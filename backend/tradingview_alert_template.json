@@ -1,0 +1,77 @@
+{
+  "entry": {
+    "secret": "REPLACE_WITH_WEBHOOK_SECRET",
+    "signal_id": "{{timenow}}-{{ticker}}-ENTRY",
+    "strategy_code": "TRADINGVIEW_NIFTY_V1",
+    "action": "ENTRY",
+    "side": "BUY",
+    "symbol": "NIFTY",
+    "instrument_type": "OPTIDX",
+    "exchange_segment": "NSE_FNO",
+    "security_id": "REPLACE_SECURITY_ID",
+    "trading_symbol": "REPLACE_TRADING_SYMBOL",
+    "option_side": "CE",
+    "strike": 22500,
+    "expiry": "2026-05-28",
+    "qty": 1,
+    "order_type": "MARKET",
+    "product_type": "INTRADAY",
+    "source": "tradingview"
+  },
+  "exit": {
+    "secret": "REPLACE_WITH_WEBHOOK_SECRET",
+    "signal_id": "{{timenow}}-{{ticker}}-EXIT",
+    "strategy_code": "TRADINGVIEW_NIFTY_V1",
+    "action": "EXIT",
+    "side": "SELL",
+    "symbol": "NIFTY",
+    "instrument_type": "OPTIDX",
+    "exchange_segment": "NSE_FNO",
+    "security_id": "REPLACE_SECURITY_ID",
+    "trading_symbol": "REPLACE_TRADING_SYMBOL",
+    "qty": 1,
+    "order_type": "MARKET",
+    "product_type": "INTRADAY",
+    "source": "tradingview"
+  },
+  "pine_multi_leg_buy_existing": {
+    "secret": "REPLACE_WITH_WEBHOOK_SECRET",
+    "alertType": "multi_leg_order",
+    "order_legs": [
+      {
+        "transactionType": "B",
+        "orderType": "MKT",
+        "quantity": "1",
+        "exchange": "NSE",
+        "symbol": "NIFTY",
+        "instrument": "OPT",
+        "productType": "I",
+        "sort_order": "1",
+        "price": "0",
+        "option_type": "CE",
+        "strike_price": "22500.0",
+        "expiry_date": "2026-05-28"
+      }
+    ]
+  },
+  "pine_multi_leg_sell_existing": {
+    "secret": "REPLACE_WITH_WEBHOOK_SECRET",
+    "alertType": "multi_leg_order",
+    "order_legs": [
+      {
+        "transactionType": "S",
+        "orderType": "MKT",
+        "quantity": "1",
+        "exchange": "NSE",
+        "symbol": "NIFTY",
+        "instrument": "OPT",
+        "productType": "I",
+        "sort_order": "1",
+        "price": "0",
+        "option_type": "CE",
+        "strike_price": "22500.0",
+        "expiry_date": "2026-05-28"
+      }
+    ]
+  }
+}

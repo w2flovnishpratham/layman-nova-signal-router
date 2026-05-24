@@ -1,0 +1,40 @@
+# ============================================================
+# NOVA Signal Router — Backend .gitignore
+# ============================================================
+
+# ── Environment files (NEVER commit real .env with credentials) ──
+.env
+.env.local
+.env.live
+.env.*
+!.env.example
+!.env.local.example
+!.env.live.example
+
+# ── Runtime state & logs (generated at runtime) ─────────────
+runtime_state/
+runtime_logs/
+pytest_temp/
+
+# ── Scrip master data (downloaded at runtime via POST endpoint) ──
+data/dhan_scrip_master.csv
+data/api-scrip-master-detailed.csv
+
+# ── Database files ───────────────────────────────────────────
+*.db
+*.db-journal
+**/*.db
+
+# ── Python ──────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# ── Pytest ──────────────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml

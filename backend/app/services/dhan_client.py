@@ -1,0 +1,535 @@
+"""
+Dhan client wrappers for MOCK and REAL modes.
+
+The execution router decides whether a real order is allowed. This module only
+performs the request it is given and never reads or exposes the access token.
+
+Dhan v2 API base: https://api.dhan.co/v2
+Order placement requires static IP whitelisting.
+Read-only endpoints (orders, trades, funds, positions) are available for diagnostics.
+
+Endpoints implemented:
+  POST /orders            - place order
+  GET  /orders/{order-id} - order status (poll after placement)
+  GET  /fundlimit         - funds / wallet validation
+  GET  /positions         - open positions
+  GET  /profile           - token validation
+
+Endpoints not yet implemented (phase 2 TODOs):
+  GET  /orders            - full order book
+  GET  /trades            - trade book
+  POST /marketfeed/ltp    - market quote / LTP validation before order
+  WebSocket /orderUpdate  - live order update stream
+"""
+from __future__ import annotations
+
+import logging
+import random
+import time
+import uuid
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+from app.config import settings
+from app.services.audit_logger import log_order_event
+from app.services.dhan_debugger import build_dhan_headers_debug, get_outgoing_ip, validate_dhan_payload
+from app.services.dhan_error_interpreter import interpret_dhan_error
+from app.services.risk_manager import _market_is_open
+
+
+logger = logging.getLogger("dhan_client")
+DHAN_BASE_URL = "https://api.dhan.co/v2"
+
+# Order statuses per Dhan v2 docs
+DHAN_TERMINAL_STATUSES = {"TRADED", "REJECTED", "CANCELLED", "EXPIRED"}
+DHAN_PENDING_STATUSES = {"TRANSIT", "PENDING"}
+
+
+@dataclass(frozen=True)
+class DhanValidationResult:
+    success: bool
+    message: str
+    status_code: int | None = None
+    raw_response: dict[str, Any] | list[Any] | None = None
+
+
+@dataclass(frozen=True)
+class DhanFundsResult:
+    success: bool
+    message: str
+    status_code: int | None = None
+    client_id: str | None = None
+    available_balance: float | None = None
+    withdrawable_balance: float | None = None
+    utilized_amount: float | None = None
+    sod_limit: float | None = None
+    collateral_amount: float | None = None
+    blocked_payout_amount: float | None = None
+    raw_response: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class DhanOrderStatusResult:
+    """Result of polling GET /orders/{order-id}."""
+    success: bool
+    order_id: str | None
+    order_status: str | None  # TRANSIT, PENDING, TRADED, REJECTED, CANCELLED, EXPIRED
+    is_terminal: bool
+    is_filled: bool  # True only when TRADED
+    avg_price: float | None
+    raw_response: dict[str, Any] | None
+    error: str | None = None
+
+
+class DhanOrderResult:
+    def __init__(
+        self,
+        *,
+        success: bool,
+        order_id: str | None,
+        status: str,
+        avg_price: float | None,
+        raw_response: dict[str, Any],
+        error: str | None = None,
+        interpreted_error: dict[str, str] | None = None,
+    ) -> None:
+        self.success = success
+        self.order_id = order_id
+        self.status = status
+        self.avg_price = avg_price
+        self.raw_response = raw_response
+        self.error = error
+        self.interpreted_error = interpreted_error
+
+
+class MockDhanClient:
+    def place_order(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanOrderResult:
+        fake_id = f"MOCK-{uuid.uuid4().hex[:12].upper()}"
+        fake_price = round(random.uniform(50.0, 500.0), 2)
+        logger.info("[MOCK] place_order order_id=%s qty=%s", fake_id, payload.get("quantity"))
+        return DhanOrderResult(
+            success=True,
+            order_id=fake_id,
+            status="TRADED",
+            avg_price=fake_price,
+            raw_response={
+                "orderId": fake_id,
+                "orderStatus": "TRADED",
+                "avgPrice": fake_price,
+                "mock": True,
+            },
+        )
+
+    def poll_order_status(
+        self,
+        *,
+        client_id: str,
+        access_token: str,
+        order_id: str,
+        max_polls: int = 4,
+        poll_delay: float = 1.5,
+    ) -> DhanOrderStatusResult:
+        """Mock always returns TRADED immediately."""
+        return DhanOrderStatusResult(
+            success=True,
+            order_id=order_id,
+            order_status="TRADED",
+            is_terminal=True,
+            is_filled=True,
+            avg_price=None,
+            raw_response={"orderId": order_id, "orderStatus": "TRADED", "mock": True},
+        )
+
+    def validate_token(self, *, client_id: str, access_token: str) -> DhanValidationResult:
+        return DhanValidationResult(success=True, message="MOCK Dhan mode is active.")
+
+    def get_positions(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
+        return []
+
+    def get_fund_limit(self, *, client_id: str, access_token: str) -> DhanFundsResult:
+        return DhanFundsResult(success=True, message="MOCK Dhan mode is active.", client_id=client_id)
+
+
+class RealDhanClient:
+    def _headers(self, client_id: str, access_token: str) -> dict[str, str]:
+        """
+        Build Dhan v2 request headers.
+
+        Per Dhan v2 official docs, only `access-token` is required as an auth header.
+        `client-id` is NOT documented by Dhan but is included by default for compatibility
+        (DHAN_SEND_CLIENT_ID_HEADER=true). Set DHAN_SEND_CLIENT_ID_HEADER=false to omit it --
+        dhanClientId is always present in the order body, which is what Dhan requires.
+
+        Headers always present:
+          access-token: <jwt>          -- required for all Dhan v2 requests
+          Content-Type: application/json -- required for POST requests
+          Accept: application/json     -- recommended
+
+        Headers conditionally present:
+          client-id: <id>              -- only if DHAN_SEND_CLIENT_ID_HEADER=true (default)
+        """
+        headers: dict[str, str] = {
+            "access-token": access_token,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        if settings.DHAN_SEND_CLIENT_ID_HEADER:
+            headers["client-id"] = client_id
+        return headers
+
+    def _parse_response(self, response: httpx.Response) -> dict[str, Any] | list[Any] | str:
+        try:
+            return response.json()
+        except ValueError:
+            return response.text
+
+    def _error_message(self, data: dict[str, Any] | list[Any] | str, fallback: str) -> str:
+        if isinstance(data, dict):
+            for key in ("errorMessage", "internalErrorMessage", "remarks", "message", "error"):
+                value = data.get(key)
+                if value:
+                    return str(value)
+            error_code = data.get("errorCode") or data.get("internalErrorCode")
+            if error_code:
+                return str(error_code)
+        if isinstance(data, str) and data.strip():
+            return data.strip()
+        return fallback
+
+    def _optional_float(self, data: dict[str, Any], *keys: str) -> float | None:
+        for key in keys:
+            value = data.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _response_payload(self, parsed: dict[str, Any] | list[Any] | str) -> dict[str, Any]:
+        return parsed if isinstance(parsed, dict) else {"raw_response": parsed}
+
+    def place_order(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanOrderResult:
+        url = f"{DHAN_BASE_URL}/orders"
+        outgoing_ip_result = get_outgoing_ip(timeout=2.0)
+        outgoing_ip = outgoing_ip_result.get("outgoing_ip")
+        headers_masked = build_dhan_headers_debug(client_id, access_token)
+        payload_validation = validate_dhan_payload(payload)
+        market_closed_possible = not _market_is_open()
+
+        log_order_event(
+            {
+                "event": "DHAN_ORDER_ATTEMPT",
+                "outgoing_ip": outgoing_ip,
+                "outgoing_ip_check": outgoing_ip_result,
+                "url": url,
+                "headers_masked": headers_masked,
+                "payload": payload,
+                "payload_validation": payload_validation,
+                "dhan_mode": "REAL",
+                "live_orders_enabled": True,
+                "market_closed_possible": market_closed_possible,
+            }
+        )
+
+        if not payload_validation.get("ok"):
+            if payload_validation.get("raw_pine_detected"):
+                error_message = "BUG: Raw Pine payload reached Dhan client. This must be normalized first."
+            else:
+                error_message = payload_validation.get("error") or "Invalid Dhan payload."
+            interpreted_error = interpret_dhan_error(None, error_message)
+            raw_response = {"payload_validation": payload_validation}
+            log_order_event(
+                {
+                    "event": "DHAN_ORDER_RESPONSE",
+                    "outgoing_ip": outgoing_ip,
+                    "url": url,
+                    "status_code": None,
+                    "response_text": error_message,
+                    "response_json": raw_response,
+                    "interpreted_error": interpreted_error,
+                }
+            )
+            return DhanOrderResult(
+                success=False,
+                order_id=None,
+                status="PAYLOAD_INVALID",
+                avg_price=None,
+                raw_response=raw_response,
+                error=error_message,
+                interpreted_error=interpreted_error,
+            )
+
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                response = client.post(url, json=payload, headers=self._headers(client_id, access_token))
+
+            parsed = self._parse_response(response)
+            data = self._response_payload(parsed)
+            interpreted_error = interpret_dhan_error(response.status_code, parsed)
+            response_json = parsed if isinstance(parsed, (dict, list)) else None
+            log_order_event(
+                {
+                    "event": "DHAN_ORDER_RESPONSE",
+                    "outgoing_ip": outgoing_ip,
+                    "url": url,
+                    "status_code": response.status_code,
+                    "response_text": response.text[:4000],
+                    "response_json": response_json,
+                    "interpreted_error": interpreted_error,
+                }
+            )
+
+            if response.status_code in (200, 201) and data.get("orderId"):
+                return DhanOrderResult(
+                    success=True,
+                    order_id=data.get("orderId"),
+                    status=data.get("orderStatus", "PENDING"),
+                    avg_price=data.get("avgPrice"),
+                    raw_response=data,
+                    interpreted_error=None,
+                )
+
+            return DhanOrderResult(
+                success=False,
+                order_id=data.get("orderId"),
+                status=data.get("orderStatus", "REJECTED"),
+                avg_price=data.get("avgPrice"),
+                raw_response=data,
+                error=self._error_message(data, f"Dhan rejected order ({response.status_code})"),
+                interpreted_error=interpreted_error,
+            )
+        except httpx.TimeoutException as exc:
+            interpreted_error = interpret_dhan_error(None, "Dhan API timeout")
+            log_order_event(
+                {
+                    "event": "DHAN_ORDER_EXCEPTION",
+                    "outgoing_ip": outgoing_ip,
+                    "url": url,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": "Dhan API timeout",
+                    "interpreted_error": interpreted_error,
+                }
+            )
+            return DhanOrderResult(
+                success=False,
+                order_id=None,
+                status="TIMEOUT",
+                avg_price=None,
+                raw_response={},
+                error="Dhan API timeout",
+                interpreted_error=interpreted_error,
+            )
+        except Exception as exc:
+            logger.error("Dhan place_order error: %s", exc)
+            interpreted_error = interpret_dhan_error(None, str(exc))
+            log_order_event(
+                {
+                    "event": "DHAN_ORDER_EXCEPTION",
+                    "outgoing_ip": outgoing_ip,
+                    "url": url,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "interpreted_error": interpreted_error,
+                }
+            )
+            return DhanOrderResult(
+                success=False,
+                order_id=None,
+                status="API_ERROR",
+                avg_price=None,
+                raw_response={},
+                error=str(exc),
+                interpreted_error=interpreted_error,
+            )
+
+    def poll_order_status(
+        self,
+        *,
+        client_id: str,
+        access_token: str,
+        order_id: str,
+        max_polls: int = 4,
+        poll_delay: float = 1.5,
+    ) -> DhanOrderStatusResult:
+        """
+        Poll GET /orders/{order-id} up to max_polls times until a terminal status is reached.
+
+        Terminal statuses: TRADED, REJECTED, CANCELLED, EXPIRED.
+        Pending statuses:  TRANSIT, PENDING.
+
+        For MVP, if not terminal after max_polls, returns PENDING_CONFIRMATION.
+        Dashboard should show ambiguous status and operator should verify in Dhan portal.
+        """
+        url = f"{DHAN_BASE_URL}/orders/{order_id}"
+        last_status: str | None = None
+        last_data: dict[str, Any] = {}
+
+        for attempt in range(max_polls):
+            try:
+                with httpx.Client(timeout=8.0) as client:
+                    response = client.get(url, headers=self._headers(client_id, access_token))
+                parsed = self._parse_response(response)
+                data = self._response_payload(parsed)
+                last_data = data
+                order_status = str(data.get("orderStatus") or "").upper()
+                last_status = order_status
+                log_order_event({
+                    "event": "DHAN_ORDER_STATUS_POLL",
+                    "attempt": attempt + 1,
+                    "order_id": order_id,
+                    "status_code": response.status_code,
+                    "order_status": order_status,
+                })
+                if order_status in DHAN_TERMINAL_STATUSES:
+                    avg_price_raw = data.get("avgPrice")
+                    avg_price: float | None = None
+                    if avg_price_raw not in (None, ""):
+                        try:
+                            avg_price = float(avg_price_raw)
+                        except (TypeError, ValueError):
+                            pass
+                    return DhanOrderStatusResult(
+                        success=True,
+                        order_id=order_id,
+                        order_status=order_status,
+                        is_terminal=True,
+                        is_filled=(order_status == "TRADED"),
+                        avg_price=avg_price,
+                        raw_response=data,
+                    )
+                if attempt < max_polls - 1:
+                    time.sleep(poll_delay)
+            except httpx.TimeoutException:
+                logger.warning("Order status poll timeout for order_id=%s attempt=%d", order_id, attempt + 1)
+                if attempt < max_polls - 1:
+                    time.sleep(poll_delay)
+            except Exception as exc:
+                logger.error("Order status poll error: %s", exc)
+                return DhanOrderStatusResult(
+                    success=False,
+                    order_id=order_id,
+                    order_status=last_status,
+                    is_terminal=False,
+                    is_filled=False,
+                    avg_price=None,
+                    raw_response=last_data or None,
+                    error=str(exc),
+                )
+
+        # Exhausted polls without reaching terminal status
+        log_order_event({
+            "event": "DHAN_ORDER_STATUS_PENDING_CONFIRMATION",
+            "order_id": order_id,
+            "last_status": last_status,
+            "polls": max_polls,
+            "message": "Order not yet terminal after polling. Dashboard shows PENDING_CONFIRMATION.",
+        })
+        return DhanOrderStatusResult(
+            success=True,
+            order_id=order_id,
+            order_status=last_status or "PENDING_CONFIRMATION",
+            is_terminal=False,
+            is_filled=False,
+            avg_price=None,
+            raw_response=last_data or None,
+        )
+
+    # TODO (Phase 2): GET /orders - full order book
+    # def get_order_book(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
+    #     url = f"{DHAN_BASE_URL}/orders"
+    #     ...
+
+    # TODO (Phase 2): GET /trades - trade book
+    # def get_trade_book(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
+    #     url = f"{DHAN_BASE_URL}/trades"
+    #     ...
+
+    # TODO (Phase 2): POST /marketfeed/ltp - market quote LTP validation before order
+    # def get_market_ltp(self, *, client_id: str, access_token: str,
+    #                    exchange_segment: str, security_id: str) -> dict[str, Any]:
+    #     url = f"{DHAN_BASE_URL}/marketfeed/ltp"
+    #     ...
+
+    def validate_token(self, *, client_id: str, access_token: str) -> DhanValidationResult:
+        url = f"{DHAN_BASE_URL}/profile"
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                response = client.get(url, headers=self._headers(client_id, access_token))
+            data = self._parse_response(response)
+            if 200 <= response.status_code <= 299:
+                profile_client_id = data.get("dhanClientId") if isinstance(data, dict) else None
+                if profile_client_id and str(profile_client_id) != str(client_id):
+                    return DhanValidationResult(
+                        success=False,
+                        message=(
+                            "Dhan token valid, but it belongs to client ID "
+                            f"{profile_client_id}, not configured client ID {client_id}."
+                        ),
+                        status_code=response.status_code,
+                        raw_response=data,
+                    )
+                return DhanValidationResult(
+                    success=True,
+                    message="Dhan token valid.",
+                    status_code=response.status_code,
+                    raw_response=data if isinstance(data, (dict, list)) else None,
+                )
+            reason = self._error_message(data, f"Dhan token validation failed ({response.status_code}).")
+            return DhanValidationResult(
+                success=False,
+                message=f"Dhan token validation failed: {reason}",
+                status_code=response.status_code,
+                raw_response=data if isinstance(data, (dict, list)) else None,
+            )
+        except httpx.TimeoutException:
+            return DhanValidationResult(success=False, message="Dhan token validation timed out.")
+        except Exception:
+            logger.exception("Dhan token validation error")
+            return DhanValidationResult(success=False, message="Dhan token validation request failed.")
+
+    def get_positions(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
+        url = f"{DHAN_BASE_URL}/positions"
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                response = client.get(url, headers=self._headers(client_id, access_token))
+            return response.json() if response.status_code == 200 else []
+        except Exception:
+            return []
+
+    def get_fund_limit(self, *, client_id: str, access_token: str) -> DhanFundsResult:
+        url = f"{DHAN_BASE_URL}/fundlimit"
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                response = client.get(url, headers=self._headers(client_id, access_token))
+            parsed = self._parse_response(response)
+            data = parsed if isinstance(parsed, dict) else {"raw_response": parsed}
+            if 200 <= response.status_code <= 299:
+                return DhanFundsResult(
+                    success=True,
+                    message="Dhan fund limit fetched.",
+                    status_code=response.status_code,
+                    client_id=str(data.get("dhanClientId") or client_id),
+                    available_balance=self._optional_float(data, "availabelBalance", "availableBalance"),
+                    withdrawable_balance=self._optional_float(data, "withdrawableBalance"),
+                    utilized_amount=self._optional_float(data, "utilizedAmount"),
+                    sod_limit=self._optional_float(data, "sodLimit"),
+                    collateral_amount=self._optional_float(data, "collateralAmount"),
+                    blocked_payout_amount=self._optional_float(data, "blockedPayoutAmount"),
+                    raw_response=data,
+                )
+            reason = self._error_message(data, f"Dhan fund limit request failed ({response.status_code}).")
+            return DhanFundsResult(
+                success=False,
+                message=f"Dhan fund limit request failed: {reason}",
+                status_code=response.status_code,
+                raw_response=data,
+            )
+        except httpx.TimeoutException:
+            return DhanFundsResult(success=False, message="Dhan fund limit request timed out.")
+        except Exception:
+            logger.exception("Dhan fund limit error")
+            return DhanFundsResult(success=False, message="Dhan fund limit request failed.")

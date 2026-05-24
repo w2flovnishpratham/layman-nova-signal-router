@@ -1,0 +1,48 @@
+import { useEffect, useState } from 'react'
+import { RefreshCw } from 'lucide-react'
+import { getLiveFlow } from '../api/dashboard'
+import LiveFlowTimeline from '../components/LiveFlowTimeline'
+import { LiveFlowStep } from '../types'
+
+export default function LiveFlowPage() {
+  const [steps, setSteps] = useState<LiveFlowStep[]>([])
+  const [loading, setLoading] = useState(true)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+
+  const loadData = () => {
+    getLiveFlow()
+      .then((response) => {
+        setSteps(response.data)
+        setLastUpdated(new Date())
+      })
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    loadData()
+    const id = window.setInterval(loadData, 3000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  return (
+    <div className="max-w-xl">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold">Live Flow</h1>
+          {lastUpdated && (
+            <p className="text-gray-500 text-xs mt-0.5">
+              Updated {lastUpdated.toLocaleTimeString()} - auto-refreshes every 3s
+            </p>
+          )}
+        </div>
+        <button onClick={loadData} className="btn-ghost flex items-center gap-1 text-sm">
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+
+      <div className="card">
+        {loading ? <p className="text-gray-500 text-sm">Loading flow...</p> : <LiveFlowTimeline steps={steps} />}
+      </div>
+    </div>
+  )
+}

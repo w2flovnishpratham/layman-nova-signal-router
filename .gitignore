@@ -1,0 +1,72 @@
+# ============================================================
+# NOVA Signal Router — Root .gitignore
+# ============================================================
+
+# ── Python ──────────────────────────────────────────────────
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# ── Pytest / test artifacts ──────────────────────────────────
+.pytest_cache/
+backend/pytest_temp/
+backend/.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── Environment files (NEVER commit real credentials) ────────
+# Root-level env files
+.env
+.env.*
+
+
+# Backend env files — the backend/.gitignore also covers these
+backend/.env
+backend/.env.*
+
+
+
+# Frontend env files
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# ── Runtime state & logs (generated at runtime, never commit) ─
+backend/runtime_state/
+backend/runtime_logs/
+backend/data/dhan_scrip_master.csv
+backend/data/api-scrip-master-detailed.csv
+
+# ── Database files ───────────────────────────────────────────
+backend/*.db
+backend/*.db-journal
+backend/**/*.db
+
+# ── Frontend build artifacts ─────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ── Backend virtualenvs ───────────────────────────────────────
+backend/venv/
+backend/.venv/
+
+# ── IDE / OS ─────────────────────────────────────────────────
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+
+# ── Sensitive runtime files ──────────────────────────────────
+# Credentials file is encrypted but should still never be committed
+backend/runtime_state/credentials.enc.json
