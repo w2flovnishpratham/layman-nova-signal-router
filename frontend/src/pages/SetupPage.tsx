@@ -58,12 +58,27 @@ function cleanText(value: string | undefined) {
   return (value || '').replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '').replace(/\s+/g, ' ').trim()
 }
 
-function stateMessage(status: SetupStatus) {
-  if (!status.engine_started) return 'Engine stopped. Start engine when setup is ready.'
+function activityPlaceholder(status: SetupStatus) {
+  if (!status.engine_started) return 'Engine stopped.'
   if (status.app_state.state === 'WAITING_ENTRY') return 'Waiting for entry alert.'
   if (status.app_state.state === 'WAITING_EXIT') return 'Waiting for sell alert.'
-  if (status.app_state.state === 'ERROR') return `Order rejected: ${status.app_state.last_message}`
-  return status.app_state.last_message || status.app_state.state.replace(/_/g, ' ')
+  return ''
+}
+
+function isInternalActivityText(value: string) {
+  return [
+    /^hey,?\s*i'?m nova signal router/i,
+    /^waiting for tradingview entry alert/i,
+    /^waiting for dhan order response/i,
+    /^tradingview alert received/i,
+    /^exit alert received/i,
+    /^running backend risk checks/i,
+    /^risk check passed/i,
+    /^sending (entry|exit) order to dhan/i,
+    /^entry order placed/i,
+    /^trade exited\. waiting for next entry alert/i,
+    /^position open\. waiting for tradingview exit alert/i,
+  ].some((pattern) => pattern.test(value))
 }
 
 function errorMessage(error: unknown) {
@@ -133,10 +148,11 @@ function SignalCard({ item }: { item: ChatFeedItem }) {
 
 function OrderCard({ item, status }: { item: ChatFeedItem; status: SetupStatus }) {
   const meta = item.metadata || {}
+  const isExit = meta.action === 'EXIT'
   return (
     <div className="rounded-md border border-emerald-800 bg-emerald-950/30 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-semibold text-emerald-200">{textValue(meta.action)} order details</p>
+        <p className="font-semibold text-emerald-200">{isExit ? 'Sell executed' : 'Buy executed'}</p>
         <p className="text-xs text-slate-400">{displayTime(item.timestamp)}</p>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
@@ -166,7 +182,7 @@ function OrderCard({ item, status }: { item: ChatFeedItem; status: SetupStatus }
         </div>
         <div>
           <p className="text-slate-500">{meta.action === 'EXIT' ? 'Exit source' : 'Next step'}</p>
-          <p>{meta.action === 'EXIT' ? 'TradingView TP/SL' : 'Sell alert'}</p>
+          <p>{isExit ? 'TradingView TP/SL' : 'Sell alert'}</p>
         </div>
         <div>
           <p className="text-slate-500">Mode</p>
@@ -178,7 +194,16 @@ function OrderCard({ item, status }: { item: ChatFeedItem; status: SetupStatus }
 }
 
 function ActivityFeed({ status, feed }: { status: SetupStatus; feed: ChatFeedItem[] }) {
-  const items = feed.filter((item) => item.id !== 'init-welcome').slice(-18)
+  const waitingText = activityPlaceholder(status)
+  const items = feed
+    .filter((item) => item.id !== 'init-welcome')
+    .filter((item) => {
+      if (item.type === 'signal_card' || item.type === 'order_card') return true
+      const text = cleanText(item.text)
+      if (!text) return false
+      return !isInternalActivityText(text)
+    })
+    .slice(-12)
 
   return (
     <section className="rounded-lg border border-slate-800 bg-slate-900">
@@ -187,16 +212,6 @@ function ActivityFeed({ status, feed }: { status: SetupStatus; feed: ChatFeedIte
         <h2 className="text-lg font-semibold">Live Activity</h2>
       </div>
       <div className="space-y-3 px-5 py-5">
-        <div className="rounded-md border border-slate-700 bg-slate-950 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className={status.engine_started ? 'font-semibold text-emerald-300' : 'font-semibold text-slate-300'}>
-              {status.engine_started ? 'Engine running' : 'Engine stopped'}
-            </p>
-            <p className="text-xs text-slate-500">{displayTime(status.app_state.last_alert_at)}</p>
-          </div>
-          <p className="mt-2 text-sm text-slate-300">{stateMessage(status)}</p>
-        </div>
-
         {items.map((item, index) => {
           if (item.type === 'signal_card') return <SignalCard key={item.id || index} item={item} />
           if (item.type === 'order_card') return <OrderCard key={item.id || index} item={item} status={status} />
@@ -214,6 +229,15 @@ function ActivityFeed({ status, feed }: { status: SetupStatus; feed: ChatFeedIte
             </div>
           )
         })}
+
+        {waitingText && (
+          <div className="rounded-md border border-slate-700 bg-slate-950 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className={status.engine_started ? 'text-sm font-semibold text-sky-200' : 'text-sm font-semibold text-slate-300'}>{waitingText}</p>
+              {status.engine_started && <span className="h-2 w-2 rounded-full bg-sky-400" />}
+            </div>
+          </div>
+        )}
       </div>
     </section>
   )
