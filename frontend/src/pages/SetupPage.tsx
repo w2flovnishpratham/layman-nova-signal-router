@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   CheckCircle2,
@@ -9,6 +9,7 @@ import {
   Play,
   RefreshCw,
   ShieldCheck,
+  Square,
   Wallet,
 } from 'lucide-react'
 import {
@@ -18,14 +19,13 @@ import {
   saveRiskSettings,
   saveWebhookSecret,
   startEngine,
+  stopEngine,
 } from '../api/dashboard'
 import { RiskSetupPayload, SetupStatus } from '../types'
 
 const steps = ['Connect Dhan', 'Wallet Verified', 'Webhook Secret', 'Risk Settings', 'Start Engine']
 const MIN_WEBHOOK_SECRET_LENGTH = 5
 const WEBHOOK_SECRET_LENGTH_ERROR = `Webhook secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters.`
-
-type SetupSection = 'dhan' | 'secret' | 'risk'
 
 type ChatFeedItem = {
   id?: string
@@ -99,45 +99,6 @@ function randomSecret() {
   const bytes = new Uint8Array(24)
   window.crypto.getRandomValues(bytes)
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
-function SetupPanel({
-  title,
-  complete,
-  open,
-  icon,
-  summary,
-  onToggle,
-  children,
-}: {
-  title: string
-  complete: boolean
-  open: boolean
-  icon: ReactNode
-  summary: ReactNode
-  onToggle: () => void
-  children: ReactNode
-}) {
-  return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900">
-      <button type="button" onClick={onToggle} className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left">
-        <span className="flex min-w-0 items-center gap-3">
-          {icon}
-          <span>
-            <span className="block text-base font-semibold">{title}</span>
-            <span className={complete ? 'mt-1 block text-sm text-emerald-300' : 'mt-1 block text-sm text-amber-300'}>
-              {complete ? 'Completed' : 'Needs attention'}
-            </span>
-          </span>
-        </span>
-        <span className="flex shrink-0 items-center gap-2 text-sm text-slate-300">
-          {complete && !open ? 'Edit' : open ? 'Collapse' : 'Open'}
-          {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </span>
-      </button>
-      {open ? <div className="border-t border-slate-800 px-5 py-5">{children}</div> : <div className="border-t border-slate-800 px-5 py-4">{summary}</div>}
-    </section>
-  )
 }
 
 function SignalCard({ item }: { item: ChatFeedItem }) {
@@ -271,7 +232,7 @@ export default function SetupPage() {
     allow_entry: true,
     allow_exit: true,
   })
-  const [expanded, setExpanded] = useState<Partial<Record<SetupSection, boolean>>>({})
+  const [setupFormsOpen, setSetupFormsOpen] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -294,6 +255,10 @@ export default function SetupPage() {
     return () => window.clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    if (status?.engine_started) setSetupFormsOpen(false)
+  }, [status?.engine_started])
+
   const activeStep = useMemo(() => {
     if (!status?.dhan_connected) return 0
     if (!status.wallet?.success) return 1
@@ -311,7 +276,6 @@ export default function SetupPage() {
       const response = await connectDhan({ client_id: clientId, access_token: accessToken })
       setAccessToken('')
       setMessage(response.data?.message || 'Dhan connected successfully.')
-      setExpanded((current) => ({ ...current, dhan: false }))
       await loadData()
     } catch (err) {
       setError(errorMessage(err))
@@ -334,7 +298,6 @@ export default function SetupPage() {
       await saveWebhookSecret(trimmedSecret)
       setWebhookSecret('')
       setMessage('Webhook secret saved.')
-      setExpanded((current) => ({ ...current, secret: false }))
       await loadData()
     } catch (err) {
       setError(errorMessage(err))
@@ -350,7 +313,6 @@ export default function SetupPage() {
     try {
       await saveRiskSettings(risk)
       setMessage('Risk settings saved.')
-      setExpanded((current) => ({ ...current, risk: false }))
       await loadData()
     } catch (err) {
       setError(errorMessage(err))
@@ -369,6 +331,22 @@ export default function SetupPage() {
       }
       await startEngine(confirmLive)
       setMessage('Engine started. Waiting for TradingView entry alert.')
+      setSetupFormsOpen(false)
+      await loadData()
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const runStopEngine = async () => {
+    setBusy('stop-engine')
+    setError('')
+    try {
+      await stopEngine()
+      setMessage('Engine stopped. New TradingView entry alerts are blocked.')
+      setSetupFormsOpen(true)
       await loadData()
     } catch (err) {
       setError(errorMessage(err))
@@ -397,8 +375,7 @@ export default function SetupPage() {
     secret: Boolean(status.webhook_secret_set),
     risk: Boolean(status.risk_configured),
   }
-
-  const isOpen = (key: SetupSection) => expanded[key] ?? !completed[key]
+  const setupComplete = completed.dhan && completed.secret && completed.risk
 
   return (
     <div className="space-y-6">
@@ -436,160 +413,162 @@ export default function SetupPage() {
         })}
       </div>
 
-      <div className="grid grid-cols-1 gap-4">
-        <SetupPanel
-          title="Connect Dhan"
-          complete={completed.dhan}
-          open={isOpen('dhan')}
-          onToggle={() => setExpanded((current) => ({ ...current, dhan: !isOpen('dhan') }))}
-          icon={<KeyRound className="text-emerald-400" size={20} />}
-          summary={
-            <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-4">
-              <p><span className="text-slate-400">Client</span><br />{status.dhan_client_id_masked || '-'}</p>
-              <p><span className="text-slate-400">Available</span><br />{currency(status.wallet.available_balance)}</p>
-              <p><span className="text-slate-400">Utilized</span><br />{currency(status.wallet.utilized_amount)}</p>
-              <p><span className="text-slate-400">Backend IP</span><br /><span className="font-mono">{status.outgoing_ip || '-'}</span></p>
-            </div>
-          }
-        >
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <form onSubmit={(event) => submitDhan(event, 'connect')} className="space-y-4">
-              <label className="block text-sm">
-                <span className="mb-1 block text-slate-300">Dhan Client ID</span>
-                <input value={clientId} onChange={(event) => setClientId(event.target.value)} className="input" autoComplete="off" />
-              </label>
-              <label className="block text-sm">
-                <span className="mb-1 block text-slate-300">Dhan Access Token</span>
-                <input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="input" type="password" autoComplete="off" />
-              </label>
-              {!status.vault.ready && (
-                <p className="rounded-md border border-amber-800 bg-amber-950 p-3 text-sm text-amber-200">{status.vault.error}</p>
-              )}
-              <div className="flex flex-wrap gap-2">
-                <button disabled={busy === 'connect'} className="btn-primary" type="submit">
-                  Connect Dhan
-                </button>
-                <button disabled={busy === 'test'} onClick={(event) => submitDhan(event, 'test')} className="btn-ghost" type="button">
-                  Test Connection
-                </button>
-              </div>
-              {status.dhan_connected && <p className="text-sm text-emerald-300">Dhan connected successfully. Client ID: {status.dhan_client_id_masked}</p>}
-            </form>
+      <section className="rounded-lg border border-slate-800 bg-slate-900">
+        <button type="button" onClick={() => setSetupFormsOpen((open) => !open)} className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left">
+          <span className="flex min-w-0 items-center gap-3">
+            <KeyRound className={setupComplete ? 'text-emerald-400' : 'text-amber-400'} size={20} />
+            <span>
+              <span className="block text-base font-semibold">Setup Forms</span>
+              <span className={setupComplete ? 'mt-1 block text-sm text-emerald-300' : 'mt-1 block text-sm text-amber-300'}>
+                {status.engine_started ? 'Collapsed while engine is running' : setupComplete ? 'Completed' : 'Open to finish Dhan, webhook, and risk setup'}
+              </span>
+            </span>
+          </span>
+          <span className="flex shrink-0 items-center gap-2 text-sm text-slate-300">
+            {setupFormsOpen ? 'Collapse' : 'Open'}
+            {setupFormsOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </span>
+        </button>
 
-            <div className="space-y-4">
+        {setupFormsOpen ? (
+          <div className="border-t border-slate-800 px-5 py-5">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="text-emerald-400" size={20} />
+                  <h2 className="text-lg font-semibold">Connect Dhan</h2>
+                </div>
+                <form onSubmit={(event) => submitDhan(event, 'connect')} className="space-y-4">
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-slate-300">Dhan Client ID</span>
+                    <input value={clientId} onChange={(event) => setClientId(event.target.value)} className="input" autoComplete="off" />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-slate-300">Dhan Access Token</span>
+                    <input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="input" type="password" autoComplete="off" />
+                  </label>
+                  {!status.vault.ready && (
+                    <p className="rounded-md border border-amber-800 bg-amber-950 p-3 text-sm text-amber-200">{status.vault.error}</p>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <button disabled={busy === 'connect'} className="btn-primary" type="submit">
+                      Connect Dhan
+                    </button>
+                    <button disabled={busy === 'test'} onClick={(event) => submitDhan(event, 'test')} className="btn-ghost" type="button">
+                      Test Connection
+                    </button>
+                  </div>
+                  {status.dhan_connected && <p className="text-sm text-emerald-300">Dhan connected successfully. Client ID: {status.dhan_client_id_masked}</p>}
+                </form>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Wallet className="text-sky-400" size={20} />
+                  <h2 className="text-lg font-semibold">Wallet / Funds</h2>
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <p><span className="text-slate-400">Available balance</span><br /><span className="font-semibold">{currency(status.wallet.available_balance)}</span></p>
+                  <p><span className="text-slate-400">Utilized margin</span><br /><span className="font-semibold">{currency(status.wallet.utilized_amount)}</span></p>
+                  <p><span className="text-slate-400">Client ID</span><br /><span className="font-mono">{status.wallet.client_id || status.dhan_client_id_masked || '-'}</span></p>
+                  <p><span className="text-slate-400">Dhan mode</span><br /><span className={status.mode.dhan_mode === 'REAL' ? 'font-bold text-red-300' : 'font-bold text-emerald-300'}>{status.mode.dhan_mode}</span></p>
+                </div>
+                <p className="rounded-md border border-slate-700 bg-slate-950 p-3 text-sm text-slate-300">{status.static_ip_note}</p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-1 gap-6 border-t border-slate-800 pt-6 lg:grid-cols-2">
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="text-emerald-400" size={20} />
+                  <h2 className="text-lg font-semibold">Webhook Secret</h2>
+                </div>
+                <form onSubmit={submitSecret} className="space-y-4">
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-slate-300">Webhook Secret</span>
+                    <input value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} className="input" type="password" autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} required />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button disabled={busy === 'secret'} className="btn-primary" type="submit">
+                      Save Secret
+                    </button>
+                    <button onClick={() => setWebhookSecret(randomSecret())} className="btn-ghost" type="button">
+                      Generate Random Secret
+                    </button>
+                  </div>
+                  {status.webhook_secret_set && <p className="text-sm text-emerald-300">Webhook secret saved.</p>}
+                </form>
+              </div>
+
+              <div className="space-y-4">
+                <h2 className="text-lg font-semibold">TradingView Setup</h2>
+                <div>
+                  <p className="mb-1 text-sm text-slate-400">Webhook URL</p>
+                  <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950 p-3">
+                    <p className="min-w-0 flex-1 break-all font-mono text-sm">{status.webhook_url || '-'}</p>
+                    <button onClick={copyWebhook} className="btn-ghost p-2" title="Copy webhook URL" type="button">
+                      <Copy size={16} />
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-1 text-sm text-slate-400">Alert Message</p>
+                  <p className="rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-sm">{'{{strategy.order.alert_message}}'}</p>
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={submitRisk} className="mt-6 space-y-4 border-t border-slate-800 pt-6">
               <div className="flex items-center gap-2">
-                <Wallet className="text-sky-400" size={20} />
-                <h2 className="text-lg font-semibold">Wallet / Funds</h2>
+                <CheckCircle2 className="text-emerald-400" size={20} />
+                <h2 className="text-lg font-semibold">Risk Settings</h2>
               </div>
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <p><span className="text-slate-400">Available balance</span><br /><span className="font-semibold">{currency(status.wallet.available_balance)}</span></p>
-                <p><span className="text-slate-400">Utilized margin</span><br /><span className="font-semibold">{currency(status.wallet.utilized_amount)}</span></p>
-                <p><span className="text-slate-400">Client ID</span><br /><span className="font-mono">{status.wallet.client_id || status.dhan_client_id_masked || '-'}</span></p>
-                <p><span className="text-slate-400">Dhan mode</span><br /><span className={status.mode.dhan_mode === 'REAL' ? 'font-bold text-red-300' : 'font-bold text-emerald-300'}>{status.mode.dhan_mode}</span></p>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <label className="block text-sm">
+                  <span className="mb-1 block text-slate-300">Max quantity per order</span>
+                  <input className="input" type="number" min={1} value={risk.max_qty_per_order} onChange={(event) => setRisk({ ...risk, max_qty_per_order: Number(event.target.value) })} />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-slate-300">Max trades per day</span>
+                  <input className="input" type="number" min={1} value={risk.max_trades_per_day} onChange={(event) => setRisk({ ...risk, max_trades_per_day: Number(event.target.value) })} />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-slate-300">Daily loss limit</span>
+                  <input className="input" type="number" min={1} value={risk.daily_loss_limit} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} />
+                </label>
               </div>
-              <p className="rounded-md border border-slate-700 bg-slate-950 p-3 text-sm text-slate-300">{status.static_ip_note}</p>
-            </div>
+              <div className="flex flex-wrap gap-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={risk.allow_entry} onChange={(event) => setRisk({ ...risk, allow_entry: event.target.checked })} />
+                  Allow entry
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={risk.allow_exit} onChange={(event) => setRisk({ ...risk, allow_exit: event.target.checked })} />
+                  Allow exit
+                </label>
+              </div>
+              <button disabled={busy === 'risk'} className="btn-primary" type="submit">
+                Save Risk Settings
+              </button>
+            </form>
           </div>
-        </SetupPanel>
-
-        <SetupPanel
-          title="Webhook Secret"
-          complete={completed.secret}
-          open={isOpen('secret')}
-          onToggle={() => setExpanded((current) => ({ ...current, secret: !isOpen('secret') }))}
-          icon={<ShieldCheck className="text-emerald-400" size={20} />}
-          summary={
-            <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-[1fr_auto] md:items-center">
-              <p><span className="text-slate-400">TradingView URL</span><br /><span className="break-all font-mono">{status.webhook_url || '-'}</span></p>
-              <button onClick={copyWebhook} className="btn-ghost flex items-center gap-2 justify-self-start" type="button">
+        ) : (
+          <div className="border-t border-slate-800 px-5 py-4">
+            <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-4">
+              <p><span className="text-slate-400">Dhan</span><br />{completed.dhan ? `Connected ${status.dhan_client_id_masked || ''}` : 'Needs attention'}</p>
+              <p><span className="text-slate-400">Wallet</span><br />{currency(status.wallet.available_balance)}</p>
+              <p><span className="text-slate-400">Webhook</span><br />{completed.secret ? 'Secret saved' : 'Needs secret'}</p>
+              <p><span className="text-slate-400">Risk</span><br />Qty {risk.max_qty_per_order} / Trades {risk.max_trades_per_day}</p>
+            </div>
+            <div className="mt-4 flex flex-col gap-3 text-sm md:flex-row md:items-center md:justify-between">
+              <p className="min-w-0 break-all font-mono text-slate-300">{status.webhook_url || '-'}</p>
+              <button onClick={copyWebhook} className="btn-ghost flex items-center gap-2 self-start" type="button">
                 <Copy size={16} /> Copy URL
               </button>
             </div>
-          }
-        >
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <form onSubmit={submitSecret} className="space-y-4">
-              <label className="block text-sm">
-                <span className="mb-1 block text-slate-300">Webhook Secret</span>
-                <input value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} className="input" type="password" autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} required />
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <button disabled={busy === 'secret'} className="btn-primary" type="submit">
-                  Save Secret
-                </button>
-                <button onClick={() => setWebhookSecret(randomSecret())} className="btn-ghost" type="button">
-                  Generate Random Secret
-                </button>
-              </div>
-              {status.webhook_secret_set && <p className="text-sm text-emerald-300">Webhook secret saved.</p>}
-            </form>
-
-            <div className="space-y-4">
-              <h2 className="text-lg font-semibold">TradingView Setup</h2>
-              <div>
-                <p className="mb-1 text-sm text-slate-400">Webhook URL</p>
-                <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950 p-3">
-                  <p className="min-w-0 flex-1 break-all font-mono text-sm">{status.webhook_url || '-'}</p>
-                  <button onClick={copyWebhook} className="btn-ghost p-2" title="Copy webhook URL" type="button">
-                    <Copy size={16} />
-                  </button>
-                </div>
-              </div>
-              <div>
-                <p className="mb-1 text-sm text-slate-400">Alert Message</p>
-                <p className="rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-sm">{'{{strategy.order.alert_message}}'}</p>
-              </div>
-            </div>
           </div>
-        </SetupPanel>
-
-        <SetupPanel
-          title="Risk Settings"
-          complete={completed.risk}
-          open={isOpen('risk')}
-          onToggle={() => setExpanded((current) => ({ ...current, risk: !isOpen('risk') }))}
-          icon={<CheckCircle2 className="text-emerald-400" size={20} />}
-          summary={
-            <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
-              <p><span className="text-slate-400">Max qty</span><br />{risk.max_qty_per_order}</p>
-              <p><span className="text-slate-400">Max trades</span><br />{risk.max_trades_per_day}</p>
-              <p><span className="text-slate-400">Loss limit</span><br />{currency(risk.daily_loss_limit)}</p>
-              <p><span className="text-slate-400">Entry</span><br />{risk.allow_entry ? 'Allowed' : 'Paused'}</p>
-              <p><span className="text-slate-400">Exit</span><br />{risk.allow_exit ? 'Allowed' : 'Paused'}</p>
-            </div>
-          }
-        >
-          <form onSubmit={submitRisk} className="space-y-4">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              <label className="block text-sm">
-                <span className="mb-1 block text-slate-300">Max quantity per order</span>
-                <input className="input" type="number" min={1} value={risk.max_qty_per_order} onChange={(event) => setRisk({ ...risk, max_qty_per_order: Number(event.target.value) })} />
-              </label>
-              <label className="block text-sm">
-                <span className="mb-1 block text-slate-300">Max trades per day</span>
-                <input className="input" type="number" min={1} value={risk.max_trades_per_day} onChange={(event) => setRisk({ ...risk, max_trades_per_day: Number(event.target.value) })} />
-              </label>
-              <label className="block text-sm">
-                <span className="mb-1 block text-slate-300">Daily loss limit</span>
-                <input className="input" type="number" min={1} value={risk.daily_loss_limit} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} />
-              </label>
-            </div>
-            <div className="flex flex-wrap gap-4 text-sm">
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked={risk.allow_entry} onChange={(event) => setRisk({ ...risk, allow_entry: event.target.checked })} />
-                Allow entry
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked={risk.allow_exit} onChange={(event) => setRisk({ ...risk, allow_exit: event.target.checked })} />
-                Allow exit
-              </label>
-            </div>
-            <button disabled={busy === 'risk'} className="btn-primary" type="submit">
-              Save Risk Settings
-            </button>
-          </form>
-        </SetupPanel>
-      </div>
+        )}
+      </section>
 
       <section className="rounded-lg border border-slate-800 bg-slate-900 p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -597,9 +576,14 @@ export default function SetupPage() {
             <h2 className="text-lg font-semibold">Start Engine</h2>
             <p className="mt-1 text-sm text-slate-400">Webhook trading is enabled only after this setup check passes.</p>
           </div>
-          <button onClick={runStartEngine} disabled={busy === 'engine' || status.engine_started} className="btn-primary flex items-center gap-2" type="button">
-            <Play size={16} /> Start Engine
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={runStartEngine} disabled={busy === 'engine' || status.engine_started} className="btn-primary flex items-center gap-2" type="button">
+              <Play size={16} /> Start Engine
+            </button>
+            <button onClick={runStopEngine} disabled={busy === 'stop-engine' || !status.engine_started} className="btn-ghost flex items-center gap-2" type="button">
+              <Square size={16} /> Stop Engine
+            </button>
+          </div>
         </div>
         {status.readiness.issues.length > 0 && (
           <div className="mt-4 rounded-md border border-amber-800 bg-amber-950 p-3 text-sm text-amber-100">
