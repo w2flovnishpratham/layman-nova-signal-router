@@ -10,6 +10,8 @@ import {
 import { RiskSetupPayload, SetupStatus } from '../types'
 
 const steps = ['Connect Dhan', 'Wallet Verified', 'Webhook Secret', 'Risk Settings', 'Start Engine']
+const MIN_WEBHOOK_SECRET_LENGTH = 5
+const WEBHOOK_SECRET_LENGTH_ERROR = `Webhook secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters.`
 
 function currency(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
@@ -23,6 +25,20 @@ function errorMessage(error: unknown) {
   if (data && typeof data === 'object') {
     const detail = (data as { detail?: unknown }).detail
     if (typeof detail === 'string') return detail
+    if (Array.isArray(detail)) {
+      const messages = detail
+        .map((item) => {
+          if (!item || typeof item !== 'object') return ''
+          const loc = (item as { loc?: unknown }).loc
+          const msg = (item as { msg?: unknown }).msg
+          if (Array.isArray(loc) && loc.includes('webhook_secret') && typeof msg === 'string' && msg.toLowerCase().includes('at least')) {
+            return WEBHOOK_SECRET_LENGTH_ERROR
+          }
+          return typeof msg === 'string' ? msg : ''
+        })
+        .filter(Boolean)
+      if (messages.length) return Array.from(new Set(messages)).join(' ')
+    }
     if (detail && typeof detail === 'object') {
       const message = (detail as { message?: unknown }).message
       if (typeof message === 'string') return message
@@ -90,10 +106,16 @@ export default function SetupPage() {
 
   const submitSecret = async (event: FormEvent) => {
     event.preventDefault()
+    const trimmedSecret = webhookSecret.trim()
+    if (trimmedSecret.length < MIN_WEBHOOK_SECRET_LENGTH) {
+      setMessage('')
+      setError(WEBHOOK_SECRET_LENGTH_ERROR)
+      return
+    }
     setBusy('secret')
     setError('')
     try {
-      await saveWebhookSecret(webhookSecret)
+      await saveWebhookSecret(trimmedSecret)
       setWebhookSecret('')
       setMessage('Webhook secret saved.')
       await loadStatus()
@@ -252,7 +274,7 @@ export default function SetupPage() {
           </div>
           <label className="block text-sm">
             <span className="mb-1 block text-slate-300">Webhook Secret</span>
-            <input value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} className="input" type="password" autoComplete="off" />
+            <input value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} className="input" type="password" autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} required />
           </label>
           <div className="flex flex-wrap gap-2">
             <button disabled={busy === 'secret'} className="btn-primary" type="submit">

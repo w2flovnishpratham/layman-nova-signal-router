@@ -45,7 +45,7 @@ class DhanConnectRequest(BaseModel):
 
 
 class WebhookSecretRequest(BaseModel):
-    webhook_secret: str = Field(..., min_length=8)
+    webhook_secret: str = Field(..., min_length=5)
 
 
 class RiskSetupRequest(BaseModel):

@@ -280,8 +280,8 @@ def get_webhook_secret() -> str | None:
 
 def save_webhook_secret(webhook_secret: str) -> dict[str, Any]:
     webhook_secret = webhook_secret.strip()
-    if len(webhook_secret) < 8:
-        raise VaultError("Webhook secret must be at least 8 characters.")
+    if len(webhook_secret) < 5:
+        raise VaultError("Webhook secret must be at least 5 characters.")
     payload = _read_payload()
     payload["webhook_secret"] = webhook_secret
     payload["webhook_secret_updated_at"] = utc_now()

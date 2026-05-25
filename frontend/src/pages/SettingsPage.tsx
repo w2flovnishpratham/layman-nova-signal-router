@@ -14,6 +14,9 @@ import {
 } from '../api/dashboard'
 import { DhanDebugConfig, RiskSetupPayload, SetupStatus } from '../types'
 
+const MIN_WEBHOOK_SECRET_LENGTH = 5
+const WEBHOOK_SECRET_LENGTH_ERROR = `Webhook secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters.`
+
 function errorMessage(error: unknown) {
   const response = (error as { response?: { data?: unknown } }).response
   const data = response?.data
@@ -21,6 +24,20 @@ function errorMessage(error: unknown) {
   if (data && typeof data === 'object') {
     const detail = (data as { detail?: unknown }).detail
     if (typeof detail === 'string') return detail
+    if (Array.isArray(detail)) {
+      const messages = detail
+        .map((item) => {
+          if (!item || typeof item !== 'object') return ''
+          const loc = (item as { loc?: unknown }).loc
+          const msg = (item as { msg?: unknown }).msg
+          if (Array.isArray(loc) && loc.includes('webhook_secret') && typeof msg === 'string' && msg.toLowerCase().includes('at least')) {
+            return WEBHOOK_SECRET_LENGTH_ERROR
+          }
+          return typeof msg === 'string' ? msg : ''
+        })
+        .filter(Boolean)
+      if (messages.length) return Array.from(new Set(messages)).join(' ')
+    }
     if (detail && typeof detail === 'object') {
       const message = (detail as { message?: unknown }).message
       if (typeof message === 'string') return message
@@ -87,7 +104,13 @@ export default function SettingsPage() {
 
   const updateSecret = async (event: FormEvent) => {
     event.preventDefault()
-    await run('secret', saveWebhookSecret(webhookSecret), 'Webhook secret updated.')
+    const trimmedSecret = webhookSecret.trim()
+    if (trimmedSecret.length < MIN_WEBHOOK_SECRET_LENGTH) {
+      setMessage('')
+      setError(WEBHOOK_SECRET_LENGTH_ERROR)
+      return
+    }
+    await run('secret', saveWebhookSecret(trimmedSecret), 'Webhook secret updated.')
     setWebhookSecret('')
   }
 
@@ -153,7 +176,7 @@ export default function SettingsPage() {
           <p className="text-sm text-slate-400">Saved: {status.webhook_secret_set ? 'yes' : 'no'}</p>
           <label className="block text-sm">
             <span className="mb-1 block text-slate-300">New Webhook Secret</span>
-            <input className="input" type="password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="off" />
+            <input className="input" type="password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} required />
           </label>
           <div className="flex flex-wrap gap-2">
             <button disabled={busy === 'secret'} className="btn-primary" type="submit">
