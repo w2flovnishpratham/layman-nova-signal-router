@@ -153,6 +153,12 @@ class MockDhanClient:
 
 
 class RealDhanClient:
+    def _client(self, *, timeout: float) -> httpx.Client:
+        # Dhan static-IP whitelisting is configured for the server's IPv4.
+        # Bind outbound Dhan calls to IPv4 so dual-stack DNS cannot choose IPv6.
+        transport = httpx.HTTPTransport(local_address="0.0.0.0")
+        return httpx.Client(timeout=timeout, transport=transport)
+
     def _headers(self, client_id: str, access_token: str) -> dict[str, str]:
         """
         Build Dhan v2 request headers.
@@ -264,7 +270,7 @@ class RealDhanClient:
             )
 
         try:
-            with httpx.Client(timeout=10.0) as client:
+            with self._client(timeout=10.0) as client:
                 response = client.post(url, json=payload, headers=self._headers(client_id, access_token))
 
             parsed = self._parse_response(response)
@@ -370,7 +376,7 @@ class RealDhanClient:
 
         for attempt in range(max_polls):
             try:
-                with httpx.Client(timeout=8.0) as client:
+                with self._client(timeout=8.0) as client:
                     response = client.get(url, headers=self._headers(client_id, access_token))
                 parsed = self._parse_response(response)
                 data = self._response_payload(parsed)
@@ -457,7 +463,7 @@ class RealDhanClient:
     def validate_token(self, *, client_id: str, access_token: str) -> DhanValidationResult:
         url = f"{DHAN_BASE_URL}/profile"
         try:
-            with httpx.Client(timeout=5.0) as client:
+            with self._client(timeout=5.0) as client:
                 response = client.get(url, headers=self._headers(client_id, access_token))
             data = self._parse_response(response)
             if 200 <= response.status_code <= 299:
@@ -494,7 +500,7 @@ class RealDhanClient:
     def get_positions(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
         url = f"{DHAN_BASE_URL}/positions"
         try:
-            with httpx.Client(timeout=10.0) as client:
+            with self._client(timeout=10.0) as client:
                 response = client.get(url, headers=self._headers(client_id, access_token))
             return response.json() if response.status_code == 200 else []
         except Exception:
@@ -503,7 +509,7 @@ class RealDhanClient:
     def get_fund_limit(self, *, client_id: str, access_token: str) -> DhanFundsResult:
         url = f"{DHAN_BASE_URL}/fundlimit"
         try:
-            with httpx.Client(timeout=5.0) as client:
+            with self._client(timeout=5.0) as client:
                 response = client.get(url, headers=self._headers(client_id, access_token))
             parsed = self._parse_response(response)
             data = parsed if isinstance(parsed, dict) else {"raw_response": parsed}

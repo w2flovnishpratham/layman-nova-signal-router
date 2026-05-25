@@ -181,6 +181,21 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
                 security_id=request_payload.get("securityId"),
                 trading_symbol=request_payload.get("tradingSymbol"),
             )
+        lot_size = security_id_resolution.get("lot_size")
+        try:
+            lot_size_int = int(lot_size) if lot_size not in (None, "") else None
+        except (TypeError, ValueError):
+            lot_size_int = None
+        if lot_size_int and qty % lot_size_int != 0:
+            return _blocked(
+                "BLOCKED",
+                f"REAL mode blocked: quantity {qty} is not a multiple of Dhan lot size {lot_size_int}. "
+                f"For one lot, send quantity {lot_size_int}.",
+                signal,
+                security_id_resolution=security_id_resolution,
+                security_id=request_payload.get("securityId"),
+                trading_symbol=request_payload.get("tradingSymbol"),
+            )
         if (
             settings.MARKET_CLOSED_DEBUG
             and not settings.FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED

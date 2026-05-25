@@ -310,6 +310,30 @@ def resolve_security_id(signal: NormalizedSignal) -> SecurityIdResolution:
                 reason=block_reason,
                 trading_symbol=signal.trading_symbol,
             )
+        if (
+            signal.symbol
+            and signal.expiry
+            and signal.strike is not None
+            and signal.option_side
+            and settings.AUTO_RESOLVE_SECURITY_ID
+        ):
+            match = _lookup_scrip_master(
+                symbol=signal.symbol,
+                expiry=signal.expiry,
+                strike=signal.strike,
+                option_side=signal.option_side,
+                exchange_segment=signal.exchange_segment,
+            )
+            if match and str(match.security_id) == provided_id:
+                return SecurityIdResolution(
+                    ok=True,
+                    security_id=provided_id,
+                    method="PROVIDED_IN_SIGNAL",
+                    reason="securityId provided by normalized signal and verified against local Dhan scrip master.",
+                    trading_symbol=match.trading_symbol or signal.trading_symbol,
+                    lot_size=match.lot_size,
+                    source_path=match.source_path,
+                )
         return SecurityIdResolution(
             ok=True,
             security_id=provided_id,
