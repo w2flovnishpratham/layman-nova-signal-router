@@ -65,20 +65,8 @@ function activityPlaceholder(status: SetupStatus) {
   return ''
 }
 
-function isInternalActivityText(value: string) {
-  return [
-    /^hey,?\s*i'?m nova signal router/i,
-    /^waiting for tradingview entry alert/i,
-    /^waiting for dhan order response/i,
-    /^tradingview alert received/i,
-    /^exit alert received/i,
-    /^running backend risk checks/i,
-    /^risk check passed/i,
-    /^sending (entry|exit) order to dhan/i,
-    /^entry order placed/i,
-    /^trade exited\. waiting for next entry alert/i,
-    /^position open\. waiting for tradingview exit alert/i,
-  ].some((pattern) => pattern.test(value))
+function isTradeAttentionText(value: string) {
+  return /reject|blocked|failed|invalid|error|unauthor|token/i.test(value)
 }
 
 function errorMessage(error: unknown) {
@@ -201,7 +189,7 @@ function ActivityFeed({ status, feed }: { status: SetupStatus; feed: ChatFeedIte
       if (item.type === 'signal_card' || item.type === 'order_card') return true
       const text = cleanText(item.text)
       if (!text) return false
-      return !isInternalActivityText(text)
+      return isTradeAttentionText(text)
     })
     .slice(-12)
 
@@ -218,12 +206,10 @@ function ActivityFeed({ status, feed }: { status: SetupStatus; feed: ChatFeedIte
 
           const text = cleanText(item.text)
           if (!text) return null
-          const isWarning = /reject|blocked|failed|invalid|error/i.test(text)
-          const isWaiting = /waiting/i.test(text)
           return (
-            <div key={item.id || index} className={isWarning ? 'rounded-md border border-red-800 bg-red-950/30 p-4' : isWaiting ? 'rounded-md border border-slate-700 bg-slate-950 p-4' : 'rounded-md border border-slate-800 bg-slate-950 p-4'}>
+            <div key={item.id || index} className="rounded-md border border-red-800 bg-red-950/30 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className={isWarning ? 'text-sm font-semibold text-red-200' : 'text-sm font-semibold text-slate-200'}>{text}</p>
+                <p className="text-sm font-semibold text-red-200">{text}</p>
                 <p className="text-xs text-slate-500">{displayTime(item.timestamp)}</p>
               </div>
             </div>
