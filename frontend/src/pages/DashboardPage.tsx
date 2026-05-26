@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Copy,
+  Play,
   RefreshCw,
   ShieldAlert,
   Square,
@@ -15,6 +16,7 @@ import {
   getLiveFlow,
   getOrders,
   getSetupStatus,
+  startEngine,
   stopEngine,
 } from '../api/dashboard'
 import type { DashboardSummary, LiveFlowStep, OrderEvent, SetupStatus } from '../types'
@@ -209,8 +211,26 @@ export default function DashboardPage() {
     await emergencyStop(); toast.error('Emergency stop activated'); loadData()
   }
 
+  const runStartEngine = async () => {
+    const confirmLive = Boolean(setup?.mode.dhan_mode === 'REAL' && setup.mode.live_orders_enabled)
+    if (confirmLive && !window.confirm('LIVE ORDERS ENABLED - real money orders can be placed. Start engine?')) return
+    try {
+      await startEngine(confirmLive)
+      toast.success('Engine started')
+      loadData()
+    } catch {
+      toast.error('Failed to start engine')
+    }
+  }
+
   const runStopEngine = async () => {
-    await stopEngine(); toast.warning('Engine stopped'); loadData()
+    try {
+      await stopEngine()
+      toast.warning('Engine stopped')
+      loadData()
+    } catch {
+      toast.error('Failed to stop engine')
+    }
   }
 
   if (!summary || !setup) return (
@@ -254,7 +274,8 @@ export default function DashboardPage() {
         </div>
         <div className="card space-y-3">
           <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Quick controls</h2>
-          <button onClick={runStopEngine}    className="btn-ghost  flex w-full items-center justify-center gap-2 text-sm"><Square size={14} /> Stop Engine</button>
+          <button onClick={runStartEngine} disabled={setup.engine_started} className="btn-primary flex w-full items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-45"><Play size={14} /> Start Engine</button>
+          <button onClick={runStopEngine} disabled={!setup.engine_started} className="btn-ghost  flex w-full items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-45"><Square size={14} /> Stop Engine</button>
           <button onClick={runEmergencyStop} className="btn-danger flex w-full items-center justify-center gap-2 text-sm"><ShieldAlert size={14} /> Emergency Stop</button>
           <p className="text-xs" style={{ color: '#77736c' }}>Full controls at <a href="/app/controls" className="underline underline-offset-2" style={{ color: '#9a968f' }}>/controls</a>.</p>
         </div>

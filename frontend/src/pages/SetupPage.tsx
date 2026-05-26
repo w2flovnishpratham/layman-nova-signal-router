@@ -590,7 +590,7 @@ export default function SetupPage() {
             <button onClick={runStartEngine} disabled={busy === 'engine' || status.engine_started} className="btn-primary flex items-center gap-2" type="button">
               <Play size={16} /> Start Engine
             </button>
-            <button onClick={runStopEngine} disabled={busy === 'stop-engine' || !status.engine_started} className="btn-ghost flex items-center gap-2" type="button">
+            <button onClick={runStopEngine} disabled={busy === 'stop-engine' || !status.engine_started} className="btn-ghost btn-stop-engine flex items-center gap-2" type="button">
               <Square size={16} /> Stop Engine
             </button>
           </div>

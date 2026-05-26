@@ -159,6 +159,15 @@ body {
 .btn-ghost:hover { background-color: #211f1b; }
 .btn-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
 
+.btn-stop-engine {
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
+}
+.btn-stop-engine:hover:not(:disabled) {
+  background-color: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+}
+
 .btn-warning {
   display: inline-flex;
   align-items: center;
@@ -396,4 +405,3 @@ body {
 .terminal-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #3a3933;
 }
-
