@@ -59,6 +59,9 @@ Variables that must **not** appear in `.env`:
 - [ ] `max_trades_per_day = 1` (for first live test)
 - [ ] `daily_loss_limit = 500` or stricter
 - [ ] `server_side_exit_enabled = true`
+- [ ] `marketfeed_ws_enabled = true`
+- [ ] `option_ltp_source = WEBSOCKET`
+- [ ] `option_rest_fallback_enabled = false` unless you explicitly want REST backup
 - [ ] `option_sl_percent = 10.0` or stricter
 - [ ] `option_tp_percent = 20.0`
 - [ ] `option_ltp_poll_seconds = 1.0`

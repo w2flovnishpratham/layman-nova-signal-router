@@ -241,6 +241,11 @@ export default function SetupPage() {
     max_trades_per_day: 1,
     daily_loss_limit: 500,
     server_side_exit_enabled: true,
+    marketfeed_ws_enabled: true,
+    option_ltp_source: 'WEBSOCKET',
+    option_ws_stale_seconds: 5,
+    option_rest_fallback_enabled: false,
+    option_rest_fallback_cooldown_seconds: 15,
     option_sl_percent: 10,
     option_tp_percent: 20,
     option_ltp_poll_seconds: 1,
@@ -589,14 +594,40 @@ export default function SetupPage() {
                   <input className="input" type="number" min={0.1} step={0.1} value={risk.option_tp_percent ?? 20} onChange={(event) => setRisk({ ...risk, option_tp_percent: Number(event.target.value) })} />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[#d8d3c8]">LTP poll seconds</span>
+                  <span className="mb-1 block text-[#d8d3c8]">Monitor loop seconds</span>
                   <input className="input" type="number" min={1} step={1} value={risk.option_ltp_poll_seconds ?? 1} onChange={(event) => setRisk({ ...risk, option_ltp_poll_seconds: Number(event.target.value) })} />
+                </label>
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[#d8d3c8]">LTP source</span>
+                  <select className="input" value={risk.option_ltp_source ?? 'WEBSOCKET'} onChange={(event) => setRisk({ ...risk, option_ltp_source: event.target.value })}>
+                    <option value="WEBSOCKET">WebSocket</option>
+                    <option value="AUTO">WebSocket + fallback</option>
+                    <option value="REST">REST only</option>
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[#d8d3c8]">WS stale seconds</span>
+                  <input className="input" type="number" min={1} step={1} value={risk.option_ws_stale_seconds ?? 5} onChange={(event) => setRisk({ ...risk, option_ws_stale_seconds: Number(event.target.value) })} />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[#d8d3c8]">REST fallback cooldown</span>
+                  <input className="input" type="number" min={1} step={1} value={risk.option_rest_fallback_cooldown_seconds ?? 15} onChange={(event) => setRisk({ ...risk, option_rest_fallback_cooldown_seconds: Number(event.target.value) })} />
                 </label>
               </div>
               <div className="flex flex-wrap gap-4 text-sm">
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={risk.server_side_exit_enabled ?? true} onChange={(event) => setRisk({ ...risk, server_side_exit_enabled: event.target.checked })} />
                   Server-side option SL/TP
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={risk.marketfeed_ws_enabled ?? true} onChange={(event) => setRisk({ ...risk, marketfeed_ws_enabled: event.target.checked })} />
+                  Dhan market WebSocket
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={risk.option_rest_fallback_enabled ?? false} onChange={(event) => setRisk({ ...risk, option_rest_fallback_enabled: event.target.checked })} />
+                  REST fallback
                 </label>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={risk.allow_entry} onChange={(event) => setRisk({ ...risk, allow_entry: event.target.checked })} />

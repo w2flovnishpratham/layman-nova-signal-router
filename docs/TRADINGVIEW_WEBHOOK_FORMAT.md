@@ -92,7 +92,7 @@ The flow is:
 1. Pine watches the NIFTY chart and sends only an `ENTRY` alert.
 2. Backend places the Dhan CE/PE market buy order.
 3. Backend polls Dhan order status and stores the actual option fill price.
-4. Backend polls Dhan `POST /marketfeed/ltp` for the option `securityId`.
+4. Backend subscribes to Dhan Market Feed WebSocket ticker data for the option `securityId`.
 5. Backend sends a Dhan market sell when the real option premium reaches SL or TP.
 
 Runtime defaults:
@@ -100,8 +100,20 @@ Runtime defaults:
 | Setting | Default |
 |---------|---------|
 | `server_side_exit_enabled` | `true` |
+| `marketfeed_ws_enabled` | `true` |
+| `option_ltp_source` | `WEBSOCKET` |
+| `option_ws_stale_seconds` | `5.0` |
+| `option_rest_fallback_enabled` | `false` |
 | `option_sl_percent` | `10.0` |
 | `option_tp_percent` | `20.0` |
 | `option_ltp_poll_seconds` | `1.0` |
 
 The monitor only sends automatic exits when `DHAN_MODE=REAL` and `ENABLE_LIVE_ORDERS=true`.
+
+The WebSocket connection uses Dhan's documented endpoint:
+
+```text
+wss://api-feed.dhan.co?version=2&token=<token>&clientId=<clientId>&authType=2
+```
+
+The backend subscribes with request code `15` for ticker packets. Dhan sends binary little-endian packets; the backend parses the ticker packet LTP from the documented float32 LTP field. REST `/marketfeed/ltp` is available only if explicitly enabled as a fallback.

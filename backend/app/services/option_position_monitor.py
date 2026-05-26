@@ -10,6 +10,13 @@ from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret
 from app.services.dhan_client import MockDhanClient, RealDhanClient
+from app.services.dhan_marketfeed_ws import (
+    clear_marketfeed_subscription,
+    ensure_marketfeed_subscription,
+    get_marketfeed_ltp,
+    marketfeed_ws_status,
+    stop_marketfeed_ws,
+)
 from app.services.state_store import get_open_position, get_runtime_settings, set_open_position, utc_now
 
 
@@ -20,6 +27,7 @@ _THREAD: threading.Thread | None = None
 _THREAD_LOCK = threading.RLock()
 
 EXIT_COOLDOWN_SECONDS = 15.0
+_LAST_REST_FALLBACK_AT: dict[tuple[str, str], float] = {}
 
 
 def _as_float(value: Any, default: float | None = None) -> float | None:
@@ -68,6 +76,30 @@ def _poll_seconds(runtime: dict[str, Any]) -> float:
     return max(1.0, value)
 
 
+def _ws_stale_seconds(runtime: dict[str, Any]) -> float:
+    value = _as_positive_float(runtime.get("option_ws_stale_seconds"), 5.0)
+    return max(1.0, value)
+
+
+def _ltp_source(runtime: dict[str, Any]) -> str:
+    source = str(runtime.get("option_ltp_source") or "WEBSOCKET").strip().upper()
+    return source if source in {"WEBSOCKET", "REST", "AUTO"} else "WEBSOCKET"
+
+
+def _rest_fallback_allowed(runtime: dict[str, Any], exchange_segment: str, security_id: str) -> bool:
+    if _ltp_source(runtime) == "REST":
+        return True
+    if not _runtime_bool(runtime, "option_rest_fallback_enabled", False):
+        return False
+    cooldown = _as_positive_float(runtime.get("option_rest_fallback_cooldown_seconds"), 15.0)
+    key = (exchange_segment, security_id)
+    last_at = _LAST_REST_FALLBACK_AT.get(key)
+    if last_at is not None and time.time() - last_at < cooldown:
+        return False
+    _LAST_REST_FALLBACK_AT[key] = time.time()
+    return True
+
+
 def _exit_levels(entry_price: float, runtime: dict[str, Any]) -> tuple[float, float, float, float]:
     sl_percent = _as_positive_float(runtime.get("option_sl_percent"), 10.0)
     tp_percent = _as_positive_float(runtime.get("option_tp_percent"), 20.0)
@@ -85,12 +117,14 @@ def _pnl_snapshot(
     tp_price: float,
     status: str,
     exit_reason: str | None = None,
+    source: str = "dhan_marketfeed_ws",
+    quote_age_seconds: float | None = None,
 ) -> dict[str, Any]:
     qty = _as_int(position.get("qty"), 0)
     unrealized_pnl = round((ltp - entry_price) * qty, 2)
     pnl_percent = round(((ltp - entry_price) / entry_price) * 100, 2) if entry_price > 0 else None
     return {
-        "source": "dhan_marketfeed_ltp",
+        "source": source,
         "status": status,
         "entry_price": entry_price,
         "ltp": ltp,
@@ -100,6 +134,7 @@ def _pnl_snapshot(
         "unrealized_pnl": unrealized_pnl,
         "pnl_percent": pnl_percent,
         "exit_reason": exit_reason,
+        "quote_age_seconds": quote_age_seconds,
         "last_checked_at": utc_now(),
     }
 
@@ -112,6 +147,18 @@ def _with_live_pnl(position: dict[str, Any], snapshot: dict[str, Any]) -> dict[s
 
 def _client() -> RealDhanClient | MockDhanClient:
     return RealDhanClient() if settings.DHAN_MODE.upper() == "REAL" else MockDhanClient()
+
+
+def _ltp_error_snapshot(*, quote: Any, status: str, ws_status: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "source": getattr(quote, "source", "dhan_marketfeed_ws"),
+        "status": status,
+        "message": getattr(quote, "message", "LTP unavailable."),
+        "error": getattr(quote, "error", None),
+        "ltp": getattr(quote, "ltp", None),
+        "last_checked_at": utc_now(),
+        "ws_status": ws_status,
+    }
 
 
 def _sync_entry_fill_if_needed(position: dict[str, Any], client: RealDhanClient | MockDhanClient, client_id: str, access_token: str) -> dict[str, Any]:
@@ -293,6 +340,7 @@ def monitor_once() -> None:
 
     position = get_open_position()
     if not position.get("has_open_position"):
+        clear_marketfeed_subscription()
         return
 
     creds = get_dhan_credentials()
@@ -310,21 +358,45 @@ def monitor_once() -> None:
     if entry_price is None or entry_price <= 0:
         return
 
-    quote = client.get_ltp(
-        client_id=creds.client_id,
-        access_token=creds.access_token,
-        exchange_segment=exchange_segment,
-        security_id=security_id,
-    )
+    source = _ltp_source(runtime)
+    quote: Any = None
+    if source in {"WEBSOCKET", "AUTO"} and _runtime_bool(runtime, "marketfeed_ws_enabled", True):
+        ensure_marketfeed_subscription(exchange_segment=exchange_segment, security_id=security_id)
+        quote = get_marketfeed_ltp(
+            exchange_segment=exchange_segment,
+            security_id=security_id,
+            max_age_seconds=_ws_stale_seconds(runtime),
+        )
+
+    if quote is None or not quote.success:
+        if _rest_fallback_allowed(runtime, exchange_segment, security_id):
+            quote = client.get_ltp(
+                client_id=creds.client_id,
+                access_token=creds.access_token,
+                exchange_segment=exchange_segment,
+                security_id=security_id,
+            )
+        else:
+            current = dict(get_open_position())
+            if current.get("has_open_position"):
+                current["live_pnl"] = _ltp_error_snapshot(
+                    quote=quote,
+                    status="ws_waiting" if quote is None or quote.error == "ws_tick_missing" else "ws_stale",
+                    ws_status=marketfeed_ws_status(),
+                )
+                set_open_position(current)
+            return
+
     if not quote.success or quote.ltp is None:
         current = dict(get_open_position())
         if current.get("has_open_position"):
             current["live_pnl"] = {
-                "source": "dhan_marketfeed_ltp",
+                "source": getattr(quote, "source", "dhan_marketfeed_ltp"),
                 "status": "ltp_error",
                 "message": quote.message,
                 "error": quote.error,
                 "last_checked_at": utc_now(),
+                "ws_status": marketfeed_ws_status(),
             }
             set_open_position(current)
         log_order_event(
@@ -334,6 +406,7 @@ def monitor_once() -> None:
                 "error": quote.error,
                 "security_id": security_id,
                 "exchange_segment": exchange_segment,
+                "source": getattr(quote, "source", "unknown"),
             }
         )
         return
@@ -357,6 +430,8 @@ def monitor_once() -> None:
         tp_price=tp_price,
         status=status,
         exit_reason=exit_reason,
+        source=getattr(quote, "source", "dhan_marketfeed_ltp"),
+        quote_age_seconds=getattr(quote, "age_seconds", None),
     )
     updated = _with_live_pnl(position, snapshot)
 
@@ -394,3 +469,4 @@ def stop_option_position_monitor(timeout: float = 2.0) -> None:
             return
         _STOP_EVENT.set()
     thread.join(timeout=timeout)
+    stop_marketfeed_ws(timeout=timeout)

@@ -53,6 +53,11 @@ class RiskSetupRequest(BaseModel):
     max_trades_per_day: int = Field(default=1, ge=1)
     daily_loss_limit: float = Field(default=500, gt=0)
     server_side_exit_enabled: bool = True
+    marketfeed_ws_enabled: bool = True
+    option_ltp_source: str = "WEBSOCKET"
+    option_ws_stale_seconds: float = Field(default=5.0, ge=1.0)
+    option_rest_fallback_enabled: bool = False
+    option_rest_fallback_cooldown_seconds: float = Field(default=15.0, ge=1.0)
     option_sl_percent: float = Field(default=10.0, gt=0)
     option_tp_percent: float = Field(default=20.0, gt=0)
     option_ltp_poll_seconds: float = Field(default=1.0, ge=1.0)
@@ -150,6 +155,12 @@ def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, li
         issues.append("Option TP percent must be greater than zero.")
     if float(runtime.get("option_ltp_poll_seconds") or 0) < 1:
         issues.append("Option LTP poll seconds must be at least 1.")
+    if float(runtime.get("option_ws_stale_seconds") or 0) < 1:
+        issues.append("Option WebSocket stale seconds must be at least 1.")
+    if float(runtime.get("option_rest_fallback_cooldown_seconds") or 0) < 1:
+        issues.append("Option REST fallback cooldown seconds must be at least 1.")
+    if str(runtime.get("option_ltp_source") or "WEBSOCKET").upper() not in {"WEBSOCKET", "REST", "AUTO"}:
+        issues.append("Option LTP source must be WEBSOCKET, REST, or AUTO.")
     return not issues, issues
 
 
@@ -230,6 +241,11 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
             "max_trades_per_day": runtime.get("max_trades_per_day"),
             "daily_loss_limit": runtime.get("daily_loss_limit"),
             "server_side_exit_enabled": runtime.get("server_side_exit_enabled"),
+            "marketfeed_ws_enabled": runtime.get("marketfeed_ws_enabled"),
+            "option_ltp_source": runtime.get("option_ltp_source"),
+            "option_ws_stale_seconds": runtime.get("option_ws_stale_seconds"),
+            "option_rest_fallback_enabled": runtime.get("option_rest_fallback_enabled"),
+            "option_rest_fallback_cooldown_seconds": runtime.get("option_rest_fallback_cooldown_seconds"),
             "option_sl_percent": runtime.get("option_sl_percent"),
             "option_tp_percent": runtime.get("option_tp_percent"),
             "option_ltp_poll_seconds": runtime.get("option_ltp_poll_seconds"),
@@ -344,6 +360,11 @@ def configure_risk(body: RiskSetupRequest) -> dict[str, Any]:
         max_trades_per_day=body.max_trades_per_day,
         daily_loss_limit=body.daily_loss_limit,
         server_side_exit_enabled=body.server_side_exit_enabled,
+        marketfeed_ws_enabled=body.marketfeed_ws_enabled,
+        option_ltp_source=body.option_ltp_source.upper(),
+        option_ws_stale_seconds=body.option_ws_stale_seconds,
+        option_rest_fallback_enabled=body.option_rest_fallback_enabled,
+        option_rest_fallback_cooldown_seconds=body.option_rest_fallback_cooldown_seconds,
         option_sl_percent=body.option_sl_percent,
         option_tp_percent=body.option_tp_percent,
         option_ltp_poll_seconds=body.option_ltp_poll_seconds,

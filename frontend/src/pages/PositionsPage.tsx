@@ -57,6 +57,8 @@ export default function PositionsPage() {
             <Field label="Unrealized PnL" value={currency(position.live_pnl?.unrealized_pnl)} />
             <Field label="PnL %" value={position.live_pnl?.pnl_percent == null ? '-' : `${position.live_pnl.pnl_percent.toFixed(2)}%`} />
             <Field label="Monitor Status" value={position.live_pnl?.status ?? '-'} />
+            <Field label="LTP Source" value={position.live_pnl?.source ?? '-'} />
+            <Field label="Quote Age" value={position.live_pnl?.quote_age_seconds == null ? '-' : `${position.live_pnl.quote_age_seconds}s`} />
             <Field label="Opened At" span2 value={position.opened_at ? new Date(position.opened_at).toLocaleString() : '-'} />
             <Field label="Last LTP Check" span2 value={position.live_pnl?.last_checked_at ? new Date(position.live_pnl.last_checked_at).toLocaleString() : '-'} />
           </div>

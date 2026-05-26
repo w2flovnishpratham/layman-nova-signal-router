@@ -607,6 +607,11 @@ export default function DashboardPage() {
                 ['Security ID', openPosition.security_id, true],
                 ['Qty', openPosition.qty, false],
                 ['Entry order', openPosition.entry_order_id, true],
+                ['Option LTP', openPosition.live_pnl?.ltp != null ? currency(openPosition.live_pnl.ltp) : '-', false],
+                ['PnL', openPosition.live_pnl?.unrealized_pnl != null ? currency(openPosition.live_pnl.unrealized_pnl) : '-', false],
+                ['SL / TP', `${openPosition.live_pnl?.sl_price != null ? currency(openPosition.live_pnl.sl_price) : '-'} / ${openPosition.live_pnl?.tp_price != null ? currency(openPosition.live_pnl.tp_price) : '-'}`, false],
+                ['LTP source', openPosition.live_pnl?.source ?? '-', false],
+                ['Monitor', openPosition.live_pnl?.status ?? '-', false],
                 ['Entry price', openPosition.entry_price != null ? currency(openPosition.entry_price) : '—', false],
                 ['Opened', openPosition.opened_at ? new Date(openPosition.opened_at).toLocaleTimeString() : '—', false]
               ] as [string, unknown, boolean][]).map(([l, v, isMono]) => (

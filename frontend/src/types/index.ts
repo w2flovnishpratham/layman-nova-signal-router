@@ -31,9 +31,11 @@ export interface OpenPosition {
     unrealized_pnl?: number | null
     pnl_percent?: number | null
     exit_reason?: string | null
+    quote_age_seconds?: number | null
     message?: string
     error?: string | null
     last_checked_at?: string | null
+    ws_status?: Record<string, unknown> | null
   } | null
   broker_sync?: {
     source?: string
@@ -54,6 +56,11 @@ export interface RuntimeSettings {
   max_trades_per_day: number
   daily_loss_limit: number
   server_side_exit_enabled?: boolean
+  marketfeed_ws_enabled?: boolean
+  option_ltp_source?: 'WEBSOCKET' | 'REST' | 'AUTO' | string
+  option_ws_stale_seconds?: number
+  option_rest_fallback_enabled?: boolean
+  option_rest_fallback_cooldown_seconds?: number
   option_sl_percent?: number
   option_tp_percent?: number
   option_ltp_poll_seconds?: number
@@ -101,6 +108,11 @@ export interface RiskSetupPayload {
   max_trades_per_day: number
   daily_loss_limit: number
   server_side_exit_enabled?: boolean
+  marketfeed_ws_enabled?: boolean
+  option_ltp_source?: 'WEBSOCKET' | 'REST' | 'AUTO' | string
+  option_ws_stale_seconds?: number
+  option_rest_fallback_enabled?: boolean
+  option_rest_fallback_cooldown_seconds?: number
   option_sl_percent?: number
   option_tp_percent?: number
   option_ltp_poll_seconds?: number
