@@ -21,6 +21,7 @@ import {
   startEngine,
   stopEngine,
 } from '../api/dashboard'
+import ConfirmModal from '../components/ConfirmModal'
 import { RiskSetupPayload, SetupStatus } from '../types'
 
 const steps = ['Connect Dhan', 'Wallet Verified', 'Webhook Secret', 'Risk Settings', 'Start Engine']
@@ -246,6 +247,19 @@ export default function SetupPage() {
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean
+    title: string
+    message: string
+    variant: 'danger' | 'warning' | 'primary'
+    onConfirm: () => void
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    variant: 'primary',
+    onConfirm: () => {},
+  })
 
   const loadData = async () => {
     const [statusResponse, feedResponse] = await Promise.all([
@@ -332,14 +346,28 @@ export default function SetupPage() {
   }
 
   const runStartEngine = async () => {
+    const confirmLive = Boolean(status?.mode.dhan_mode === 'REAL' && status.mode.live_orders_enabled)
+    if (confirmLive) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Start Engine (LIVE MODE)',
+        message: 'LIVE ORDERS ARE ENABLED — real money orders will be placed on Dhan. Are you sure you want to start the signal routing engine?',
+        variant: 'danger',
+        onConfirm: () => {
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }))
+          executeStartEngine(true)
+        },
+      })
+    } else {
+      executeStartEngine(false)
+    }
+  }
+
+  const executeStartEngine = async (live: boolean) => {
     setBusy('engine')
     setError('')
     try {
-      const confirmLive = Boolean(status?.mode.dhan_mode === 'REAL' && status.mode.live_orders_enabled)
-      if (confirmLive && !window.confirm('LIVE ORDERS ENABLED - real money orders can be placed. Start engine?')) {
-        return
-      }
-      await startEngine(confirmLive)
+      await startEngine(live)
       setMessage('Engine started. Waiting for TradingView entry alert.')
       setSetupFormsOpen(false)
       await loadData()
@@ -606,6 +634,15 @@ export default function SetupPage() {
       </section>
 
       <ActivityFeed status={status} feed={chatFeed} />
+
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+      />
     </div>
   )
 }

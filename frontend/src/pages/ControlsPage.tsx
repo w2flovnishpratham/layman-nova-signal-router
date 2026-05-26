@@ -20,24 +20,7 @@ import {
   stopEngine,
 } from '../api/dashboard'
 import { useSystemStatus } from '../hooks/useSystemStatus'
-
-// ─── Confirm + run helper ────────────────────────────────────────────────────
-
-async function confirmRun(
-  message: string,
-  action: () => Promise<unknown>,
-  onDone: (msg: string) => void,
-  onError: (msg: string) => void,
-  successMsg: string,
-) {
-  if (!window.confirm(message)) return
-  try {
-    await action()
-    onDone(successMsg)
-  } catch {
-    onError('Request failed — check backend logs.')
-  }
-}
+import ConfirmModal from '../components/ConfirmModal'
 
 // ─── Control button ──────────────────────────────────────────────────────────
 
@@ -87,9 +70,46 @@ export default function ControlsPage() {
   const status = useSystemStatus()
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean
+    title: string
+    message: string
+    variant: 'danger' | 'warning' | 'primary'
+    onConfirm: () => void
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    variant: 'primary',
+    onConfirm: () => {},
+  })
 
   const ok = (msg: string) => { setMessage(msg); setError(''); window.setTimeout(() => setMessage(''), 4000) }
   const err = (msg: string) => { setError(msg); setMessage('') }
+
+  const triggerConfirm = (
+    title: string,
+    message: string,
+    action: () => Promise<unknown>,
+    successMsg: string,
+    variant: 'danger' | 'warning' | 'primary'
+  ) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      variant,
+      onConfirm: async () => {
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }))
+        try {
+          await action()
+          ok(successMsg)
+        } catch {
+          err('Request failed — check backend logs.')
+        }
+      },
+    })
+  }
 
   return (
     <div className="space-y-8 max-w-3xl">
@@ -125,20 +145,22 @@ export default function ControlsPage() {
         <SectionLabel>Emergency</SectionLabel>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <CtrlBtn icon={ShieldAlert} label="Emergency stop" description="Immediately block all new entry risk checks." variant="danger"
-            onClick={() => confirmRun('Activate emergency stop? No new entries will be routed.', emergencyStop, ok, err, 'Emergency stop activated.')} />
+            onClick={() => triggerConfirm('Activate Emergency Stop', 'No new entries will be routed. Are you sure you want to stop trading?', emergencyStop, 'Emergency stop activated.', 'danger')} />
           <CtrlBtn icon={ShieldCheck} label="Resume trading" description="Clear emergency stop and kill switch. Re-enables normal flow." variant="primary"
-            onClick={() => confirmRun('Resume trading? Risk checks will be re-enabled.', resumeTrading, ok, err, 'Trading resumed.')} />
+            onClick={() => triggerConfirm('Resume Trading', 'Resume trading? Risk checks will be re-enabled.', resumeTrading, 'Trading resumed.', 'primary')} />
           <CtrlBtn icon={Zap}
             label="Toggle kill switch"
             description={status.killSwitch ? 'Kill switch ON — click to turn OFF.' : 'Kill switch OFF — click to turn ON.'}
             variant={status.killSwitch ? 'danger' : 'warning'}
-            onClick={() => confirmRun(
+            onClick={() => triggerConfirm(
+              status.killSwitch ? 'Disable Kill Switch' : 'Enable Kill Switch',
               status.killSwitch ? 'Turn OFF the global kill switch?' : 'Turn ON the global kill switch? All trading will pause.',
-              () => setGlobalKillSwitch(!status.killSwitch), ok, err,
+              () => setGlobalKillSwitch(!status.killSwitch),
               `Kill switch ${status.killSwitch ? 'disabled' : 'enabled'}.`,
+              status.killSwitch ? 'primary' : 'danger'
             )} />
           <CtrlBtn icon={Square} label="Stop engine" description="Stop the signal routing engine. No new alerts will be processed." variant="warning"
-            onClick={() => confirmRun('Stop the engine?', stopEngine, ok, err, 'Engine stopped.')} />
+            onClick={() => triggerConfirm('Stop Engine', 'Stop the engine? No new alerts will be processed.', stopEngine, 'Engine stopped.', 'warning')} />
         </div>
       </section>
 
@@ -146,9 +168,9 @@ export default function ControlsPage() {
         <SectionLabel>Entry flow</SectionLabel>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <CtrlBtn icon={Square} label="Pause entries" description="Block new entry orders without clearing position state." variant="warning"
-            onClick={() => confirmRun('Pause new entries?', pauseEntries, ok, err, 'Entries paused.')} />
+            onClick={() => triggerConfirm('Pause Entries', 'Pause new entries?', pauseEntries, 'Entries paused.', 'warning')} />
           <CtrlBtn icon={RefreshCw} label="Resume entries" description="Re-enable entry routing after a pause." variant="primary"
-            onClick={() => confirmRun('Resume entries?', resumeEntries, ok, err, 'Entries resumed.')} />
+            onClick={() => triggerConfirm('Resume Entries', 'Resume entry routing?', resumeEntries, 'Entries resumed.', 'primary')} />
         </div>
       </section>
 
@@ -156,11 +178,11 @@ export default function ControlsPage() {
         <SectionLabel>State management</SectionLabel>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <CtrlBtn icon={RefreshCw} label="Clear seen signals" description="Reset duplicate-detection cache. Allows re-processing of old signal IDs." variant="ghost"
-            onClick={() => confirmRun('Clear seen signals cache? Old signal IDs can re-trigger.', clearSeenSignals, ok, err, 'Seen signals cleared.')} />
+            onClick={() => triggerConfirm('Clear Seen Signals', 'Clear seen signals cache? Old signal IDs can re-trigger.', clearSeenSignals, 'Seen signals cleared.', 'primary')} />
           <CtrlBtn icon={Trash2} label="Reset runtime state" description="Clear open position and app state. Does not affect broker orders." variant="warning"
-            onClick={() => confirmRun('Reset runtime state? Local position tracking will be cleared.', resetRuntimeState, ok, err, 'Runtime state reset.')} />
+            onClick={() => triggerConfirm('Reset Runtime State', 'Reset runtime state? Local position tracking will be cleared.', resetRuntimeState, 'Runtime state reset.', 'warning')} />
           <CtrlBtn icon={AlertTriangle} label="Fresh start" description="Full reset: clears position, signals, state. Use after a manual close in Dhan." variant="danger"
-            onClick={() => confirmRun('Full fresh start? This clears all local state including position tracking.', freshStart, ok, err, 'Fresh start complete.')} />
+            onClick={() => triggerConfirm('Fresh Start', 'Full fresh start? This clears all local state including position tracking.', freshStart, 'Fresh start complete.', 'danger')} />
         </div>
       </section>
 
@@ -183,6 +205,15 @@ export default function ControlsPage() {
           ))}
         </div>
       </section>
+
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+      />
     </div>
   )
 }

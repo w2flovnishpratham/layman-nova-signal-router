@@ -22,6 +22,7 @@ import {
   stopEngine,
 } from '../api/dashboard'
 import type { DashboardSummary, LiveFlowStep, OrderEvent, SetupStatus } from '../types'
+import ConfirmModal from '../components/ConfirmModal'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -432,6 +433,19 @@ export default function DashboardPage() {
   const [setup,   setSetup]     = useState<SetupStatus | null>(null)
   const [flow,    setFlow]      = useState<LiveFlowStep[]>([])
   const [orders,  setOrders]    = useState<OrderEvent[]>([])
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean
+    title: string
+    message: string
+    variant: 'danger' | 'warning' | 'primary'
+    onConfirm: () => void
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    variant: 'primary',
+    onConfirm: () => {},
+  })
 
   const animBalance  = useAnimatedNumber(summary?.wallet?.available_balance ?? null)
   const animUtilised = useAnimatedNumber(summary?.wallet?.utilized_amount ?? null)
@@ -456,15 +470,45 @@ export default function DashboardPage() {
   }
 
   const runEmergencyStop = async () => {
-    if (!window.confirm('Activate emergency stop?')) return
-    await emergencyStop(); toast.error('Emergency stop activated'); loadData()
+    setConfirmModal({
+      isOpen: true,
+      title: 'Activate Emergency Stop',
+      message: 'This will immediately block all incoming trading alerts. Are you sure you want to activate emergency stop?',
+      variant: 'danger',
+      onConfirm: async () => {
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }))
+        try {
+          await emergencyStop()
+          toast.error('Emergency stop activated')
+          loadData()
+        } catch {
+          toast.error('Failed to activate emergency stop')
+        }
+      },
+    })
   }
 
   const runStartEngine = async () => {
     const confirmLive = Boolean(setup?.mode.dhan_mode === 'REAL' && setup.mode.live_orders_enabled)
-    if (confirmLive && !window.confirm('LIVE ORDERS ENABLED - real money orders can be placed. Start engine?')) return
+    if (confirmLive) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Start Engine (LIVE MODE)',
+        message: 'LIVE ORDERS ARE ENABLED — real money orders will be placed on Dhan. Are you sure you want to start the signal routing engine?',
+        variant: 'danger',
+        onConfirm: () => {
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }))
+          executeStartEngine(true)
+        },
+      })
+    } else {
+      executeStartEngine(false)
+    }
+  }
+
+  const executeStartEngine = async (live: boolean) => {
     try {
-      await startEngine(confirmLive)
+      await startEngine(live)
       toast.success('Engine started')
       loadData()
     } catch {
@@ -616,6 +660,15 @@ export default function DashboardPage() {
           </table>
         </div>
       </section>
+
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+      />
     </div>
   )
 }
