@@ -5,8 +5,8 @@ import { OpenPosition } from '../types'
 function Field({ label, value, mono, span2 }: { label: string; value: React.ReactNode; mono?: boolean; span2?: boolean }) {
   return (
     <div className={span2 ? 'col-span-2' : ''}>
-      <p className="text-xs mb-0.5" style={{ color: 'var(--c-text-4)' }}>{label}</p>
-      <p className={`text-sm ${mono ? 'font-mono' : 'font-medium'}`} style={{ color: 'var(--c-text-1)' }}>{value}</p>
+      <p className="text-xs mb-0.5" style={{ color: '#77736c' }}>{label}</p>
+      <p className={`text-sm ${mono ? 'font-mono' : 'font-medium'}`} style={{ color: '#f4f1ea' }}>{value}</p>
     </div>
   )
 }
@@ -27,16 +27,16 @@ export default function PositionsPage() {
   return (
     <div className="w-full">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold" style={{ color: 'var(--c-text-1)' }}>Position</h1>
-        <p className="mt-1 text-sm" style={{ color: 'var(--c-text-3)' }}>Current open position tracked by the signal engine.</p>
+        <h1 className="text-2xl font-semibold" style={{ color: '#f4f1ea' }}>Position</h1>
+        <p className="mt-1 text-sm" style={{ color: '#9a968f' }}>Current open position tracked by the signal engine.</p>
       </div>
       <div className="card">
         {loading ? (
-          <p className="text-sm" style={{ color: 'var(--c-text-4)' }}>Loading position…</p>
+          <p className="text-sm" style={{ color: '#77736c' }}>Loading position…</p>
         ) : !position?.has_open_position ? (
           <div className="flex flex-col items-center justify-center py-10 gap-2">
-            <p className="text-sm font-medium" style={{ color: 'var(--c-text-3)' }}>No open position</p>
-            <p className="text-xs" style={{ color: 'var(--c-text-4)' }}>A position will appear here once an entry order is executed.</p>
+            <p className="text-sm font-medium" style={{ color: '#9a968f' }}>No open position</p>
+            <p className="text-xs" style={{ color: '#77736c' }}>A position will appear here once an entry order is executed.</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-x-8 gap-y-5">

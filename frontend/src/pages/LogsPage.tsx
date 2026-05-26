@@ -37,8 +37,8 @@ const filters: { key: FilterKey; label: string }[] = [
 
 const SOURCE_PILL: Record<LogSource, React.CSSProperties> = {
   webhook_events: { background: 'rgba(59,130,246,0.12)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.25)' },
-  order_events:   { background: 'rgba(152,233,77,0.1)',  color: 'var(--c-lime-text)', border: '1px solid rgba(152,233,77,0.22)' },
-  audit_events:   { background: 'var(--c-raised)',               color: 'var(--c-text-3)', border: '1px solid var(--c-border-3)' },
+  order_events:   { background: 'rgba(152,233,77,0.1)',  color: '#98e94d', border: '1px solid rgba(152,233,77,0.22)' },
+  audit_events:   { background: '#1b1a17',               color: '#9a968f', border: '1px solid #2b2a26' },
   error_events:   { background: 'rgba(239,68,68,0.1)',   color: '#f87171', border: '1px solid rgba(239,68,68,0.25)' },
 }
 
@@ -190,7 +190,7 @@ function statusStyle(severity: Severity): React.CSSProperties {
   if (severity === 'warning') return { border: '1px solid rgba(245,158,11,0.22)', background: 'rgba(245,158,11,0.05)', color: '#fde68a' }
   if (severity === 'danger')  return { border: '1px solid rgba(239,68,68,0.22)',  background: 'rgba(239,68,68,0.05)',  color: '#fca5a5' }
   if (severity === 'info')    return { border: '1px solid rgba(59,130,246,0.2)',  background: 'rgba(59,130,246,0.05)', color: '#bfdbfe' }
-  return { border: '1px solid #222222', background: 'var(--c-card)', color: 'var(--c-text-2)' }
+  return { border: '1px solid #222222', background: '#151513', color: '#d8d3c8' }
 }
 
 function EventIcon({ severity }: { severity: Severity }) {
@@ -201,12 +201,12 @@ function EventIcon({ severity }: { severity: Severity }) {
 
 function Stat({ label, value, icon }: { label: string; value: number | string; icon: ReactNode }) {
   return (
-    <div className="rounded-xl p-4" style={{ border: '1px solid #222222', background: 'var(--c-card)' }}>
-      <div className="flex items-center gap-2" style={{ color: 'var(--c-text-3)' }}>
+    <div className="rounded-xl p-4" style={{ border: '1px solid #222222', background: '#151513' }}>
+      <div className="flex items-center gap-2" style={{ color: '#9a968f' }}>
         {icon}
         <p className="text-sm">{label}</p>
       </div>
-      <p className="mt-2 break-words text-xl font-semibold" style={{ color: 'var(--c-text-1)' }}>{value}</p>
+      <p className="mt-2 break-words text-xl font-semibold" style={{ color: '#f4f1ea' }}>{value}</p>
     </div>
   )
 }
@@ -258,8 +258,8 @@ export default function LogsPage() {
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold" style={{ color: 'var(--c-text-1)' }}>Activity</h1>
-          <p className="mt-1 text-sm" style={{ color: 'var(--c-text-3)' }}>
+          <h1 className="text-2xl font-semibold" style={{ color: '#f4f1ea' }}>Activity</h1>
+          <p className="mt-1 text-sm" style={{ color: '#9a968f' }}>
             Searchable audit trail for alerts, orders, errors, and engine actions.
           </p>
         </div>
@@ -287,8 +287,8 @@ export default function LogsPage() {
                 className="px-4 py-2.5 text-xs font-medium transition-colors border-b-2"
                 style={
                   active === filter.key
-                    ? { borderBottomColor: '#98e94d', color: 'var(--c-lime-text)' }
-                    : { borderBottomColor: 'transparent', color: 'var(--c-text-3)' }
+                    ? { borderBottomColor: '#98e94d', color: '#98e94d' }
+                    : { borderBottomColor: 'transparent', color: '#9a968f' }
                 }
               >
                 {filter.label}
@@ -309,7 +309,7 @@ export default function LogsPage() {
           <Search
             className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2"
             size={15}
-            style={{ color: 'var(--c-text-4)' }}
+            style={{ color: '#77736c' }}
           />
           <input
             className="input text-sm"
@@ -326,14 +326,14 @@ export default function LogsPage() {
         {loading ? (
           <div
             className="rounded-xl p-5 text-sm"
-            style={{ border: '1px solid #222222', background: 'var(--c-card)', color: 'var(--c-text-3)' }}
+            style={{ border: '1px solid #222222', background: '#151513', color: '#9a968f' }}
           >
             Loading activity...
           </div>
         ) : filteredItems.length === 0 ? (
           <div
             className="rounded-xl p-5 text-sm"
-            style={{ border: '1px solid #222222', background: 'var(--c-card)', color: 'var(--c-text-3)' }}
+            style={{ border: '1px solid #222222', background: '#151513', color: '#9a968f' }}
           >
             No activity entries match this view.
           </div>
@@ -355,10 +355,10 @@ export default function LogsPage() {
                       </span>
                       <h2 className="text-sm font-semibold">{item.title}</h2>
                     </div>
-                    <p className="mt-1 text-sm" style={{ color: 'var(--c-text-3)' }}>{item.message}</p>
+                    <p className="mt-1 text-sm" style={{ color: '#9a968f' }}>{item.message}</p>
                   </div>
                 </div>
-                <p className="shrink-0 text-xs" style={{ color: 'var(--c-text-3)' }}>
+                <p className="shrink-0 text-xs" style={{ color: '#9a968f' }}>
                   {formatTime(item.timestamp)}
                 </p>
               </div>
@@ -375,7 +375,7 @@ export default function LogsPage() {
                   ] as { label: string; value: string; mono: boolean }[]
                 ).map(({ label, value, mono }) => (
                   <div key={label}>
-                    <p style={{ color: 'var(--c-text-4)' }}>{label}</p>
+                    <p style={{ color: '#77736c' }}>{label}</p>
                     <p className={`font-medium ${mono ? 'font-mono text-xs break-all' : ''}`}>{value}</p>
                   </div>
                 ))}
@@ -383,12 +383,12 @@ export default function LogsPage() {
 
               {/* Raw event */}
               <details className="mt-4">
-                <summary className="cursor-pointer text-sm" style={{ color: 'var(--c-text-3)' }}>
+                <summary className="cursor-pointer text-sm" style={{ color: '#9a968f' }}>
                   Raw event
                 </summary>
                 <pre
                   className="mt-3 overflow-x-auto rounded-lg p-3 text-xs"
-                  style={{ border: '1px solid #222222', background: 'var(--c-page)', color: 'var(--c-text-3)' }}
+                  style={{ border: '1px solid #222222', background: '#090908', color: '#9a968f' }}
                 >
                   {JSON.stringify(item.raw, null, 2)}
                 </pre>

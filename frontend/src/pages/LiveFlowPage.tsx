@@ -22,9 +22,9 @@ export default function LiveFlowPage() {
     <div className="max-w-xl">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold" style={{ color: 'var(--c-text-1)' }}>Live Flow</h1>
+          <h1 className="text-2xl font-semibold" style={{ color: '#f4f1ea' }}>Live Flow</h1>
           {lastUpdated && (
-            <p className="text-xs mt-0.5" style={{ color: 'var(--c-text-4)' }}>
+            <p className="text-xs mt-0.5" style={{ color: '#77736c' }}>
               Updated {lastUpdated.toLocaleTimeString()} · auto-refreshes every 3s
             </p>
           )}
@@ -34,7 +34,7 @@ export default function LiveFlowPage() {
         </button>
       </div>
       <div className="card">
-        {loading ? <p className="text-sm" style={{ color: 'var(--c-text-4)' }}>Loading flow…</p> : <LiveFlowTimeline steps={steps} />}
+        {loading ? <p className="text-sm" style={{ color: '#77736c' }}>Loading flow…</p> : <LiveFlowTimeline steps={steps} />}
       </div>
     </div>
   )
