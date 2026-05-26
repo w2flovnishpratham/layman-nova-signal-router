@@ -535,9 +535,21 @@ export default function DashboardPage() {
         <div className="card space-y-3">
           <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Open position</h2>
           {openPosition.has_open_position ? (
-            <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-              {([['Symbol', openPosition.trading_symbol], ['Security ID', openPosition.security_id], ['Qty', openPosition.qty], ['Entry order', openPosition.entry_order_id], ['Entry price', openPosition.entry_price != null ? currency(openPosition.entry_price) : '—'], ['Opened', openPosition.opened_at ? new Date(openPosition.opened_at).toLocaleTimeString() : '—']] as [string, unknown][]).map(([l, v]) => (
-                <div key={String(l)}><p className="text-xs" style={{ color: '#77736c' }}>{String(l)}</p><p className="font-medium truncate">{String(v ?? '—')}</p></div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+              {([
+                ['Symbol', openPosition.trading_symbol, false],
+                ['Security ID', openPosition.security_id, true],
+                ['Qty', openPosition.qty, false],
+                ['Entry order', openPosition.entry_order_id, true],
+                ['Entry price', openPosition.entry_price != null ? currency(openPosition.entry_price) : '—', false],
+                ['Opened', openPosition.opened_at ? new Date(openPosition.opened_at).toLocaleTimeString() : '—', false]
+              ] as [string, unknown, boolean][]).map(([l, v, isMono]) => (
+                <div key={String(l)}>
+                  <p className="text-xs" style={{ color: '#77736c' }}>{String(l)}</p>
+                  <p className={`font-medium ${isMono ? 'font-mono text-xs break-all select-all text-[#bcb5aa]' : 'truncate'}`}>
+                    {String(v ?? '—')}
+                  </p>
+                </div>
               ))}
             </div>
           ) : (
@@ -597,7 +609,7 @@ export default function DashboardPage() {
                   <td className="py-2.5 pr-4 font-mono text-xs font-medium">{order.trading_symbol ?? order.normalized_symbol ?? '—'}</td>
                   <td className="py-2.5 pr-4" style={{ color: '#d8d3c8' }}>{order.normalized_qty ?? order.qty ?? '—'}</td>
                   <td className="py-2.5 pr-4"><OrderStatusBadge order={order} /></td>
-                  <td className="py-2.5 text-xs max-w-xs truncate" style={{ color: '#77736c' }}>{order.reason ?? '—'}</td>
+                  <td className="py-2.5 text-xs max-w-xs break-words whitespace-normal" style={{ color: '#77736c' }}>{order.reason ?? '—'}</td>
                 </tr>
               ))}
             </tbody>

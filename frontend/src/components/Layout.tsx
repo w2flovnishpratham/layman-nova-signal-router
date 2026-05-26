@@ -183,16 +183,16 @@ export default function Layout() {
           className="flex items-center justify-between h-14 px-5 flex-shrink-0"
           style={{ borderBottom: '1px solid #1a1a1a', background: '#0a0a0a' }}
         >
-          <div>
-            <p className="text-sm font-semibold leading-tight" style={{ color: '#f0f0f0' }}>
+          <div className="min-w-0 flex-shrink-0">
+            <p className="text-sm font-semibold leading-tight whitespace-nowrap" style={{ color: '#f0f0f0' }}>
               NOVA Signal Router
             </p>
-            <p className="text-xs leading-tight" style={{ color: '#555555' }}>
+            <p className="text-xs leading-tight hidden sm:block mt-0.5" style={{ color: '#555555' }}>
               TradingView → Dhan
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
             {status.dhanMode !== 'UNKNOWN' && (
               <span className={status.dhanMode === 'REAL' ? 'badge-red-solid' : 'badge-green-solid'}>
                 {status.dhanMode}
@@ -208,19 +208,24 @@ export default function Layout() {
               </span>
             )}
 
-            <div className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs ${cfg.pillCls}`}>
+            <div 
+              title={status.label}
+              className={`flex items-center justify-center rounded-full ${cfg.pillCls} px-2.5 py-1 sm:px-3 sm:py-1.5`}
+            >
               <span className={cfg.dotCls} />
-              <span className={cfg.textCls}>{status.label}</span>
+              <span className={`hidden sm:inline text-xs ml-1.5 font-medium tracking-wide ${cfg.textCls}`}>
+                {status.label}
+              </span>
             </div>
 
             {/* Quick controls for mobile toolbar */}
-            <div className="flex md:hidden items-center gap-1 border-l border-[#1a1a1a] pl-2 ml-1">
+            <div className="flex md:hidden items-center gap-0.5 border-l border-[#1a1a1a] pl-2 ml-1">
               <NavLink
                 to="/app/controls"
                 title="Controls"
                 className={({ isActive }) =>
                   `p-1.5 rounded-lg transition-colors ${
-                    isActive ? 'bg-[rgba(239,68,68,0.12)] text-red-400' : 'text-[#444444]'
+                    isActive ? 'bg-[rgba(239,68,68,0.12)] text-red-400' : 'text-[#555555] hover:text-[#aaaaaa]'
                   }`
                 }
               >
@@ -231,7 +236,7 @@ export default function Layout() {
                 title="Settings"
                 className={({ isActive }) =>
                   `p-1.5 rounded-lg transition-colors ${
-                    isActive ? 'bg-[#1b1a17] text-[#98e94d]' : 'text-[#444444]'
+                    isActive ? 'bg-[#1b1a17] text-[#98e94d]' : 'text-[#555555] hover:text-[#aaaaaa]'
                   }`
                 }
               >
