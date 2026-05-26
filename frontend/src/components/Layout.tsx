@@ -107,6 +107,28 @@ function SidebarLink({ to, icon: Icon, label, danger = false }: NavItem & { dang
   )
 }
 
+// ─── Mobile nav item ─────────────────────────────────────────────────────────
+
+function MobileNavLink({ to, icon: Icon, label }: NavItem) {
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) => {
+        const base = 'flex flex-col items-center justify-center flex-1 h-full py-1.5 transition-all duration-150 '
+        return (
+          base +
+          (isActive
+            ? 'text-[#98e94d] font-semibold'
+            : 'text-[#555555] hover:text-[#aaaaaa]')
+        )
+      }}
+    >
+      <Icon size={16} />
+      <span className="mt-1 text-[9px] uppercase tracking-wider font-mono">{label}</span>
+    </NavLink>
+  )
+}
+
 // ─── Layout ──────────────────────────────────────────────────────────────────
 
 export default function Layout() {
@@ -118,7 +140,7 @@ export default function Layout() {
     <div className="flex h-screen overflow-hidden" style={{ background: '#0f0f0f', color: '#f0f0f0' }}>
       {/* ── Sidebar ── */}
       <aside
-        className="flex flex-col items-center w-14 flex-shrink-0 py-3"
+        className="hidden md:flex flex-col items-center w-14 flex-shrink-0 py-3"
         style={{ background: '#0a0a0a', borderRight: '1px solid #1a1a1a' }}
       >
         {/* Logo mark */}
@@ -190,16 +212,52 @@ export default function Layout() {
               <span className={cfg.dotCls} />
               <span className={cfg.textCls}>{status.label}</span>
             </div>
+
+            {/* Quick controls for mobile toolbar */}
+            <div className="flex md:hidden items-center gap-1 border-l border-[#1a1a1a] pl-2 ml-1">
+              <NavLink
+                to="/app/controls"
+                title="Controls"
+                className={({ isActive }) =>
+                  `p-1.5 rounded-lg transition-colors ${
+                    isActive ? 'bg-[rgba(239,68,68,0.12)] text-red-400' : 'text-[#444444]'
+                  }`
+                }
+              >
+                <ShieldAlert size={15} />
+              </NavLink>
+              <NavLink
+                to="/app/settings"
+                title="Settings"
+                className={({ isActive }) =>
+                  `p-1.5 rounded-lg transition-colors ${
+                    isActive ? 'bg-[#1b1a17] text-[#98e94d]' : 'text-[#444444]'
+                  }`
+                }
+              >
+                <Settings size={15} />
+              </NavLink>
+            </div>
           </div>
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto" style={{ background: '#0f0f0f' }}>
+        <main className="flex-1 overflow-y-auto pb-20 md:pb-0" style={{ background: '#0f0f0f' }}>
           <div className="mx-auto w-full max-w-7xl px-6 py-6">
             <Outlet />
           </div>
         </main>
       </div>
+
+      {/* Mobile Bottom Tab Bar */}
+      <nav 
+        className="fixed bottom-0 left-0 right-0 h-16 bg-[#0a0a0a] border-t border-[#1a1a1a] flex md:hidden items-center justify-around z-50 px-2 shadow-[0_-5px_15px_rgba(0,0,0,0.4)]"
+        style={{ background: '#0a0a0a' }}
+      >
+        {TOP_LINKS.map(link => (
+          <MobileNavLink key={link.to} {...link} />
+        ))}
+      </nav>
     </div>
   )
 }

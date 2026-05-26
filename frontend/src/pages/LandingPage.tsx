@@ -523,7 +523,7 @@ export default function LandingPage() {
             <div className="grid lg:grid-cols-[300px_1fr] min-h-[460px]">
               
               {/* Left Pane - Preset Controllers */}
-              <div className="border-r border-[#1d1c19] bg-[#111110]/50 p-5 flex flex-col justify-between gap-6">
+              <div className="border-b lg:border-b-0 lg:border-r border-[#1d1c19] bg-[#111110]/50 p-5 flex flex-col justify-between gap-6">
                 <div className="space-y-4">
                   <span className="text-xs font-bold text-[#77736c] uppercase tracking-wider block">Signal Injection Presets</span>
                   <div className="flex flex-col gap-2.5">
@@ -577,10 +577,10 @@ export default function LandingPage() {
                 {/* SVG Visual Flow Panel */}
                 <div className="p-6 bg-[#090908] border-b border-[#1c1c19] flex items-center justify-center overflow-x-auto relative">
                   
-                  {/* Flow chart SVG wrapper */}
+                  {/* Desktop flowchart (horizontal) */}
                   <svg 
                     viewBox="0 0 760 160" 
-                    className="w-full max-w-[700px] h-[150px] overflow-visible select-none flex-shrink-0"
+                    className="hidden md:block w-full max-w-[700px] h-[150px] overflow-visible select-none flex-shrink-0"
                   >
                     <defs>
                       <filter id="glow-green" x="-20%" y="-20%" width="140%" height="140%">
@@ -736,6 +736,168 @@ export default function LandingPage() {
                       </foreignObject>
                       <text x="680" y="125" textAnchor="middle" fill={getNodeStyles(nodeStates.route).textColor} className="text-[11px] font-semibold tracking-wide">Route Order</text>
                       <text x="680" y="140" textAnchor="middle" fill="#77736c" className="text-[9px] font-mono">Dhan execution</text>
+                    </g>
+                  </svg>
+
+                  {/* Mobile flowchart (vertical) */}
+                  <svg 
+                    viewBox="0 0 240 440" 
+                    className="block md:hidden w-full max-w-[300px] h-[400px] overflow-visible select-none flex-shrink-0"
+                  >
+                    <defs>
+                      <filter id="glow-green-mobile" x="-20%" y="-20%" width="140%" height="140%">
+                        <feGaussianBlur stdDeviation="3.5" result="blur" />
+                        <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                      </filter>
+                      <filter id="glow-orange-mobile" x="-20%" y="-20%" width="140%" height="140%">
+                        <feGaussianBlur stdDeviation="3.5" result="blur" />
+                        <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                      </filter>
+                      <filter id="glow-red-mobile" x="-20%" y="-20%" width="140%" height="140%">
+                        <feGaussianBlur stdDeviation="3.5" result="blur" />
+                        <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                      </filter>
+                    </defs>
+
+                    {/* Vertical background connector lines */}
+                    <path
+                      d="M 60 50 C 30 105, 30 105, 60 160"
+                      fill="none"
+                      stroke="#1d1c19"
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d="M 60 160 C 90 215, 90 215, 60 270"
+                      fill="none"
+                      stroke="#1d1c19"
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d="M 60 270 C 30 325, 30 325, 60 380"
+                      fill="none"
+                      stroke="#1d1c19"
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                    />
+
+                    {/* Vertical active flow overlay paths */}
+                    <path
+                      d="M 60 50 C 30 105, 30 105, 60 160"
+                      fill="none"
+                      opacity={getPathStyles(pathStates.p1).opacity}
+                      stroke={getPathStyles(pathStates.p1).stroke}
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                      strokeDasharray={getPathStyles(pathStates.p1).strokeDasharray}
+                      className={getPathStyles(pathStates.p1).className}
+                    />
+                    <path
+                      d="M 60 160 C 90 215, 90 215, 60 270"
+                      fill="none"
+                      opacity={getPathStyles(pathStates.p2).opacity}
+                      stroke={getPathStyles(pathStates.p2).stroke}
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                      strokeDasharray={getPathStyles(pathStates.p2).strokeDasharray}
+                      className={getPathStyles(pathStates.p2).className}
+                    />
+                    <path
+                      d="M 60 270 C 30 325, 30 325, 60 380"
+                      fill="none"
+                      opacity={getPathStyles(pathStates.p3).opacity}
+                      stroke={getPathStyles(pathStates.p3).stroke}
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                      strokeDasharray={getPathStyles(pathStates.p3).strokeDasharray}
+                      className={getPathStyles(pathStates.p3).className}
+                    />
+
+                    {/* Nodes (Vertical) */}
+                    
+                    {/* Node 1: Webhook */}
+                    <g>
+                      <circle
+                        cx="60"
+                        cy="50"
+                        r="22"
+                        fill={getNodeStyles(nodeStates.webhook).fill}
+                        stroke={getNodeStyles(nodeStates.webhook).stroke}
+                        strokeWidth={getNodeStyles(nodeStates.webhook).borderWidth}
+                        className={getNodeStyles(nodeStates.webhook).pulseCls}
+                        style={{ filter: nodeStates.webhook !== 'idle' ? 'url(#glow-green-mobile)' : 'none' }}
+                      />
+                      <foreignObject x="48" y="38" width="24" height="24">
+                        <div className="flex items-center justify-center w-full h-full" style={{ color: getNodeStyles(nodeStates.webhook).iconColor }}>
+                          <Webhook size={14} />
+                        </div>
+                      </foreignObject>
+                      <text x="100" y="46" textAnchor="start" dominantBaseline="middle" fill={getNodeStyles(nodeStates.webhook).textColor} className="text-[12px] font-semibold tracking-wide">TV Alert</text>
+                      <text x="100" y="58" textAnchor="start" dominantBaseline="middle" fill="#77736c" className="text-[10px] font-mono">Webhook</text>
+                    </g>
+
+                    {/* Node 2: Risk Gate */}
+                    <g>
+                      <circle
+                        cx="60"
+                        cy="160"
+                        r="22"
+                        fill={getNodeStyles(nodeStates.risk).fill}
+                        stroke={getNodeStyles(nodeStates.risk).stroke}
+                        strokeWidth={getNodeStyles(nodeStates.risk).borderWidth}
+                        className={getNodeStyles(nodeStates.risk).pulseCls}
+                        style={{ filter: nodeStates.risk === 'success' || nodeStates.risk === 'active' ? 'url(#glow-green-mobile)' : nodeStates.risk === 'blocked' ? 'url(#glow-orange-mobile)' : nodeStates.risk === 'failed' ? 'url(#glow-red-mobile)' : 'none' }}
+                      />
+                      <foreignObject x="48" y="148" width="24" height="24">
+                        <div className="flex items-center justify-center w-full h-full" style={{ color: getNodeStyles(nodeStates.risk).iconColor }}>
+                          <ShieldCheck size={14} />
+                        </div>
+                      </foreignObject>
+                      <text x="100" y="156" textAnchor="start" dominantBaseline="middle" fill={getNodeStyles(nodeStates.risk).textColor} className="text-[12px] font-semibold tracking-wide">Risk Gate</text>
+                      <text x="100" y="168" textAnchor="start" dominantBaseline="middle" fill="#77736c" className="text-[10px] font-mono">Locks & Limits</text>
+                    </g>
+
+                    {/* Node 3: Dhan Preflight */}
+                    <g>
+                      <circle
+                        cx="60"
+                        cy="270"
+                        r="22"
+                        fill={getNodeStyles(nodeStates.preflight).fill}
+                        stroke={getNodeStyles(nodeStates.preflight).stroke}
+                        strokeWidth={getNodeStyles(nodeStates.preflight).borderWidth}
+                        className={getNodeStyles(nodeStates.preflight).pulseCls}
+                        style={{ filter: nodeStates.preflight === 'success' || nodeStates.preflight === 'active' ? 'url(#glow-green-mobile)' : nodeStates.preflight === 'failed' ? 'url(#glow-red-mobile)' : 'none' }}
+                      />
+                      <foreignObject x="48" y="258" width="24" height="24">
+                        <div className="flex items-center justify-center w-full h-full" style={{ color: getNodeStyles(nodeStates.preflight).iconColor }}>
+                          <RadioTower size={14} />
+                        </div>
+                      </foreignObject>
+                      <text x="100" y="266" textAnchor="start" dominantBaseline="middle" fill={getNodeStyles(nodeStates.preflight).textColor} className="text-[12px] font-semibold tracking-wide">Broker Check</text>
+                      <text x="100" y="278" textAnchor="start" dominantBaseline="middle" fill="#77736c" className="text-[10px] font-mono">Dhan Preflight</text>
+                    </g>
+
+                    {/* Node 4: Order Route */}
+                    <g>
+                      <circle
+                        cx="60"
+                        cy="380"
+                        r="22"
+                        fill={getNodeStyles(nodeStates.route).fill}
+                        stroke={getNodeStyles(nodeStates.route).stroke}
+                        strokeWidth={getNodeStyles(nodeStates.route).borderWidth}
+                        className={getNodeStyles(nodeStates.route).pulseCls}
+                        style={{ filter: nodeStates.route !== 'idle' ? 'url(#glow-green-mobile)' : 'none' }}
+                      />
+                      <foreignObject x="48" y="368" width="24" height="24">
+                        <div className="flex items-center justify-center w-full h-full" style={{ color: getNodeStyles(nodeStates.route).iconColor }}>
+                          <Zap size={14} />
+                        </div>
+                      </foreignObject>
+                      <text x="100" y="376" textAnchor="start" dominantBaseline="middle" fill={getNodeStyles(nodeStates.route).textColor} className="text-[12px] font-semibold tracking-wide">Route Order</text>
+                      <text x="100" y="388" textAnchor="start" dominantBaseline="middle" fill="#77736c" className="text-[10px] font-mono">Dhan execution</text>
                     </g>
                   </svg>
                 </div>

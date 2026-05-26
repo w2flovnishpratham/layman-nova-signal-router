@@ -8,6 +8,8 @@ import {
   ShieldAlert,
   Square,
   Wallet,
+  Clock,
+  Circle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -112,36 +114,283 @@ function CanTradeBanner({ summary, setup }: { summary: DashboardSummary; setup: 
 
 // ─── Pipeline strip ──────────────────────────────────────────────────────────
 
-const STEP_STYLE: Record<string, React.CSSProperties> = {
-  done:    { background: 'rgba(152,233,77,0.08)', border: '1px solid rgba(152,233,77,0.2)',  color: '#98e94d' },
-  active:  { background: 'rgba(59,130,246,0.1)',  border: '1px solid rgba(59,130,246,0.3)',  color: '#93c5fd' },
-  blocked: { background: 'rgba(239,68,68,0.08)',  border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' },
-  error:   { background: 'rgba(239,68,68,0.08)',  border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' },
-  pending: { background: '#151513',               border: '1px solid #2a2a2a',              color: '#77736c' },
+// ─── Pipeline strip labels mapping ──────────────────────────────────────────
+
+const PIPELINE_LABELS: Record<string, string> = {
+  // Signal desk stages
+  WAITING_ENTRY_SIGNAL: 'Ready',
+  ENTRY_SIGNAL_RECEIVED: 'Entry Signal',
+  ENTRY_RISK_CHECK_PASSED: 'Risk Gate',
+  ENTRY_ORDER_PLACED: 'Order Sent',
+  ENTERED: 'Entered',
+  WAITING_EXIT_SIGNAL: 'Wait Exit',
+  EXIT_SIGNAL_RECEIVED: 'Exit Signal',
+  EXIT_ORDER_PLACED: 'Exit Order',
+  EXITED: 'Exited',
+
+  // Custom step labels
+  WAITING_ENTRY: 'Ready',
+  ENTRY_RISK_CHECK: 'Risk Gate',
+  ENTRY_ORDER_SENDING: 'Order Sent',
+  OPEN: 'Entered',
+  WAITING_EXIT: 'Wait Exit',
+  EXIT_ORDER_SENDING: 'Order Sent',
+  BLOCKED: 'Blocked',
 }
-const CONN_COLOR: Record<string, string> = {
-  done: '#98e94d', active: '#3b82f6', blocked: '#ef4444', error: '#ef4444', pending: '#2b2a26',
+
+const STEP_THEMES: Record<string, { border: string; text: string; bg: string; glow: string; stroke: string }> = {
+  done:    { border: 'border-[#98e94d]/40', text: 'text-[#98e94d]', bg: 'bg-[#11170d]/90', glow: 'shadow-[0_0_10px_rgba(152,233,77,0.15)]', stroke: '#98e94d' },
+  active:  { border: 'border-blue-500/50',  text: 'text-blue-400',  bg: 'bg-blue-950/20',   glow: 'shadow-[0_0_12px_rgba(96,165,250,0.25)]',  stroke: '#60a5fa' },
+  blocked: { border: 'border-red-500/50',   text: 'text-red-400',   bg: 'bg-[#1c0c0c]/90',  glow: 'shadow-[0_0_10px_rgba(239,68,68,0.15)]',   stroke: '#ef4444' },
+  error:   { border: 'border-red-500/50',   text: 'text-red-400',   bg: 'bg-[#1c0c0c]/90',  glow: 'shadow-[0_0_10px_rgba(239,68,68,0.15)]',   stroke: '#ef4444' },
+  pending: { border: 'border-[#2b2a26]',    text: 'text-[#5e5a53]', bg: 'bg-[#151513]',      glow: 'shadow-none',                             stroke: '#2b2a26' },
 }
 
 function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
+
+  // Default selection to active step or latest completed step
+  useEffect(() => {
+    if (!steps.length) {
+      setSelectedIndex(null)
+      return
+    }
+
+    const activeIdx = steps.findIndex(s => s.status === 'active')
+    if (activeIdx !== -1) {
+      setSelectedIndex(activeIdx)
+      return
+    }
+
+    const latestDone = steps.reduce((acc, s, idx) =>
+      s.status === 'done' || s.status === 'blocked' || s.status === 'error' ? idx : acc, 0
+    )
+    setSelectedIndex(latestDone)
+  }, [steps])
+
   if (!steps.length) return <p className="text-sm" style={{ color: '#77736c' }}>No flow data.</p>
+
+  const safeSelectedIndex = selectedIndex !== null && selectedIndex < steps.length ? selectedIndex : 0
+  const selectedStep = steps[safeSelectedIndex] ?? null
+
   return (
-    <div className="flex items-stretch gap-0">
-      {steps.map((step, i) => (
-        <div key={step.step} className="flex items-center flex-1 min-w-0">
-          <div
-            className={`flex-1 rounded-lg px-2 py-2.5 text-center min-w-0 ${step.status === 'active' ? 'step-active-anim' : ''}`}
-            style={STEP_STYLE[step.status] ?? STEP_STYLE.pending}
-            title={step.message ?? undefined}
-          >
-            <p className="text-xs font-medium leading-tight truncate">{step.step.replace(/_/g, ' ')}</p>
-            <p className="text-xs opacity-60 mt-0.5 capitalize">{step.status}</p>
+    <div className="space-y-4">
+      
+      {/* Desktop Stepper Track (horizontal) */}
+      <div className="hidden md:flex items-center justify-between w-full overflow-x-auto py-4 px-1.5 terminal-scrollbar scroll-smooth">
+        {steps.map((step, i) => {
+          const theme = STEP_THEMES[step.status] ?? STEP_THEMES.pending
+          const Icon = step.status === 'done' ? CheckCircle2 :
+                       step.status === 'active' ? Clock :
+                       step.status === 'blocked' ? ShieldAlert :
+                       step.status === 'error' ? AlertTriangle : Circle
+
+          const isSelected = selectedIndex === i
+          const labelText = PIPELINE_LABELS[step.step] || step.step.replace(/_/g, ' ')
+
+          // Check if connector line should render completed glow
+          const nextStatus = steps[i + 1]?.status
+          const connColor = (step.status === 'done' && (nextStatus === 'done' || nextStatus === 'active')) ? '#98e94d' :
+                            (step.status === 'done' && (nextStatus === 'blocked' || nextStatus === 'error')) ? '#ef4444' :
+                            (step.status === 'active' || step.status === 'done') ? '#3a3933' : '#1d1c19'
+
+          return (
+            <div key={step.step} className="flex items-center flex-1 min-w-0">
+              
+              {/* Stepper Node Button */}
+              <button
+                onClick={() => setSelectedIndex(i)}
+                className={`flex flex-col items-center flex-shrink-0 cursor-pointer focus:outline-none transition-transform hover:scale-[1.05] ${
+                  isSelected ? 'scale-[1.02]' : ''
+                }`}
+                style={{ width: '72px' }}
+                title={`Click to inspect details of ${labelText}`}
+              >
+                {/* Node Circle */}
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center border transition-all duration-200 ${theme.border} ${theme.bg} ${theme.glow} ${
+                  isSelected ? 'ring-2 ring-nova-50/20' : ''
+                }`}>
+                  {step.status === 'active' ? (
+                    <Icon size={14} className={`${theme.text} animate-pulse`} />
+                  ) : (
+                    <Icon size={14} className={theme.text} />
+                  )}
+                </div>
+
+                {/* Node Label (Wraps on multiple lines cleanly to prevent truncation) */}
+                <p className={`text-[10px] font-bold text-center mt-2 leading-tight uppercase tracking-wider transition-colors max-w-[70px] min-h-[24px] break-words ${
+                  isSelected ? 'text-[#f4f1ea] font-black underline underline-offset-4 decoration-[#98e94d]' :
+                  step.status === 'active' ? 'text-blue-400 font-black' :
+                  step.status === 'done' ? 'text-[#bcb5aa]' :
+                  step.status === 'blocked' || step.status === 'error' ? 'text-red-400' : 'text-[#444444]'
+                }`}>
+                  {labelText}
+                </p>
+              </button>
+
+              {/* Stepper Connector Link Segment */}
+              {i < steps.length - 1 && (
+                <div 
+                  className="flex-1 h-[2px] mx-1 min-w-[12px] md:min-w-[20px] transition-colors duration-300" 
+                  style={{ background: connColor }} 
+                />
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Mobile Stepper Track (vertical) */}
+      <div className="flex md:hidden flex-col gap-0 w-full py-2">
+        {steps.map((step, i) => {
+          const theme = STEP_THEMES[step.status] ?? STEP_THEMES.pending
+          const Icon = step.status === 'done' ? CheckCircle2 :
+                       step.status === 'active' ? Clock :
+                       step.status === 'blocked' ? ShieldAlert :
+                       step.status === 'error' ? AlertTriangle : Circle
+
+          const isSelected = selectedIndex === i
+          const labelText = PIPELINE_LABELS[step.step] || step.step.replace(/_/g, ' ')
+
+          // Check if connector line should render completed glow
+          const nextStatus = steps[i + 1]?.status
+          const connColor = (step.status === 'done' && (nextStatus === 'done' || nextStatus === 'active')) ? '#98e94d' :
+                            (step.status === 'done' && (nextStatus === 'blocked' || nextStatus === 'error')) ? '#ef4444' :
+                            (step.status === 'active' || step.status === 'done') ? '#3a3933' : '#1d1c19'
+
+          return (
+            <div key={step.step + '-mobile'} className="flex flex-col">
+              
+              {/* Stepper Node Row Button */}
+              <button
+                onClick={() => setSelectedIndex(i)}
+                className={`flex items-center w-full text-left p-1.5 rounded-xl transition-all cursor-pointer ${
+                  isSelected ? 'bg-[#151513]/60' : 'hover:bg-[#151513]/20'
+                }`}
+                title={`Inspect ${labelText}`}
+              >
+                {/* Node Circle */}
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center border flex-shrink-0 transition-all duration-200 ${theme.border} ${theme.bg} ${theme.glow} ${
+                  isSelected ? 'ring-2 ring-nova-50/20' : ''
+                }`}>
+                  {step.status === 'active' ? (
+                    <Icon size={14} className={`${theme.text} animate-pulse`} />
+                  ) : (
+                    <Icon size={14} className={theme.text} />
+                  )}
+                </div>
+
+                {/* Node Text Content (Next to circle) */}
+                <div className="ml-3">
+                  <p className={`text-[11px] font-bold uppercase tracking-wider transition-colors ${
+                    isSelected ? 'text-[#f4f1ea] font-black underline underline-offset-2 decoration-[#98e94d]' :
+                    step.status === 'active' ? 'text-blue-400 font-black' :
+                    step.status === 'done' ? 'text-[#bcb5aa]' :
+                    step.status === 'blocked' || step.status === 'error' ? 'text-red-400' : 'text-[#444444]'
+                  }`}>
+                    {labelText}
+                  </p>
+                  <p className="text-[9px] text-[#77736c] font-mono leading-none mt-0.5">
+                    {step.status}
+                  </p>
+                </div>
+              </button>
+
+              {/* Vertical Stepper Connector Line */}
+              {i < steps.length - 1 && (
+                <div 
+                  className="w-[2px] h-3 transition-colors duration-300"
+                  style={{ background: connColor, marginLeft: '21px' }} 
+                />
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Interactive Step Details Inspector Card */}
+      {selectedStep && (
+        <div 
+          className="rounded-xl p-4 mt-2 transition-all duration-300 relative overflow-hidden bg-[#11110f]/40 border border-[#1c1c19] backdrop-blur-sm"
+          style={{ boxShadow: 'inset 0 1px 0 rgba(244, 241, 234, 0.02)' }}
+        >
+          {/* Subtle soft backdrop glow matching active color */}
+          <div 
+            className="absolute top-0 right-0 w-36 h-36 pointer-events-none blur-3xl rounded-full" 
+            style={{
+              background: selectedStep.status === 'done' ? 'rgba(152, 233, 77, 0.04)' :
+                          selectedStep.status === 'active' ? 'rgba(96, 165, 250, 0.04)' :
+                          selectedStep.status === 'blocked' || selectedStep.status === 'error' ? 'rgba(239, 68, 68, 0.04)' : 'transparent'
+            }}
+          />
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#1c1c19] pb-3 mb-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded ${
+                  selectedStep.status === 'done' ? 'bg-[#98e94d]/10 text-[#98e94d] border border-[#98e94d]/15' :
+                  selectedStep.status === 'active' ? 'bg-blue-500/10 text-blue-400 border border-blue-400/15' :
+                  selectedStep.status === 'blocked' || selectedStep.status === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/15' :
+                  'bg-[#24231f] text-[#77736c] border border-[#2b2a26]'
+                }`}>
+                  STAGE { (selectedIndex ?? 0) + 1 } / { steps.length }
+                </span>
+                <h3 className="text-xs font-bold text-[#f4f1ea] uppercase tracking-wide">
+                  {PIPELINE_LABELS[selectedStep.step] || selectedStep.step.replace(/_/g, ' ')}
+                </h3>
+              </div>
+              <p className="text-[10px] text-[#5e5a53] font-mono leading-none">
+                System state code: {selectedStep.step}
+              </p>
+            </div>
+
+            <div className="text-left sm:text-right flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-1">
+              <span className={`inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider ${
+                selectedStep.status === 'done' ? 'text-[#98e94d]' :
+                selectedStep.status === 'active' ? 'text-blue-400 animate-pulse' :
+                selectedStep.status === 'blocked' || selectedStep.status === 'error' ? 'text-red-400' : 'text-[#77736c]'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  selectedStep.status === 'done' ? 'bg-[#98e94d]' :
+                  selectedStep.status === 'active' ? 'bg-blue-400' :
+                  selectedStep.status === 'blocked' || selectedStep.status === 'error' ? 'bg-red-400' : 'bg-[#444444]'
+                }`} />
+                {selectedStep.status}
+              </span>
+              {selectedStep.timestamp && (
+                <p className="text-[10px] text-[#5e5a53] font-mono">
+                  Processed at {new Date(selectedStep.timestamp).toLocaleTimeString()}
+                </p>
+              )}
+            </div>
           </div>
-          {i < steps.length - 1 && (
-            <div className="h-0.5 w-3 flex-shrink-0" style={{ background: CONN_COLOR[step.status] ?? CONN_COLOR.pending }} />
-          )}
+
+          <div className="space-y-3">
+            <p className="text-xs text-[#d8d3c8] leading-relaxed">
+              {selectedStep.message || (
+                selectedStep.status === 'pending'
+                  ? 'This stage is waiting for alert triggers to activate.'
+                  : 'Processed successfully with no additional messages.'
+              )}
+            </p>
+
+            {selectedStep.order_id && (
+              <div className="inline-flex items-center gap-2 rounded-lg bg-[#090908] border border-[#2b2a26] px-3 py-1.5">
+                <span className="text-[10px] text-[#77736c] font-mono">Dhan Order Reference:</span>
+                <span className="text-[11px] font-mono text-[#98e94d] font-bold select-all">{selectedStep.order_id}</span>
+              </div>
+            )}
+
+            {selectedStep.reason && (
+              <div className="rounded-lg bg-red-950/10 border border-red-900/25 px-3.5 py-2.5 text-xs text-red-400 leading-normal">
+                <strong className="block font-bold mb-0.5 uppercase tracking-wide text-[10px] text-red-300">Block Details:</strong>
+                {selectedStep.reason}
+              </div>
+            )}
+          </div>
         </div>
-      ))}
+      )}
+
     </div>
   )
 }
