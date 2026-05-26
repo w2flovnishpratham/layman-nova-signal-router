@@ -1,5 +1,14 @@
-import { useEffect, useState } from 'react'
-import { AlertTriangle, Copy, Pause, RefreshCw, ShieldAlert, Square, Wallet } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Copy,
+  RefreshCw,
+  ShieldAlert,
+  Square,
+  Wallet,
+} from 'lucide-react'
+import { toast } from 'sonner'
 import {
   emergencyStop,
   getDashboardSummary,
@@ -8,252 +17,319 @@ import {
   getSetupStatus,
   stopEngine,
 } from '../api/dashboard'
-import { DashboardSummary, LiveFlowStep, OrderEvent, SetupStatus } from '../types'
+import type { DashboardSummary, LiveFlowStep, OrderEvent, SetupStatus } from '../types'
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function currency(value: number | null | undefined) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
-  return `Rs.${Number(value).toFixed(2)}`
+  if (value == null || Number.isNaN(Number(value))) return '—'
+  return `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
 }
 
-function stateLabel(value: string | undefined) {
-  return (value || 'WAITING_ENTRY').replace(/_/g, ' ').toLowerCase()
+function useAnimatedNumber(target: number | null) {
+  const [display, setDisplay] = useState(target ?? 0)
+  const ref = useRef(display)
+  ref.current = display
+  useEffect(() => {
+    if (target == null) return
+    const start = ref.current
+    const diff = target - start
+    if (Math.abs(diff) < 0.01) return
+    const duration = 600
+    const t0 = performance.now()
+    const tick = (now: number) => {
+      const t = Math.min((now - t0) / duration, 1)
+      const ease = t < 0.5 ? 2 * t * t : (4 - 2 * t) * t - 1
+      setDisplay(start + diff * ease)
+      if (t < 1) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  }, [target])
+  return display
 }
+
+// ─── Can Trade? banner ───────────────────────────────────────────────────────
+
+function CanTradeBanner({ summary, setup }: { summary: DashboardSummary; setup: SetupStatus }) {
+  const { app_state, mode } = summary
+  if (app_state.emergency_stop) return (
+    <div className="can-trade-danger flex items-center gap-3">
+      <ShieldAlert className="text-red-400 flex-shrink-0" size={20} />
+      <div>
+        <p className="text-sm font-semibold text-red-300">Blocked — Emergency stop active</p>
+        <p className="text-xs text-red-400/80 mt-0.5">Go to Controls to resume.</p>
+      </div>
+    </div>
+  )
+  if (app_state.global_kill_switch) return (
+    <div className="can-trade-danger flex items-center gap-3">
+      <AlertTriangle className="text-red-400 flex-shrink-0" size={20} />
+      <div>
+        <p className="text-sm font-semibold text-red-300">Blocked — Kill switch is ON</p>
+        <p className="text-xs text-red-400/80 mt-0.5">Go to Controls to re-enable.</p>
+      </div>
+    </div>
+  )
+  if (!setup.dhan_connected) return (
+    <div className="can-trade-blocked flex items-center gap-3">
+      <AlertTriangle className="text-amber-400 flex-shrink-0" size={20} />
+      <div>
+        <p className="text-sm font-semibold text-amber-300">Blocked — Dhan not connected</p>
+        <p className="text-xs text-amber-400/80 mt-0.5">Go to Setup and enter your Dhan credentials.</p>
+      </div>
+    </div>
+  )
+  if (!setup.engine_started) return (
+    <div className="can-trade-blocked flex items-center gap-3">
+      <Square className="text-amber-400 flex-shrink-0" size={20} />
+      <div>
+        <p className="text-sm font-semibold text-amber-300">Blocked — Engine not running</p>
+        <p className="text-xs text-amber-400/80 mt-0.5">Go to Setup and start the engine.</p>
+      </div>
+    </div>
+  )
+  if (mode.live_orders_enabled) return (
+    <div className="can-trade-danger flex items-center gap-3">
+      <span className="status-dot dot-red dot-pulse flex-shrink-0" />
+      <div>
+        <p className="text-sm font-semibold text-red-300">LIVE ORDERS ENABLED — real money orders will be placed</p>
+        <p className="text-xs text-red-400/80 mt-0.5">All alerts will route to Dhan with real funds.</p>
+      </div>
+    </div>
+  )
+  return (
+    <div className="can-trade-ready flex items-center gap-3">
+      <CheckCircle2 style={{ color: '#98e94d', flexShrink: 0 }} size={20} />
+      <div>
+        <p className="text-sm font-semibold" style={{ color: '#98e94d' }}>Ready to trade</p>
+        <p className="text-xs mt-0.5" style={{ color: 'rgba(152,233,77,0.65)' }}>Engine running · Dhan connected · {setup.mode.dhan_mode} mode</p>
+      </div>
+    </div>
+  )
+}
+
+// ─── Pipeline strip ──────────────────────────────────────────────────────────
+
+const STEP_STYLE: Record<string, React.CSSProperties> = {
+  done:    { background: 'rgba(152,233,77,0.08)', border: '1px solid rgba(152,233,77,0.2)',  color: '#98e94d' },
+  active:  { background: 'rgba(59,130,246,0.1)',  border: '1px solid rgba(59,130,246,0.3)',  color: '#93c5fd' },
+  blocked: { background: 'rgba(239,68,68,0.08)',  border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' },
+  error:   { background: 'rgba(239,68,68,0.08)',  border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' },
+  pending: { background: '#151513',               border: '1px solid #2a2a2a',              color: '#77736c' },
+}
+const CONN_COLOR: Record<string, string> = {
+  done: '#98e94d', active: '#3b82f6', blocked: '#ef4444', error: '#ef4444', pending: '#2b2a26',
+}
+
+function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
+  if (!steps.length) return <p className="text-sm" style={{ color: '#77736c' }}>No flow data.</p>
+  return (
+    <div className="flex items-stretch gap-0">
+      {steps.map((step, i) => (
+        <div key={step.step} className="flex items-center flex-1 min-w-0">
+          <div
+            className={`flex-1 rounded-lg px-2 py-2.5 text-center min-w-0 ${step.status === 'active' ? 'step-active-anim' : ''}`}
+            style={STEP_STYLE[step.status] ?? STEP_STYLE.pending}
+            title={step.message ?? undefined}
+          >
+            <p className="text-xs font-medium leading-tight truncate">{step.step.replace(/_/g, ' ')}</p>
+            <p className="text-xs opacity-60 mt-0.5 capitalize">{step.status}</p>
+          </div>
+          {i < steps.length - 1 && (
+            <div className="h-0.5 w-3 flex-shrink-0" style={{ background: CONN_COLOR[step.status] ?? CONN_COLOR.pending }} />
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Metric card ─────────────────────────────────────────────────────────────
+
+function MetricCard({ label, value, accent }: { label: string; value: string; accent?: 'green' | 'red' | 'amber' }) {
+  const valueColor = accent === 'green' ? '#98e94d' : accent === 'red' ? '#f87171' : accent === 'amber' ? '#fbbf24' : '#f4f1ea'
+  return (
+    <div className="card py-3 px-4">
+      <p className="text-xs uppercase tracking-wide mb-1" style={{ color: '#77736c' }}>{label}</p>
+      <p className="text-xl font-semibold" style={{ color: valueColor }}>{value}</p>
+    </div>
+  )
+}
+
+// ─── Order badges ─────────────────────────────────────────────────────────────
+
+function OrderStatusBadge({ order }: { order: OrderEvent }) {
+  if (order.blocked) return <span className="badge-red">BLOCKED</span>
+  const s = (order.status ?? order.phase ?? '').toUpperCase()
+  if (s.includes('TRADED') || s.includes('FILLED')) return <span className="badge-green">{s}</span>
+  if (s.includes('REJECT') || s.includes('FAIL'))   return <span className="badge-red">{s}</span>
+  if (s.includes('PENDING') || s.includes('PLACED')) return <span className="badge-yellow">{s}</span>
+  return <span className="badge-gray">{s || '—'}</span>
+}
+
+function ActionBadge({ order }: { order: OrderEvent }) {
+  const a = (order.normalized_action ?? order.action ?? '').toUpperCase()
+  if (a === 'BUY'  || a === 'LONG')  return <span className="badge-blue">{a}</span>
+  if (a === 'SELL' || a === 'SHORT') return <span className="badge-red">{a}</span>
+  return <span className="badge-gray">{a || '—'}</span>
+}
+
+// ─── Dashboard ───────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const [summary, setSummary] = useState<DashboardSummary | null>(null)
-  const [setup, setSetup] = useState<SetupStatus | null>(null)
-  const [flow, setFlow] = useState<LiveFlowStep[]>([])
-  const [orders, setOrders] = useState<OrderEvent[]>([])
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
+  const [summary, setSummary]   = useState<DashboardSummary | null>(null)
+  const [setup,   setSetup]     = useState<SetupStatus | null>(null)
+  const [flow,    setFlow]      = useState<LiveFlowStep[]>([])
+  const [orders,  setOrders]    = useState<OrderEvent[]>([])
+
+  const animBalance  = useAnimatedNumber(summary?.wallet?.available_balance ?? null)
+  const animUtilised = useAnimatedNumber(summary?.wallet?.utilized_amount ?? null)
 
   const loadData = async () => {
-    const [summaryResponse, setupResponse, flowResponse, orderResponse] = await Promise.all([
-      getDashboardSummary(),
-      getSetupStatus(),
-      getLiveFlow(),
-      getOrders(),
+    const [s, st, f, o] = await Promise.all([
+      getDashboardSummary(), getSetupStatus(), getLiveFlow(), getOrders(),
     ])
-    setSummary(summaryResponse.data)
-    setSetup(setupResponse.data)
-    setFlow(flowResponse.data)
-    setOrders(orderResponse.data.slice(0, 8))
+    setSummary(s.data); setSetup(st.data); setFlow(f.data); setOrders(o.data.slice(0, 10))
   }
 
   useEffect(() => {
-    loadData().catch(() => setError('Backend dashboard APIs are not reachable.'))
-    const interval = window.setInterval(() => {
-      loadData().catch(() => undefined)
-    }, 2000)
-    return () => window.clearInterval(interval)
+    loadData().catch(() => toast.error('Backend APIs unreachable'))
+    const id = window.setInterval(() => loadData().catch(() => undefined), 2000)
+    return () => window.clearInterval(id)
   }, [])
 
-  const copyWebhook = () => {
+  const copyWebhook = async () => {
     if (!setup?.webhook_url) return
-    navigator.clipboard.writeText(setup.webhook_url)
-    setMessage('Webhook URL copied.')
-    window.setTimeout(() => setMessage(''), 2500)
+    await navigator.clipboard.writeText(setup.webhook_url)
+    toast.success('Webhook URL copied')
   }
 
   const runEmergencyStop = async () => {
-    if (!window.confirm('Activate emergency stop? New entry alerts will be blocked immediately.')) return
-    await emergencyStop()
-    setMessage('Emergency stop activated.')
-    await loadData()
+    if (!window.confirm('Activate emergency stop?')) return
+    await emergencyStop(); toast.error('Emergency stop activated'); loadData()
   }
 
   const runStopEngine = async () => {
-    await stopEngine()
-    setMessage('Engine stopped.')
-    await loadData()
+    await stopEngine(); toast.warning('Engine stopped'); loadData()
   }
 
-  if (!summary || !setup) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center text-slate-300">
-        <RefreshCw className="mr-3 animate-spin" size={20} />
-        Loading dashboard
-      </div>
-    )
-  }
+  if (!summary || !setup) return (
+    <div className="flex min-h-[60vh] items-center justify-center gap-3" style={{ color: '#77736c' }}>
+      <RefreshCw className="animate-spin" size={18} />
+      <span className="text-sm">Loading dashboard…</span>
+    </div>
+  )
 
-  const latestAlert = summary.last_logs?.webhook as Record<string, unknown> | undefined
   const openPosition = summary.open_position
-  const engineStarted = setup.engine_started
+  const latestAlert  = summary.last_logs?.webhook as Record<string, unknown> | undefined
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Dashboard</h1>
-          <p className="mt-1 text-sm text-slate-400">Alert lifecycle, current position, and order logs.</p>
+          <h1 className="text-2xl font-semibold" style={{ color: '#f4f1ea' }}>Dashboard</h1>
+          <p className="mt-0.5 text-sm" style={{ color: '#9a968f' }}>Live system state and recent orders.</p>
         </div>
-        <button onClick={() => loadData()} className="btn-ghost flex items-center gap-2 self-start">
-          <RefreshCw size={16} /> Refresh
+        <button onClick={loadData} className="btn-ghost flex items-center gap-2 text-sm py-1.5">
+          <RefreshCw size={14} /> Refresh
         </button>
       </div>
 
-      {setup.mode.live_orders_enabled && (
-        <div className="rounded-lg border-2 border-red-500 bg-red-950 p-4 text-red-100">
-          <p className="font-bold">LIVE ORDERS ENABLED - real money orders can be placed.</p>
-        </div>
-      )}
+      {/* Can Trade? banner — always first */}
+      <CanTradeBanner summary={summary} setup={setup} />
 
-      {message && <div className="rounded-md border border-emerald-700 bg-emerald-950 p-3 text-sm text-emerald-200">{message}</div>}
-      {error && <div className="rounded-md border border-red-700 bg-red-950 p-3 text-sm text-red-200">{error}</div>}
+      {/* Metric strip */}
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <MetricCard label="Engine"    value={setup.engine_started  ? 'Running'   : 'Stopped'}  accent={setup.engine_started  ? 'green' : 'amber'} />
+        <MetricCard label="Dhan"      value={setup.dhan_connected  ? 'Connected' : 'Offline'}  accent={setup.dhan_connected  ? 'green' : 'red'}   />
+        <MetricCard label="Available" value={`₹${Math.round(animBalance).toLocaleString('en-IN')}`} />
+        <MetricCard label="Utilised"  value={`₹${Math.round(animUtilised).toLocaleString('en-IN')}`} accent={animUtilised > 0 ? 'amber' : undefined} />
+      </section>
 
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-4">
-        <div className="card">
-          <p className="text-sm text-slate-400">Engine</p>
-          <p className={engineStarted ? 'mt-2 text-xl font-semibold text-emerald-300' : 'mt-2 text-xl font-semibold text-amber-300'}>
-            {engineStarted ? 'Started' : 'Stopped'}
-          </p>
+      {/* Pipeline + quick controls */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="card space-y-3 lg:col-span-2">
+          <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Alert lifecycle</h2>
+          <PipelineStrip steps={flow} />
         </div>
-        <div className="card">
-          <p className="text-sm text-slate-400">Dhan</p>
-          <p className={setup.dhan_connected ? 'mt-2 text-xl font-semibold text-emerald-300' : 'mt-2 text-xl font-semibold text-red-300'}>
-            {setup.dhan_connected ? 'Connected' : 'Not connected'}
-          </p>
-          <p className="mt-1 font-mono text-xs text-slate-400">{setup.dhan_client_id_masked || '-'}</p>
-        </div>
-        <div className="card">
-          <p className="text-sm text-slate-400">Current State</p>
-          <p className="mt-2 text-xl font-semibold capitalize">{stateLabel(summary.app_state.state)}</p>
-        </div>
-        <div className="card">
-          <p className="text-sm text-slate-400">Available Balance</p>
-          <p className="mt-2 text-xl font-semibold">{currency(summary.wallet.available_balance)}</p>
+        <div className="card space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Quick controls</h2>
+          <button onClick={runStopEngine}    className="btn-ghost  flex w-full items-center justify-center gap-2 text-sm"><Square size={14} /> Stop Engine</button>
+          <button onClick={runEmergencyStop} className="btn-danger flex w-full items-center justify-center gap-2 text-sm"><ShieldAlert size={14} /> Emergency Stop</button>
+          <p className="text-xs" style={{ color: '#77736c' }}>Full controls at <a href="/app/controls" className="underline underline-offset-2" style={{ color: '#9a968f' }}>/controls</a>.</p>
         </div>
       </section>
 
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="card space-y-4 lg:col-span-2">
-          <h2 className="text-lg font-semibold">Alert Lifecycle</h2>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-            {flow.map((step) => (
-              <div key={step.step} className="rounded-md border border-slate-800 bg-slate-950 p-3">
-                <p className="text-xs uppercase text-slate-500">{step.step.replace(/_/g, ' ')}</p>
-                <p className={step.status === 'done' ? 'mt-1 font-semibold text-emerald-300' : step.status === 'active' ? 'mt-1 font-semibold text-sky-300' : step.status === 'blocked' || step.status === 'error' ? 'mt-1 font-semibold text-red-300' : 'mt-1 font-semibold text-slate-300'}>
-                  {step.status}
-                </p>
-                {step.message && <p className="mt-2 text-xs text-slate-400">{step.message}</p>}
-              </div>
+      {/* Position + wallet */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="card space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Open position</h2>
+          {openPosition.has_open_position ? (
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+              {([['Symbol', openPosition.trading_symbol], ['Security ID', openPosition.security_id], ['Qty', openPosition.qty], ['Entry order', openPosition.entry_order_id], ['Entry price', openPosition.entry_price != null ? currency(openPosition.entry_price) : '—'], ['Opened', openPosition.opened_at ? new Date(openPosition.opened_at).toLocaleTimeString() : '—']] as [string, unknown][]).map(([l, v]) => (
+                <div key={String(l)}><p className="text-xs" style={{ color: '#77736c' }}>{String(l)}</p><p className="font-medium truncate">{String(v ?? '—')}</p></div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm" style={{ color: '#77736c' }}>No open position tracked locally.</p>
+          )}
+        </div>
+
+        <div className="card space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Wallet</h2>
+            <Wallet size={14} style={{ color: '#77736c' }} />
+          </div>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+            {([['Available', currency(summary.wallet.available_balance)], ['Utilised', currency(summary.wallet.utilized_amount)], ['Withdrawable', currency(summary.wallet.withdrawable_balance)], ['Mode', setup.mode.dhan_mode]] as [string, string][]).map(([l, v]) => (
+              <div key={l}><p className="text-xs" style={{ color: '#77736c' }}>{l}</p><p className="font-medium" style={{ color: l === 'Mode' && v === 'REAL' ? '#f87171' : '#f4f1ea' }}>{v}</p></div>
             ))}
           </div>
         </div>
-
-        <div className="card space-y-4">
-          <h2 className="text-lg font-semibold">Controls</h2>
-          <button onClick={runStopEngine} className="btn-ghost flex w-full items-center justify-center gap-2">
-            <Square size={16} /> Stop Engine
-          </button>
-          <button onClick={runEmergencyStop} className="btn-danger flex w-full items-center justify-center gap-2">
-            <ShieldAlert size={16} /> Emergency Stop
-          </button>
-          <p className="text-sm text-slate-400">Stop Engine blocks new entries. Emergency Stop immediately blocks new entry risk checks.</p>
-        </div>
       </section>
 
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="card space-y-4">
-          <div className="flex items-center gap-2">
-            <Wallet className="text-sky-400" size={20} />
-            <h2 className="text-lg font-semibold">Wallet</h2>
-          </div>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <p className="text-slate-400">Available</p>
-              <p className="font-semibold">{currency(summary.wallet.available_balance)}</p>
-            </div>
-            <div>
-              <p className="text-slate-400">Utilized</p>
-              <p className="font-semibold">{currency(summary.wallet.utilized_amount)}</p>
-            </div>
-            <div>
-              <p className="text-slate-400">Mode</p>
-              <p className={setup.mode.dhan_mode === 'REAL' ? 'font-semibold text-red-300' : 'font-semibold text-emerald-300'}>{setup.mode.dhan_mode}</p>
-            </div>
-            <div>
-              <p className="text-slate-400">Outgoing IP</p>
-              <p className="font-mono">{setup.outgoing_ip || '-'}</p>
-            </div>
-          </div>
+      {/* Webhook + latest alert */}
+      <section className="card space-y-2">
+        <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>TradingView webhook</h2>
+        <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #2a2a2a', background: '#090908' }}>
+          <p className="flex-1 min-w-0 truncate font-mono text-xs" style={{ color: '#bcb5aa' }}>{setup.webhook_url || '—'}</p>
+          <button onClick={copyWebhook} className="btn-ghost p-1.5" style={{ color: '#9a968f' }} title="Copy"><Copy size={13} /></button>
         </div>
-
-        <div className="card space-y-4">
-          <h2 className="text-lg font-semibold">TradingView Webhook</h2>
-          <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950 p-3">
-            <p className="min-w-0 flex-1 break-all font-mono text-sm">{setup.webhook_url || '-'}</p>
-            <button onClick={copyWebhook} className="btn-ghost p-2" title="Copy webhook URL">
-              <Copy size={16} />
-            </button>
-          </div>
-          <p className="rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-sm">{'{{strategy.order.alert_message}}'}</p>
-        </div>
+        {latestAlert && (
+          <p className="text-xs" style={{ color: '#77736c' }}>
+            Last alert: <span style={{ color: '#98e94d' }}>{String(latestAlert.event_type ?? '—')}</span>
+            {' · '}<span className="font-mono" style={{ color: '#bcb5aa' }}>{String(latestAlert.signal_id ?? '—')}</span>
+          </p>
+        )}
       </section>
 
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="card">
-          <h2 className="mb-4 text-lg font-semibold">Open Position</h2>
-          {openPosition.has_open_position ? (
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <p className="text-slate-400">Symbol</p>
-              <p>{openPosition.trading_symbol || '-'}</p>
-              <p className="text-slate-400">Security ID</p>
-              <p>{openPosition.security_id || '-'}</p>
-              <p className="text-slate-400">Quantity</p>
-              <p>{openPosition.qty}</p>
-              <p className="text-slate-400">Entry order</p>
-              <p>{openPosition.entry_order_id || '-'}</p>
-            </div>
-          ) : (
-            <p className="text-sm text-slate-400">No open position tracked.</p>
-          )}
-        </div>
-
-        <div className="card">
-          <h2 className="mb-4 text-lg font-semibold">Latest Alert</h2>
-          {latestAlert ? (
-            <div className="space-y-2 text-sm">
-              <p><span className="text-slate-400">Type:</span> {String(latestAlert.event_type || '-')}</p>
-              <p><span className="text-slate-400">Signal:</span> {String(latestAlert.signal_id || '-')}</p>
-              <p><span className="text-slate-400">Payload:</span> {String(latestAlert.payload_format || '-')}</p>
-              <p><span className="text-slate-400">Message:</span> {String(latestAlert.message || '-')}</p>
-            </div>
-          ) : (
-            <p className="text-sm text-slate-400">Waiting for alert.</p>
-          )}
-        </div>
-      </section>
-
+      {/* Orders */}
       <section className="card">
-        <h2 className="mb-4 text-lg font-semibold">Orders</h2>
+        <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Recent orders</h2>
         <div className="overflow-x-auto">
           <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-slate-800 text-slate-400">
-              <tr>
-                <th className="py-2 pr-4">Time</th>
-                <th className="py-2 pr-4">Action</th>
-                <th className="py-2 pr-4">Symbol</th>
-                <th className="py-2 pr-4">Status</th>
-                <th className="py-2 pr-4">Reason</th>
+            <thead style={{ borderBottom: '1px solid #222222' }}>
+              <tr className="text-xs uppercase tracking-wide" style={{ color: '#77736c' }}>
+                {['Time', 'Action', 'Symbol', 'Qty', 'Status', 'Reason'].map(h => (
+                  <th key={h} className="pb-2 pr-4 font-medium">{h}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {orders.map((order) => (
-                <tr key={order.id} className="border-b border-slate-900">
-                  <td className="py-2 pr-4 text-slate-400">{order.created_at ? new Date(order.created_at).toLocaleString() : '-'}</td>
-                  <td className="py-2 pr-4">{order.action || order.normalized_action || '-'}</td>
-                  <td className="py-2 pr-4">{order.trading_symbol || order.normalized_symbol || '-'}</td>
-                  <td className="py-2 pr-4">{order.status || order.phase || '-'}</td>
-                  <td className="py-2 pr-4 text-slate-400">{order.reason || '-'}</td>
+              {orders.length === 0 ? (
+                <tr><td colSpan={6} className="py-6 text-center text-sm" style={{ color: '#77736c' }}>No order events yet.</td></tr>
+              ) : orders.map(order => (
+                <tr key={order.id} className="transition-colors" style={{ borderBottom: '1px solid #1a1a1a' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#1b1a17')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <td className="py-2.5 pr-4 text-xs whitespace-nowrap" style={{ color: '#77736c' }}>{order.created_at ? new Date(order.created_at).toLocaleTimeString() : '—'}</td>
+                  <td className="py-2.5 pr-4"><ActionBadge order={order} /></td>
+                  <td className="py-2.5 pr-4 font-mono text-xs font-medium">{order.trading_symbol ?? order.normalized_symbol ?? '—'}</td>
+                  <td className="py-2.5 pr-4" style={{ color: '#d8d3c8' }}>{order.normalized_qty ?? order.qty ?? '—'}</td>
+                  <td className="py-2.5 pr-4"><OrderStatusBadge order={order} /></td>
+                  <td className="py-2.5 text-xs max-w-xs truncate" style={{ color: '#77736c' }}>{order.reason ?? '—'}</td>
                 </tr>
               ))}
-              {orders.length === 0 && (
-                <tr>
-                  <td className="py-4 text-slate-400" colSpan={5}>No order events yet.</td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>

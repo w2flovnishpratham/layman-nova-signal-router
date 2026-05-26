@@ -8,19 +8,19 @@ interface Props {
 }
 
 const accents = {
-  green: 'border-green-500/40 bg-green-500/5',
+  green: 'border-[#98e94d]/40 bg-[#98e94d]/5',
   red: 'border-red-500/40 bg-red-500/5',
   yellow: 'border-yellow-500/40 bg-yellow-500/5',
-  blue: 'border-brand-500/40 bg-brand-500/5',
-  default: 'border-gray-800',
+  blue: 'border-[#d3cec5]/30 bg-[#d3cec5]/5',
+  default: 'border-[#24231f]',
 }
 
 export default function StatusCard({ title, value, subtitle, accent = 'default' }: Props) {
   return (
     <div className={`card border ${accents[accent]}`}>
-      <p className="text-gray-400 text-xs uppercase tracking-wide mb-1">{title}</p>
-      <div className="text-xl font-bold text-gray-100">{value}</div>
-      {subtitle && <p className="text-gray-500 text-xs mt-1">{subtitle}</p>}
+      <p className="text-xs uppercase tracking-wide mb-1 text-[#9a968f]">{title}</p>
+      <div className="text-xl font-bold text-[#f4f1ea]">{value}</div>
+      {subtitle && <p className="text-xs mt-1 text-[#77736c]">{subtitle}</p>}
     </div>
   )
 }

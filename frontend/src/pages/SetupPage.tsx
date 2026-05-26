@@ -107,26 +107,26 @@ function randomSecret() {
 function SignalCard({ item }: { item: ChatFeedItem }) {
   const meta = item.metadata || {}
   return (
-    <div className="rounded-md border border-sky-800 bg-sky-950/30 p-4">
+    <div className="rounded-md border border-[#2b2a26] bg-[#151513] p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-semibold text-sky-200">{textValue(meta.action)} alert received</p>
-        <p className="text-xs text-slate-400">{displayTime(item.timestamp)}</p>
+        <p className="font-semibold text-[#d3cec5]">{textValue(meta.action)} alert received</p>
+        <p className="text-xs text-[#9a968f]">{displayTime(item.timestamp)}</p>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
         <div>
-          <p className="text-slate-500">Symbol</p>
+          <p className="text-[#77736c]">Symbol</p>
           <p>{textValue(meta.trading_symbol || meta.symbol)}</p>
         </div>
         <div>
-          <p className="text-slate-500">Side</p>
+          <p className="text-[#77736c]">Side</p>
           <p>{textValue(meta.side)}</p>
         </div>
         <div>
-          <p className="text-slate-500">Qty</p>
+          <p className="text-[#77736c]">Qty</p>
           <p>{textValue(meta.qty)}</p>
         </div>
         <div>
-          <p className="text-slate-500">Contract</p>
+          <p className="text-[#77736c]">Contract</p>
           <p>{textValue(meta.expiry)} {textValue(meta.strike)} {textValue(meta.option_side)}</p>
         </div>
       </div>
@@ -138,42 +138,42 @@ function OrderCard({ item, status }: { item: ChatFeedItem; status: SetupStatus }
   const meta = item.metadata || {}
   const isExit = meta.action === 'EXIT'
   return (
-    <div className="rounded-md border border-emerald-800 bg-emerald-950/30 p-4">
+    <div className="rounded-md border border-[#26331d] bg-[#11170d] p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-semibold text-emerald-200">{isExit ? 'Sell executed' : 'Buy executed'}</p>
-        <p className="text-xs text-slate-400">{displayTime(item.timestamp)}</p>
+        <p className="font-semibold text-[#c8f68f]">{isExit ? 'Sell executed' : 'Buy executed'}</p>
+        <p className="text-xs text-[#9a968f]">{displayTime(item.timestamp)}</p>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
         <div>
-          <p className="text-slate-500">Order ID</p>
+          <p className="text-[#77736c]">Order ID</p>
           <p className="font-mono">{textValue(meta.order_id)}</p>
         </div>
         <div>
-          <p className="text-slate-500">Status</p>
+          <p className="text-[#77736c]">Status</p>
           <p>{textValue(meta.status)}</p>
         </div>
         <div>
-          <p className="text-slate-500">Qty</p>
+          <p className="text-[#77736c]">Qty</p>
           <p>{textValue(meta.qty)}</p>
         </div>
         <div>
-          <p className="text-slate-500">Avg price</p>
+          <p className="text-[#77736c]">Avg price</p>
           <p>{textValue(meta.avg_price)}</p>
         </div>
         <div>
-          <p className="text-slate-500">Symbol</p>
+          <p className="text-[#77736c]">Symbol</p>
           <p>{textValue(meta.trading_symbol)}</p>
         </div>
         <div>
-          <p className="text-slate-500">Session PnL</p>
+          <p className="text-[#77736c]">Session PnL</p>
           <p>{currency(status.wallet.session_pnl)}</p>
         </div>
         <div>
-          <p className="text-slate-500">{meta.action === 'EXIT' ? 'Exit source' : 'Next step'}</p>
+          <p className="text-[#77736c]">{meta.action === 'EXIT' ? 'Exit source' : 'Next step'}</p>
           <p>{isExit ? 'TradingView TP/SL' : 'Sell alert'}</p>
         </div>
         <div>
-          <p className="text-slate-500">Mode</p>
+          <p className="text-[#77736c]">Mode</p>
           <p>{textValue(meta.dhan_mode)}</p>
         </div>
       </div>
@@ -194,9 +194,9 @@ function ActivityFeed({ status, feed }: { status: SetupStatus; feed: ChatFeedIte
     .slice(-12)
 
   return (
-    <section className="rounded-lg border border-slate-800 bg-slate-900">
-      <div className="flex items-center gap-2 border-b border-slate-800 px-5 py-4">
-        <Activity className="text-sky-400" size={20} />
+    <section className="rounded-lg border border-[#24231f] bg-[#151513]">
+      <div className="flex items-center gap-2 border-b border-[#24231f] px-5 py-4">
+        <Activity className="text-[#d3cec5]" size={20} />
         <h2 className="text-lg font-semibold">Live Activity</h2>
       </div>
       <div className="space-y-3 px-5 py-5">
@@ -210,17 +210,17 @@ function ActivityFeed({ status, feed }: { status: SetupStatus; feed: ChatFeedIte
             <div key={item.id || index} className="rounded-md border border-red-800 bg-red-950/30 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-red-200">{text}</p>
-                <p className="text-xs text-slate-500">{displayTime(item.timestamp)}</p>
+                <p className="text-xs text-[#77736c]">{displayTime(item.timestamp)}</p>
               </div>
             </div>
           )
         })}
 
         {waitingText && (
-          <div className="rounded-md border border-slate-700 bg-slate-950 p-4">
+          <div className="rounded-md border border-[#2b2a26] bg-[#090908] p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className={status.engine_started ? 'text-sm font-semibold text-sky-200' : 'text-sm font-semibold text-slate-300'}>{waitingText}</p>
-              {status.engine_started && <span className="h-2 w-2 rounded-full bg-sky-400" />}
+              <p className={status.engine_started ? 'text-sm font-semibold text-[#d3cec5]' : 'text-sm font-semibold text-[#d8d3c8]'}>{waitingText}</p>
+              {status.engine_started && <span className="h-2 w-2 rounded-full bg-[#98e94d]" />}
             </div>
           </div>
         )}
@@ -373,7 +373,7 @@ export default function SetupPage() {
 
   if (!status) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center text-slate-300">
+      <div className="flex min-h-[60vh] items-center justify-center text-[#d8d3c8]">
         <RefreshCw className="mr-3 animate-spin" size={20} />
         Loading setup status
       </div>
@@ -392,7 +392,7 @@ export default function SetupPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Setup</h1>
-          <p className="mt-1 text-sm text-slate-400">Connect Dhan, save your webhook secret, set risk limits, then start the engine.</p>
+          <p className="mt-1 text-sm text-[#9a968f]">Connect Dhan, save your webhook secret, set risk limits, then start the engine.</p>
         </div>
         <button onClick={() => loadData()} className="btn-ghost flex items-center gap-2 self-start">
           <RefreshCw size={16} /> Refresh
@@ -405,7 +405,7 @@ export default function SetupPage() {
         </div>
       )}
 
-      {message && <div className="rounded-md border border-emerald-700 bg-emerald-950 p-3 text-sm text-emerald-200">{message}</div>}
+      {message && <div className="rounded-md border border-[#26331d] bg-[#11170d] p-3 text-sm text-[#c8f68f]">{message}</div>}
       {error && <div className="rounded-md border border-red-700 bg-red-950 p-3 text-sm text-red-200">{error}</div>}
 
       <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
@@ -413,9 +413,9 @@ export default function SetupPage() {
           const done = index < activeStep || (index === 4 && status.engine_started)
           const active = index === activeStep && !done
           return (
-            <div key={step} className={done || active ? 'rounded-md border border-emerald-800 bg-emerald-950/40 p-3' : 'rounded-md border border-slate-800 bg-slate-900 p-3'}>
+            <div key={step} className={done || active ? 'rounded-md border border-[#26331d] bg-[#11170d] p-3' : 'rounded-md border border-[#24231f] bg-[#151513] p-3'}>
               <div className="flex items-center gap-2 text-sm font-medium">
-                {done ? <CheckCircle2 className="text-emerald-400" size={16} /> : <span className={active ? 'h-4 w-4 rounded-full border border-emerald-400' : 'h-4 w-4 rounded-full border border-slate-500'} />}
+                {done ? <CheckCircle2 className="text-[#98e94d]" size={16} /> : <span className={active ? 'h-4 w-4 rounded-full border border-[#98e94d]' : 'h-4 w-4 rounded-full border border-[#77736c]'} />}
                 {step}
               </div>
             </div>
@@ -423,38 +423,38 @@ export default function SetupPage() {
         })}
       </div>
 
-      <section className="rounded-lg border border-slate-800 bg-slate-900">
+      <section className="rounded-lg border border-[#24231f] bg-[#151513]">
         <button type="button" onClick={() => setSetupFormsOpen((open) => !open)} className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left">
           <span className="flex min-w-0 items-center gap-3">
-            <KeyRound className={setupComplete ? 'text-emerald-400' : 'text-amber-400'} size={20} />
+            <KeyRound className={setupComplete ? 'text-[#98e94d]' : 'text-amber-400'} size={20} />
             <span>
               <span className="block text-base font-semibold">Setup Forms</span>
-              <span className={setupComplete ? 'mt-1 block text-sm text-emerald-300' : 'mt-1 block text-sm text-amber-300'}>
+              <span className={setupComplete ? 'mt-1 block text-sm text-[#98e94d]' : 'mt-1 block text-sm text-amber-300'}>
                 {status.engine_started ? 'Collapsed while engine is running' : setupComplete ? 'Completed' : 'Open to finish Dhan, webhook, and risk setup'}
               </span>
             </span>
           </span>
-          <span className="flex shrink-0 items-center gap-2 text-sm text-slate-300">
+          <span className="flex shrink-0 items-center gap-2 text-sm text-[#d8d3c8]">
             {setupFormsOpen ? 'Collapse' : 'Open'}
             {setupFormsOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </span>
         </button>
 
         {setupFormsOpen ? (
-          <div className="border-t border-slate-800 px-5 py-5">
+          <div className="border-t border-[#24231f] px-5 py-5">
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <KeyRound className="text-emerald-400" size={20} />
+                  <KeyRound className="text-[#98e94d]" size={20} />
                   <h2 className="text-lg font-semibold">Connect Dhan</h2>
                 </div>
                 <form onSubmit={(event) => submitDhan(event, 'connect')} className="space-y-4">
                   <label className="block text-sm">
-                    <span className="mb-1 block text-slate-300">Dhan Client ID</span>
+                    <span className="mb-1 block text-[#d8d3c8]">Dhan Client ID</span>
                     <input value={clientId} onChange={(event) => setClientId(event.target.value)} className="input" autoComplete="off" />
                   </label>
                   <label className="block text-sm">
-                    <span className="mb-1 block text-slate-300">Dhan Access Token</span>
+                    <span className="mb-1 block text-[#d8d3c8]">Dhan Access Token</span>
                     <input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="input" type="password" autoComplete="off" />
                   </label>
                   {!status.vault.ready && (
@@ -468,34 +468,34 @@ export default function SetupPage() {
                       Test Connection
                     </button>
                   </div>
-                  {status.dhan_connected && <p className="text-sm text-emerald-300">Dhan connected successfully. Client ID: {status.dhan_client_id_masked}</p>}
+                  {status.dhan_connected && <p className="text-sm text-[#98e94d]">Dhan connected successfully. Client ID: {status.dhan_client_id_masked}</p>}
                 </form>
               </div>
 
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <Wallet className="text-sky-400" size={20} />
+                  <Wallet className="text-[#d3cec5]" size={20} />
                   <h2 className="text-lg font-semibold">Wallet / Funds</h2>
                 </div>
                 <div className="grid grid-cols-2 gap-3 text-sm">
-                  <p><span className="text-slate-400">Available balance</span><br /><span className="font-semibold">{currency(status.wallet.available_balance)}</span></p>
-                  <p><span className="text-slate-400">Utilized margin</span><br /><span className="font-semibold">{currency(status.wallet.utilized_amount)}</span></p>
-                  <p><span className="text-slate-400">Client ID</span><br /><span className="font-mono">{status.wallet.client_id || status.dhan_client_id_masked || '-'}</span></p>
-                  <p><span className="text-slate-400">Dhan mode</span><br /><span className={status.mode.dhan_mode === 'REAL' ? 'font-bold text-red-300' : 'font-bold text-emerald-300'}>{status.mode.dhan_mode}</span></p>
+                  <p><span className="text-[#9a968f]">Available balance</span><br /><span className="font-semibold">{currency(status.wallet.available_balance)}</span></p>
+                  <p><span className="text-[#9a968f]">Utilized margin</span><br /><span className="font-semibold">{currency(status.wallet.utilized_amount)}</span></p>
+                  <p><span className="text-[#9a968f]">Client ID</span><br /><span className="font-mono">{status.wallet.client_id || status.dhan_client_id_masked || '-'}</span></p>
+                  <p><span className="text-[#9a968f]">Dhan mode</span><br /><span className={status.mode.dhan_mode === 'REAL' ? 'font-bold text-red-300' : 'font-bold text-[#98e94d]'}>{status.mode.dhan_mode}</span></p>
                 </div>
-                <p className="rounded-md border border-slate-700 bg-slate-950 p-3 text-sm text-slate-300">{status.static_ip_note}</p>
+                <p className="rounded-md border border-[#2b2a26] bg-[#090908] p-3 text-sm text-[#d8d3c8]">{status.static_ip_note}</p>
               </div>
             </div>
 
-            <div className="mt-6 grid grid-cols-1 gap-6 border-t border-slate-800 pt-6 lg:grid-cols-2">
+            <div className="mt-6 grid grid-cols-1 gap-6 border-t border-[#24231f] pt-6 lg:grid-cols-2">
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <ShieldCheck className="text-emerald-400" size={20} />
+                  <ShieldCheck className="text-[#98e94d]" size={20} />
                   <h2 className="text-lg font-semibold">Webhook Secret</h2>
                 </div>
                 <form onSubmit={submitSecret} className="space-y-4">
                   <label className="block text-sm">
-                    <span className="mb-1 block text-slate-300">Webhook Secret</span>
+                    <span className="mb-1 block text-[#d8d3c8]">Webhook Secret</span>
                     <input value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} className="input" type="password" autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} required />
                   </label>
                   <div className="flex flex-wrap gap-2">
@@ -506,15 +506,15 @@ export default function SetupPage() {
                       Generate Random Secret
                     </button>
                   </div>
-                  {status.webhook_secret_set && <p className="text-sm text-emerald-300">Webhook secret saved.</p>}
+                  {status.webhook_secret_set && <p className="text-sm text-[#98e94d]">Webhook secret saved.</p>}
                 </form>
               </div>
 
               <div className="space-y-4">
                 <h2 className="text-lg font-semibold">TradingView Setup</h2>
                 <div>
-                  <p className="mb-1 text-sm text-slate-400">Webhook URL</p>
-                  <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950 p-3">
+                  <p className="mb-1 text-sm text-[#9a968f]">Webhook URL</p>
+                  <div className="flex items-center gap-2 rounded-md border border-[#24231f] bg-[#090908] p-3">
                     <p className="min-w-0 flex-1 break-all font-mono text-sm">{status.webhook_url || '-'}</p>
                     <button onClick={copyWebhook} className="btn-ghost p-2" title="Copy webhook URL" type="button">
                       <Copy size={16} />
@@ -522,28 +522,28 @@ export default function SetupPage() {
                   </div>
                 </div>
                 <div>
-                  <p className="mb-1 text-sm text-slate-400">Alert Message</p>
-                  <p className="rounded-md border border-slate-800 bg-slate-950 p-3 font-mono text-sm">{'{{strategy.order.alert_message}}'}</p>
+                  <p className="mb-1 text-sm text-[#9a968f]">Alert Message</p>
+                  <p className="rounded-md border border-[#24231f] bg-[#090908] p-3 font-mono text-sm">{'{{strategy.order.alert_message}}'}</p>
                 </div>
               </div>
             </div>
 
-            <form onSubmit={submitRisk} className="mt-6 space-y-4 border-t border-slate-800 pt-6">
+            <form onSubmit={submitRisk} className="mt-6 space-y-4 border-t border-[#24231f] pt-6">
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="text-emerald-400" size={20} />
+                <CheckCircle2 className="text-[#98e94d]" size={20} />
                 <h2 className="text-lg font-semibold">Risk Settings</h2>
               </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <label className="block text-sm">
-                  <span className="mb-1 block text-slate-300">Max quantity per order</span>
+                  <span className="mb-1 block text-[#d8d3c8]">Max quantity per order</span>
                   <input className="input" type="number" min={1} value={risk.max_qty_per_order} onChange={(event) => setRisk({ ...risk, max_qty_per_order: Number(event.target.value) })} />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-slate-300">Max trades per day</span>
+                  <span className="mb-1 block text-[#d8d3c8]">Max trades per day</span>
                   <input className="input" type="number" min={1} value={risk.max_trades_per_day} onChange={(event) => setRisk({ ...risk, max_trades_per_day: Number(event.target.value) })} />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-slate-300">Daily loss limit</span>
+                  <span className="mb-1 block text-[#d8d3c8]">Daily loss limit</span>
                   <input className="input" type="number" min={1} value={risk.daily_loss_limit} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} />
                 </label>
               </div>
@@ -563,15 +563,15 @@ export default function SetupPage() {
             </form>
           </div>
         ) : (
-          <div className="border-t border-slate-800 px-5 py-4">
+          <div className="border-t border-[#24231f] px-5 py-4">
             <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-4">
-              <p><span className="text-slate-400">Dhan</span><br />{completed.dhan ? `Connected ${status.dhan_client_id_masked || ''}` : 'Needs attention'}</p>
-              <p><span className="text-slate-400">Wallet</span><br />{currency(status.wallet.available_balance)}</p>
-              <p><span className="text-slate-400">Webhook</span><br />{completed.secret ? 'Secret saved' : 'Needs secret'}</p>
-              <p><span className="text-slate-400">Risk</span><br />Qty {risk.max_qty_per_order} / Trades {risk.max_trades_per_day}</p>
+              <p><span className="text-[#9a968f]">Dhan</span><br />{completed.dhan ? `Connected ${status.dhan_client_id_masked || ''}` : 'Needs attention'}</p>
+              <p><span className="text-[#9a968f]">Wallet</span><br />{currency(status.wallet.available_balance)}</p>
+              <p><span className="text-[#9a968f]">Webhook</span><br />{completed.secret ? 'Secret saved' : 'Needs secret'}</p>
+              <p><span className="text-[#9a968f]">Risk</span><br />Qty {risk.max_qty_per_order} / Trades {risk.max_trades_per_day}</p>
             </div>
             <div className="mt-4 flex flex-col gap-3 text-sm md:flex-row md:items-center md:justify-between">
-              <p className="min-w-0 break-all font-mono text-slate-300">{status.webhook_url || '-'}</p>
+              <p className="min-w-0 break-all font-mono text-[#d8d3c8]">{status.webhook_url || '-'}</p>
               <button onClick={copyWebhook} className="btn-ghost flex items-center gap-2 self-start" type="button">
                 <Copy size={16} /> Copy URL
               </button>
@@ -580,11 +580,11 @@ export default function SetupPage() {
         )}
       </section>
 
-      <section className="rounded-lg border border-slate-800 bg-slate-900 p-5">
+      <section className="rounded-lg border border-[#24231f] bg-[#151513] p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-lg font-semibold">Start Engine</h2>
-            <p className="mt-1 text-sm text-slate-400">Webhook trading is enabled only after this setup check passes.</p>
+            <p className="mt-1 text-sm text-[#9a968f]">Webhook trading is enabled only after this setup check passes.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button onClick={runStartEngine} disabled={busy === 'engine' || status.engine_started} className="btn-primary flex items-center gap-2" type="button">
@@ -602,7 +602,7 @@ export default function SetupPage() {
             ))}
           </div>
         )}
-        {status.engine_started && <p className="mt-4 text-sm text-emerald-300">Engine started. Waiting for TradingView entry alert.</p>}
+        {status.engine_started && <p className="mt-4 text-sm text-[#98e94d]">Engine started. Waiting for TradingView entry alert.</p>}
       </section>
 
       <ActivityFeed status={status} feed={chatFeed} />

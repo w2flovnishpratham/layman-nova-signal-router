@@ -2,6 +2,19 @@ import { useEffect, useState } from 'react'
 import { getPositions } from '../api/dashboard'
 import { OpenPosition } from '../types'
 
+interface FieldProps { label: string; value: React.ReactNode; mono?: boolean; span2?: boolean }
+
+function Field({ label, value, mono, span2 }: FieldProps) {
+  return (
+    <div className={span2 ? 'col-span-2' : ''}>
+      <p className="text-xs mb-0.5" style={{ color: '#77736c' }}>{label}</p>
+      <p className={`text-sm ${mono ? 'font-mono' : 'font-medium'}`} style={{ color: '#f4f1ea' }}>
+        {value}
+      </p>
+    </div>
+  )
+}
+
 export default function PositionsPage() {
   const [position, setPosition] = useState<OpenPosition | null>(null)
   const [loading, setLoading] = useState(true)
@@ -20,44 +33,37 @@ export default function PositionsPage() {
 
   return (
     <div className="max-w-3xl">
-      <h1 className="text-2xl font-bold mb-6">Position</h1>
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold" style={{ color: '#f4f1ea' }}>Position</h1>
+        <p className="mt-1 text-sm" style={{ color: '#9a968f' }}>
+          Current open position tracked by the signal engine.
+        </p>
+      </div>
+
       <div className="card">
         {loading ? (
-          <p className="text-gray-500 text-sm">Loading position...</p>
+          <p className="text-sm" style={{ color: '#77736c' }}>Loading position…</p>
         ) : !position?.has_open_position ? (
-          <p className="text-gray-500 text-sm">No open position.</p>
+          <div className="flex flex-col items-center justify-center py-10 gap-2">
+            <p className="text-sm font-medium" style={{ color: '#9a968f' }}>No open position</p>
+            <p className="text-xs" style={{ color: '#77736c' }}>A position will appear here once an entry order is executed.</p>
+          </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <p className="text-gray-500">Strategy</p>
-              <p className="text-gray-100 font-medium">{position.strategy_code}</p>
-            </div>
-            <div>
-              <p className="text-gray-500">Trading Symbol</p>
-              <p className="text-gray-100 font-medium">{position.trading_symbol}</p>
-            </div>
-            <div>
-              <p className="text-gray-500">Security ID</p>
-              <p className="text-gray-100 font-mono">{position.security_id}</p>
-            </div>
-            <div>
-              <p className="text-gray-500">Qty</p>
-              <p className="text-gray-100 font-medium">{position.qty}</p>
-            </div>
-            <div>
-              <p className="text-gray-500">Entry Order ID</p>
-              <p className="text-gray-100 font-mono text-xs">{position.entry_order_id}</p>
-            </div>
-            <div>
-              <p className="text-gray-500">Entry Price</p>
-              <p className="text-gray-100 font-medium">
-                {position.entry_price == null ? '-' : position.entry_price.toFixed(2)}
-              </p>
-            </div>
-            <div className="col-span-2">
-              <p className="text-gray-500">Opened At</p>
-              <p className="text-gray-100">{position.opened_at ? new Date(position.opened_at).toLocaleString() : '-'}</p>
-            </div>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-5">
+            <Field label="Strategy" value={position.strategy_code} />
+            <Field label="Trading Symbol" value={position.trading_symbol} mono />
+            <Field label="Security ID" value={position.security_id} mono />
+            <Field label="Qty" value={position.qty} />
+            <Field label="Entry Order ID" value={position.entry_order_id} mono />
+            <Field
+              label="Entry Price"
+              value={position.entry_price == null ? '—' : `₹${position.entry_price.toFixed(2)}`}
+            />
+            <Field
+              label="Opened At"
+              span2
+              value={position.opened_at ? new Date(position.opened_at).toLocaleString() : '—'}
+            />
           </div>
         )}
       </div>

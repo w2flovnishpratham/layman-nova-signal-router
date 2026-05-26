@@ -1,51 +1,399 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind v4 -- single import replaces the three @tailwind directives */
+@import "tailwindcss";
 
+/* === Custom theme tokens === */
+@theme {
+  /* Reference palette: near-black, warm charcoal, soft cream, signal lime */
+  --color-nova-50:  #f4f1ea;
+  --color-nova-100: #e6e0d5;
+  --color-nova-200: #d3cec5;
+  --color-nova-300: #bcb5aa;
+  --color-nova-400: #98e94d;
+  --color-nova-500: #82d934;
+  --color-nova-600: #62b820;
+  --color-nova-700: #417b16;
+  --color-nova-800: #26331d;
+  --color-nova-900: #11170d;
+
+  /* Dark-neutral surfaces (no blue tint) */
+  --color-surface-page:    #090908;
+  --color-surface-card:    #151513;
+  --color-surface-raised:  #1b1a17;
+  --color-surface-overlay: #24231f;
+
+  /* Borders */
+  --color-border-subtle:  #1d1c19;
+  --color-border-default: #2b2a26;
+  --color-border-strong:  #3a3933;
+
+  /* Text */
+  --color-text-primary:   #f4f1ea;
+  --color-text-secondary: #9a968f;
+  --color-text-muted:     #77736c;
+}
+
+/* === Animation keyframes === */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.3; transform: scale(0.8); }
+}
+
+@keyframes ping-ring {
+  0%        { transform: scale(1); opacity: 1; }
+  75%, 100% { transform: scale(2.2); opacity: 0; }
+}
+
+@keyframes step-active {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* === Base === */
 body {
-  @apply bg-slate-950 text-slate-100 font-sans;
+  background-color: #090908;
+  color: #f4f1ea;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
+/* === Cards === */
 .card {
-  @apply rounded-lg border border-slate-800 bg-slate-900 p-5;
+  background-color: #151513;
+  border: 1px solid #24231f;
+  border-radius: 0.875rem;
+  padding: 1.25rem;
 }
 
-.btn-primary {
-  @apply rounded-md bg-emerald-600 px-4 py-2 font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50;
+.landing-card {
+  background-color: #151513;
+  border: 1px solid #24231f;
+  border-radius: 1rem;
+  padding: 1.25rem;
+  box-shadow: inset 0 1px 0 rgba(244, 241, 234, 0.03);
 }
+
+.card-accent-green {
+  background-color: #151513;
+  border: 1px solid #24231f;
+  border-left: 3px solid #98e94d;
+  border-radius: 0.875rem;
+  padding: 1.25rem;
+}
+
+.card-accent-red {
+  background-color: #151513;
+  border: 1px solid #24231f;
+  border-left: 3px solid #ef4444;
+  border-radius: 0.875rem;
+  padding: 1.25rem;
+}
+
+.card-accent-amber {
+  background-color: #151513;
+  border: 1px solid #24231f;
+  border-left: 3px solid #f59e0b;
+  border-radius: 0.875rem;
+  padding: 1.25rem;
+}
+
+/* === Buttons === */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: #f4f1ea;
+  color: #090908;
+  font-weight: 600;
+  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  border-radius: 9999px;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.15s, opacity 0.15s;
+}
+.btn-primary:hover { background-color: #98e94d; }
+.btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .btn-danger {
-  @apply rounded-md bg-red-600 px-4 py-2 font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: #ef4444;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.625rem;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.15s;
 }
+.btn-danger:hover { background-color: #dc2626; }
+.btn-danger:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .btn-ghost {
-  @apply rounded-md bg-slate-800 px-4 py-2 font-medium text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: #171714;
+  color: #d8d3c8;
+  font-weight: 500;
+  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  border-radius: 9999px;
+  border: 1px solid #2b2a26;
+  cursor: pointer;
+  transition: background-color 0.15s;
 }
+.btn-ghost:hover { background-color: #211f1b; }
+.btn-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
 
+.btn-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background-color: #f59e0b;
+  color: #0a0a0a;
+  font-weight: 600;
+  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.625rem;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.btn-warning:hover { background-color: #d97706; }
+.btn-warning:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* === Form inputs === */
 .input {
-  @apply w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500;
+  width: 100%;
+  background-color: #151513;
+  border: 1px solid #2b2a26;
+  border-radius: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  color: #f4f1ea;
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.input:focus {
+  border-color: #98e94d;
+  box-shadow: 0 0 0 3px rgba(152, 233, 77, 0.12);
+}
+.input::placeholder { color: #5e5a53; }
+
+/* === Navigation === */
+.nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.625rem;
+  color: #555555;
+  transition: background-color 0.15s, color 0.15s;
+}
+.nav-icon:hover { background-color: #1b1a17; color: #f4f1ea; }
+
+.nav-icon-active {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.625rem;
+  background-color: #1b1a17;
+  color: #98e94d;
 }
 
-.nav-link {
-  @apply rounded-md px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800 hover:text-white;
-}
-
-.nav-link-active {
-  @apply rounded-md bg-slate-800 px-3 py-2 text-sm font-semibold text-white;
-}
-
+/* === Status badges === */
 .badge-green {
-  @apply inline-flex items-center rounded-full bg-emerald-950 px-2.5 py-0.5 text-xs font-medium text-emerald-300;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  background-color: rgba(152, 233, 77, 0.12);
+  border: 1px solid rgba(152, 233, 77, 0.25);
+  padding: 0.125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #98e94d;
 }
 
 .badge-red {
-  @apply inline-flex items-center rounded-full bg-red-950 px-2.5 py-0.5 text-xs font-medium text-red-300;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  background-color: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  padding: 0.125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #f87171;
 }
 
 .badge-yellow {
-  @apply inline-flex items-center rounded-full bg-amber-950 px-2.5 py-0.5 text-xs font-medium text-amber-300;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  background-color: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  padding: 0.125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #fbbf24;
 }
 
 .badge-gray {
-  @apply inline-flex items-center rounded-full bg-slate-800 px-2.5 py-0.5 text-xs font-medium text-slate-400;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  background-color: #1b1a17;
+  border: 1px solid #2b2a26;
+  padding: 0.125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #9a968f;
 }
+
+.badge-blue {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  background-color: rgba(211, 206, 197, 0.1);
+  border: 1px solid rgba(211, 206, 197, 0.22);
+  padding: 0.125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #d3cec5;
+}
+
+/* Mode badge -- REAL = red pill, MOCK = lime pill */
+.badge-red-solid {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  background-color: #ef4444;
+  padding: 0.2rem 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #fff;
+}
+
+.badge-green-solid {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  background-color: rgba(152, 233, 77, 0.15);
+  border: 1px solid rgba(152, 233, 77, 0.3);
+  padding: 0.2rem 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #98e94d;
+}
+
+/* === Live state indicators === */
+.status-dot {
+  display: inline-block;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.dot-green  { background-color: #98e94d; }
+.dot-red    { background-color: #ef4444; }
+.dot-amber  { background-color: #f59e0b; }
+.dot-gray   { background-color: #77736c; }
+
+.dot-pulse {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.dot-ping {
+  animation: ping-ring 1.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* Active pipeline step */
+.step-active-anim {
+  animation: step-active 1.5s ease infinite;
+}
+
+/* === "Can Trade?" banner variants === */
+.can-trade-ready {
+  border-radius: 0.75rem;
+  border: 1px solid rgba(152, 233, 77, 0.2);
+  background-color: rgba(152, 233, 77, 0.06);
+  padding: 0.75rem 1rem;
+}
+
+.can-trade-blocked {
+  border-radius: 0.75rem;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  background-color: rgba(245, 158, 11, 0.07);
+  padding: 0.75rem 1rem;
+}
+
+.can-trade-danger {
+  border-radius: 0.75rem;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background-color: rgba(239, 68, 68, 0.08);
+  padding: 0.75rem 1rem;
+}
+
+/* === Log row animations === */
+.log-row-enter {
+  animation: slide-in-right 0.2s ease forwards;
+}
+
+.fade-in {
+  animation: fade-in 0.25s ease forwards;
+}
+
+/* === SVG Flow Animation === */
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.animate-flow {
+  animation: dash-flow 0.8s linear infinite;
+}
+
+/* === Technical Grid Backdrop === */
+.bg-tech-grid {
+  background-image: 
+    linear-gradient(to right, rgba(244, 241, 234, 0.015) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(244, 241, 234, 0.015) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* === Scrollbar Styling for Terminal === */
+.terminal-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.terminal-scrollbar::-webkit-scrollbar-track {
+  background: #0d0d0c;
+}
+.terminal-scrollbar::-webkit-scrollbar-thumb {
+  background: #24231f;
+  border-radius: 3px;
+}
+.terminal-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #3a3933;
+}
+

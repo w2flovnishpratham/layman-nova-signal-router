@@ -28,20 +28,23 @@ export default function LiveFlowPage() {
     <div className="max-w-xl">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Live Flow</h1>
+          <h1 className="text-2xl font-semibold" style={{ color: '#f4f1ea' }}>Live Flow</h1>
           {lastUpdated && (
-            <p className="text-gray-500 text-xs mt-0.5">
-              Updated {lastUpdated.toLocaleTimeString()} - auto-refreshes every 3s
+            <p className="text-xs mt-0.5" style={{ color: '#77736c' }}>
+              Updated {lastUpdated.toLocaleTimeString()} · auto-refreshes every 3s
             </p>
           )}
         </div>
-        <button onClick={loadData} className="btn-ghost flex items-center gap-1 text-sm">
-          <RefreshCw size={14} /> Refresh
+        <button onClick={loadData} className="btn-ghost flex items-center gap-1.5 text-sm">
+          <RefreshCw size={13} /> Refresh
         </button>
       </div>
 
       <div className="card">
-        {loading ? <p className="text-gray-500 text-sm">Loading flow...</p> : <LiveFlowTimeline steps={steps} />}
+        {loading
+          ? <p className="text-sm" style={{ color: '#77736c' }}>Loading flow…</p>
+          : <LiveFlowTimeline steps={steps} />
+        }
       </div>
     </div>
   )

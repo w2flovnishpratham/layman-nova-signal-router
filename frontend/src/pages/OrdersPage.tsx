@@ -27,55 +27,62 @@ export default function OrdersPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Orders</h1>
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold" style={{ color: '#f4f1ea' }}>Orders</h1>
+        <p className="mt-1 text-sm" style={{ color: '#9a968f' }}>
+          All order events routed through the signal engine.
+        </p>
+      </div>
+
       <div className="card overflow-x-auto">
         {loading ? (
-          <p className="text-gray-500 text-sm">Loading orders...</p>
+          <p className="text-sm" style={{ color: '#77736c' }}>Loading orders…</p>
         ) : orders.length === 0 ? (
-          <p className="text-gray-500 text-sm">No order events yet.</p>
+          <p className="text-sm" style={{ color: '#77736c' }}>No order events yet.</p>
         ) : (
           <table className="w-full text-sm text-left">
             <thead>
-              <tr className="text-gray-500 border-b border-gray-800">
-                <th className="pb-2 pr-4">Time</th>
-                <th className="pb-2 pr-4">Format</th>
-                <th className="pb-2 pr-4">Phase</th>
-                <th className="pb-2 pr-4">Action</th>
-                <th className="pb-2 pr-4">Side</th>
-                <th className="pb-2 pr-4">Mode</th>
-                <th className="pb-2 pr-4">Symbol</th>
-                <th className="pb-2 pr-4">Option</th>
-                <th className="pb-2 pr-4">Qty</th>
-                <th className="pb-2 pr-4">Status</th>
-                <th className="pb-2 pr-4">Order ID</th>
-                <th className="pb-2">Reason</th>
+              <tr style={{ borderBottom: '1px solid #24231f' }}>
+                {['Time', 'Format', 'Phase', 'Action', 'Side', 'Mode', 'Symbol', 'Option', 'Qty', 'Status', 'Order ID', 'Reason'].map(h => (
+                  <th key={h} className="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider" style={{ color: '#77736c' }}>
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {orders.map((order) => (
-                <tr key={order.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 align-top">
-                  <td className="py-2 pr-4 text-gray-400 text-xs whitespace-nowrap">
+                <tr
+                  key={order.id}
+                  className="align-top"
+                  style={{ borderBottom: '1px solid #1d1c19' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#151513')}
+                  onMouseLeave={e => (e.currentTarget.style.background = '')}
+                >
+                  <td className="py-2 pr-4 text-xs whitespace-nowrap font-mono" style={{ color: '#77736c' }}>
                     {order.created_at ? new Date(order.created_at).toLocaleString() : '-'}
                   </td>
-                  <td className="py-2 pr-4 font-mono text-xs">{order.payload_format || '-'}</td>
-                  <td className="py-2 pr-4 font-mono text-xs">{order.phase || '-'}</td>
-                  <td className="py-2 pr-4">{order.normalized_action || order.action || '-'}</td>
-                  <td className="py-2 pr-4">{order.normalized_side || order.side || '-'}</td>
+                  <td className="py-2 pr-4 font-mono text-xs" style={{ color: '#bcb5aa' }}>{order.payload_format || '-'}</td>
+                  <td className="py-2 pr-4 font-mono text-xs" style={{ color: '#bcb5aa' }}>{order.phase || '-'}</td>
+                  <td className="py-2 pr-4" style={{ color: '#f4f1ea' }}>{order.normalized_action || order.action || '-'}</td>
+                  <td className="py-2 pr-4" style={{ color: '#f4f1ea' }}>{order.normalized_side || order.side || '-'}</td>
                   <td className="py-2 pr-4">
-                    <span className={order.dhan_mode === 'REAL' ? 'text-red-400' : 'text-green-400'}>
+                    <span className={order.dhan_mode === 'REAL' ? 'badge-red-solid' : 'badge-green-solid'}>
                       {order.dhan_mode || '-'}
                     </span>
                   </td>
-                  <td className="py-2 pr-4 font-mono text-xs">{order.trading_symbol || order.normalized_symbol || order.security_id || '-'}</td>
-                  <td className="py-2 pr-4 text-xs">
+                  <td className="py-2 pr-4 font-mono text-xs" style={{ color: '#d3cec5' }}>
+                    {order.trading_symbol || order.normalized_symbol || order.security_id || '-'}
+                  </td>
+                  <td className="py-2 pr-4 text-xs" style={{ color: '#9a968f' }}>
                     {order.normalized_expiry || '-'} {order.normalized_strike ?? ''} {order.normalized_option_side || ''}
                   </td>
-                  <td className="py-2 pr-4">{order.normalized_qty ?? order.qty ?? '-'}</td>
+                  <td className="py-2 pr-4" style={{ color: '#f4f1ea' }}>{order.normalized_qty ?? order.qty ?? '-'}</td>
                   <td className="py-2 pr-4">
                     <span className={badge(order)}>{order.status || (order.blocked ? 'BLOCKED' : order.phase)}</span>
                   </td>
-                  <td className="py-2 pr-4 font-mono text-xs text-gray-400">{order.order_id || '-'}</td>
-                  <td className="py-2 text-xs text-gray-400 max-w-sm">{order.reason || '-'}</td>
+                  <td className="py-2 pr-4 font-mono text-xs" style={{ color: '#77736c' }}>{order.order_id || '-'}</td>
+                  <td className="py-2 text-xs max-w-sm" style={{ color: '#9a968f' }}>{order.reason || '-'}</td>
                 </tr>
               ))}
             </tbody>

@@ -121,7 +121,7 @@ export default function SettingsPage() {
 
   if (!status) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center text-slate-300">
+      <div className="flex min-h-[60vh] items-center justify-center text-[#d8d3c8]">
         <RefreshCw className="mr-3 animate-spin" size={20} />
         Loading settings
       </div>
@@ -133,7 +133,7 @@ export default function SettingsPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Settings</h1>
-          <p className="mt-1 text-sm text-slate-400">Reconnect Dhan, rotate webhook secret, update risk, and control safety switches.</p>
+          <p className="mt-1 text-sm text-[#9a968f]">Reconnect Dhan, rotate webhook secret, update risk, and control safety switches.</p>
         </div>
         <button onClick={() => loadData()} className="btn-ghost flex items-center gap-2 self-start">
           <RefreshCw size={16} /> Refresh
@@ -146,19 +146,19 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {message && <div className="rounded-md border border-emerald-700 bg-emerald-950 p-3 text-sm text-emerald-200">{message}</div>}
+      {message && <div className="rounded-md border border-[#26331d] bg-[#11170d] p-3 text-sm text-[#c8f68f]">{message}</div>}
       {error && <div className="rounded-md border border-red-700 bg-red-950 p-3 text-sm text-red-200">{error}</div>}
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <form onSubmit={reconnectDhan} className="card space-y-4">
           <h2 className="text-lg font-semibold">Reconnect Dhan</h2>
-          <p className="text-sm text-slate-400">Current client: {status.dhan_client_id_masked || '-'}</p>
+          <p className="text-sm text-[#9a968f]">Current client: {status.dhan_client_id_masked || '-'}</p>
           <label className="block text-sm">
-            <span className="mb-1 block text-slate-300">Dhan Client ID</span>
+            <span className="mb-1 block text-[#d8d3c8]">Dhan Client ID</span>
             <input className="input" value={clientId} onChange={(event) => setClientId(event.target.value)} autoComplete="off" />
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-slate-300">Dhan Access Token</span>
+            <span className="mb-1 block text-[#d8d3c8]">Dhan Access Token</span>
             <input className="input" type="password" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} autoComplete="off" />
           </label>
           <div className="flex flex-wrap gap-2">
@@ -173,9 +173,9 @@ export default function SettingsPage() {
 
         <form onSubmit={updateSecret} className="card space-y-4">
           <h2 className="text-lg font-semibold">Reset Webhook Secret</h2>
-          <p className="text-sm text-slate-400">Saved: {status.webhook_secret_set ? 'yes' : 'no'}</p>
+          <p className="text-sm text-[#9a968f]">Saved: {status.webhook_secret_set ? 'yes' : 'no'}</p>
           <label className="block text-sm">
-            <span className="mb-1 block text-slate-300">New Webhook Secret</span>
+            <span className="mb-1 block text-[#d8d3c8]">New Webhook Secret</span>
             <input className="input" type="password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} required />
           </label>
           <div className="flex flex-wrap gap-2">
@@ -193,15 +193,15 @@ export default function SettingsPage() {
         <h2 className="text-lg font-semibold">Risk Settings</h2>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <label className="block text-sm">
-            <span className="mb-1 block text-slate-300">Max quantity per order</span>
+            <span className="mb-1 block text-[#d8d3c8]">Max quantity per order</span>
             <input className="input" type="number" min={1} value={risk.max_qty_per_order} onChange={(event) => setRisk({ ...risk, max_qty_per_order: Number(event.target.value) })} />
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-slate-300">Max trades per day</span>
+            <span className="mb-1 block text-[#d8d3c8]">Max trades per day</span>
             <input className="input" type="number" min={1} value={risk.max_trades_per_day} onChange={(event) => setRisk({ ...risk, max_trades_per_day: Number(event.target.value) })} />
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-slate-300">Daily loss limit</span>
+            <span className="mb-1 block text-[#d8d3c8]">Daily loss limit</span>
             <input className="input" type="number" min={1} value={risk.daily_loss_limit} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} />
           </label>
         </div>
@@ -231,7 +231,7 @@ export default function SettingsPage() {
               Resume
             </button>
           </div>
-          <p className="text-sm text-slate-400">Engine started: {String(status.engine_started)}</p>
+          <p className="text-sm text-[#9a968f]">Engine started: {String(status.engine_started)}</p>
         </div>
 
         <div className="card space-y-4">
@@ -247,7 +247,7 @@ export default function SettingsPage() {
               Kill Switch Off
             </button>
           </div>
-          <p className="text-sm text-slate-400">Emergency stop: {String(status.settings.emergency_stop)}. Kill switch: {String(status.settings.global_kill_switch)}.</p>
+          <p className="text-sm text-[#9a968f]">Emergency stop: {String(status.settings.emergency_stop)}. Kill switch: {String(status.settings.global_kill_switch)}.</p>
         </div>
       </section>
 
@@ -255,12 +255,12 @@ export default function SettingsPage() {
         <section className="card space-y-4">
           <h2 className="text-lg font-semibold">Dhan Debug</h2>
           <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
-            <p><span className="text-slate-400">Outgoing IP:</span> {debug.outgoing_ip || '-'}</p>
-            <p><span className="text-slate-400">Mode:</span> {debug.dhan.mode}</p>
-            <p><span className="text-slate-400">Live orders:</span> {String(debug.dhan.live_orders_enabled)}</p>
-            <p><span className="text-slate-400">Client:</span> {debug.dhan.client_id_masked || '-'}</p>
-            <p><span className="text-slate-400">Token:</span> {debug.dhan.access_token_present ? 'present' : 'missing'}</p>
-            <p><span className="text-slate-400">Last Dhan status:</span> {debug.last_dhan_status_code ?? '-'}</p>
+            <p><span className="text-[#9a968f]">Outgoing IP:</span> {debug.outgoing_ip || '-'}</p>
+            <p><span className="text-[#9a968f]">Mode:</span> {debug.dhan.mode}</p>
+            <p><span className="text-[#9a968f]">Live orders:</span> {String(debug.dhan.live_orders_enabled)}</p>
+            <p><span className="text-[#9a968f]">Client:</span> {debug.dhan.client_id_masked || '-'}</p>
+            <p><span className="text-[#9a968f]">Token:</span> {debug.dhan.access_token_present ? 'present' : 'missing'}</p>
+            <p><span className="text-[#9a968f]">Last Dhan status:</span> {debug.last_dhan_status_code ?? '-'}</p>
           </div>
           {debug.issues.length > 0 && <p className="text-sm text-red-300">{debug.issues.join(' ')}</p>}
           {debug.warnings.length > 0 && <p className="text-sm text-amber-300">{debug.warnings.join(' ')}</p>}
