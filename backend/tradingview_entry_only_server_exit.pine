@@ -1,0 +1,30 @@
+//@version=5
+strategy("NOVA NIFTY Entry Only - Server Option SLTP",
+     overlay=true,
+     initial_capital=13000,
+     default_qty_type=strategy.fixed,
+     default_qty_value=65,
+     pyramiding=0)
+
+// This Pine script only sends the entry alert.
+// The backend reads the real Dhan option fill price, tracks option LTP,
+// and sends the SL/TP exit order from the server.
+
+secretKey  = input.string("REPLACE_WITH_WEBHOOK_SECRET", "Webhook Secret")
+expiryDate = input.string("2026-05-28", "Expiry Date")
+qty        = input.int(65, "Dhan Quantity", minval=1)
+optionSide = input.string("CE", "Option Side", options=["CE", "PE"])
+
+atmStrike = math.round(close / 50) * 50
+
+makeEntryJSON(_strike) =>
+    signalId = "TV-" + str.tostring(timenow) + "-" + syminfo.ticker + "-ENTRY"
+    '{"secret":"' + secretKey + '","signal_id":"' + signalId + '","strategy_code":"TRADINGVIEW_NIFTY_V1","action":"ENTRY","side":"BUY","symbol":"NIFTY","instrument_type":"OPTIDX","exchange_segment":"NSE_FNO","option_side":"' + optionSide + '","strike":' + str.tostring(_strike) + ',"expiry":"' + expiryDate + '","qty":' + str.tostring(qty) + ',"order_type":"MARKET","product_type":"INTRADAY","source":"tradingview"}'
+
+var bool sentEntry = false
+
+if not sentEntry and barstate.isrealtime and barstate.isconfirmed
+    strategy.entry("NOVA_ENTRY", strategy.long, alert_message=makeEntryJSON(atmStrike))
+    sentEntry := true
+
+plot(atmStrike, "ATM Strike", color=color.yellow, linewidth=2)

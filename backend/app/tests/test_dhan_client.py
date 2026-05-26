@@ -198,6 +198,44 @@ def test_get_positions_snapshot_uses_v2_positions_endpoint(monkeypatch):
     assert recorder["url"] == f"{DHAN_BASE_URL}/positions"
 
 
+def test_get_ltp_uses_v2_marketfeed_ltp_endpoint(monkeypatch):
+    recorder = {}
+    response = httpx.Response(200, json={"data": {"NSE_FNO": {"49081": {"last_price": 121.5}}}, "status": "success"})
+    patch_http_client(monkeypatch, response, recorder)
+
+    result = RealDhanClient().get_ltp(
+        client_id="1000000001",
+        access_token="token",
+        exchange_segment="NSE_FNO",
+        security_id="49081",
+    )
+
+    assert result.success is True
+    assert result.ltp == 121.5
+    assert recorder["method"] == "POST"
+    assert recorder["url"] == f"{DHAN_BASE_URL}/marketfeed/ltp"
+    assert recorder["json"] == {"NSE_FNO": [49081]}
+
+
+def test_poll_order_status_reads_average_traded_price(monkeypatch):
+    recorder = {}
+    response = httpx.Response(200, json={"orderId": "112111182198", "orderStatus": "TRADED", "averageTradedPrice": 123.45})
+    patch_http_client(monkeypatch, response, recorder)
+
+    result = RealDhanClient().poll_order_status(
+        client_id="1000000001",
+        access_token="token",
+        order_id="112111182198",
+        max_polls=1,
+        poll_delay=0,
+    )
+
+    assert result.is_filled is True
+    assert result.avg_price == 123.45
+    assert recorder["method"] == "GET"
+    assert recorder["url"] == f"{DHAN_BASE_URL}/orders/112111182198"
+
+
 def test_headers_always_include_access_token_and_content_type(monkeypatch):
     """access-token and Content-Type must always be present in Dhan request headers."""
     monkeypatch.setattr(settings, "DHAN_SEND_CLIENT_ID_HEADER", True)

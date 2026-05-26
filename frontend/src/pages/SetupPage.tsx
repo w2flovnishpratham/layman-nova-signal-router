@@ -240,6 +240,10 @@ export default function SetupPage() {
     max_qty_per_order: 1,
     max_trades_per_day: 1,
     daily_loss_limit: 500,
+    server_side_exit_enabled: true,
+    option_sl_percent: 10,
+    option_tp_percent: 20,
+    option_ltp_poll_seconds: 1,
     allow_entry: true,
     allow_exit: true,
   })
@@ -575,7 +579,25 @@ export default function SetupPage() {
                   <input className="input" type="number" min={1} value={risk.daily_loss_limit} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} />
                 </label>
               </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[#d8d3c8]">Option SL %</span>
+                  <input className="input" type="number" min={0.1} step={0.1} value={risk.option_sl_percent ?? 10} onChange={(event) => setRisk({ ...risk, option_sl_percent: Number(event.target.value) })} />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[#d8d3c8]">Option TP %</span>
+                  <input className="input" type="number" min={0.1} step={0.1} value={risk.option_tp_percent ?? 20} onChange={(event) => setRisk({ ...risk, option_tp_percent: Number(event.target.value) })} />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[#d8d3c8]">LTP poll seconds</span>
+                  <input className="input" type="number" min={1} step={1} value={risk.option_ltp_poll_seconds ?? 1} onChange={(event) => setRisk({ ...risk, option_ltp_poll_seconds: Number(event.target.value) })} />
+                </label>
+              </div>
               <div className="flex flex-wrap gap-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={risk.server_side_exit_enabled ?? true} onChange={(event) => setRisk({ ...risk, server_side_exit_enabled: event.target.checked })} />
+                  Server-side option SL/TP
+                </label>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={risk.allow_entry} onChange={(event) => setRisk({ ...risk, allow_entry: event.target.checked })} />
                   Allow entry
@@ -596,7 +618,7 @@ export default function SetupPage() {
               <p><span className="text-[#9a968f]">Dhan</span><br />{completed.dhan ? `Connected ${status.dhan_client_id_masked || ''}` : 'Needs attention'}</p>
               <p><span className="text-[#9a968f]">Wallet</span><br />{currency(status.wallet.available_balance)}</p>
               <p><span className="text-[#9a968f]">Webhook</span><br />{completed.secret ? 'Secret saved' : 'Needs secret'}</p>
-              <p><span className="text-[#9a968f]">Risk</span><br />Qty {risk.max_qty_per_order} / Trades {risk.max_trades_per_day}</p>
+              <p><span className="text-[#9a968f]">Risk</span><br />Qty {risk.max_qty_per_order} / SL {risk.option_sl_percent ?? 10}% / TP {risk.option_tp_percent ?? 20}%</p>
             </div>
             <div className="mt-4 flex flex-col gap-3 text-sm md:flex-row md:items-center md:justify-between">
               <p className="min-w-0 break-all font-mono text-[#d8d3c8]">{status.webhook_url || '-'}</p>

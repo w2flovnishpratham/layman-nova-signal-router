@@ -20,6 +20,21 @@ export interface OpenPosition {
   entry_order_id: string | null
   entry_price: number | null
   opened_at: string | null
+  live_pnl?: {
+    source?: string
+    status?: string
+    entry_price?: number | null
+    ltp?: number | null
+    qty?: number | null
+    sl_price?: number | null
+    tp_price?: number | null
+    unrealized_pnl?: number | null
+    pnl_percent?: number | null
+    exit_reason?: string | null
+    message?: string
+    error?: string | null
+    last_checked_at?: string | null
+  } | null
   broker_sync?: {
     source?: string
     status?: string
@@ -38,6 +53,10 @@ export interface RuntimeSettings {
   max_qty_per_order: number
   max_trades_per_day: number
   daily_loss_limit: number
+  server_side_exit_enabled?: boolean
+  option_sl_percent?: number
+  option_tp_percent?: number
+  option_ltp_poll_seconds?: number
   emergency_stop: boolean
   global_kill_switch: boolean
 }
@@ -81,6 +100,10 @@ export interface RiskSetupPayload {
   max_qty_per_order: number
   max_trades_per_day: number
   daily_loss_limit: number
+  server_side_exit_enabled?: boolean
+  option_sl_percent?: number
+  option_tp_percent?: number
+  option_ltp_poll_seconds?: number
   allow_entry: boolean
   allow_exit: boolean
 }

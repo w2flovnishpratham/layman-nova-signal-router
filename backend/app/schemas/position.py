@@ -12,4 +12,5 @@ class OpenPosition(BaseModel):
     entry_order_id: str | None = None
     entry_price: float | None = None
     opened_at: str | None = None
+    live_pnl: dict[str, Any] | None = None
     extra: dict[str, Any] | None = None

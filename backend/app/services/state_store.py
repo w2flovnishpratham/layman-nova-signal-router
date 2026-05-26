@@ -62,6 +62,7 @@ def default_open_position() -> dict[str, Any]:
         "entry_order_id": None,
         "entry_price": None,
         "opened_at": None,
+        "live_pnl": None,
     }
 
 

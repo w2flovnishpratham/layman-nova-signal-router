@@ -12,13 +12,13 @@ Endpoints implemented:
   POST /orders            - place order
   GET  /orders/{order-id} - order status (poll after placement)
   GET  /orders            - full order book
+  POST /marketfeed/ltp    - latest traded price snapshot
   GET  /fundlimit         - funds / wallet validation
   GET  /positions         - open positions
   GET  /profile           - token validation
 
 Endpoints not yet implemented (phase 2 TODOs):
   GET  /trades            - trade book
-  POST /marketfeed/ltp    - market quote / LTP validation before order
   WebSocket /orderUpdate  - live order update stream
 """
 from __future__ import annotations
@@ -89,6 +89,18 @@ class DhanListResult:
     success: bool
     message: str
     items: list[dict[str, Any]]
+    status_code: int | None = None
+    raw_response: dict[str, Any] | list[Any] | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class DhanLtpResult:
+    success: bool
+    message: str
+    ltp: float | None
+    exchange_segment: str | None = None
+    security_id: str | None = None
     status_code: int | None = None
     raw_response: dict[str, Any] | list[Any] | None = None
     error: str | None = None
@@ -165,6 +177,23 @@ class MockDhanClient:
     def get_order_book(self, *, client_id: str, access_token: str) -> DhanListResult:
         return DhanListResult(success=True, message="MOCK Dhan mode is active.", items=[])
 
+    def get_ltp(
+        self,
+        *,
+        client_id: str,
+        access_token: str,
+        exchange_segment: str,
+        security_id: str,
+    ) -> DhanLtpResult:
+        return DhanLtpResult(
+            success=True,
+            message="MOCK Dhan mode is active.",
+            ltp=100.0,
+            exchange_segment=exchange_segment,
+            security_id=str(security_id),
+            raw_response={"mock": True, "last_price": 100.0},
+        )
+
     def get_fund_limit(self, *, client_id: str, access_token: str) -> DhanFundsResult:
         return DhanFundsResult(success=True, message="MOCK Dhan mode is active.", client_id=client_id)
 
@@ -231,6 +260,16 @@ class RealDhanClient:
             except (TypeError, ValueError):
                 continue
         return None
+
+    def _order_avg_price(self, data: dict[str, Any]) -> float | None:
+        return self._optional_float(
+            data,
+            "avgPrice",
+            "averageTradedPrice",
+            "avgTradedPrice",
+            "AvgTradedPrice",
+            "TradedPrice",
+        )
 
     def _response_payload(self, parsed: dict[str, Any] | list[Any] | str) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {"raw_response": parsed}
@@ -369,7 +408,7 @@ class RealDhanClient:
                     success=True,
                     order_id=data.get("orderId"),
                     status=data.get("orderStatus", "PENDING"),
-                    avg_price=data.get("avgPrice"),
+                    avg_price=self._order_avg_price(data),
                     raw_response=data,
                     interpreted_error=None,
                 )
@@ -378,7 +417,7 @@ class RealDhanClient:
                 success=False,
                 order_id=data.get("orderId"),
                 status=data.get("orderStatus", "REJECTED"),
-                avg_price=data.get("avgPrice"),
+                avg_price=self._order_avg_price(data),
                 raw_response=data,
                 error=self._error_message(data, f"Dhan rejected order ({response.status_code})"),
                 interpreted_error=interpreted_error,
@@ -466,13 +505,7 @@ class RealDhanClient:
                     "order_status": order_status,
                 })
                 if order_status in DHAN_TERMINAL_STATUSES:
-                    avg_price_raw = data.get("avgPrice")
-                    avg_price: float | None = None
-                    if avg_price_raw not in (None, ""):
-                        try:
-                            avg_price = float(avg_price_raw)
-                        except (TypeError, ValueError):
-                            pass
+                    avg_price = self._order_avg_price(data)
                     return DhanOrderStatusResult(
                         success=True,
                         order_id=order_id,
@@ -518,6 +551,158 @@ class RealDhanClient:
             avg_price=None,
             raw_response=last_data or None,
         )
+
+    def get_ltp(
+        self,
+        *,
+        client_id: str,
+        access_token: str,
+        exchange_segment: str,
+        security_id: str,
+    ) -> DhanLtpResult:
+        """
+        Fetch an LTP snapshot with POST /marketfeed/ltp.
+
+        Dhan's Market Quote API accepts a body like {"NSE_FNO": [49081]}
+        and returns last_price under data.<segment>.<securityId>.
+        """
+        segment = str(exchange_segment or "").upper()
+        sid = str(security_id or "").strip()
+        if not segment or not sid:
+            return DhanLtpResult(
+                success=False,
+                message="Dhan LTP request missing exchange segment or security id.",
+                ltp=None,
+                exchange_segment=segment or None,
+                security_id=sid or None,
+                error="missing_exchange_segment_or_security_id",
+            )
+
+        request_security_id: int | str = int(sid) if sid.isdigit() else sid
+        request_body = {segment: [request_security_id]}
+        url = f"{DHAN_BASE_URL}/marketfeed/ltp"
+
+        try:
+            with self._client(timeout=5.0) as client:
+                response = client.post(url, json=request_body, headers=self._headers(client_id, access_token))
+            parsed = self._parse_response(response)
+            raw_response = parsed if isinstance(parsed, (dict, list)) else None
+
+            if not (200 <= response.status_code <= 299):
+                reason = self._error_message(parsed, f"Dhan LTP request failed ({response.status_code}).")
+                return DhanLtpResult(
+                    success=False,
+                    message=f"Dhan LTP request failed: {reason}",
+                    ltp=None,
+                    exchange_segment=segment,
+                    security_id=sid,
+                    status_code=response.status_code,
+                    raw_response=raw_response,
+                    error=reason,
+                )
+
+            if not isinstance(parsed, dict):
+                return DhanLtpResult(
+                    success=False,
+                    message="Dhan LTP response was not a JSON object.",
+                    ltp=None,
+                    exchange_segment=segment,
+                    security_id=sid,
+                    status_code=response.status_code,
+                    raw_response=raw_response,
+                    error="invalid_ltp_response",
+                )
+
+            data = parsed.get("data")
+            if not isinstance(data, dict):
+                return DhanLtpResult(
+                    success=False,
+                    message="Dhan LTP response did not include data.",
+                    ltp=None,
+                    exchange_segment=segment,
+                    security_id=sid,
+                    status_code=response.status_code,
+                    raw_response=raw_response,
+                    error="missing_data",
+                )
+
+            segment_data = data.get(segment)
+            if segment_data is None:
+                for key, value in data.items():
+                    if str(key).upper() == segment:
+                        segment_data = value
+                        break
+            if not isinstance(segment_data, dict):
+                return DhanLtpResult(
+                    success=False,
+                    message=f"Dhan LTP response did not include segment {segment}.",
+                    ltp=None,
+                    exchange_segment=segment,
+                    security_id=sid,
+                    status_code=response.status_code,
+                    raw_response=raw_response,
+                    error="missing_segment",
+                )
+
+            quote = segment_data.get(sid) or segment_data.get(str(request_security_id))
+            if quote is None:
+                for key, value in segment_data.items():
+                    if str(key) == sid:
+                        quote = value
+                        break
+            if not isinstance(quote, dict):
+                return DhanLtpResult(
+                    success=False,
+                    message=f"Dhan LTP response did not include security id {sid}.",
+                    ltp=None,
+                    exchange_segment=segment,
+                    security_id=sid,
+                    status_code=response.status_code,
+                    raw_response=raw_response,
+                    error="missing_security_id",
+                )
+
+            ltp = self._optional_float(quote, "last_price", "lastPrice", "ltp", "LTP")
+            if ltp is None:
+                return DhanLtpResult(
+                    success=False,
+                    message=f"Dhan LTP response had no last_price for security id {sid}.",
+                    ltp=None,
+                    exchange_segment=segment,
+                    security_id=sid,
+                    status_code=response.status_code,
+                    raw_response=raw_response,
+                    error="missing_last_price",
+                )
+
+            return DhanLtpResult(
+                success=True,
+                message="Dhan LTP fetched.",
+                ltp=ltp,
+                exchange_segment=segment,
+                security_id=sid,
+                status_code=response.status_code,
+                raw_response=raw_response,
+            )
+        except httpx.TimeoutException:
+            return DhanLtpResult(
+                success=False,
+                message="Dhan LTP request timed out.",
+                ltp=None,
+                exchange_segment=segment,
+                security_id=sid,
+                error="timeout",
+            )
+        except Exception as exc:
+            logger.exception("Dhan LTP request error")
+            return DhanLtpResult(
+                success=False,
+                message="Dhan LTP request failed.",
+                ltp=None,
+                exchange_segment=segment,
+                security_id=sid,
+                error=str(exc),
+            )
 
     # TODO (Phase 2): GET /trades - trade book
     # def get_trade_book(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:

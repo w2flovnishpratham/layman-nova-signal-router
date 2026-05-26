@@ -82,3 +82,26 @@ In TradingView → Alert → Webhook:
 2. Set Message to the JSON template above
 3. Use `{{timenow}}-{{ticker}}-ENTRY` as `signal_id` for uniqueness
 4. Use the same `secret` saved from the frontend setup screen
+
+## Entry-Only Pine With Server-Side Option SL/TP
+
+For option premium SL/TP, use `backend/tradingview_entry_only_server_exit.pine`.
+
+The flow is:
+
+1. Pine watches the NIFTY chart and sends only an `ENTRY` alert.
+2. Backend places the Dhan CE/PE market buy order.
+3. Backend polls Dhan order status and stores the actual option fill price.
+4. Backend polls Dhan `POST /marketfeed/ltp` for the option `securityId`.
+5. Backend sends a Dhan market sell when the real option premium reaches SL or TP.
+
+Runtime defaults:
+
+| Setting | Default |
+|---------|---------|
+| `server_side_exit_enabled` | `true` |
+| `option_sl_percent` | `10.0` |
+| `option_tp_percent` | `20.0` |
+| `option_ltp_poll_seconds` | `1.0` |
+
+The monitor only sends automatic exits when `DHAN_MODE=REAL` and `ENABLE_LIVE_ORDERS=true`.

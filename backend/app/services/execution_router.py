@@ -464,7 +464,7 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
 
     if result.success and result.order_id:
         # Status from placement response may be TRANSIT/PENDING — poll for confirmation.
-        if result.status not in DHAN_TERMINAL_STATUSES or dhan_mode == "MOCK":
+        if result.status not in DHAN_TERMINAL_STATUSES or dhan_mode == "MOCK" or final_avg_price is None:
             poll = client.poll_order_status(
                 client_id=client_id,
                 access_token=access_token,
@@ -515,15 +515,35 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
 
 
 def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty: int) -> dict[str, Any]:
+    entry_price = order_result.get("avg_price")
     return {
         "has_open_position": True,
         "strategy_code": signal.strategy_code,
+        "symbol": signal.symbol,
+        "instrument_type": signal.instrument_type,
+        "exchange_segment": signal.exchange_segment or DEFAULT_EXCHANGE_SEGMENT,
         "security_id": order_result.get("security_id") or signal.security_id,
         "trading_symbol": order_result.get("trading_symbol") or signal.trading_symbol,
+        "option_side": signal.option_side,
+        "strike": signal.strike,
+        "expiry": signal.expiry,
         "qty": qty,
         "entry_order_id": order_result.get("order_id"),
-        "entry_price": order_result.get("avg_price"),
+        "entry_price": entry_price,
+        "order_type": signal.order_type or DEFAULT_ORDER_TYPE,
+        "product_type": signal.product_type or DEFAULT_PRODUCT_TYPE,
         "opened_at": utc_now(),
+        "live_pnl": {
+            "source": "dhan_order_status" if entry_price is not None else "pending_entry_fill",
+            "status": "tracking_pending" if entry_price is not None else "waiting_entry_fill",
+            "entry_price": entry_price,
+            "message": (
+                "Server-side option premium monitor is armed."
+                if entry_price is not None
+                else "Waiting for Dhan to confirm entry fill price before arming SL/TP."
+            ),
+            "last_checked_at": utc_now(),
+        },
     }
 
 

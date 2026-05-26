@@ -11,6 +11,11 @@ function Field({ label, value, mono, span2 }: { label: string; value: React.Reac
   )
 }
 
+function currency(value: number | null | undefined) {
+  if (value == null || Number.isNaN(Number(value))) return '-'
+  return `Rs.${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+}
+
 export default function PositionsPage() {
   const [position, setPosition] = useState<OpenPosition | null>(null)
   const [loading, setLoading] = useState(true)
@@ -32,7 +37,7 @@ export default function PositionsPage() {
       </div>
       <div className="card">
         {loading ? (
-          <p className="text-sm" style={{ color: '#77736c' }}>Loading position…</p>
+          <p className="text-sm" style={{ color: '#77736c' }}>Loading position...</p>
         ) : !position?.has_open_position ? (
           <div className="flex flex-col items-center justify-center py-10 gap-2">
             <p className="text-sm font-medium" style={{ color: '#9a968f' }}>No open position</p>
@@ -45,8 +50,15 @@ export default function PositionsPage() {
             <Field label="Security ID" value={position.security_id} mono />
             <Field label="Qty" value={position.qty} />
             <Field label="Entry Order ID" value={position.entry_order_id} mono />
-            <Field label="Entry Price" value={position.entry_price == null ? '—' : `₹${position.entry_price.toFixed(2)}`} />
-            <Field label="Opened At" span2 value={position.opened_at ? new Date(position.opened_at).toLocaleString() : '—'} />
+            <Field label="Entry Price" value={currency(position.entry_price)} />
+            <Field label="Option LTP" value={currency(position.live_pnl?.ltp)} />
+            <Field label="SL Price" value={currency(position.live_pnl?.sl_price)} />
+            <Field label="TP Price" value={currency(position.live_pnl?.tp_price)} />
+            <Field label="Unrealized PnL" value={currency(position.live_pnl?.unrealized_pnl)} />
+            <Field label="PnL %" value={position.live_pnl?.pnl_percent == null ? '-' : `${position.live_pnl.pnl_percent.toFixed(2)}%`} />
+            <Field label="Monitor Status" value={position.live_pnl?.status ?? '-'} />
+            <Field label="Opened At" span2 value={position.opened_at ? new Date(position.opened_at).toLocaleString() : '-'} />
+            <Field label="Last LTP Check" span2 value={position.live_pnl?.last_checked_at ? new Date(position.live_pnl.last_checked_at).toLocaleString() : '-'} />
           </div>
         )}
       </div>

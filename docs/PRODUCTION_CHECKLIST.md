@@ -58,6 +58,10 @@ Variables that must **not** appear in `.env`:
 - [ ] `max_qty_per_order = 1` (for first live test)
 - [ ] `max_trades_per_day = 1` (for first live test)
 - [ ] `daily_loss_limit = 500` or stricter
+- [ ] `server_side_exit_enabled = true`
+- [ ] `option_sl_percent = 10.0` or stricter
+- [ ] `option_tp_percent = 20.0`
+- [ ] `option_ltp_poll_seconds = 1.0`
 - [ ] `allow_entry = true`
 - [ ] `allow_exit = true`
 - [ ] `emergency_stop = false`

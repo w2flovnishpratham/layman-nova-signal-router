@@ -11,6 +11,7 @@ from app.routers import broker, control, dashboard, debug, engine, orders, posit
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import vault_status
 from app.services.instrument_resolver import start_instrument_cache_warmup
+from app.services.option_position_monitor import start_option_position_monitor, stop_option_position_monitor
 from app.services.state_store import get_app_state, get_runtime_settings, init_runtime_files, sync_runtime_flags_from_env
 
 
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
         logger.warning("REAL DHAN MODE CONFIGURED.")
     if settings.ENABLE_LIVE_ORDERS:
         logger.warning("LIVE ORDERS ENABLED. REAL MONEY ORDERS MAY BE SENT AFTER RISK CHECKS.")
+    start_option_position_monitor()
     log_audit_event(
         "APP_START",
         "NOVA Signal Router backend started.",
@@ -51,6 +53,7 @@ async def lifespan(app: FastAPI):
         },
     )
     yield
+    stop_option_position_monitor()
     logger.info("NOVA Signal Router shutting down.")
 
 
