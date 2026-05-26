@@ -427,6 +427,47 @@ function ActionBadge({ order }: { order: OrderEvent }) {
 }
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────
+const notifyNewOrder = (order: OrderEvent) => {
+  const action = (order.normalized_action ?? order.action ?? 'ORDER').toUpperCase()
+  const symbol = order.trading_symbol ?? order.normalized_symbol ?? 'Symbol'
+  const qty = order.normalized_qty ?? order.qty ?? 0
+  const status = (order.status ?? order.phase ?? '').toUpperCase()
+  
+  const isSuccess = status.includes('TRADED') || status.includes('FILLED') || order.success
+  const isBlocked = order.blocked || status.includes('BLOCK') || status.includes('REJECT') || status.includes('FAIL')
+
+  let title = `Order Placed`
+  if (isBlocked) title = `Order Blocked`
+  else if (isSuccess) title = `Order Executed`
+
+  const message = `${action} ${qty} qty of ${symbol}`
+
+  if (isBlocked) {
+    toast.error(title, {
+      description: message + (order.reason ? ` - ${order.reason}` : ''),
+      duration: 5000,
+    })
+  } else if (isSuccess) {
+    toast.success(title, {
+      description: message,
+      duration: 4000,
+    })
+  } else {
+    toast(title, {
+      description: message,
+      duration: 4000,
+    })
+  }
+}
+
+const orderEventKey = (order: OrderEvent) => [
+  order.created_at,
+  order.phase,
+  order.signal_id,
+  order.order_id,
+  order.status,
+  order.reason,
+].map(value => String(value ?? '')).join('|')
 
 export default function DashboardPage() {
   const [summary, setSummary]   = useState<DashboardSummary | null>(null)
@@ -447,6 +488,9 @@ export default function DashboardPage() {
     onConfirm: () => {},
   })
 
+  const seenOrderKeysRef = useRef<Set<string>>(new Set())
+  const isFirstLoadRef = useRef(true)
+
   const animBalance  = useAnimatedNumber(summary?.wallet?.available_balance ?? null)
   const animUtilised = useAnimatedNumber(summary?.wallet?.utilized_amount ?? null)
 
@@ -454,7 +498,31 @@ export default function DashboardPage() {
     const [s, st, f, o] = await Promise.all([
       getDashboardSummary(), getSetupStatus(), getLiveFlow(), getOrders(),
     ])
-    setSummary(s.data); setSetup(st.data); setFlow(f.data); setOrders(o.data.slice(0, 10))
+    
+    const freshOrders = o.data || []
+    
+    if (isFirstLoadRef.current) {
+      seenOrderKeysRef.current = new Set(freshOrders.map(orderEventKey))
+      isFirstLoadRef.current = false
+    } else {
+      const newOrdersToToast: OrderEvent[] = []
+      for (const ord of freshOrders) {
+        const key = orderEventKey(ord)
+        if (!seenOrderKeysRef.current.has(key)) {
+          newOrdersToToast.push(ord)
+          seenOrderKeysRef.current.add(key)
+        }
+      }
+      // Notify chronologically (oldest new order first)
+      for (let i = newOrdersToToast.length - 1; i >= 0; i--) {
+        notifyNewOrder(newOrdersToToast[i])
+      }
+    }
+
+    setSummary(s.data)
+    setSetup(st.data)
+    setFlow(f.data)
+    setOrders(freshOrders.slice(0, 10))
   }
 
   useEffect(() => {
@@ -637,7 +705,57 @@ export default function DashboardPage() {
       {/* Orders */}
       <section className="card">
         <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Recent orders</h2>
-        <div className="overflow-x-auto">
+        
+        {/* Mobile Stacked List View */}
+        <div className="block sm:hidden space-y-3">
+          {orders.length === 0 ? (
+            <p className="py-6 text-center text-sm" style={{ color: '#77736c' }}>No order events yet.</p>
+          ) : orders.map(order => (
+            <div 
+              key={order.id} 
+              className="rounded-xl p-3.5 space-y-2.5 transition-colors border border-[#1d1c19] bg-[#0c0c0b]"
+            >
+              {/* Header: Action + Status + Time */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <ActionBadge order={order} />
+                  <span className="text-[10px] text-[#77736c] font-mono">
+                    {order.created_at ? new Date(order.created_at).toLocaleTimeString() : '—'}
+                  </span>
+                </div>
+                <OrderStatusBadge order={order} />
+              </div>
+
+              {/* Symbol + Qty */}
+              <div className="flex items-center justify-between gap-4">
+                <span className="font-mono text-xs font-bold text-[#f4f1ea] break-words">
+                  {order.trading_symbol ?? order.normalized_symbol ?? '—'}
+                </span>
+                <span className="text-xs font-semibold text-[#d8d3c8] whitespace-nowrap">
+                  Qty: {order.normalized_qty ?? order.qty ?? '—'}
+                </span>
+              </div>
+
+              {/* Reason (if blocked or failed) */}
+              {order.reason && (
+                <div 
+                  className="rounded-lg p-2.5 text-[11px] leading-relaxed" 
+                  style={{ 
+                    background: 'rgba(239, 68, 68, 0.04)', 
+                    border: '1px solid rgba(239, 68, 68, 0.15)', 
+                    color: '#f87171' 
+                  }}
+                >
+                  <span className="font-bold uppercase tracking-wider text-[9px] mr-1 block">Block Reason:</span>
+                  {order.reason}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Desktop Table View */}
+        <div className="hidden sm:block overflow-x-auto">
           <table className="min-w-full text-left text-sm">
             <thead style={{ borderBottom: '1px solid #222222' }}>
               <tr className="text-xs uppercase tracking-wide" style={{ color: '#77736c' }}>

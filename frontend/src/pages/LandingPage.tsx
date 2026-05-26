@@ -381,7 +381,7 @@ export default function LandingPage() {
         : 'dot-gray dot-pulse'
 
   return (
-    <div className="min-h-screen bg-[#090908] bg-tech-grid text-[#f4f1ea] relative selection:bg-[#98e94d] selection:text-[#090908]">
+    <div className="min-h-screen bg-[#090908] bg-tech-grid text-[#f4f1ea] relative selection:bg-[#98e94d] selection:text-[#090908] overflow-x-hidden">
       
       {/* Background ambient glowing radial lights */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-7xl h-[600px] bg-[radial-gradient(circle_at_top,_rgba(152,233,77,0.06)_0%,_rgba(0,0,0,0)_60%)] pointer-events-none" />
@@ -505,14 +505,14 @@ export default function LandingPage() {
           <div className="landing-card bg-[#0d0d0c] border-[#1d1c19] overflow-hidden p-0 shadow-[0_0_50px_-12px_rgba(152,233,77,0.15)]">
             
             {/* Header controls mimic mac window */}
-            <div className="flex items-center justify-between px-4 py-3 bg-[#111110] border-b border-[#1d1c19]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between px-4 py-3 bg-[#111110] border-b border-[#1d1c19] gap-2">
               <div className="flex items-center gap-2">
                 <span className="w-3 h-3 rounded-full bg-[#ef4444]/40" />
                 <span className="w-3 h-3 rounded-full bg-[#fbbf24]/40" />
                 <span className="w-3 h-3 rounded-full bg-[#22c55e]/40" />
-                <span className="text-xs font-mono text-[#5e5a53] ml-2">nova_sandbox_router_log</span>
+                <span className="hidden sm:inline text-xs font-mono text-[#5e5a53] ml-2">nova_sandbox_router_log</span>
               </div>
-              <div className="flex items-center gap-4 text-xs font-mono text-[#77736c]">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono text-[#77736c]">
                 <div>Signals: <span className="text-[#98e94d] font-bold">{signalsCount}</span></div>
                 <div>Blocks: <span className="text-[#ef4444] font-bold">{blocksCount}</span></div>
                 <div>Latency: <span className="text-[#d8d3c8] font-bold">{simLatency}</span></div>

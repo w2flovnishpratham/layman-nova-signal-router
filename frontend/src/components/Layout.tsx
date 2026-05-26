@@ -247,7 +247,7 @@ export default function Layout() {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto pb-20 md:pb-0" style={{ background: '#0f0f0f' }}>
+        <main className="flex-1 overflow-y-auto overflow-x-hidden pb-20 md:pb-0" style={{ background: '#0f0f0f' }}>
           <div className="mx-auto w-full max-w-7xl px-6 py-6">
             <Outlet />
           </div>
