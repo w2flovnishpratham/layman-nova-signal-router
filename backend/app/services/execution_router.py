@@ -6,7 +6,7 @@ from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRO
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.credential_vault import get_dhan_credentials
-from app.services.dhan_client import DHAN_TERMINAL_STATUSES, MockDhanClient, RealDhanClient
+from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, MockDhanClient, RealDhanClient
 from app.services.risk_manager import RiskDecision, _market_is_open, evaluate_entry, evaluate_exit
 from app.services.security_id_resolver import resolve_security_id
 from app.services.state_store import (
@@ -148,6 +148,184 @@ def _blocked(
     }
 
 
+def _pick(row: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _number(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_active_dhan_position(row: dict[str, Any]) -> bool:
+    net_qty = _number(_pick(row, "netQty", "netQuantity", "net_qty"))
+    if net_qty is not None and abs(net_qty) > 0:
+        return True
+
+    buy_qty = _number(_pick(row, "buyQty", "buyQuantity", "buy_qty"))
+    sell_qty = _number(_pick(row, "sellQty", "sellQuantity", "sell_qty"))
+    if buy_qty is not None and sell_qty is not None and abs(buy_qty - sell_qty) > 0:
+        return True
+
+    position_type = str(_pick(row, "positionType", "position_type") or "").upper()
+    return position_type in {"LONG", "SHORT", "OPEN"}
+
+
+def _is_open_dhan_order(row: dict[str, Any]) -> bool:
+    status = str(_pick(row, "orderStatus", "order_status", "status") or "").upper()
+    if status in DHAN_OPEN_ORDER_STATUSES:
+        return True
+    if status in DHAN_TERMINAL_STATUSES:
+        return False
+
+    remaining_qty = _number(_pick(row, "remainingQuantity", "remainingQty", "pendingQuantity", "pendingQty"))
+    if remaining_qty is not None:
+        return remaining_qty > 0
+
+    # Unknown non-terminal statuses are treated as active in live mode.
+    return bool(status)
+
+
+def _summarize_dhan_position(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "trading_symbol": _pick(row, "tradingSymbol", "trading_symbol"),
+        "security_id": _pick(row, "securityId", "security_id"),
+        "net_qty": _pick(row, "netQty", "netQuantity", "net_qty"),
+        "position_type": _pick(row, "positionType", "position_type"),
+        "product_type": _pick(row, "productType", "product_type"),
+        "exchange_segment": _pick(row, "exchangeSegment", "exchange_segment"),
+    }
+
+
+def _summarize_dhan_order(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "order_id": _pick(row, "orderId", "order_id"),
+        "order_status": _pick(row, "orderStatus", "order_status", "status"),
+        "trading_symbol": _pick(row, "tradingSymbol", "trading_symbol"),
+        "security_id": _pick(row, "securityId", "security_id"),
+        "transaction_type": _pick(row, "transactionType", "transaction_type"),
+        "quantity": _pick(row, "quantity", "qty"),
+        "remaining_quantity": _pick(row, "remainingQuantity", "remainingQty", "pendingQuantity", "pendingQty"),
+    }
+
+
+def _first_non_empty(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _dhan_exposure_reason(active_positions: list[dict[str, Any]], open_orders: list[dict[str, Any]]) -> str:
+    if active_positions:
+        position = active_positions[0]
+        symbol = _first_non_empty(position.get("trading_symbol"), position.get("security_id"), "unknown symbol")
+        qty = position.get("net_qty")
+        qty_text = f" netQty={qty}" if qty not in (None, "") else ""
+        return f"Trade blocked: Dhan already has open position {symbol}{qty_text}."
+
+    order = open_orders[0]
+    symbol = _first_non_empty(order.get("trading_symbol"), order.get("security_id"), order.get("order_id"), "unknown order")
+    status = order.get("order_status") or "UNKNOWN"
+    order_id = order.get("order_id")
+    order_text = f" order_id={order_id}" if order_id not in (None, "") else ""
+    return f"Trade blocked: Dhan already has open order {symbol} status={status}{order_text}."
+
+
+def _dhan_entry_preflight(client: RealDhanClient | MockDhanClient, *, client_id: str, access_token: str, signal: NormalizedSignal) -> dict[str, Any]:
+    positions = client.get_positions_snapshot(client_id=client_id, access_token=access_token)
+    orders = client.get_order_book(client_id=client_id, access_token=access_token)
+
+    active_positions = [_summarize_dhan_position(row) for row in positions.items if _is_active_dhan_position(row)]
+    open_orders = [_summarize_dhan_order(row) for row in orders.items if _is_open_dhan_order(row)]
+
+    failures = []
+    if not positions.success:
+        failures.append(positions.message)
+    if not orders.success:
+        failures.append(orders.message)
+
+    details = {
+        "positions_success": positions.success,
+        "positions_count": len(positions.items),
+        "orders_success": orders.success,
+        "orders_count": len(orders.items),
+        "active_positions": active_positions[:3],
+        "open_orders": open_orders[:3],
+        "failures": failures,
+    }
+    allowed = not active_positions and not open_orders and not failures
+
+    log_order_event(
+        {
+            "event": "DHAN_ENTRY_PREFLIGHT",
+            "signal_id": signal.signal_id,
+            "action": signal.action,
+            "allowed": allowed,
+            "dhan_mode": settings.DHAN_MODE.upper(),
+            **details,
+        }
+    )
+
+    if active_positions or open_orders:
+        return {"allowed": False, "reason": _dhan_exposure_reason(active_positions, open_orders), "details": details}
+
+    if failures:
+        return {
+            "allowed": False,
+            "reason": "Trade blocked: could not verify Dhan positions/orders before live entry. " + " ".join(failures),
+            "details": details,
+        }
+
+    return {"allowed": True, "reason": "Dhan pre-entry check passed.", "details": details}
+
+
+def _reconcile_tracked_position_before_entry(signal: NormalizedSignal) -> RiskDecision | None:
+    open_position = get_open_position()
+    if not open_position.get("has_open_position"):
+        return None
+    if settings.DHAN_MODE.upper() != "REAL" or not settings.ENABLE_LIVE_ORDERS:
+        return None
+
+    creds = get_dhan_credentials()
+    if not creds:
+        return RiskDecision(False, "Trade blocked: local open position exists and Dhan credentials are missing.")
+
+    preflight = _dhan_entry_preflight(
+        RealDhanClient(),
+        client_id=creds.client_id,
+        access_token=creds.access_token,
+        signal=signal,
+    )
+    if preflight.get("allowed"):
+        clear_open_position()
+        message = "Tracked open position cleared because Dhan positions/orders are flat before entry."
+        log_audit_event(
+            "OPEN_POSITION_RECONCILED",
+            message,
+            metadata={"signal_id": signal.signal_id, "previous_open_position": open_position},
+        )
+        log_order_event(
+            {
+                "event": "LOCAL_OPEN_POSITION_RECONCILED",
+                "signal_id": signal.signal_id,
+                "previous_open_position": open_position,
+                "dhan_preflight": preflight.get("details"),
+            }
+        )
+        return None
+
+    return RiskDecision(False, str(preflight.get("reason") or "Trade blocked: Dhan exposure check failed."))
+
+
 def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, Any]:
     dhan_mode = settings.DHAN_MODE.upper()
     creds = get_dhan_credentials()
@@ -216,6 +394,18 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
         client = MockDhanClient()
         client_id = creds.client_id if creds else "MOCK_CLIENT"
         access_token = ""
+
+    if dhan_mode == "REAL" and action == "ENTRY":
+        preflight = _dhan_entry_preflight(client, client_id=client_id, access_token=access_token, signal=signal)
+        if not preflight.get("allowed"):
+            return _blocked(
+                "BLOCKED",
+                str(preflight.get("reason") or "Trade blocked: Dhan exposure check failed."),
+                signal,
+                security_id_resolution=security_id_resolution,
+                security_id=request_payload.get("securityId"),
+                trading_symbol=request_payload.get("tradingSymbol"),
+            )
 
     log_order_event(
         {
@@ -344,6 +534,10 @@ def route_entry_signal(signal: NormalizedSignal) -> dict[str, Any]:
         last_alert_at=utc_now(),
         last_message=f"Entry alert received for {signal.trading_symbol or signal.symbol}",
     )
+    broker_reconcile = _reconcile_tracked_position_before_entry(signal)
+    if broker_reconcile and not broker_reconcile.allowed:
+        return _blocked("BLOCKED", broker_reconcile.reason, signal)
+
     decision = evaluate_entry(signal)
     if not decision.allowed:
         return _blocked("BLOCKED", decision.reason, signal)

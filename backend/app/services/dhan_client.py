@@ -11,12 +11,12 @@ Read-only endpoints (orders, trades, funds, positions) are available for diagnos
 Endpoints implemented:
   POST /orders            - place order
   GET  /orders/{order-id} - order status (poll after placement)
+  GET  /orders            - full order book
   GET  /fundlimit         - funds / wallet validation
   GET  /positions         - open positions
   GET  /profile           - token validation
 
 Endpoints not yet implemented (phase 2 TODOs):
-  GET  /orders            - full order book
   GET  /trades            - trade book
   POST /marketfeed/ltp    - market quote / LTP validation before order
   WebSocket /orderUpdate  - live order update stream
@@ -45,6 +45,7 @@ DHAN_BASE_URL = "https://api.dhan.co/v2"
 # Order statuses per Dhan v2 docs
 DHAN_TERMINAL_STATUSES = {"TRADED", "REJECTED", "CANCELLED", "EXPIRED"}
 DHAN_PENDING_STATUSES = {"TRANSIT", "PENDING"}
+DHAN_OPEN_ORDER_STATUSES = DHAN_PENDING_STATUSES | {"PART_TRADED"}
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,16 @@ class DhanOrderStatusResult:
     is_filled: bool  # True only when TRADED
     avg_price: float | None
     raw_response: dict[str, Any] | None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class DhanListResult:
+    success: bool
+    message: str
+    items: list[dict[str, Any]]
+    status_code: int | None = None
+    raw_response: dict[str, Any] | list[Any] | None = None
     error: str | None = None
 
 
@@ -147,6 +158,12 @@ class MockDhanClient:
 
     def get_positions(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
         return []
+
+    def get_positions_snapshot(self, *, client_id: str, access_token: str) -> DhanListResult:
+        return DhanListResult(success=True, message="MOCK Dhan mode is active.", items=[])
+
+    def get_order_book(self, *, client_id: str, access_token: str) -> DhanListResult:
+        return DhanListResult(success=True, message="MOCK Dhan mode is active.", items=[])
 
     def get_fund_limit(self, *, client_id: str, access_token: str) -> DhanFundsResult:
         return DhanFundsResult(success=True, message="MOCK Dhan mode is active.", client_id=client_id)
@@ -217,6 +234,64 @@ class RealDhanClient:
 
     def _response_payload(self, parsed: dict[str, Any] | list[Any] | str) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {"raw_response": parsed}
+
+    def _list_response(self, parsed: dict[str, Any] | list[Any] | str) -> list[dict[str, Any]]:
+        if isinstance(parsed, list):
+            return [item for item in parsed if isinstance(item, dict)]
+        if isinstance(parsed, dict):
+            for key in ("data", "orders", "positions"):
+                value = parsed.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        return []
+
+    def _get_list_endpoint(
+        self,
+        *,
+        client_id: str,
+        access_token: str,
+        endpoint: str,
+        label: str,
+        timeout: float = 10.0,
+    ) -> DhanListResult:
+        url = f"{DHAN_BASE_URL}/{endpoint.lstrip('/')}"
+        try:
+            with self._client(timeout=timeout) as client:
+                response = client.get(url, headers=self._headers(client_id, access_token))
+            parsed = self._parse_response(response)
+            raw_response = parsed if isinstance(parsed, (dict, list)) else None
+            if 200 <= response.status_code <= 299:
+                return DhanListResult(
+                    success=True,
+                    message=f"Dhan {label} fetched.",
+                    items=self._list_response(parsed),
+                    status_code=response.status_code,
+                    raw_response=raw_response,
+                )
+            reason = self._error_message(parsed, f"Dhan {label} request failed ({response.status_code}).")
+            return DhanListResult(
+                success=False,
+                message=f"Dhan {label} request failed: {reason}",
+                items=[],
+                status_code=response.status_code,
+                raw_response=raw_response,
+                error=reason,
+            )
+        except httpx.TimeoutException:
+            return DhanListResult(
+                success=False,
+                message=f"Dhan {label} request timed out.",
+                items=[],
+                error="timeout",
+            )
+        except Exception as exc:
+            logger.exception("Dhan %s request error", label)
+            return DhanListResult(
+                success=False,
+                message=f"Dhan {label} request failed.",
+                items=[],
+                error=str(exc),
+            )
 
     def place_order(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanOrderResult:
         url = f"{DHAN_BASE_URL}/orders"
@@ -444,11 +519,6 @@ class RealDhanClient:
             raw_response=last_data or None,
         )
 
-    # TODO (Phase 2): GET /orders - full order book
-    # def get_order_book(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
-    #     url = f"{DHAN_BASE_URL}/orders"
-    #     ...
-
     # TODO (Phase 2): GET /trades - trade book
     # def get_trade_book(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
     #     url = f"{DHAN_BASE_URL}/trades"
@@ -498,13 +568,24 @@ class RealDhanClient:
             return DhanValidationResult(success=False, message="Dhan token validation request failed.")
 
     def get_positions(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
-        url = f"{DHAN_BASE_URL}/positions"
-        try:
-            with self._client(timeout=10.0) as client:
-                response = client.get(url, headers=self._headers(client_id, access_token))
-            return response.json() if response.status_code == 200 else []
-        except Exception:
-            return []
+        result = self.get_positions_snapshot(client_id=client_id, access_token=access_token)
+        return result.items if result.success else []
+
+    def get_positions_snapshot(self, *, client_id: str, access_token: str) -> DhanListResult:
+        return self._get_list_endpoint(
+            client_id=client_id,
+            access_token=access_token,
+            endpoint="positions",
+            label="positions",
+        )
+
+    def get_order_book(self, *, client_id: str, access_token: str) -> DhanListResult:
+        return self._get_list_endpoint(
+            client_id=client_id,
+            access_token=access_token,
+            endpoint="orders",
+            label="order book",
+        )
 
     def get_fund_limit(self, *, client_id: str, access_token: str) -> DhanFundsResult:
         url = f"{DHAN_BASE_URL}/fundlimit"

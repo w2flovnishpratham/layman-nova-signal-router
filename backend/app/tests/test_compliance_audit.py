@@ -23,6 +23,7 @@ from app.config import settings
 from app.schemas.signal import NormalizedSignal
 from app.services import audit_logger, credential_vault, state_store
 from app.services import risk_manager
+from app.services.dhan_client import DhanListResult
 from app.services.dhan_debugger import validate_dhan_payload
 from app.services.execution_router import _build_dhan_payload_and_resolution
 from app.services.security_id_resolver import (
@@ -420,6 +421,94 @@ class TestLiveOrderGating:
         assert real_called["called"] is False
         body = response.json()
         assert body["accepted"] is False
+
+    def test_real_entry_blocks_when_dhan_has_open_position(self, monkeypatch, client):
+        """Before live ENTRY, broker positions are checked and active exposure blocks order placement."""
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", True)
+        monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "123456")
+        monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
+        monkeypatch.setattr("app.routers.webhook.get_webhook_secret", lambda: "test-secret")
+        monkeypatch.setattr(
+            "app.services.execution_router.get_dhan_credentials",
+            lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
+        )
+        real_called = {"called": False}
+
+        class FakeRealDhanClient:
+            def get_positions_snapshot(self, *, client_id, access_token):
+                return DhanListResult(
+                    success=True,
+                    message="positions",
+                    items=[{"tradingSymbol": "NIFTY 26 MAY 23900 CALL", "securityId": "72176", "netQty": 65}],
+                )
+
+            def get_order_book(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="orders", items=[])
+
+            def place_order(self, *, client_id, access_token, payload):
+                real_called["called"] = True
+                raise RuntimeError("place_order must not be called when Dhan has open position")
+
+        monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
+
+        payload = nova_payload("ENTRY", "BUY", "dhan-open-position-001")
+        response = client.post("/webhook/tradingview", json=payload)
+        body = response.json()
+
+        assert response.status_code == 200
+        assert body["accepted"] is False
+        assert "Dhan already has open position" in body.get("message", "")
+        assert real_called["called"] is False
+
+    def test_real_entry_blocks_when_dhan_has_pending_order(self, monkeypatch, client):
+        """Before live ENTRY, broker order book is checked and pending orders block order placement."""
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", True)
+        monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "123456")
+        monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
+        monkeypatch.setattr("app.routers.webhook.get_webhook_secret", lambda: "test-secret")
+        monkeypatch.setattr(
+            "app.services.execution_router.get_dhan_credentials",
+            lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
+        )
+        real_called = {"called": False}
+
+        class FakeRealDhanClient:
+            def get_positions_snapshot(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="positions", items=[])
+
+            def get_order_book(self, *, client_id, access_token):
+                return DhanListResult(
+                    success=True,
+                    message="orders",
+                    items=[
+                        {
+                            "orderId": "112111182198",
+                            "orderStatus": "PENDING",
+                            "tradingSymbol": "NIFTY 26 MAY 23900 PUT",
+                            "securityId": "72176",
+                            "quantity": 65,
+                        }
+                    ],
+                )
+
+            def place_order(self, *, client_id, access_token, payload):
+                real_called["called"] = True
+                raise RuntimeError("place_order must not be called when Dhan has pending order")
+
+        monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
+
+        payload = nova_payload("ENTRY", "BUY", "dhan-pending-order-001")
+        response = client.post("/webhook/tradingview", json=payload)
+        body = response.json()
+
+        assert response.status_code == 200
+        assert body["accepted"] is False
+        assert "Dhan already has open order" in body.get("message", "")
+        assert real_called["called"] is False
 
     def test_emergency_stop_blocks_entry(self, client):
         """EMERGENCY_STOP=true must block all entry signals."""

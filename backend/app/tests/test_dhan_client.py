@@ -172,6 +172,32 @@ def test_get_fund_limit_uses_v2_fundlimit_endpoint(monkeypatch):
 # present; client-id conditional on DHAN_SEND_CLIENT_ID_HEADER setting.
 # ===========================================================================
 
+def test_get_order_book_uses_v2_orders_endpoint(monkeypatch):
+    recorder = {}
+    response = httpx.Response(200, json=[{"orderId": "112111182198", "orderStatus": "PENDING"}])
+    patch_http_client(monkeypatch, response, recorder)
+
+    result = RealDhanClient().get_order_book(client_id="1000000001", access_token="token")
+
+    assert result.success is True
+    assert result.items == [{"orderId": "112111182198", "orderStatus": "PENDING"}]
+    assert recorder["method"] == "GET"
+    assert recorder["url"] == f"{DHAN_BASE_URL}/orders"
+
+
+def test_get_positions_snapshot_uses_v2_positions_endpoint(monkeypatch):
+    recorder = {}
+    response = httpx.Response(200, json=[{"tradingSymbol": "NIFTY 26 MAY 23900 CALL", "netQty": 65}])
+    patch_http_client(monkeypatch, response, recorder)
+
+    result = RealDhanClient().get_positions_snapshot(client_id="1000000001", access_token="token")
+
+    assert result.success is True
+    assert result.items == [{"tradingSymbol": "NIFTY 26 MAY 23900 CALL", "netQty": 65}]
+    assert recorder["method"] == "GET"
+    assert recorder["url"] == f"{DHAN_BASE_URL}/positions"
+
+
 def test_headers_always_include_access_token_and_content_type(monkeypatch):
     """access-token and Content-Type must always be present in Dhan request headers."""
     monkeypatch.setattr(settings, "DHAN_SEND_CLIENT_ID_HEADER", True)
