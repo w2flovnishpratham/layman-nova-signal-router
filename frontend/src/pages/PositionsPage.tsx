@@ -47,6 +47,9 @@ export default function PositionsPage() {
           <div className="flex flex-col items-center justify-center py-10 gap-2">
             <p className="text-sm font-medium" style={{ color: '#9a968f' }}>No open position</p>
             <p className="text-xs" style={{ color: '#77736c' }}>A position will appear here once an entry order is executed.</p>
+            {position?.broker_sync?.message && (
+              <p className="max-w-md text-center text-xs" style={{ color: '#98e94d' }}>{position.broker_sync.message}</p>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-x-8 gap-y-5">

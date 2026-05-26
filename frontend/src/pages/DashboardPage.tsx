@@ -597,7 +597,12 @@ export default function DashboardPage() {
               ))}
             </div>
           ) : (
-            <p className="text-sm" style={{ color: '#77736c' }}>No open position tracked locally.</p>
+            <div className="space-y-1">
+              <p className="text-sm" style={{ color: '#77736c' }}>No open position tracked locally.</p>
+              {openPosition.broker_sync?.message && (
+                <p className="text-xs" style={{ color: '#98e94d' }}>{openPosition.broker_sync.message}</p>
+              )}
+            </div>
           )}
         </div>
 

@@ -20,6 +20,16 @@ export interface OpenPosition {
   entry_order_id: string | null
   entry_price: number | null
   opened_at: string | null
+  broker_sync?: {
+    source?: string
+    status?: string
+    message?: string
+    checked_at?: string
+    cleared?: boolean
+    active_positions_count?: number
+    open_orders_count?: number
+    failures?: string[]
+  }
 }
 
 export interface RuntimeSettings {

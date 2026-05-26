@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.services.state_store import get_open_position
+from app.services.position_reconciler import get_reconciled_open_position
 
 
 router = APIRouter()
@@ -8,4 +8,4 @@ router = APIRouter()
 
 @router.get("/positions")
 def positions() -> dict:
-    return get_open_position()
+    return get_reconciled_open_position(reason="positions_endpoint")

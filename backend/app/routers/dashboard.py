@@ -8,7 +8,8 @@ from app.config import settings
 from app.routers.setup import tradingview_webhook_url
 from app.services.audit_logger import read_jsonl
 from app.services.credential_vault import dhan_metadata, get_dhan_credentials, webhook_secret_metadata
-from app.services.state_store import get_app_state, get_open_position, get_runtime_settings
+from app.services.position_reconciler import get_reconciled_open_position
+from app.services.state_store import get_app_state, get_runtime_settings
 from app.services.wallet_service import refresh_wallet_snapshot
 
 
@@ -49,8 +50,8 @@ def _latest(log_name: str) -> dict | None:
 
 @router.get("/dashboard/summary")
 def dashboard_summary() -> dict:
+    open_position = get_reconciled_open_position(reason="dashboard_summary")
     app_state = get_app_state()
-    open_position = get_open_position()
     runtime_settings = get_runtime_settings()
 
     tradingview_url = tradingview_webhook_url()
