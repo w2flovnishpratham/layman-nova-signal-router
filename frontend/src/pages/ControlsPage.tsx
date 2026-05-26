@@ -112,7 +112,7 @@ export default function ControlsPage() {
   }
 
   return (
-    <div className="space-y-8 max-w-3xl">
+    <div className="space-y-8 w-full">
       <div>
         <h1 className="text-2xl font-semibold" style={{ color: '#f4f1ea' }}>Controls</h1>
         <p className="mt-1 text-sm" style={{ color: '#9a968f' }}>

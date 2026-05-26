@@ -38,6 +38,46 @@
   --font-sans: 'Poppins', ui-sans-serif, system-ui, -apple-system, sans-serif;
 }
 
+:root {
+  --c-page: #090908;
+  --c-card: #151513;
+  --c-raised: #1b1a17;
+  --c-border-1: #1d1c19;
+  --c-border-2: #24231f;
+  --c-border-3: #2b2a26;
+  --c-border-4: #3a3933;
+  --c-text-1: #f4f1ea;
+  --c-text-2: #d8d3c8;
+  --c-text-3: #9a968f;
+  --c-text-4: #77736c;
+  --c-text-5: #5e5a53;
+  --c-lime-text: #98e94d;
+  --c-table-border: #24231f;
+  --c-table-head: #77736c;
+  --c-table-hover: #151513;
+  --c-timeline-line: #24231f;
+}
+
+:root[data-theme="light"] {
+  --c-page: #f4f1ea;
+  --c-card: #ffffff;
+  --c-raised: #ebe6dc;
+  --c-border-1: #e1dbcf;
+  --c-border-2: #d7d0c4;
+  --c-border-3: #c8c0b2;
+  --c-border-4: #aaa193;
+  --c-text-1: #171714;
+  --c-text-2: #34322e;
+  --c-text-3: #5e5a53;
+  --c-text-4: #77736c;
+  --c-text-5: #9a968f;
+  --c-lime-text: #417b16;
+  --c-table-border: #d7d0c4;
+  --c-table-head: #5e5a53;
+  --c-table-hover: #ebe6dc;
+  --c-timeline-line: #d7d0c4;
+}
+
 /* === Animation keyframes === */
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; transform: scale(1); }
