@@ -82,14 +82,14 @@ def _ws_stale_seconds(runtime: dict[str, Any]) -> float:
 
 
 def _ltp_source(runtime: dict[str, Any]) -> str:
-    source = str(runtime.get("option_ltp_source") or "WEBSOCKET").strip().upper()
-    return source if source in {"WEBSOCKET", "REST", "AUTO"} else "WEBSOCKET"
+    source = str(runtime.get("option_ltp_source") or "AUTO").strip().upper()
+    return source if source in {"WEBSOCKET", "REST", "AUTO"} else "AUTO"
 
 
 def _rest_fallback_allowed(runtime: dict[str, Any], exchange_segment: str, security_id: str) -> bool:
     if _ltp_source(runtime) == "REST":
         return True
-    if not _runtime_bool(runtime, "option_rest_fallback_enabled", False):
+    if not _runtime_bool(runtime, "option_rest_fallback_enabled", True):
         return False
     cooldown = _as_positive_float(runtime.get("option_rest_fallback_cooldown_seconds"), 15.0)
     key = (exchange_segment, security_id)

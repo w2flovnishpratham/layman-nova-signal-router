@@ -54,9 +54,9 @@ class RiskSetupRequest(BaseModel):
     daily_loss_limit: float = Field(default=500, gt=0)
     server_side_exit_enabled: bool = True
     marketfeed_ws_enabled: bool = True
-    option_ltp_source: str = "WEBSOCKET"
+    option_ltp_source: str = "AUTO"
     option_ws_stale_seconds: float = Field(default=5.0, ge=1.0)
-    option_rest_fallback_enabled: bool = False
+    option_rest_fallback_enabled: bool = True
     option_rest_fallback_cooldown_seconds: float = Field(default=15.0, ge=1.0)
     option_sl_percent: float = Field(default=10.0, gt=0)
     option_tp_percent: float = Field(default=20.0, gt=0)

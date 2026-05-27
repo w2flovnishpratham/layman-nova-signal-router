@@ -104,9 +104,9 @@ function CanTradeBanner({ summary, setup }: { summary: DashboardSummary; setup: 
   )
   return (
     <div className="can-trade-ready flex items-center gap-3">
-      <CheckCircle2 style={{ color: '#98e94d', flexShrink: 0 }} size={20} />
+      <CheckCircle2 style={{ color: 'var(--c-lime-text)', flexShrink: 0 }} size={20} />
       <div>
-        <p className="text-sm font-semibold" style={{ color: '#98e94d' }}>Ready to trade</p>
+        <p className="text-sm font-semibold" style={{ color: 'var(--c-lime-text)' }}>Ready to trade</p>
         <p className="text-xs mt-0.5" style={{ color: 'rgba(152,233,77,0.65)' }}>Engine running · Dhan connected · {setup.mode.dhan_mode} mode</p>
       </div>
     </div>
@@ -169,7 +169,7 @@ function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
     setSelectedIndex(latestDone)
   }, [steps])
 
-  if (!steps.length) return <p className="text-sm" style={{ color: '#77736c' }}>No flow data.</p>
+  if (!steps.length) return <p className="text-sm" style={{ color: 'var(--c-text-4)' }}>No flow data.</p>
 
   const safeSelectedIndex = selectedIndex !== null && selectedIndex < steps.length ? selectedIndex : 0
   const selectedStep = steps[safeSelectedIndex] ?? null
@@ -193,7 +193,7 @@ function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
           const nextStatus = steps[i + 1]?.status
           const connColor = (step.status === 'done' && (nextStatus === 'done' || nextStatus === 'active')) ? '#98e94d' :
                             (step.status === 'done' && (nextStatus === 'blocked' || nextStatus === 'error')) ? '#ef4444' :
-                            (step.status === 'active' || step.status === 'done') ? '#3a3933' : '#1d1c19'
+                            (step.status === 'active' || step.status === 'done') ? 'var(--c-border-4)' : 'var(--c-border-1)'
 
           return (
             <div key={step.step} className="flex items-center flex-1 min-w-0">
@@ -224,7 +224,7 @@ function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
                   step.status === 'active' ? 'text-blue-400 font-black' :
                   step.status === 'done' ? 'opacity-70' :
                   step.status === 'blocked' || step.status === 'error' ? 'text-red-400' : 'opacity-30'
-                }`} style={isSelected ? { color: '#98e94d' } : undefined}>
+                }`} style={isSelected ? { color: 'var(--c-lime-text)' } : undefined}>
                   {labelText}
                 </p>
               </button>
@@ -257,7 +257,7 @@ function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
           const nextStatus = steps[i + 1]?.status
           const connColor = (step.status === 'done' && (nextStatus === 'done' || nextStatus === 'active')) ? '#98e94d' :
                             (step.status === 'done' && (nextStatus === 'blocked' || nextStatus === 'error')) ? '#ef4444' :
-                            (step.status === 'active' || step.status === 'done') ? '#3a3933' : '#1d1c19'
+                            (step.status === 'active' || step.status === 'done') ? 'var(--c-border-4)' : 'var(--c-border-1)'
 
           return (
             <div key={step.step + '-mobile'} className="flex flex-col">
@@ -291,7 +291,7 @@ function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
                   }`}>
                     {labelText}
                   </p>
-                  <p className="text-[9px] font-mono leading-none mt-0.5" style={{ color: "#77736c" }}>
+                  <p className="text-[9px] font-mono leading-none mt-0.5" style={{ color: "var(--c-text-4)" }}>
                     {step.status}
                   </p>
                 </div>
@@ -328,35 +328,28 @@ function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3 mb-3">
             <div className="space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded ${
-                  selectedStep.status === 'done' ? 'bg-[#98e94d]/10 text-[#98e94d] border border-[#98e94d]/15' :
-                  selectedStep.status === 'active' ? 'bg-blue-500/10 text-blue-400 border border-blue-400/15' :
-                  selectedStep.status === 'blocked' || selectedStep.status === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/15' :
-                  'border'
-                }`}
-                  style={
-                    selectedStep.status === 'done' ||
-                    selectedStep.status === 'active' ||
-                    selectedStep.status === 'blocked' ||
-                    selectedStep.status === 'error'
-                      ? undefined
-                      : { background: '#24231f', borderColor: '#2b2a26', color: '#77736c' }
-                  }
-                >
+                <span
+                  className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded ${
+                    selectedStep.status === 'done' ? 'bg-[#98e94d]/10 text-[#98e94d] border border-[#98e94d]/15' :
+                    selectedStep.status === 'active' ? 'bg-blue-500/10 text-blue-400 border border-blue-400/15' :
+                    selectedStep.status === 'blocked' || selectedStep.status === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/15' :
+                    ''
+                  }`}
+                  style={!['done','active','blocked','error'].includes(selectedStep.status) ? { background: 'var(--c-raised)', borderColor: 'var(--c-border-3)', color: 'var(--c-text-4)' } : undefined}>
                   STAGE { (selectedIndex ?? 0) + 1 } / { steps.length }
                 </span>
-                <h3 className="text-xs font-bold uppercase tracking-wide" style={{ color: "#f4f1ea" }}>
+                <h3 className="text-xs font-bold uppercase tracking-wide" style={{ color: "var(--c-text-1)" }}>
                   {PIPELINE_LABELS[selectedStep.step] || selectedStep.step.replace(/_/g, ' ')}
                 </h3>
               </div>
-              <p className="text-[10px] font-mono leading-none" style={{ color: "#5e5a53" }}>
+              <p className="text-[10px] font-mono leading-none" style={{ color: "var(--c-text-5)" }}>
                 System state code: {selectedStep.step}
               </p>
             </div>
 
             <div className="text-left sm:text-right flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-1">
               <span className={`inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider ${
-                selectedStep.status === 'done' ? 'text-[#98e94d]' :
+                selectedStep.status === 'done' ? 'text-[var(--c-lime-text)]' :
                 selectedStep.status === 'active' ? 'text-blue-400 animate-pulse' :
                 selectedStep.status === 'blocked' || selectedStep.status === 'error' ? 'text-red-400' : 'text-[#77736c]'
               }`}>
@@ -368,7 +361,7 @@ function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
                 {selectedStep.status}
               </span>
               {selectedStep.timestamp && (
-                <p className="text-[10px] font-mono" style={{ color: "#5e5a53" }}>
+                <p className="text-[10px] font-mono" style={{ color: "var(--c-text-5)" }}>
                   Processed at {new Date(selectedStep.timestamp).toLocaleTimeString()}
                 </p>
               )}
@@ -376,7 +369,7 @@ function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
           </div>
 
           <div className="space-y-3">
-            <p className="text-xs leading-relaxed" style={{ color: "#d8d3c8" }}>
+            <p className="text-xs leading-relaxed" style={{ color: "var(--c-text-2)" }}>
               {selectedStep.message || (
                 selectedStep.status === 'pending'
                   ? 'This stage is waiting for alert triggers to activate.'
@@ -385,9 +378,9 @@ function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
             </p>
 
             {selectedStep.order_id && (
-              <div className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5" style={{ background: '#090908', border: '1px solid #2b2a26' }}>
-                <span className="text-[10px] font-mono" style={{ color: '#77736c' }}>Dhan Order Reference:</span>
-                <span className="text-[11px] font-mono font-bold select-all" style={{ color: '#98e94d' }}>{selectedStep.order_id}</span>
+              <div className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5" style={{ background: 'var(--c-page)', border: '1px solid var(--c-border-3)' }}>
+                <span className="text-[10px] font-mono" style={{ color: 'var(--c-text-4)' }}>Dhan Order Reference:</span>
+                <span className="text-[11px] font-mono font-bold select-all" style={{ color: 'var(--c-lime-text)' }}>{selectedStep.order_id}</span>
               </div>
             )}
 
@@ -408,10 +401,10 @@ function PipelineStrip({ steps }: { steps: LiveFlowStep[] }) {
 // ─── Metric card ─────────────────────────────────────────────────────────────
 
 function MetricCard({ label, value, accent }: { label: string; value: string; accent?: 'green' | 'red' | 'amber' }) {
-  const valueColor = accent === 'green' ? '#98e94d' : accent === 'red' ? '#f87171' : accent === 'amber' ? '#fbbf24' : '#f4f1ea'
+  const valueColor = accent === 'green' ? 'var(--c-lime-text)' : accent === 'red' ? '#f87171' : accent === 'amber' ? '#fbbf24' : 'var(--c-text-1)'
   return (
     <div className="card py-3 px-4">
-      <p className="text-xs uppercase tracking-wide mb-1" style={{ color: '#77736c' }}>{label}</p>
+      <p className="text-xs uppercase tracking-wide mb-1" style={{ color: 'var(--c-text-4)' }}>{label}</p>
       <p className="text-xl font-semibold" style={{ color: valueColor }}>{value}</p>
     </div>
   )
@@ -553,7 +546,7 @@ export default function DashboardPage() {
   }
 
   if (!summary || !setup) return (
-    <div className="flex min-h-[60vh] items-center justify-center gap-3" style={{ color: '#77736c' }}>
+    <div className="flex min-h-[60vh] items-center justify-center gap-3" style={{ color: 'var(--c-text-4)' }}>
       <RefreshCw className="animate-spin" size={18} />
       <span className="text-sm">Loading dashboard…</span>
     </div>
@@ -566,8 +559,8 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold" style={{ color: '#f4f1ea' }}>Dashboard</h1>
-          <p className="mt-0.5 text-sm" style={{ color: '#9a968f' }}>Live system state and recent orders.</p>
+          <h1 className="text-2xl font-semibold" style={{ color: 'var(--c-text-1)' }}>Dashboard</h1>
+          <p className="mt-0.5 text-sm" style={{ color: 'var(--c-text-3)' }}>Live system state and recent orders.</p>
         </div>
         <button onClick={loadData} className="btn-ghost flex items-center gap-2 text-sm py-1.5">
           <RefreshCw size={14} /> Refresh
@@ -585,21 +578,21 @@ export default function DashboardPage() {
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="card space-y-3 lg:col-span-2">
-          <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Alert lifecycle</h2>
+          <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--c-text-4)' }}>Alert lifecycle</h2>
           <PipelineStrip steps={flow} />
         </div>
         <div className="card space-y-3">
-          <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Quick controls</h2>
+          <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--c-text-4)' }}>Quick controls</h2>
           <button onClick={runStartEngine} disabled={setup.engine_started} className="btn-primary flex w-full items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-45"><Play size={14} /> Start Engine</button>
           <button onClick={runStopEngine} disabled={!setup.engine_started} className="btn-ghost  flex w-full items-center justify-center gap-2 text-sm disabled:cursor-not-allowed disabled:opacity-45"><Square size={14} /> Stop Engine</button>
           <button onClick={runEmergencyStop} className="btn-danger flex w-full items-center justify-center gap-2 text-sm"><ShieldAlert size={14} /> Emergency Stop</button>
-          <p className="text-xs" style={{ color: '#77736c' }}>Full controls at <a href="/app/controls" className="underline underline-offset-2" style={{ color: '#9a968f' }}>/controls</a>.</p>
+          <p className="text-xs" style={{ color: 'var(--c-text-4)' }}>Full controls at <a href="/app/controls" className="underline underline-offset-2" style={{ color: 'var(--c-text-3)' }}>/controls</a>.</p>
         </div>
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="card space-y-3">
-          <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Open position</h2>
+          <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--c-text-4)' }}>Open position</h2>
           {openPosition.has_open_position ? (
             <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
               {([
@@ -612,22 +605,22 @@ export default function DashboardPage() {
                 ['SL / TP', `${openPosition.live_pnl?.sl_price != null ? currency(openPosition.live_pnl.sl_price) : '-'} / ${openPosition.live_pnl?.tp_price != null ? currency(openPosition.live_pnl.tp_price) : '-'}`, false],
                 ['LTP source', openPosition.live_pnl?.source ?? '-', false],
                 ['Monitor', openPosition.live_pnl?.status ?? '-', false],
-                ['Entry price', openPosition.entry_price != null ? currency(openPosition.entry_price) : '—', false],
-                ['Opened', openPosition.opened_at ? new Date(openPosition.opened_at).toLocaleTimeString() : '—', false]
+                ['Entry price', openPosition.entry_price != null ? currency(openPosition.entry_price) : '-', false],
+                ['Opened', openPosition.opened_at ? new Date(openPosition.opened_at).toLocaleTimeString() : '-', false]
               ] as [string, unknown, boolean][]).map(([l, v, isMono]) => (
                 <div key={String(l)}>
-                  <p className="text-xs" style={{ color: '#77736c' }}>{String(l)}</p>
-                  <p className={`font-medium ${isMono ? 'font-mono text-xs break-all select-all' : 'truncate'}`} style={{ color: isMono ? '#9a968f' : '#f4f1ea' }}>
-                    {String(v ?? '—')}
+                  <p className="text-xs" style={{ color: 'var(--c-text-4)' }}>{String(l)}</p>
+                  <p className={`font-medium ${isMono ? 'font-mono text-xs break-all select-all' : 'truncate'}`} style={{ color: isMono ? 'var(--c-text-3)' : 'var(--c-text-1)' }}>
+                    {String(v ?? '-')}
                   </p>
                 </div>
               ))}
             </div>
           ) : (
             <div className="space-y-1">
-              <p className="text-sm" style={{ color: '#77736c' }}>No open position tracked locally.</p>
+              <p className="text-sm" style={{ color: 'var(--c-text-4)' }}>No open position tracked locally.</p>
               {openPosition.broker_sync?.message && (
-                <p className="text-xs" style={{ color: '#98e94d' }}>{openPosition.broker_sync.message}</p>
+                <p className="text-xs" style={{ color: 'var(--c-lime-text)' }}>{openPosition.broker_sync.message}</p>
               )}
             </div>
           )}
@@ -635,14 +628,14 @@ export default function DashboardPage() {
 
         <div className="card space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Wallet</h2>
-            <Wallet size={14} style={{ color: '#77736c' }} />
+            <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--c-text-4)' }}>Wallet</h2>
+            <Wallet size={14} style={{ color: 'var(--c-text-4)' }} />
           </div>
           <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
             {([['Available', currency(summary.wallet.available_balance)], ['Utilised', currency(summary.wallet.utilized_amount)], ['Withdrawable', currency(summary.wallet.withdrawable_balance)], ['Mode', setup.mode.dhan_mode]] as [string, string][]).map(([l, v]) => (
               <div key={l}>
-                <p className="text-xs" style={{ color: '#77736c' }}>{l}</p>
-                <p className="font-medium" style={{ color: l === 'Mode' && v === 'REAL' ? '#f87171' : '#f4f1ea' }}>{v}</p>
+                <p className="text-xs" style={{ color: 'var(--c-text-4)' }}>{l}</p>
+                <p className="font-medium" style={{ color: l === 'Mode' && v === 'REAL' ? '#f87171' : 'var(--c-text-1)' }}>{v}</p>
               </div>
             ))}
           </div>
@@ -650,42 +643,42 @@ export default function DashboardPage() {
       </section>
 
       <section className="card space-y-2">
-        <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>TradingView webhook</h2>
-        <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #24231f', background: '#090908' }}>
-          <p className="flex-1 min-w-0 truncate font-mono text-xs" style={{ color: '#9a968f' }}>{setup.webhook_url || '—'}</p>
-          <button onClick={copyWebhook} className="btn-ghost p-1.5" style={{ color: '#9a968f' }} title="Copy"><Copy size={13} /></button>
+        <h2 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--c-text-4)' }}>TradingView webhook</h2>
+        <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid var(--c-border-2)', background: 'var(--c-page)' }}>
+          <p className="flex-1 min-w-0 truncate font-mono text-xs" style={{ color: 'var(--c-text-3)' }}>{setup.webhook_url || '—'}</p>
+          <button onClick={copyWebhook} className="btn-ghost p-1.5" style={{ color: 'var(--c-text-3)' }} title="Copy"><Copy size={13} /></button>
         </div>
         {latestAlert && (
-          <p className="text-xs" style={{ color: '#77736c' }}>
-            Last alert: <span style={{ color: '#98e94d' }}>{String(latestAlert.event_type ?? '—')}</span>
-            {' · '}<span className="font-mono" style={{ color: '#9a968f' }}>{String(latestAlert.signal_id ?? '—')}</span>
+          <p className="text-xs" style={{ color: 'var(--c-text-4)' }}>
+            Last alert: <span style={{ color: 'var(--c-lime-text)' }}>{String(latestAlert.event_type ?? '—')}</span>
+            {' · '}<span className="font-mono" style={{ color: 'var(--c-text-3)' }}>{String(latestAlert.signal_id ?? '—')}</span>
           </p>
         )}
       </section>
 
       <section className="card">
-        <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest" style={{ color: '#77736c' }}>Recent orders</h2>
+        <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--c-text-4)' }}>Recent orders</h2>
 
         <div className="block sm:hidden space-y-3">
           {orders.length === 0 ? (
-            <p className="py-6 text-center text-sm" style={{ color: '#77736c' }}>No order events yet.</p>
+            <p className="py-6 text-center text-sm" style={{ color: 'var(--c-text-4)' }}>No order events yet.</p>
           ) : orders.map(order => (
             <div key={order.id} className="rounded-xl p-3.5 space-y-2.5 transition-colors"
-              style={{ border: '1px solid #1d1c19', background: '#151513' }}>
+              style={{ border: '1px solid var(--c-border-1)', background: 'var(--c-card)' }}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <ActionBadge order={order} />
-                  <span className="text-[10px] font-mono" style={{ color: '#77736c' }}>
+                  <span className="text-[10px] font-mono" style={{ color: 'var(--c-text-4)' }}>
                     {order.created_at ? new Date(order.created_at).toLocaleTimeString() : '—'}
                   </span>
                 </div>
                 <OrderStatusBadge order={order} />
               </div>
               <div className="flex items-center justify-between gap-4">
-                <span className="font-mono text-xs font-bold break-words" style={{ color: '#f4f1ea' }}>
+                <span className="font-mono text-xs font-bold break-words" style={{ color: 'var(--c-text-1)' }}>
                   {order.trading_symbol ?? order.normalized_symbol ?? '—'}
                 </span>
-                <span className="text-xs font-semibold whitespace-nowrap" style={{ color: '#d8d3c8' }}>
+                <span className="text-xs font-semibold whitespace-nowrap" style={{ color: 'var(--c-text-2)' }}>
                   Qty: {order.normalized_qty ?? order.qty ?? '—'}
                 </span>
               </div>
@@ -702,8 +695,8 @@ export default function DashboardPage() {
 
         <div className="hidden sm:block overflow-x-auto">
           <table className="min-w-full text-left text-sm">
-            <thead style={{ borderBottom: '1px solid #24231f' }}>
-              <tr className="text-xs uppercase tracking-wide" style={{ color: '#77736c' }}>
+            <thead style={{ borderBottom: '1px solid var(--c-border-2)' }}>
+              <tr className="text-xs uppercase tracking-wide" style={{ color: 'var(--c-text-4)' }}>
                 {['Time', 'Action', 'Symbol', 'Qty', 'Status', 'Reason'].map(h => (
                   <th key={h} className="pb-2 pr-4 font-medium">{h}</th>
                 ))}
@@ -711,17 +704,17 @@ export default function DashboardPage() {
             </thead>
             <tbody>
               {orders.length === 0 ? (
-                <tr><td colSpan={6} className="py-6 text-center text-sm" style={{ color: '#77736c' }}>No order events yet.</td></tr>
+                <tr><td colSpan={6} className="py-6 text-center text-sm" style={{ color: 'var(--c-text-4)' }}>No order events yet.</td></tr>
               ) : orders.map(order => (
-                <tr key={order.id} className="transition-colors" style={{ borderBottom: '1px solid #1d1c19' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#1b1a17')}
+                <tr key={order.id} className="transition-colors" style={{ borderBottom: '1px solid var(--c-border-1)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--c-raised)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  <td className="py-2.5 pr-4 text-xs whitespace-nowrap" style={{ color: '#77736c' }}>{order.created_at ? new Date(order.created_at).toLocaleTimeString() : '—'}</td>
+                  <td className="py-2.5 pr-4 text-xs whitespace-nowrap" style={{ color: 'var(--c-text-4)' }}>{order.created_at ? new Date(order.created_at).toLocaleTimeString() : '—'}</td>
                   <td className="py-2.5 pr-4"><ActionBadge order={order} /></td>
-                  <td className="py-2.5 pr-4 font-mono text-xs font-medium" style={{ color: '#f4f1ea' }}>{order.trading_symbol ?? order.normalized_symbol ?? '—'}</td>
-                  <td className="py-2.5 pr-4" style={{ color: '#d8d3c8' }}>{order.normalized_qty ?? order.qty ?? '—'}</td>
+                  <td className="py-2.5 pr-4 font-mono text-xs font-medium" style={{ color: 'var(--c-text-1)' }}>{order.trading_symbol ?? order.normalized_symbol ?? '—'}</td>
+                  <td className="py-2.5 pr-4" style={{ color: 'var(--c-text-2)' }}>{order.normalized_qty ?? order.qty ?? '—'}</td>
                   <td className="py-2.5 pr-4"><OrderStatusBadge order={order} /></td>
-                  <td className="py-2.5 text-xs max-w-xs break-words whitespace-normal" style={{ color: '#77736c' }}>{order.reason ?? '—'}</td>
+                  <td className="py-2.5 text-xs max-w-xs break-words whitespace-normal" style={{ color: 'var(--c-text-4)' }}>{order.reason ?? '—'}</td>
                 </tr>
               ))}
             </tbody>

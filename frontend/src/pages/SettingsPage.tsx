@@ -64,6 +64,15 @@ export default function SettingsPage() {
     daily_loss_limit: 500,
     allow_entry: true,
     allow_exit: true,
+    option_sl_percent: 10,
+    option_tp_percent: 20,
+    server_side_exit_enabled: true,
+    marketfeed_ws_enabled: true,
+    option_ltp_source: 'AUTO',
+    option_ws_stale_seconds: 5,
+    option_rest_fallback_enabled: true,
+    option_rest_fallback_cooldown_seconds: 15,
+    option_ltp_poll_seconds: 1,
   })
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -116,7 +125,17 @@ export default function SettingsPage() {
 
   const updateRisk = async (event: FormEvent) => {
     event.preventDefault()
-    await run('risk', saveRiskSettings(risk), 'Risk settings updated.')
+    const payload: RiskSetupPayload = {
+      ...risk,
+      server_side_exit_enabled: true,
+      marketfeed_ws_enabled: true,
+      option_ltp_source: 'AUTO',
+      option_ltp_poll_seconds: 1,
+      option_ws_stale_seconds: 5,
+      option_rest_fallback_enabled: true,
+      option_rest_fallback_cooldown_seconds: 15,
+    }
+    await run('risk', saveRiskSettings(payload), 'Risk settings updated.')
   }
 
   if (!status) {
@@ -190,33 +209,47 @@ export default function SettingsPage() {
       </section>
 
       <form onSubmit={updateRisk} className="card space-y-4">
-        <h2 className="text-lg font-semibold">Risk Settings</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-semibold">Risk Settings</h2>
+        </div>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <label className="block text-sm">
-            <span className="mb-1 block text-[#d8d3c8]">Max quantity per order</span>
-            <input className="input" type="number" min={1} value={risk.max_qty_per_order} onChange={(event) => setRisk({ ...risk, max_qty_per_order: Number(event.target.value) })} />
+            <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max quantity per order</span>
+            <input className="input no-spinner" type="number" min={1} value={risk.max_qty_per_order} onChange={(e) => setRisk({ ...risk, max_qty_per_order: Number(e.target.value) })} />
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-[#d8d3c8]">Max trades per day</span>
-            <input className="input" type="number" min={1} value={risk.max_trades_per_day} onChange={(event) => setRisk({ ...risk, max_trades_per_day: Number(event.target.value) })} />
+            <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max trades per day</span>
+            <input className="input no-spinner" type="number" min={1} value={risk.max_trades_per_day} onChange={(e) => setRisk({ ...risk, max_trades_per_day: Number(e.target.value) })} />
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-[#d8d3c8]">Daily loss limit</span>
-            <input className="input" type="number" min={1} value={risk.daily_loss_limit} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} />
+            <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Daily loss limit (INR)</span>
+            <input className="input no-spinner" type="number" min={1} value={risk.daily_loss_limit} onChange={(e) => setRisk({ ...risk, daily_loss_limit: Number(e.target.value) })} />
           </label>
         </div>
-        <div className="flex flex-wrap gap-4 text-sm">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={risk.allow_entry} onChange={(event) => setRisk({ ...risk, allow_entry: event.target.checked })} />
-            Allow entry
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <label className="block text-sm">
+            <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option SL %</span>
+            <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_sl_percent ?? 10} onChange={(e) => setRisk({ ...risk, option_sl_percent: Number(e.target.value) })} />
           </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={risk.allow_exit} onChange={(event) => setRisk({ ...risk, allow_exit: event.target.checked })} />
-            Allow exit
+          <label className="block text-sm">
+            <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option TP %</span>
+            <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_tp_percent ?? 20} onChange={(e) => setRisk({ ...risk, option_tp_percent: Number(e.target.value) })} />
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <label className="nova-toggle">
+            <input type="checkbox" checked={risk.allow_entry} onChange={(e) => setRisk({ ...risk, allow_entry: e.target.checked })} />
+            <span className="nova-toggle__track"><span className="nova-toggle__thumb" /></span>
+            <span className="nova-toggle__label">Allow entry</span>
+          </label>
+          <label className="nova-toggle">
+            <input type="checkbox" checked={risk.allow_exit} onChange={(e) => setRisk({ ...risk, allow_exit: e.target.checked })} />
+            <span className="nova-toggle__track"><span className="nova-toggle__thumb" /></span>
+            <span className="nova-toggle__label">Allow exit</span>
           </label>
         </div>
         <button disabled={busy === 'risk'} className="btn-primary" type="submit">
-          Update Risk
+          Save Risk Settings
         </button>
       </form>
 

@@ -242,9 +242,9 @@ export default function SetupPage() {
     daily_loss_limit: 500,
     server_side_exit_enabled: true,
     marketfeed_ws_enabled: true,
-    option_ltp_source: 'WEBSOCKET',
+    option_ltp_source: 'AUTO',
     option_ws_stale_seconds: 5,
-    option_rest_fallback_enabled: false,
+    option_rest_fallback_enabled: true,
     option_rest_fallback_cooldown_seconds: 15,
     option_sl_percent: 10,
     option_tp_percent: 20,
@@ -270,20 +270,28 @@ export default function SetupPage() {
     onConfirm: () => {},
   })
 
-  const loadData = async () => {
+  // Polls engine/status only — never touches risk form state so user edits persist
+  const pollStatus = async () => {
     const [statusResponse, feedResponse] = await Promise.all([
       getSetupStatus(),
       getChatFeed().catch(() => ({ data: [] as ChatFeedItem[] })),
     ])
     setStatus(statusResponse.data)
-    setRisk(statusResponse.data.settings)
     setChatFeed((feedResponse.data || []) as ChatFeedItem[])
   }
+
+  // Loads risk settings — only on mount and after a successful save
+  const loadRisk = async () => {
+    const statusResponse = await getSetupStatus()
+    setRisk(statusResponse.data.settings)
+  }
+
+  const loadData = async () => { await pollStatus(); await loadRisk() }
 
   useEffect(() => {
     loadData().catch(() => setError('Backend is not reachable. Check VITE_API_BASE_URL and backend health.'))
     const interval = window.setInterval(() => {
-      loadData().catch(() => undefined)
+      pollStatus().catch(() => undefined)
     }, 3000)
     return () => window.clearInterval(interval)
   }, [])
@@ -344,9 +352,20 @@ export default function SetupPage() {
     setBusy('risk')
     setError('')
     try {
-      await saveRiskSettings(risk)
+      const payload: RiskSetupPayload = {
+        ...risk,
+        server_side_exit_enabled: true,
+        marketfeed_ws_enabled: true,
+        option_ltp_source: 'AUTO',
+        option_ltp_poll_seconds: 1,
+        option_ws_stale_seconds: 5,
+        option_rest_fallback_enabled: true,
+        option_rest_fallback_cooldown_seconds: 15,
+      }
+      await saveRiskSettings(payload)
       setMessage('Risk settings saved.')
-      await loadData()
+      await loadRisk()
+      await pollStatus()
     } catch (err) {
       setError(errorMessage(err))
     } finally {
@@ -572,70 +591,38 @@ export default function SetupPage() {
               </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[#d8d3c8]">Max quantity per order</span>
-                  <input className="input" type="number" min={1} value={risk.max_qty_per_order} onChange={(event) => setRisk({ ...risk, max_qty_per_order: Number(event.target.value) })} />
+                  <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max quantity per order</span>
+                  <input className="input no-spinner" type="number" min={1} value={risk.max_qty_per_order} onChange={(event) => setRisk({ ...risk, max_qty_per_order: Number(event.target.value) })} />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[#d8d3c8]">Max trades per day</span>
-                  <input className="input" type="number" min={1} value={risk.max_trades_per_day} onChange={(event) => setRisk({ ...risk, max_trades_per_day: Number(event.target.value) })} />
+                  <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max trades per day</span>
+                  <input className="input no-spinner" type="number" min={1} value={risk.max_trades_per_day} onChange={(event) => setRisk({ ...risk, max_trades_per_day: Number(event.target.value) })} />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[#d8d3c8]">Daily loss limit</span>
-                  <input className="input" type="number" min={1} value={risk.daily_loss_limit} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} />
+                  <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Daily loss limit (INR)</span>
+                  <input className="input no-spinner" type="number" min={1} value={risk.daily_loss_limit} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} />
                 </label>
               </div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[#d8d3c8]">Option SL %</span>
-                  <input className="input" type="number" min={0.1} step={0.1} value={risk.option_sl_percent ?? 10} onChange={(event) => setRisk({ ...risk, option_sl_percent: Number(event.target.value) })} />
+                  <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option SL %</span>
+                  <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_sl_percent ?? 10} onChange={(event) => setRisk({ ...risk, option_sl_percent: Number(event.target.value) })} />
                 </label>
                 <label className="block text-sm">
-                  <span className="mb-1 block text-[#d8d3c8]">Option TP %</span>
-                  <input className="input" type="number" min={0.1} step={0.1} value={risk.option_tp_percent ?? 20} onChange={(event) => setRisk({ ...risk, option_tp_percent: Number(event.target.value) })} />
-                </label>
-                <label className="block text-sm">
-                  <span className="mb-1 block text-[#d8d3c8]">Monitor loop seconds</span>
-                  <input className="input" type="number" min={1} step={1} value={risk.option_ltp_poll_seconds ?? 1} onChange={(event) => setRisk({ ...risk, option_ltp_poll_seconds: Number(event.target.value) })} />
+                  <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option TP %</span>
+                  <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_tp_percent ?? 20} onChange={(event) => setRisk({ ...risk, option_tp_percent: Number(event.target.value) })} />
                 </label>
               </div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <label className="block text-sm">
-                  <span className="mb-1 block text-[#d8d3c8]">LTP source</span>
-                  <select className="input" value={risk.option_ltp_source ?? 'WEBSOCKET'} onChange={(event) => setRisk({ ...risk, option_ltp_source: event.target.value })}>
-                    <option value="WEBSOCKET">WebSocket</option>
-                    <option value="AUTO">WebSocket + fallback</option>
-                    <option value="REST">REST only</option>
-                  </select>
+              <div className="flex flex-wrap gap-3">
+                <label className="nova-toggle">
+                  <input type="checkbox" checked={risk.allow_entry} onChange={(e) => setRisk({ ...risk, allow_entry: e.target.checked })} />
+                  <span className="nova-toggle__track"><span className="nova-toggle__thumb" /></span>
+                  <span className="nova-toggle__label">Allow entry</span>
                 </label>
-                <label className="block text-sm">
-                  <span className="mb-1 block text-[#d8d3c8]">WS stale seconds</span>
-                  <input className="input" type="number" min={1} step={1} value={risk.option_ws_stale_seconds ?? 5} onChange={(event) => setRisk({ ...risk, option_ws_stale_seconds: Number(event.target.value) })} />
-                </label>
-                <label className="block text-sm">
-                  <span className="mb-1 block text-[#d8d3c8]">REST fallback cooldown</span>
-                  <input className="input" type="number" min={1} step={1} value={risk.option_rest_fallback_cooldown_seconds ?? 15} onChange={(event) => setRisk({ ...risk, option_rest_fallback_cooldown_seconds: Number(event.target.value) })} />
-                </label>
-              </div>
-              <div className="flex flex-wrap gap-4 text-sm">
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={risk.server_side_exit_enabled ?? true} onChange={(event) => setRisk({ ...risk, server_side_exit_enabled: event.target.checked })} />
-                  Server-side option SL/TP
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={risk.marketfeed_ws_enabled ?? true} onChange={(event) => setRisk({ ...risk, marketfeed_ws_enabled: event.target.checked })} />
-                  Dhan market WebSocket
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={risk.option_rest_fallback_enabled ?? false} onChange={(event) => setRisk({ ...risk, option_rest_fallback_enabled: event.target.checked })} />
-                  REST fallback
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={risk.allow_entry} onChange={(event) => setRisk({ ...risk, allow_entry: event.target.checked })} />
-                  Allow entry
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={risk.allow_exit} onChange={(event) => setRisk({ ...risk, allow_exit: event.target.checked })} />
-                  Allow exit
+                <label className="nova-toggle">
+                  <input type="checkbox" checked={risk.allow_exit} onChange={(e) => setRisk({ ...risk, allow_exit: e.target.checked })} />
+                  <span className="nova-toggle__track"><span className="nova-toggle__thumb" /></span>
+                  <span className="nova-toggle__label">Allow exit</span>
                 </label>
               </div>
               <button disabled={busy === 'risk'} className="btn-primary" type="submit">
