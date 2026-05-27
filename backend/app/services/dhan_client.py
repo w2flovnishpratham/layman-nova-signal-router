@@ -269,10 +269,38 @@ class RealDhanClient:
             "avgTradedPrice",
             "AvgTradedPrice",
             "TradedPrice",
+            "tradedPrice",
         )
 
     def _response_payload(self, parsed: dict[str, Any] | list[Any] | str) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {"raw_response": parsed}
+
+    def _order_status_payload(self, parsed: dict[str, Any] | list[Any] | str, order_id: str) -> dict[str, Any]:
+        if isinstance(parsed, dict):
+            if any(key in parsed for key in ("orderStatus", "order_status", "status", "orderId", "order_id")):
+                return parsed
+            for key in ("data", "order", "orders"):
+                value = parsed.get(key)
+                if isinstance(value, dict):
+                    return self._order_status_payload(value, order_id)
+                if isinstance(value, list):
+                    return self._order_status_payload(value, order_id)
+            return parsed
+
+        if isinstance(parsed, list):
+            rows = [item for item in parsed if isinstance(item, dict)]
+            for row in rows:
+                row_order_id = str(row.get("orderId") or row.get("order_id") or row.get("id") or "")
+                if row_order_id == str(order_id):
+                    return row
+            if len(rows) == 1:
+                return rows[0]
+            return {"raw_response": parsed}
+
+        return {"raw_response": parsed}
+
+    def _order_status_value(self, data: dict[str, Any]) -> str:
+        return str(data.get("orderStatus") or data.get("order_status") or data.get("status") or "").upper()
 
     def _list_response(self, parsed: dict[str, Any] | list[Any] | str) -> list[dict[str, Any]]:
         if isinstance(parsed, list):
@@ -493,9 +521,9 @@ class RealDhanClient:
                 with self._client(timeout=8.0) as client:
                     response = client.get(url, headers=self._headers(client_id, access_token))
                 parsed = self._parse_response(response)
-                data = self._response_payload(parsed)
+                data = self._order_status_payload(parsed, order_id)
                 last_data = data
-                order_status = str(data.get("orderStatus") or "").upper()
+                order_status = self._order_status_value(data)
                 last_status = order_status
                 log_order_event({
                     "event": "DHAN_ORDER_STATUS_POLL",

@@ -1,6 +1,7 @@
 from app.config import settings
 from app.services import audit_logger, option_position_monitor, state_store
 from app.services.credential_vault import DhanCredentials
+from app.services.dhan_client import DhanListResult, DhanOrderStatusResult
 from app.services.dhan_marketfeed_ws import MarketFeedLtpResult
 
 
@@ -161,3 +162,89 @@ def test_monitor_waits_for_websocket_tick_without_rest_fallback(tmp_path, monkey
     position = state_store.get_open_position()
     assert position["live_pnl"]["status"] == "ws_waiting"
     assert position["live_pnl"]["error"] == "ws_tick_missing"
+
+
+def test_monitor_syncs_entry_price_from_positions_when_order_status_is_empty(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+
+    class FillFallbackClient:
+        def poll_order_status(self, **kwargs):
+            return DhanOrderStatusResult(
+                success=True,
+                order_id=kwargs["order_id"],
+                order_status="PENDING_CONFIRMATION",
+                is_terminal=False,
+                is_filled=False,
+                avg_price=None,
+                raw_response={"raw_response": []},
+            )
+
+        def get_order_book(self, **kwargs):
+            return DhanListResult(success=True, message="ok", items=[])
+
+        def get_positions_snapshot(self, **kwargs):
+            return DhanListResult(
+                success=True,
+                message="ok",
+                items=[{"securityId": "57048", "netQty": 65, "buyAvg": 100.0}],
+            )
+
+    monkeypatch.setattr(option_position_monitor, "_client", lambda: FillFallbackClient())
+    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **kwargs: None)
+    monkeypatch.setattr(
+        option_position_monitor,
+        "get_marketfeed_ltp",
+        lambda **kwargs: MarketFeedLtpResult(
+            success=True,
+            message="ok",
+            ltp=105.0,
+            exchange_segment=kwargs["exchange_segment"],
+            security_id=kwargs["security_id"],
+            source="dhan_marketfeed_ws",
+        ),
+    )
+    monkeypatch.setattr(
+        option_position_monitor,
+        "get_dhan_credentials",
+        lambda: DhanCredentials(client_id="1000000001", access_token="token"),
+    )
+
+    state_store.update_runtime_settings(
+        server_side_exit_enabled=True,
+        marketfeed_ws_enabled=True,
+        option_ltp_source="AUTO",
+        option_rest_fallback_enabled=True,
+        option_sl_percent=10.0,
+        option_tp_percent=20.0,
+        allow_exit=True,
+    )
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "strategy_code": "TRADINGVIEW_NIFTY_V1",
+            "symbol": "NIFTY",
+            "instrument_type": "OPTIDX",
+            "exchange_segment": "NSE_FNO",
+            "security_id": "57048",
+            "trading_symbol": "NIFTY 02 JUN 23950 CALL",
+            "option_side": "CE",
+            "strike": 23950.0,
+            "expiry": "2026-06-02",
+            "qty": 65,
+            "entry_order_id": "23226052743016",
+            "entry_price": None,
+            "order_type": "MARKET",
+            "product_type": "INTRADAY",
+            "opened_at": state_store.utc_now(),
+        }
+    )
+
+    option_position_monitor.monitor_once()
+
+    position = state_store.get_open_position()
+    assert position["entry_price"] == 100.0
+    assert position["entry_fill_source"] == "dhan_positions"
+    assert position["live_pnl"]["ltp"] == 105.0
+    assert position["live_pnl"]["status"] == "tracking"

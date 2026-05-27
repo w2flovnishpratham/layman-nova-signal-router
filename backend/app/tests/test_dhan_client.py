@@ -236,6 +236,50 @@ def test_poll_order_status_reads_average_traded_price(monkeypatch):
     assert recorder["url"] == f"{DHAN_BASE_URL}/orders/112111182198"
 
 
+def test_poll_order_status_reads_single_item_list_response(monkeypatch):
+    recorder = {}
+    response = httpx.Response(
+        200,
+        json=[{"orderId": "112111182198", "orderStatus": "TRADED", "averageTradedPrice": 123.45}],
+    )
+    patch_http_client(monkeypatch, response, recorder)
+
+    result = RealDhanClient().poll_order_status(
+        client_id="1000000001",
+        access_token="token",
+        order_id="112111182198",
+        max_polls=1,
+        poll_delay=0,
+    )
+
+    assert result.is_filled is True
+    assert result.avg_price == 123.45
+    assert result.raw_response == {"orderId": "112111182198", "orderStatus": "TRADED", "averageTradedPrice": 123.45}
+
+
+def test_poll_order_status_reads_matching_item_from_list_response(monkeypatch):
+    recorder = {}
+    response = httpx.Response(
+        200,
+        json=[
+            {"orderId": "old", "orderStatus": "TRADED", "averageTradedPrice": 10.0},
+            {"orderId": "112111182198", "orderStatus": "TRADED", "averageTradedPrice": 123.45},
+        ],
+    )
+    patch_http_client(monkeypatch, response, recorder)
+
+    result = RealDhanClient().poll_order_status(
+        client_id="1000000001",
+        access_token="token",
+        order_id="112111182198",
+        max_polls=1,
+        poll_delay=0,
+    )
+
+    assert result.is_filled is True
+    assert result.avg_price == 123.45
+
+
 def test_headers_always_include_access_token_and_content_type(monkeypatch):
     """access-token and Content-Type must always be present in Dhan request headers."""
     monkeypatch.setattr(settings, "DHAN_SEND_CLIENT_ID_HEADER", True)

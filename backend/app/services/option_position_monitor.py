@@ -161,6 +161,78 @@ def _ltp_error_snapshot(*, quote: Any, status: str, ws_status: dict[str, Any] | 
     }
 
 
+def _pick(row: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in row:
+            return row[key]
+    return None
+
+
+def _entry_price_from_order_book(order_id: str, items: list[dict[str, Any]]) -> tuple[float | None, str | None]:
+    for row in items:
+        row_order_id = str(_pick(row, "orderId", "order_id", "id") or "")
+        if row_order_id != str(order_id):
+            continue
+        price = _as_float(_pick(row, "avgPrice", "averageTradedPrice", "avgTradedPrice", "tradedPrice", "TradedPrice"))
+        if price is not None and price > 0:
+            return price, str(_pick(row, "orderStatus", "order_status", "status") or "ORDER_BOOK").upper()
+    return None, None
+
+
+def _entry_price_from_positions(position: dict[str, Any], items: list[dict[str, Any]]) -> tuple[float | None, str | None]:
+    security_id = str(position.get("security_id") or "").strip()
+    for row in items:
+        row_security_id = str(_pick(row, "securityId", "security_id") or "").strip()
+        if security_id and row_security_id != security_id:
+            continue
+
+        price = _as_float(
+            _pick(
+                row,
+                "buyAvg",
+                "buyAverage",
+                "buyAvgPrice",
+                "buyAveragePrice",
+                "averagePrice",
+                "costPrice",
+                "netAvg",
+                "netAveragePrice",
+            )
+        )
+        if price is not None and price > 0:
+            return price, "POSITIONS"
+
+        buy_value = _as_float(_pick(row, "dayBuyValue", "buyValue", "day_buy_value"))
+        buy_qty = _as_float(_pick(row, "dayBuyQty", "buyQty", "buyQuantity", "day_buy_qty"))
+        if buy_value is not None and buy_qty is not None and buy_qty > 0:
+            return round(buy_value / buy_qty, 2), "POSITIONS"
+    return None, None
+
+
+def _broker_entry_price_fallback(
+    position: dict[str, Any],
+    client: RealDhanClient | MockDhanClient,
+    client_id: str,
+    access_token: str,
+) -> tuple[float | None, str | None, str | None]:
+    order_id = str(position.get("entry_order_id") or "")
+    try:
+        orders = client.get_order_book(client_id=client_id, access_token=access_token)
+        if orders.success:
+            price, source_status = _entry_price_from_order_book(order_id, orders.items)
+            if price is not None:
+                return price, "dhan_order_book", source_status
+
+        positions = client.get_positions_snapshot(client_id=client_id, access_token=access_token)
+        if positions.success:
+            price, source_status = _entry_price_from_positions(position, positions.items)
+            if price is not None:
+                return price, "dhan_positions", source_status
+    except Exception as exc:
+        return None, "dhan_broker_snapshot", str(exc)
+    return None, None, None
+
+
 def _sync_entry_fill_if_needed(position: dict[str, Any], client: RealDhanClient | MockDhanClient, client_id: str, access_token: str) -> dict[str, Any]:
     if _as_float(position.get("entry_price")) is not None:
         return position
@@ -176,7 +248,17 @@ def _sync_entry_fill_if_needed(position: dict[str, Any], client: RealDhanClient 
         max_polls=1,
         poll_delay=0,
     )
-    if not poll.is_filled or poll.avg_price is None:
+    avg_price = poll.avg_price if poll.is_filled and poll.avg_price is not None else None
+    fill_source = "dhan_order_status"
+    source_status = poll.order_status
+    if avg_price is None:
+        fallback_price, fallback_source, fallback_status = _broker_entry_price_fallback(position, client, client_id, access_token)
+        if fallback_price is not None:
+            avg_price = fallback_price
+            fill_source = fallback_source or fill_source
+            source_status = fallback_status or source_status
+
+    if avg_price is None:
         updated = dict(position)
         updated["live_pnl"] = {
             "source": "dhan_order_status",
@@ -190,13 +272,16 @@ def _sync_entry_fill_if_needed(position: dict[str, Any], client: RealDhanClient 
         return set_open_position(updated)
 
     updated = dict(position)
-    updated["entry_price"] = poll.avg_price
+    updated["entry_price"] = avg_price
     updated["entry_fill_synced_at"] = utc_now()
+    updated["entry_fill_source"] = fill_source
     log_order_event(
         {
             "event": "ENTRY_FILL_PRICE_SYNCED",
             "entry_order_id": order_id,
-            "avg_price": poll.avg_price,
+            "avg_price": avg_price,
+            "source": fill_source,
+            "source_status": source_status,
             "trading_symbol": position.get("trading_symbol"),
             "security_id": position.get("security_id"),
         }
