@@ -22,7 +22,7 @@ import {
   stopEngine,
 } from '../api/dashboard'
 import ConfirmModal from '../components/ConfirmModal'
-import { RiskSetupPayload, SetupStatus } from '../types'
+import { DhanConnectPayload, RiskSetupPayload, SetupStatus } from '../types'
 
 const steps = ['Connect Dhan', 'Wallet Verified', 'Webhook Secret', 'Risk Settings', 'Start Engine']
 const MIN_WEBHOOK_SECRET_LENGTH = 5
@@ -315,7 +315,21 @@ export default function SetupPage() {
     setError('')
     setMessage('')
     try {
-      const response = await connectDhan({ client_id: clientId, access_token: accessToken })
+      const payload: DhanConnectPayload = {}
+      const trimmedClientId = clientId.trim()
+      const trimmedAccessToken = accessToken.trim()
+      if (trimmedClientId) payload.client_id = trimmedClientId
+      if (trimmedAccessToken) payload.access_token = trimmedAccessToken
+      if (!status?.dhan_client_id_masked && !payload.client_id) {
+        setError('Dhan Client ID is required.')
+        return
+      }
+      if (!status?.access_token_present && !payload.access_token) {
+        setError('Dhan Access Token is required.')
+        return
+      }
+      const response = await connectDhan(payload)
+      setClientId('')
       setAccessToken('')
       setMessage(response.data?.message || 'Dhan connected successfully.')
       await loadData()
@@ -507,13 +521,17 @@ export default function SetupPage() {
                   <h2 className="text-lg font-semibold">Connect Dhan</h2>
                 </div>
                 <form onSubmit={(event) => submitDhan(event, 'connect')} className="space-y-4">
+                  <div className="grid grid-cols-1 gap-2 text-sm text-[#9a968f] sm:grid-cols-2">
+                    <p>Saved client<br /><span className="font-mono text-[#d8d3c8]">{status.dhan_client_id_masked || '-'}</span></p>
+                    <p>Saved token<br /><span className="font-mono text-[#d8d3c8]">{status.access_token_masked || (status.access_token_present ? 'present' : '-')}</span></p>
+                  </div>
                   <label className="block text-sm">
                     <span className="mb-1 block text-[#d8d3c8]">Dhan Client ID</span>
-                    <input value={clientId} onChange={(event) => setClientId(event.target.value)} className="input" autoComplete="off" />
+                    <input value={clientId} onChange={(event) => setClientId(event.target.value)} className="input" autoComplete="off" placeholder={status.dhan_client_id_masked ? `Saved ${status.dhan_client_id_masked}` : 'Required'} required={!status.dhan_client_id_masked} />
                   </label>
                   <label className="block text-sm">
                     <span className="mb-1 block text-[#d8d3c8]">Dhan Access Token</span>
-                    <input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="input" type="password" autoComplete="off" />
+                    <input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="input" type="password" autoComplete="off" placeholder={status.access_token_masked ? `Saved ${status.access_token_masked}` : 'Required'} required={!status.access_token_present} />
                   </label>
                   {!status.vault.ready && (
                     <p className="rounded-md border border-amber-800 bg-amber-950 p-3 text-sm text-amber-200">{status.vault.error}</p>
@@ -554,7 +572,7 @@ export default function SetupPage() {
                 <form onSubmit={submitSecret} className="space-y-4">
                   <label className="block text-sm">
                     <span className="mb-1 block text-[#d8d3c8]">Webhook Secret</span>
-                    <input value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} className="input" type="password" autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} required />
+                    <input value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} className="input" type="password" autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} placeholder={status.webhook_secret_masked ? `Saved ${status.webhook_secret_masked}` : 'Required'} required={!status.webhook_secret_set} />
                   </label>
                   <div className="flex flex-wrap gap-2">
                     <button disabled={busy === 'secret'} className="btn-primary" type="submit">
@@ -564,7 +582,7 @@ export default function SetupPage() {
                       Generate Random Secret
                     </button>
                   </div>
-                  {status.webhook_secret_set && <p className="text-sm text-[#98e94d]">Webhook secret saved.</p>}
+                  {status.webhook_secret_set && <p className="text-sm text-[#98e94d]">Webhook secret saved: <span className="font-mono">{status.webhook_secret_masked || 'present'}</span></p>}
                 </form>
               </div>
 
@@ -594,25 +612,25 @@ export default function SetupPage() {
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <label className="block text-sm">
                   <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max quantity per order</span>
-                  <input className="input no-spinner" type="number" min={1} value={risk.max_qty_per_order} onChange={(event) => setRisk({ ...risk, max_qty_per_order: Number(event.target.value) })} />
+                  <input className="input no-spinner" type="number" min={1} value={risk.max_qty_per_order} onChange={(event) => setRisk({ ...risk, max_qty_per_order: Number(event.target.value) })} required />
                 </label>
                 <label className="block text-sm">
                   <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max trades per day</span>
-                  <input className="input no-spinner" type="number" min={1} value={risk.max_trades_per_day} onChange={(event) => setRisk({ ...risk, max_trades_per_day: Number(event.target.value) })} />
+                  <input className="input no-spinner" type="number" min={1} value={risk.max_trades_per_day} onChange={(event) => setRisk({ ...risk, max_trades_per_day: Number(event.target.value) })} required />
                 </label>
                 <label className="block text-sm">
                   <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Daily loss limit (INR)</span>
-                  <input className="input no-spinner" type="number" min={1} value={risk.daily_loss_limit} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} />
+                  <input className="input no-spinner" type="number" min={1} value={risk.daily_loss_limit} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} required />
                 </label>
               </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <label className="block text-sm">
                   <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option SL %</span>
-                  <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_sl_percent ?? 10} onChange={(event) => setRisk({ ...risk, option_sl_percent: Number(event.target.value) })} />
+                  <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_sl_percent ?? 10} onChange={(event) => setRisk({ ...risk, option_sl_percent: Number(event.target.value) })} required />
                 </label>
                 <label className="block text-sm">
                   <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option TP %</span>
-                  <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_tp_percent ?? 20} onChange={(event) => setRisk({ ...risk, option_tp_percent: Number(event.target.value) })} />
+                  <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_tp_percent ?? 20} onChange={(event) => setRisk({ ...risk, option_tp_percent: Number(event.target.value) })} required />
                 </label>
               </div>
               <div className="flex flex-wrap gap-3">

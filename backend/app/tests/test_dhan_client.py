@@ -28,6 +28,19 @@ class FakeHTTPClient:
         self.recorder["headers"] = headers
         return self.response
 
+    def put(self, url, json, headers):
+        self.recorder["method"] = "PUT"
+        self.recorder["url"] = url
+        self.recorder["json"] = json
+        self.recorder["headers"] = headers
+        return self.response
+
+    def delete(self, url, headers):
+        self.recorder["method"] = "DELETE"
+        self.recorder["url"] = url
+        self.recorder["headers"] = headers
+        return self.response
+
 
 def patch_http_client(monkeypatch, response, recorder):
     def fake_client(*args, **kwargs):
@@ -154,6 +167,59 @@ def test_place_super_order_uses_v2_super_orders_endpoint(monkeypatch):
     assert recorder["method"] == "POST"
     assert recorder["url"] == f"{DHAN_BASE_URL}/super/orders"
     assert recorder["json"] == payload
+
+
+def test_modify_super_order_uses_v2_super_orders_endpoint(monkeypatch):
+    recorder = {}
+    response = httpx.Response(200, json={"orderId": "112111182198", "orderStatus": "TRANSIT"})
+    patch_http_client(monkeypatch, response, recorder)
+    monkeypatch.setattr(
+        "app.services.dhan_client.get_outgoing_ip",
+        lambda timeout=2.0: {"outgoing_ip": "203.0.113.10", "ok": True, "error": None},
+    )
+    monkeypatch.setattr("app.services.dhan_client.log_order_event", lambda event: event)
+    payload = {
+        "dhanClientId": "1000000001",
+        "orderId": "112111182198",
+        "legName": "TARGET_LEG",
+        "targetPrice": 160,
+    }
+
+    result = RealDhanClient().modify_super_order(
+        client_id="1000000001",
+        access_token="token",
+        order_id="112111182198",
+        payload=payload,
+    )
+
+    assert result.success is True
+    assert result.order_id == "112111182198"
+    assert recorder["method"] == "PUT"
+    assert recorder["url"] == f"{DHAN_BASE_URL}/super/orders/112111182198"
+    assert recorder["json"] == payload
+
+
+def test_cancel_super_order_leg_uses_v2_super_orders_endpoint(monkeypatch):
+    recorder = {}
+    response = httpx.Response(202, json={"orderId": "112111182198", "orderStatus": "CANCELLED"})
+    patch_http_client(monkeypatch, response, recorder)
+    monkeypatch.setattr(
+        "app.services.dhan_client.get_outgoing_ip",
+        lambda timeout=2.0: {"outgoing_ip": "203.0.113.10", "ok": True, "error": None},
+    )
+    monkeypatch.setattr("app.services.dhan_client.log_order_event", lambda event: event)
+
+    result = RealDhanClient().cancel_super_order_leg(
+        client_id="1000000001",
+        access_token="token",
+        order_id="112111182198",
+        leg_name="STOP_LOSS_LEG",
+    )
+
+    assert result.success is True
+    assert result.order_id == "112111182198"
+    assert recorder["method"] == "DELETE"
+    assert recorder["url"] == f"{DHAN_BASE_URL}/super/orders/112111182198/STOP_LOSS_LEG"
 
 
 def test_place_order_refuses_raw_pine_payload_before_http(monkeypatch):

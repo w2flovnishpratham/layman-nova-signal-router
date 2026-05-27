@@ -132,6 +132,55 @@ def evaluate_entry(payload: NormalizedSignal) -> RiskDecision:
     return RiskDecision(True, "All entry risk checks passed.", final_qty=payload.qty)
 
 
+def _is_opposite_option_side(left: str | None, right: str | None) -> bool:
+    left_side = str(left or "").upper()
+    right_side = str(right or "").upper()
+    return {left_side, right_side} == {"CE", "PE"}
+
+
+def evaluate_reversal_entry(payload: NormalizedSignal) -> RiskDecision:
+    runtime = get_runtime_settings()
+    common = _common_signal_checks(payload)
+    if common:
+        return common
+
+    if not bool(get_app_state().get("webhook_trading_enabled")):
+        return RiskDecision(False, "Trade blocked: WEBHOOK_TRADING_ENABLED=false.")
+
+    if _setting_bool(runtime, "emergency_stop", False):
+        return RiskDecision(False, "Trade blocked: EMERGENCY_STOP=true.")
+
+    if _setting_bool(runtime, "global_kill_switch", False):
+        return RiskDecision(False, "Trade blocked: GLOBAL_KILL_SWITCH=true.")
+
+    if not _setting_bool(runtime, "allow_entry", True):
+        return RiskDecision(False, "Trade blocked: ALLOW_ENTRY=false.")
+
+    if not _setting_bool(runtime, "allow_exit", True):
+        return RiskDecision(False, "Reversal blocked: ALLOW_EXIT=false.")
+
+    open_position = get_open_position()
+    if not open_position.get("has_open_position"):
+        return RiskDecision(False, "Reversal blocked: no open position exists.")
+
+    if not _is_opposite_option_side(open_position.get("option_side"), payload.option_side):
+        return RiskDecision(
+            False,
+            f"Trade blocked: open position already exists for {open_position.get('trading_symbol')}.",
+        )
+
+    max_qty = _setting_int(runtime, "max_qty_per_order", 1)
+    if payload.qty > max_qty:
+        return RiskDecision(False, "Quantity exceeds MAX_QTY_PER_ORDER.")
+
+    loss_limit = float(runtime.get("daily_loss_limit", 500))
+    realized_pnl_today = 0.0
+    if realized_pnl_today <= -abs(loss_limit):
+        return RiskDecision(False, f"Trade blocked: DAILY_LOSS_LIMIT reached ({realized_pnl_today}).")
+
+    return RiskDecision(True, "Opposite option-side reversal checks passed.", final_qty=payload.qty)
+
+
 def evaluate_exit(payload: NormalizedSignal) -> RiskDecision:
     runtime = get_runtime_settings()
     common = _common_signal_checks(payload)

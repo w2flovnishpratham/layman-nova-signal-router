@@ -40,8 +40,8 @@ router = APIRouter()
 
 
 class DhanConnectRequest(BaseModel):
-    client_id: str = Field(..., min_length=1)
-    access_token: str = Field(..., min_length=1)
+    client_id: str | None = None
+    access_token: str | None = None
 
 
 class WebhookSecretRequest(BaseModel):
@@ -66,6 +66,24 @@ class RiskSetupRequest(BaseModel):
     allow_exit: bool = True
 
 
+class RiskSettingsPatchRequest(BaseModel):
+    max_qty_per_order: int | None = Field(default=None, ge=1)
+    max_trades_per_day: int | None = Field(default=None, ge=1)
+    daily_loss_limit: float | None = Field(default=None, gt=0)
+    server_side_exit_enabled: bool | None = None
+    marketfeed_ws_enabled: bool | None = None
+    option_ltp_source: str | None = None
+    option_exit_mode: str | None = None
+    option_ws_stale_seconds: float | None = Field(default=None, ge=1.0)
+    option_rest_fallback_enabled: bool | None = None
+    option_rest_fallback_cooldown_seconds: float | None = Field(default=None, ge=1.0)
+    option_sl_percent: float | None = Field(default=None, gt=0)
+    option_tp_percent: float | None = Field(default=None, gt=0)
+    option_ltp_poll_seconds: float | None = Field(default=None, ge=1.0)
+    allow_entry: bool | None = None
+    allow_exit: bool | None = None
+
+
 def public_base_url() -> str:
     return settings.BACKEND_PUBLIC_BASE_URL.rstrip("/")
 
@@ -73,6 +91,27 @@ def public_base_url() -> str:
 def tradingview_webhook_url() -> str:
     base = public_base_url()
     return f"{base}/webhook/tradingview" if base else ""
+
+
+def _model_dump(model: BaseModel, **kwargs: Any) -> dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(**kwargs)
+    return model.dict(**kwargs)
+
+
+def _normalize_risk_changes(changes: dict[str, Any]) -> dict[str, Any]:
+    normalized = {key: value for key, value in changes.items() if value is not None}
+    if "option_ltp_source" in normalized:
+        normalized["option_ltp_source"] = str(normalized["option_ltp_source"]).upper()
+    if "option_exit_mode" in normalized:
+        normalized["option_exit_mode"] = str(normalized["option_exit_mode"]).upper()
+    return normalized
+
+
+def _save_risk_settings(changes: dict[str, Any]) -> dict[str, Any]:
+    saved = update_runtime_settings(**_normalize_risk_changes(changes))
+    log_audit_event("RISK_SETTINGS_UPDATED", "Risk settings updated.", metadata=saved)
+    return saved
 
 
 def _wallet_from_funds(result: DhanFundsResult, previous: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -225,7 +264,9 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
         "dhan_connected": bool(meta["connected"]),
         "dhan_client_id_masked": meta["client_id_masked"],
         "access_token_present": meta["access_token_present"],
+        "access_token_masked": meta["access_token_masked"],
         "webhook_secret_set": bool(webhook_meta["set"]),
+        "webhook_secret_masked": webhook_meta["masked"],
         "risk_configured": bool(readiness["risk_configured"]),
         "engine_started": bool(app_state.get("webhook_trading_enabled")),
         "wallet": wallet,
@@ -273,8 +314,16 @@ def setup_status() -> dict[str, Any]:
 
 @router.post("/setup/dhan/connect")
 def connect_dhan(body: DhanConnectRequest) -> dict[str, Any]:
-    client_id = body.client_id.strip()
-    access_token = body.access_token.strip()
+    existing = get_dhan_credentials()
+    submitted_client_id = (body.client_id or "").strip()
+    submitted_access_token = (body.access_token or "").strip()
+    client_id = submitted_client_id or (existing.client_id if existing else "")
+    access_token = submitted_access_token or (existing.access_token if existing else "")
+    has_credential_changes = bool(submitted_client_id or submitted_access_token)
+    if not client_id:
+        raise HTTPException(status_code=400, detail="Dhan Client ID is required.")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Dhan Access Token is required.")
     vault = vault_status()
     if not vault["ready"] and not vault.get("local_mock_allowed"):
         message = f"Dhan connection failed: {vault['error']}"
@@ -285,11 +334,12 @@ def connect_dhan(body: DhanConnectRequest) -> dict[str, Any]:
         log_audit_event("DHAN_CONNECT_FAILED", message, severity="WARNING", metadata=details)
         raise HTTPException(status_code=400, detail={"message": message, **details})
 
-    try:
-        save_dhan_credentials(client_id, access_token)
-    except VaultError as exc:
-        log_audit_event("DHAN_CONNECT_BLOCKED", str(exc), severity="WARNING")
-        raise HTTPException(status_code=400, detail=f"Dhan connection failed: {exc}") from exc
+    if has_credential_changes:
+        try:
+            save_dhan_credentials(client_id, access_token)
+        except VaultError as exc:
+            log_audit_event("DHAN_CONNECT_BLOCKED", str(exc), severity="WARNING")
+            raise HTTPException(status_code=400, detail=f"Dhan connection failed: {exc}") from exc
 
     wallet = set_wallet_snapshot(_wallet_from_funds(funds, get_wallet_snapshot())) if funds else get_wallet_snapshot()
     token_meta = dhan_token_age_metadata()
@@ -359,24 +409,16 @@ def configure_webhook_secret(body: WebhookSecretRequest) -> dict[str, Any]:
 
 @router.post("/setup/risk")
 def configure_risk(body: RiskSetupRequest) -> dict[str, Any]:
-    saved = update_runtime_settings(
-        max_qty_per_order=body.max_qty_per_order,
-        max_trades_per_day=body.max_trades_per_day,
-        daily_loss_limit=body.daily_loss_limit,
-        server_side_exit_enabled=body.server_side_exit_enabled,
-        marketfeed_ws_enabled=body.marketfeed_ws_enabled,
-        option_ltp_source=body.option_ltp_source.upper(),
-        option_exit_mode=body.option_exit_mode.upper(),
-        option_ws_stale_seconds=body.option_ws_stale_seconds,
-        option_rest_fallback_enabled=body.option_rest_fallback_enabled,
-        option_rest_fallback_cooldown_seconds=body.option_rest_fallback_cooldown_seconds,
-        option_sl_percent=body.option_sl_percent,
-        option_tp_percent=body.option_tp_percent,
-        option_ltp_poll_seconds=body.option_ltp_poll_seconds,
-        allow_entry=body.allow_entry,
-        allow_exit=body.allow_exit,
-    )
-    log_audit_event("RISK_SETTINGS_UPDATED", "Risk settings updated.", metadata=saved)
+    saved = _save_risk_settings(_model_dump(body, exclude_unset=True))
+    return {"success": True, "settings": saved}
+
+
+@router.patch("/setup/risk")
+def patch_risk(body: RiskSettingsPatchRequest) -> dict[str, Any]:
+    changes = _model_dump(body, exclude_unset=True, exclude_none=True)
+    if not changes:
+        return {"success": True, "settings": get_runtime_settings()}
+    saved = _save_risk_settings(changes)
     return {"success": True, "settings": saved}
 
 

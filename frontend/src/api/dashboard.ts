@@ -7,7 +7,9 @@ import {
   LogBundle,
   OpenPosition,
   OrderEvent,
+  DhanConnectPayload,
   RiskSetupPayload,
+  RiskSettingsPatchPayload,
   SetupStatus,
   WalletSnapshot,
   WebhookUrlInfo,
@@ -15,11 +17,12 @@ import {
 
 export const getHealth = () => api.get('/health')
 export const getSetupStatus = () => api.get<SetupStatus>('/setup/status')
-export const connectDhan = (payload: { client_id: string; access_token: string }) =>
+export const connectDhan = (payload: DhanConnectPayload) =>
   api.post('/setup/dhan/connect', payload)
 export const disconnectDhan = () => api.post('/setup/dhan/disconnect')
 export const saveWebhookSecret = (webhook_secret: string) => api.post('/setup/webhook-secret', { webhook_secret })
 export const saveRiskSettings = (payload: RiskSetupPayload) => api.post('/setup/risk', payload)
+export const updateRiskSettings = (payload: RiskSettingsPatchPayload) => api.patch('/setup/risk', payload)
 export const startEngine = (confirm_live_orders = false) => api.post('/engine/start', { confirm_live_orders })
 export const stopEngine = () => api.post('/engine/stop')
 export const getEngineStatus = () => api.get<EngineStatus>('/engine/status')

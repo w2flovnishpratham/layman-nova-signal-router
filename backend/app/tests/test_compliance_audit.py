@@ -23,9 +23,14 @@ from app.config import settings
 from app.schemas.signal import NormalizedSignal
 from app.services import audit_logger, credential_vault, state_store
 from app.services import risk_manager
-from app.services.dhan_client import DhanListResult
+from app.services.dhan_client import DhanListResult, DhanLtpResult, DhanOrderResult, DhanOrderStatusResult
 from app.services.dhan_debugger import validate_dhan_payload
-from app.services.execution_router import _build_dhan_payload_and_resolution, _build_dhan_super_order_payload
+from app.services.execution_router import (
+    _build_dhan_payload_and_resolution,
+    _build_dhan_super_order_payload,
+    _place_order,
+    route_entry_signal,
+)
 from app.services.security_id_resolver import (
     NIFTY_UNDERLYING_ID,
     resolve_security_id,
@@ -462,6 +467,128 @@ class TestLiveOrderGating:
         assert "Dhan already has open position" in body.get("message", "")
         assert real_called["called"] is False
 
+    def test_opposite_option_entry_exits_then_enters_reversal(self, monkeypatch, client):
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", False)
+        monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "")
+        monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
+        monkeypatch.setattr(
+            "app.services.execution_router.get_dhan_credentials",
+            lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
+        )
+        monkeypatch.setattr("app.services.execution_router.refresh_wallet_snapshot", lambda **kwargs: {})
+        state_store.update_runtime_settings(
+            option_exit_mode="DHAN_SUPER",
+            option_sl_percent=30,
+            option_tp_percent=60,
+            max_qty_per_order=1,
+            max_trades_per_day=1,
+            allow_entry=True,
+            allow_exit=True,
+        )
+        state_store.set_open_position(
+            {
+                "has_open_position": True,
+                "strategy_code": "TRADINGVIEW_NIFTY_V1",
+                "symbol": "NIFTY",
+                "instrument_type": "OPTIDX",
+                "exchange_segment": "NSE_FNO",
+                "security_id": "CE123",
+                "trading_symbol": "NIFTY 2026-05-28 22500 CE",
+                "option_side": "CE",
+                "strike": 22500.0,
+                "expiry": "2026-05-28",
+                "qty": 1,
+                "entry_order_id": "SUPER-CE",
+                "entry_price": 100.0,
+                "exit_management": "DHAN_SUPER",
+                "broker_sl_price": 70.0,
+                "broker_tp_price": 160.0,
+                "order_type": "MARKET",
+                "product_type": "INTRADAY",
+                "opened_at": state_store.utc_now(),
+            }
+        )
+        calls: dict[str, list] = {"orders": [], "super_orders": [], "modified": [], "cancelled": []}
+
+        class FakeRealDhanClient:
+            def get_positions_snapshot(self, *, client_id, access_token):
+                return DhanListResult(
+                    success=True,
+                    message="positions",
+                    items=[{"tradingSymbol": "NIFTY 2026-05-28 22500 CE", "securityId": "CE123", "netQty": 1}],
+                )
+
+            def get_order_book(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="orders", items=[])
+
+            def place_order(self, *, client_id, access_token, payload):
+                calls["orders"].append(payload)
+                return DhanOrderResult(
+                    success=True,
+                    order_id="EXIT-CE",
+                    status="TRADED",
+                    avg_price=95.0,
+                    raw_response={"orderId": "EXIT-CE", "orderStatus": "TRADED", "avgPrice": 95.0},
+                )
+
+            def cancel_super_order_leg(self, *, client_id, access_token, order_id, leg_name):
+                calls["cancelled"].append({"order_id": order_id, "leg_name": leg_name})
+                return DhanOrderResult(
+                    success=True,
+                    order_id=order_id,
+                    status="CANCELLED",
+                    avg_price=None,
+                    raw_response={"orderId": order_id, "orderStatus": "CANCELLED"},
+                )
+
+            def get_ltp(self, *, client_id, access_token, exchange_segment, security_id):
+                return DhanLtpResult(success=True, message="ltp", ltp=100.0)
+
+            def place_super_order(self, *, client_id, access_token, payload):
+                calls["super_orders"].append(payload)
+                return DhanOrderResult(
+                    success=True,
+                    order_id="SUPER-PE",
+                    status="TRADED",
+                    avg_price=110.0,
+                    raw_response={"orderId": "SUPER-PE", "orderStatus": "TRADED", "avgPrice": 110.0},
+                )
+
+            def modify_super_order(self, *, client_id, access_token, order_id, payload):
+                calls["modified"].append(payload)
+                return DhanOrderResult(
+                    success=True,
+                    order_id=order_id,
+                    status="TRADED",
+                    avg_price=None,
+                    raw_response={"orderId": order_id, "orderStatus": "TRADED"},
+                )
+
+        monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
+
+        pe_signal = make_signal(security_id="PE456").model_copy(
+            update={
+                "signal_id": "reversal-pe-001",
+                "trading_symbol": "NIFTY 2026-05-28 22500 PE",
+                "option_side": "PE",
+                "security_id": "PE456",
+            }
+        )
+        result = route_entry_signal(pe_signal)
+
+        assert result["status"] == "REVERSAL_ORDER_PLACED"
+        assert calls["orders"][0]["transactionType"] == "SELL"
+        assert calls["orders"][0]["securityId"] == "CE123"
+        assert calls["super_orders"][0]["transactionType"] == "BUY"
+        assert calls["super_orders"][0]["securityId"] == "PE456"
+        assert calls["super_orders"][0]["orderType"] == "MARKET"
+        assert {item["leg_name"] for item in calls["cancelled"]} == {"TARGET_LEG", "STOP_LOSS_LEG"}
+        assert calls["modified"][0]["targetPrice"] == 176.0
+        assert calls["modified"][1]["stopLossPrice"] == 77.0
+        assert state_store.get_open_position()["option_side"] == "PE"
+
     def test_real_entry_blocks_when_dhan_has_pending_order(self, monkeypatch, client):
         """Before live ENTRY, broker order book is checked and pending orders block order placement."""
         monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
@@ -562,8 +689,8 @@ class TestDhanPayloadCompliance:
         payload, _ = _build_dhan_payload_and_resolution(signal, 1, "ENTRY")
         assert payload["triggerPrice"] == 0
 
-    def test_super_order_uses_limit_price_for_broker_side_sltp(self):
-        """Dhan Super Orders validate target/SL against entry price, so never send price=0."""
+    def test_super_order_uses_market_entry_with_provisional_ltp_sltp(self):
+        """Super Order enters at market, then target/SL are corrected from fill price after execution."""
         base_payload = {
             "dhanClientId": "1000000001",
             "correlationId": "super-order-test",
@@ -582,14 +709,89 @@ class TestDhanPayloadCompliance:
             runtime={"option_sl_percent": 5, "option_tp_percent": 10},
         )
 
-        assert payload["orderType"] == "LIMIT"
-        assert payload["price"] > 0
-        assert payload["price"] == levels["entry_limit_price"]
+        assert payload["orderType"] == "MARKET"
+        assert payload["price"] == 0
         assert payload["targetPrice"] == levels["target_price"]
         assert payload["stopLossPrice"] == levels["stop_loss_price"]
-        assert payload["targetPrice"] > payload["price"]
-        assert payload["stopLossPrice"] < payload["price"]
+        assert payload["targetPrice"] > levels["reference_ltp"]
+        assert payload["stopLossPrice"] < levels["reference_ltp"]
         assert levels["reference_ltp"] == 156.4
+
+    def test_super_order_post_fill_updates_sltp_from_average_price(self, monkeypatch, client):
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", False)
+        monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "")
+        monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
+        monkeypatch.setattr(
+            "app.services.execution_router.get_dhan_credentials",
+            lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
+        )
+        state_store.update_runtime_settings(
+            option_exit_mode="DHAN_SUPER",
+            option_sl_percent=30,
+            option_tp_percent=60,
+            allow_entry=True,
+            allow_exit=True,
+        )
+        calls: dict[str, list[dict] | dict | None] = {"placed": None, "modified": []}
+
+        class FakeRealDhanClient:
+            def get_positions_snapshot(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="positions", items=[])
+
+            def get_order_book(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="orders", items=[])
+
+            def get_ltp(self, *, client_id, access_token, exchange_segment, security_id):
+                return DhanLtpResult(success=True, message="ltp", ltp=100.0)
+
+            def place_super_order(self, *, client_id, access_token, payload):
+                calls["placed"] = payload
+                return DhanOrderResult(
+                    success=True,
+                    order_id="SUPER1",
+                    status="PENDING",
+                    avg_price=None,
+                    raw_response={"orderId": "SUPER1", "orderStatus": "PENDING"},
+                )
+
+            def poll_order_status(self, *, client_id, access_token, order_id, max_polls=4, poll_delay=1.5):
+                return DhanOrderStatusResult(
+                    success=True,
+                    order_id=order_id,
+                    order_status="TRADED",
+                    is_terminal=True,
+                    is_filled=True,
+                    avg_price=120.0,
+                    raw_response={"orderId": order_id, "orderStatus": "TRADED", "averageTradedPrice": 120.0},
+                )
+
+            def modify_super_order(self, *, client_id, access_token, order_id, payload):
+                calls["modified"].append(payload)
+                return DhanOrderResult(
+                    success=True,
+                    order_id=order_id,
+                    status="TRADED",
+                    avg_price=None,
+                    raw_response={"orderId": order_id, "orderStatus": "TRADED"},
+                )
+
+        monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
+
+        result = _place_order(make_signal(security_id="57046"), 1, "ENTRY")
+
+        assert result["success"] is True
+        assert result["status"] == "TRADED"
+        assert calls["placed"]["orderType"] == "MARKET"
+        assert calls["placed"]["price"] == 0
+        assert calls["placed"]["stopLossPrice"] == 70.0
+        assert calls["placed"]["targetPrice"] == 160.0
+        assert {"legName": "TARGET_LEG", "targetPrice": 192.0}.items() <= calls["modified"][0].items()
+        assert {"legName": "STOP_LOSS_LEG", "stopLossPrice": 84.0}.items() <= calls["modified"][1].items()
+        assert result["broker_sl_price"] == 84.0
+        assert result["broker_tp_price"] == 192.0
+        assert result["super_order_post_fill_update"]["success"] is True
 
     def test_after_market_order_is_false(self, monkeypatch):
         monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", True)
@@ -921,6 +1123,56 @@ class TestSetupSecurity:
         body_str = str(body)
         assert "secret-token-123" not in body_str
         assert "access_token" not in body or body.get("access_token") != "secret-token-123"
+
+    def test_setup_status_returns_only_masked_saved_credentials(self, client):
+        client.post(
+            "/api/setup/dhan/connect",
+            json={"client_id": "1000000001", "access_token": "secret-token-123"},
+        )
+        client.post("/api/setup/webhook-secret", json={"webhook_secret": "webhook-secret-123"})
+
+        response = client.get("/api/setup/status")
+        body = response.json()
+        body_str = str(body)
+
+        assert body["dhan_client_id_masked"] == "******0001"
+        assert body["access_token_present"] is True
+        assert body["access_token_masked"]
+        assert body["webhook_secret_set"] is True
+        assert body["webhook_secret_masked"]
+        assert "secret-token-123" not in body_str
+        assert "webhook-secret-123" not in body_str
+
+    def test_connect_dhan_can_update_only_access_token_when_client_is_saved(self, client):
+        client.post(
+            "/api/setup/dhan/connect",
+            json={"client_id": "1000000001", "access_token": "old-token"},
+        )
+
+        response = client.post("/api/setup/dhan/connect", json={"access_token": "new-token"})
+        creds = credential_vault.get_dhan_credentials()
+
+        assert response.status_code == 200
+        assert creds is not None
+        assert creds.client_id == "1000000001"
+        assert creds.access_token == "new-token"
+
+    def test_patch_risk_updates_selected_values_without_resetting_other_settings(self, client):
+        state_store.update_runtime_settings(
+            option_ltp_source="REST",
+            option_exit_mode="SERVER",
+            option_ws_stale_seconds=9,
+        )
+
+        response = client.patch("/api/setup/risk", json={"option_sl_percent": 30, "option_tp_percent": 60})
+        saved = response.json()["settings"]
+
+        assert response.status_code == 200
+        assert saved["option_sl_percent"] == 30
+        assert saved["option_tp_percent"] == 60
+        assert saved["option_ltp_source"] == "REST"
+        assert saved["option_exit_mode"] == "SERVER"
+        assert saved["option_ws_stale_seconds"] == 9
 
     def test_setup_status_does_not_return_access_token(self, client):
         """GET /api/setup/status must never expose the access token."""

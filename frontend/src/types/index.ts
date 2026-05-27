@@ -122,11 +122,36 @@ export interface RiskSetupPayload {
   allow_exit: boolean
 }
 
+export interface RiskSettingsPatchPayload {
+  max_qty_per_order?: number
+  max_trades_per_day?: number
+  daily_loss_limit?: number
+  server_side_exit_enabled?: boolean
+  marketfeed_ws_enabled?: boolean
+  option_ltp_source?: 'WEBSOCKET' | 'REST' | 'AUTO' | string
+  option_exit_mode?: 'DHAN_SUPER' | 'SERVER' | string
+  option_ws_stale_seconds?: number
+  option_rest_fallback_enabled?: boolean
+  option_rest_fallback_cooldown_seconds?: number
+  option_sl_percent?: number
+  option_tp_percent?: number
+  option_ltp_poll_seconds?: number
+  allow_entry?: boolean
+  allow_exit?: boolean
+}
+
+export interface DhanConnectPayload {
+  client_id?: string
+  access_token?: string
+}
+
 export interface SetupStatus {
   dhan_connected: boolean
   dhan_client_id_masked: string | null
   access_token_present: boolean
+  access_token_masked: string | null
   webhook_secret_set: boolean
+  webhook_secret_masked: string | null
   risk_configured: boolean
   engine_started: boolean
   wallet: WalletSnapshot

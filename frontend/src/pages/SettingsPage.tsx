@@ -7,12 +7,12 @@ import {
   getDhanDebugConfig,
   getSetupStatus,
   resumeTrading,
-  saveRiskSettings,
   saveWebhookSecret,
   setGlobalKillSwitch,
   stopEngine,
+  updateRiskSettings,
 } from '../api/dashboard'
-import { DhanDebugConfig, RiskSetupPayload, SetupStatus } from '../types'
+import { DhanConnectPayload, DhanDebugConfig, RiskSettingsPatchPayload, RiskSetupPayload, SetupStatus } from '../types'
 
 const MIN_WEBHOOK_SECRET_LENGTH = 5
 const WEBHOOK_SECRET_LENGTH_ERROR = `Webhook secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters.`
@@ -108,7 +108,30 @@ export default function SettingsPage() {
 
   const reconnectDhan = async (event: FormEvent) => {
     event.preventDefault()
-    await run('dhan', connectDhan({ client_id: clientId, access_token: accessToken }), 'Dhan credentials updated.')
+    const payload: DhanConnectPayload = {}
+    const trimmedClientId = clientId.trim()
+    const trimmedAccessToken = accessToken.trim()
+    if (trimmedClientId) payload.client_id = trimmedClientId
+    if (trimmedAccessToken) payload.access_token = trimmedAccessToken
+
+    if (!status?.dhan_client_id_masked && !payload.client_id) {
+      setMessage('')
+      setError('Dhan Client ID is required.')
+      return
+    }
+    if (!status?.access_token_present && !payload.access_token) {
+      setMessage('')
+      setError('Dhan Access Token is required.')
+      return
+    }
+    if (!payload.client_id && !payload.access_token) {
+      setMessage('Saved Dhan credentials are already present. Enter a new value to update them.')
+      setError('')
+      return
+    }
+
+    await run('dhan', connectDhan(payload), 'Dhan credentials updated.')
+    setClientId('')
     setAccessToken('')
   }
 
@@ -126,18 +149,16 @@ export default function SettingsPage() {
 
   const updateRisk = async (event: FormEvent) => {
     event.preventDefault()
-    const payload: RiskSetupPayload = {
-      ...risk,
-      server_side_exit_enabled: true,
-      marketfeed_ws_enabled: true,
-      option_ltp_source: 'AUTO',
-      option_exit_mode: 'DHAN_SUPER',
-      option_ltp_poll_seconds: 1,
-      option_ws_stale_seconds: 5,
-      option_rest_fallback_enabled: true,
-      option_rest_fallback_cooldown_seconds: 15,
+    const payload: RiskSettingsPatchPayload = {
+      max_qty_per_order: risk.max_qty_per_order,
+      max_trades_per_day: risk.max_trades_per_day,
+      daily_loss_limit: risk.daily_loss_limit,
+      option_sl_percent: risk.option_sl_percent,
+      option_tp_percent: risk.option_tp_percent,
+      allow_entry: risk.allow_entry,
+      allow_exit: risk.allow_exit,
     }
-    await run('risk', saveRiskSettings(payload), 'Risk settings updated.')
+    await run('risk', updateRiskSettings(payload), 'Risk settings updated.')
   }
 
   if (!status) {
@@ -173,14 +194,17 @@ export default function SettingsPage() {
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <form onSubmit={reconnectDhan} className="card space-y-4">
           <h2 className="text-lg font-semibold">Reconnect Dhan</h2>
-          <p className="text-sm text-[#9a968f]">Current client: {status.dhan_client_id_masked || '-'}</p>
+          <div className="grid grid-cols-1 gap-2 text-sm text-[#9a968f] sm:grid-cols-2">
+            <p>Saved client: <span className="font-mono text-[#d8d3c8]">{status.dhan_client_id_masked || '-'}</span></p>
+            <p>Saved token: <span className="font-mono text-[#d8d3c8]">{status.access_token_masked || (status.access_token_present ? 'present' : '-')}</span></p>
+          </div>
           <label className="block text-sm">
             <span className="mb-1 block text-[#d8d3c8]">Dhan Client ID</span>
-            <input className="input" value={clientId} onChange={(event) => setClientId(event.target.value)} autoComplete="off" />
+            <input className="input" value={clientId} onChange={(event) => setClientId(event.target.value)} autoComplete="off" placeholder={status.dhan_client_id_masked ? `Saved ${status.dhan_client_id_masked}` : 'Required'} required={!status.dhan_client_id_masked} />
           </label>
           <label className="block text-sm">
             <span className="mb-1 block text-[#d8d3c8]">Dhan Access Token</span>
-            <input className="input" type="password" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} autoComplete="off" />
+            <input className="input" type="password" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} autoComplete="off" placeholder={status.access_token_masked ? `Saved ${status.access_token_masked}` : 'Required'} required={!status.access_token_present} />
           </label>
           <div className="flex flex-wrap gap-2">
             <button disabled={busy === 'dhan'} className="btn-primary" type="submit">
@@ -194,10 +218,10 @@ export default function SettingsPage() {
 
         <form onSubmit={updateSecret} className="card space-y-4">
           <h2 className="text-lg font-semibold">Reset Webhook Secret</h2>
-          <p className="text-sm text-[#9a968f]">Saved: {status.webhook_secret_set ? 'yes' : 'no'}</p>
+          <p className="text-sm text-[#9a968f]">Saved secret: <span className="font-mono text-[#d8d3c8]">{status.webhook_secret_masked || (status.webhook_secret_set ? 'present' : '-')}</span></p>
           <label className="block text-sm">
             <span className="mb-1 block text-[#d8d3c8]">New Webhook Secret</span>
-            <input className="input" type="password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} required />
+            <input className="input" type="password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} placeholder={status.webhook_secret_masked ? `Saved ${status.webhook_secret_masked}` : 'Required'} required />
           </label>
           <div className="flex flex-wrap gap-2">
             <button disabled={busy === 'secret'} className="btn-primary" type="submit">
@@ -217,25 +241,25 @@ export default function SettingsPage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <label className="block text-sm">
             <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max quantity per order</span>
-            <input className="input no-spinner" type="number" min={1} value={risk.max_qty_per_order} onChange={(e) => setRisk({ ...risk, max_qty_per_order: Number(e.target.value) })} />
+            <input className="input no-spinner" type="number" min={1} value={risk.max_qty_per_order} onChange={(e) => setRisk({ ...risk, max_qty_per_order: Number(e.target.value) })} required />
           </label>
           <label className="block text-sm">
             <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max trades per day</span>
-            <input className="input no-spinner" type="number" min={1} value={risk.max_trades_per_day} onChange={(e) => setRisk({ ...risk, max_trades_per_day: Number(e.target.value) })} />
+            <input className="input no-spinner" type="number" min={1} value={risk.max_trades_per_day} onChange={(e) => setRisk({ ...risk, max_trades_per_day: Number(e.target.value) })} required />
           </label>
           <label className="block text-sm">
             <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Daily loss limit (INR)</span>
-            <input className="input no-spinner" type="number" min={1} value={risk.daily_loss_limit} onChange={(e) => setRisk({ ...risk, daily_loss_limit: Number(e.target.value) })} />
+            <input className="input no-spinner" type="number" min={1} value={risk.daily_loss_limit} onChange={(e) => setRisk({ ...risk, daily_loss_limit: Number(e.target.value) })} required />
           </label>
         </div>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="block text-sm">
             <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option SL %</span>
-            <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_sl_percent ?? 10} onChange={(e) => setRisk({ ...risk, option_sl_percent: Number(e.target.value) })} />
+            <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_sl_percent ?? 10} onChange={(e) => setRisk({ ...risk, option_sl_percent: Number(e.target.value) })} required />
           </label>
           <label className="block text-sm">
             <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option TP %</span>
-            <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_tp_percent ?? 20} onChange={(e) => setRisk({ ...risk, option_tp_percent: Number(e.target.value) })} />
+            <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_tp_percent ?? 20} onChange={(e) => setRisk({ ...risk, option_tp_percent: Number(e.target.value) })} required />
           </label>
         </div>
         <div className="flex flex-wrap gap-3">

@@ -288,6 +288,32 @@ def _sync_entry_fill_if_needed(position: dict[str, Any], client: RealDhanClient 
     updated["entry_price"] = avg_price
     updated["entry_fill_synced_at"] = utc_now()
     updated["entry_fill_source"] = fill_source
+    if _broker_managed_exit(updated) and not updated.get("super_order_post_fill_update"):
+        try:
+            from app.services.execution_router import _sync_super_order_exit_levels
+
+            levels, sync_result = _sync_super_order_exit_levels(
+                client=client,
+                client_id=client_id,
+                access_token=access_token,
+                order_id=str(order_id),
+                fill_price=avg_price,
+                runtime=get_runtime_settings(),
+                current_levels=updated.get("broker_exit_levels"),
+            )
+            if levels:
+                updated["broker_exit_levels"] = levels
+                updated["broker_sl_price"] = levels.get("stop_loss_price")
+                updated["broker_tp_price"] = levels.get("target_price")
+            if sync_result:
+                updated["super_order_post_fill_update"] = sync_result
+        except Exception as exc:
+            updated["super_order_post_fill_update"] = {
+                "attempted": True,
+                "success": False,
+                "error": str(exc),
+                "checked_at": utc_now(),
+            }
     log_order_event(
         {
             "event": "ENTRY_FILL_PRICE_SYNCED",

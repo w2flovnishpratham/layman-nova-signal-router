@@ -12,6 +12,9 @@ Endpoints implemented:
   POST /orders            - place order
   GET  /orders/{order-id} - order status (poll after placement)
   GET  /orders            - full order book
+  POST /super/orders      - place Super Order
+  PUT  /super/orders/{id} - modify Super Order leg
+  DELETE /super/orders/{id}/{leg} - cancel Super Order leg
   POST /marketfeed/ltp    - latest traded price snapshot
   GET  /fundlimit         - funds / wallet validation
   GET  /positions         - open positions
@@ -160,6 +163,37 @@ class MockDhanClient:
                 "avgPrice": fake_price,
                 "mock": True,
                 "superOrder": True,
+            },
+        )
+
+    def modify_super_order(self, *, client_id: str, access_token: str, order_id: str, payload: dict[str, Any]) -> DhanOrderResult:
+        logger.info("[MOCK] modify_super_order order_id=%s leg=%s", order_id, payload.get("legName"))
+        return DhanOrderResult(
+            success=True,
+            order_id=order_id,
+            status="TRADED",
+            avg_price=None,
+            raw_response={
+                "orderId": order_id,
+                "orderStatus": "TRADED",
+                "mock": True,
+                "superOrderModified": True,
+                "payload": payload,
+            },
+        )
+
+    def cancel_super_order_leg(self, *, client_id: str, access_token: str, order_id: str, leg_name: str) -> DhanOrderResult:
+        logger.info("[MOCK] cancel_super_order_leg order_id=%s leg=%s", order_id, leg_name)
+        return DhanOrderResult(
+            success=True,
+            order_id=order_id,
+            status="CANCELLED",
+            avg_price=None,
+            raw_response={
+                "orderId": order_id,
+                "orderStatus": "CANCELLED",
+                "legName": leg_name,
+                "mock": True,
             },
         )
 
@@ -608,6 +642,211 @@ class RealDhanClient:
             return DhanOrderResult(
                 success=False,
                 order_id=None,
+                status="API_ERROR",
+                avg_price=None,
+                raw_response={},
+                error=str(exc),
+                interpreted_error=interpreted_error,
+            )
+
+    def modify_super_order(self, *, client_id: str, access_token: str, order_id: str, payload: dict[str, Any]) -> DhanOrderResult:
+        url = f"{DHAN_BASE_URL}/super/orders/{order_id}"
+        outgoing_ip_result = get_outgoing_ip(timeout=2.0)
+        outgoing_ip = outgoing_ip_result.get("outgoing_ip")
+        headers_masked = build_dhan_headers_debug(client_id, access_token)
+
+        log_order_event(
+            {
+                "event": "DHAN_SUPER_ORDER_MODIFY_ATTEMPT",
+                "outgoing_ip": outgoing_ip,
+                "outgoing_ip_check": outgoing_ip_result,
+                "url": url,
+                "headers_masked": headers_masked,
+                "payload": payload,
+                "dhan_mode": "REAL",
+                "live_orders_enabled": True,
+            }
+        )
+
+        try:
+            with self._client(timeout=10.0) as client:
+                response = client.put(url, json=payload, headers=self._headers(client_id, access_token))
+
+            parsed = self._parse_response(response)
+            data = self._response_payload(parsed)
+            interpreted_error = interpret_dhan_error(response.status_code, parsed)
+            response_json = parsed if isinstance(parsed, (dict, list)) else None
+            log_order_event(
+                {
+                    "event": "DHAN_SUPER_ORDER_MODIFY_RESPONSE",
+                    "outgoing_ip": outgoing_ip,
+                    "url": url,
+                    "status_code": response.status_code,
+                    "response_text": response.text[:4000],
+                    "response_json": response_json,
+                    "interpreted_error": interpreted_error,
+                }
+            )
+
+            if 200 <= response.status_code <= 299:
+                return DhanOrderResult(
+                    success=True,
+                    order_id=str(data.get("orderId") or order_id),
+                    status=str(data.get("orderStatus") or "ACCEPTED"),
+                    avg_price=self._order_avg_price(data),
+                    raw_response=data,
+                    interpreted_error=None,
+                )
+
+            return DhanOrderResult(
+                success=False,
+                order_id=str(data.get("orderId") or order_id),
+                status=str(data.get("orderStatus") or "REJECTED"),
+                avg_price=self._order_avg_price(data),
+                raw_response=data,
+                error=self._error_message(data, f"Dhan rejected Super Order modify ({response.status_code})"),
+                interpreted_error=interpreted_error,
+            )
+        except httpx.TimeoutException as exc:
+            interpreted_error = interpret_dhan_error(None, "Dhan Super Order modify API timeout")
+            log_order_event(
+                {
+                    "event": "DHAN_SUPER_ORDER_MODIFY_EXCEPTION",
+                    "outgoing_ip": outgoing_ip,
+                    "url": url,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": "Dhan Super Order modify API timeout",
+                    "interpreted_error": interpreted_error,
+                }
+            )
+            return DhanOrderResult(
+                success=False,
+                order_id=order_id,
+                status="TIMEOUT",
+                avg_price=None,
+                raw_response={},
+                error="Dhan Super Order modify API timeout",
+                interpreted_error=interpreted_error,
+            )
+        except Exception as exc:
+            logger.error("Dhan modify_super_order error: %s", exc)
+            interpreted_error = interpret_dhan_error(None, str(exc))
+            log_order_event(
+                {
+                    "event": "DHAN_SUPER_ORDER_MODIFY_EXCEPTION",
+                    "outgoing_ip": outgoing_ip,
+                    "url": url,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "interpreted_error": interpreted_error,
+                }
+            )
+            return DhanOrderResult(
+                success=False,
+                order_id=order_id,
+                status="API_ERROR",
+                avg_price=None,
+                raw_response={},
+                error=str(exc),
+                interpreted_error=interpreted_error,
+            )
+
+    def cancel_super_order_leg(self, *, client_id: str, access_token: str, order_id: str, leg_name: str) -> DhanOrderResult:
+        url = f"{DHAN_BASE_URL}/super/orders/{order_id}/{leg_name}"
+        outgoing_ip_result = get_outgoing_ip(timeout=2.0)
+        outgoing_ip = outgoing_ip_result.get("outgoing_ip")
+        headers_masked = build_dhan_headers_debug(client_id, access_token)
+
+        log_order_event(
+            {
+                "event": "DHAN_SUPER_ORDER_CANCEL_ATTEMPT",
+                "outgoing_ip": outgoing_ip,
+                "outgoing_ip_check": outgoing_ip_result,
+                "url": url,
+                "headers_masked": headers_masked,
+                "order_id": order_id,
+                "leg_name": leg_name,
+                "dhan_mode": "REAL",
+                "live_orders_enabled": True,
+            }
+        )
+
+        try:
+            with self._client(timeout=10.0) as client:
+                response = client.delete(url, headers=self._headers(client_id, access_token))
+
+            parsed = self._parse_response(response)
+            data = self._response_payload(parsed)
+            interpreted_error = interpret_dhan_error(response.status_code, parsed)
+            response_json = parsed if isinstance(parsed, (dict, list)) else None
+            log_order_event(
+                {
+                    "event": "DHAN_SUPER_ORDER_CANCEL_RESPONSE",
+                    "outgoing_ip": outgoing_ip,
+                    "url": url,
+                    "status_code": response.status_code,
+                    "response_text": response.text[:4000],
+                    "response_json": response_json,
+                    "interpreted_error": interpreted_error,
+                }
+            )
+
+            if 200 <= response.status_code <= 299:
+                return DhanOrderResult(
+                    success=True,
+                    order_id=str(data.get("orderId") or order_id),
+                    status=str(data.get("orderStatus") or "CANCELLED"),
+                    avg_price=None,
+                    raw_response=data,
+                    interpreted_error=None,
+                )
+
+            return DhanOrderResult(
+                success=False,
+                order_id=str(data.get("orderId") or order_id),
+                status=str(data.get("orderStatus") or "REJECTED"),
+                avg_price=None,
+                raw_response=data,
+                error=self._error_message(data, f"Dhan rejected Super Order cancel ({response.status_code})"),
+                interpreted_error=interpreted_error,
+            )
+        except httpx.TimeoutException as exc:
+            interpreted_error = interpret_dhan_error(None, "Dhan Super Order cancel API timeout")
+            log_order_event(
+                {
+                    "event": "DHAN_SUPER_ORDER_CANCEL_EXCEPTION",
+                    "outgoing_ip": outgoing_ip,
+                    "url": url,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": "Dhan Super Order cancel API timeout",
+                    "interpreted_error": interpreted_error,
+                }
+            )
+            return DhanOrderResult(
+                success=False,
+                order_id=order_id,
+                status="TIMEOUT",
+                avg_price=None,
+                raw_response={},
+                error="Dhan Super Order cancel API timeout",
+                interpreted_error=interpreted_error,
+            )
+        except Exception as exc:
+            logger.error("Dhan cancel_super_order_leg error: %s", exc)
+            interpreted_error = interpret_dhan_error(None, str(exc))
+            log_order_event(
+                {
+                    "event": "DHAN_SUPER_ORDER_CANCEL_EXCEPTION",
+                    "outgoing_ip": outgoing_ip,
+                    "url": url,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "interpreted_error": interpreted_error,
+                }
+            )
+            return DhanOrderResult(
+                success=False,
+                order_id=order_id,
                 status="API_ERROR",
                 avg_price=None,
                 raw_response={},

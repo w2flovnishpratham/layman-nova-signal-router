@@ -7,7 +7,7 @@ from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.credential_vault import get_dhan_credentials
 from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, MockDhanClient, RealDhanClient
-from app.services.risk_manager import RiskDecision, _market_is_open, evaluate_entry, evaluate_exit
+from app.services.risk_manager import RiskDecision, _market_is_open, evaluate_entry, evaluate_exit, evaluate_reversal_entry
 from app.services.security_id_resolver import resolve_security_id
 from app.services.state_store import (
     clear_open_position,
@@ -109,12 +109,6 @@ def _round_option_tick(price: float) -> float:
     return round(max(round(price / 0.05) * 0.05, 0.05), 2)
 
 
-def _super_order_entry_limit_price(reference_ltp: float) -> tuple[float, float]:
-    buffer_percent = 2.0
-    entry_price = _round_option_tick(reference_ltp * (1 + buffer_percent / 100))
-    return entry_price, buffer_percent
-
-
 def _broker_exit_levels(reference_price: float, runtime: dict[str, Any]) -> tuple[float, float, float, float]:
     sl_percent = _runtime_float(runtime, "option_sl_percent", 10.0)
     tp_percent = _runtime_float(runtime, "option_tp_percent", 20.0)
@@ -138,32 +132,173 @@ def _build_dhan_super_order_payload(
     reference_ltp: float,
     runtime: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    entry_price, buffer_percent = _super_order_entry_limit_price(reference_ltp)
-    sl_percent, tp_percent, stop_loss_price, target_price = _broker_exit_levels(entry_price, runtime)
+    sl_percent, tp_percent, stop_loss_price, target_price = _broker_exit_levels(reference_ltp, runtime)
     payload = {
         "dhanClientId": base_payload["dhanClientId"],
         "correlationId": base_payload["correlationId"],
         "transactionType": base_payload["transactionType"],
         "exchangeSegment": base_payload["exchangeSegment"],
         "productType": base_payload["productType"],
-        "orderType": "LIMIT",
+        "orderType": "MARKET",
         "securityId": base_payload["securityId"],
         "quantity": base_payload["quantity"],
-        "price": entry_price,
+        "price": 0,
         "targetPrice": target_price,
         "stopLossPrice": stop_loss_price,
         "trailingJump": 0,
     }
     levels = {
         "reference_ltp": reference_ltp,
-        "entry_limit_price": entry_price,
-        "entry_limit_buffer_percent": buffer_percent,
+        "provisional_exit_reference_price": reference_ltp,
         "sl_percent": sl_percent,
         "tp_percent": tp_percent,
         "stop_loss_price": stop_loss_price,
         "target_price": target_price,
+        "levels_source": "pre_entry_ltp",
     }
     return payload, levels
+
+
+def _order_result_snapshot(result: Any) -> dict[str, Any]:
+    return {
+        "success": bool(getattr(result, "success", False)),
+        "order_id": getattr(result, "order_id", None),
+        "status": getattr(result, "status", None),
+        "error": getattr(result, "error", None),
+        "interpreted_error": getattr(result, "interpreted_error", None),
+        "raw_response": getattr(result, "raw_response", None),
+    }
+
+
+def _sync_super_order_exit_levels(
+    *,
+    client: RealDhanClient | MockDhanClient,
+    client_id: str,
+    access_token: str,
+    order_id: str | None,
+    fill_price: float | None,
+    runtime: dict[str, Any],
+    current_levels: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not order_id or fill_price is None or fill_price <= 0:
+        return current_levels, None
+
+    sl_percent, tp_percent, stop_loss_price, target_price = _broker_exit_levels(fill_price, runtime)
+    target_payload = {
+        "dhanClientId": client_id,
+        "orderId": order_id,
+        "legName": "TARGET_LEG",
+        "targetPrice": target_price,
+    }
+    stop_payload = {
+        "dhanClientId": client_id,
+        "orderId": order_id,
+        "legName": "STOP_LOSS_LEG",
+        "stopLossPrice": stop_loss_price,
+        "trailingJump": 0,
+    }
+
+    target_result = client.modify_super_order(
+        client_id=client_id,
+        access_token=access_token,
+        order_id=order_id,
+        payload=target_payload,
+    )
+    stop_result = client.modify_super_order(
+        client_id=client_id,
+        access_token=access_token,
+        order_id=order_id,
+        payload=stop_payload,
+    )
+
+    target_success = bool(target_result.success)
+    stop_success = bool(stop_result.success)
+    updated_levels = dict(current_levels or {})
+    updated_levels.update(
+        {
+            "exact_exit_reference_price": fill_price,
+            "exact_stop_loss_price": stop_loss_price,
+            "exact_target_price": target_price,
+            "exact_sl_percent": sl_percent,
+            "exact_tp_percent": tp_percent,
+            "post_fill_update_complete": target_success and stop_success,
+        }
+    )
+    if target_success:
+        updated_levels["target_price"] = target_price
+    if stop_success:
+        updated_levels["stop_loss_price"] = stop_loss_price
+    if target_success or stop_success:
+        updated_levels["levels_source"] = "post_fill_avg_price"
+
+    update_result = {
+        "attempted": True,
+        "order_id": order_id,
+        "reference_price": fill_price,
+        "target_payload": target_payload,
+        "stop_payload": stop_payload,
+        "target_result": _order_result_snapshot(target_result),
+        "stop_result": _order_result_snapshot(stop_result),
+        "success": target_success and stop_success,
+    }
+    log_order_event(
+        {
+            "event": "DHAN_SUPER_ORDER_POST_FILL_LEVEL_SYNC",
+            "order_id": order_id,
+            "reference_price": fill_price,
+            "updated_levels": updated_levels,
+            "update_result": update_result,
+        }
+    )
+    return updated_levels, update_result
+
+
+def _cancel_super_order_exit_legs(position: dict[str, Any]) -> dict[str, Any] | None:
+    if str(position.get("exit_management") or "").upper() != "DHAN_SUPER":
+        return None
+    order_id = str(position.get("entry_order_id") or "").strip()
+    if not order_id:
+        return {"attempted": False, "reason": "missing_super_order_id"}
+
+    dhan_mode = settings.DHAN_MODE.upper()
+    creds = get_dhan_credentials()
+    if dhan_mode == "REAL":
+        if not creds:
+            return {"attempted": False, "reason": "missing_dhan_credentials"}
+        client: RealDhanClient | MockDhanClient = RealDhanClient()
+        client_id = creds.client_id
+        access_token = creds.access_token
+    else:
+        client = MockDhanClient()
+        client_id = creds.client_id if creds else "MOCK_CLIENT"
+        access_token = ""
+
+    results = {}
+    for leg_name in ("TARGET_LEG", "STOP_LOSS_LEG"):
+        result = client.cancel_super_order_leg(
+            client_id=client_id,
+            access_token=access_token,
+            order_id=order_id,
+            leg_name=leg_name,
+        )
+        results[leg_name] = _order_result_snapshot(result)
+
+    summary = {
+        "attempted": True,
+        "order_id": order_id,
+        "success": all(item.get("success") for item in results.values()),
+        "legs": results,
+    }
+    log_order_event(
+        {
+            "event": "DHAN_SUPER_ORDER_EXIT_LEGS_CANCELLED_AFTER_MANUAL_EXIT",
+            "order_id": order_id,
+            "summary": summary,
+            "trading_symbol": position.get("trading_symbol"),
+            "security_id": position.get("security_id"),
+        }
+    )
+    return summary
 
 
 def _blocked(
@@ -396,7 +531,7 @@ def _reconcile_tracked_position_before_entry(signal: NormalizedSignal) -> RiskDe
     return RiskDecision(False, str(preflight.get("reason") or "Trade blocked: Dhan exposure check failed."))
 
 
-def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, Any]:
+def _place_order(signal: NormalizedSignal, qty: int, action: str, *, skip_entry_preflight: bool = False) -> dict[str, Any]:
     dhan_mode = settings.DHAN_MODE.upper()
     creds = get_dhan_credentials()
     request_payload, security_id_resolution = _build_dhan_payload_and_resolution(signal, qty, action)
@@ -468,7 +603,7 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
         client_id = creds.client_id if creds else "MOCK_CLIENT"
         access_token = ""
 
-    if dhan_mode == "REAL" and action == "ENTRY":
+    if dhan_mode == "REAL" and action == "ENTRY" and not skip_entry_preflight:
         preflight = _dhan_entry_preflight(client, client_id=client_id, access_token=access_token, signal=signal)
         if not preflight.get("allowed"):
             return _blocked(
@@ -569,6 +704,8 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
     final_status = result.status
     final_avg_price = result.avg_price
     final_success = result.success
+    super_order_post_fill_update: dict[str, Any] | None = None
+    active_super_order_levels = super_order_levels
 
     if result.success and result.order_id:
         # Status from placement response may be TRANSIT/PENDING — poll for confirmation.
@@ -598,6 +735,17 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
                 final_status = "PENDING_CONFIRMATION"
                 final_success = True  # order was accepted; fill pending
 
+    if use_super_order and final_success and final_status == "TRADED" and final_avg_price is not None:
+        active_super_order_levels, super_order_post_fill_update = _sync_super_order_exit_levels(
+            client=client,
+            client_id=client_id,
+            access_token=access_token,
+            order_id=result.order_id,
+            fill_price=final_avg_price,
+            runtime=runtime,
+            current_levels=super_order_levels,
+        )
+
     return {
         "blocked": False,
         "success": final_success,
@@ -608,12 +756,13 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
         "interpreted_error": result.interpreted_error,
         "raw_response": result.raw_response,
         "order_status_poll": order_status_poll,
+        "super_order_post_fill_update": super_order_post_fill_update,
         "place_method": place_method,
         "exit_management": "DHAN_SUPER" if use_super_order else "SERVER",
-        "broker_sl_price": super_order_levels.get("stop_loss_price") if super_order_levels else None,
-        "broker_tp_price": super_order_levels.get("target_price") if super_order_levels else None,
-        "broker_entry_reference_price": super_order_levels.get("reference_ltp") if super_order_levels else None,
-        "broker_exit_levels": super_order_levels,
+        "broker_sl_price": active_super_order_levels.get("stop_loss_price") if active_super_order_levels else None,
+        "broker_tp_price": active_super_order_levels.get("target_price") if active_super_order_levels else None,
+        "broker_entry_reference_price": active_super_order_levels.get("reference_ltp") if active_super_order_levels else None,
+        "broker_exit_levels": active_super_order_levels,
         "order_type": order_request_payload.get("orderType"),
         "payload_format": signal.payload_format,
         "normalized_action": signal.action,
@@ -659,6 +808,7 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
         "broker_tp_price": broker_tp_price,
         "broker_entry_reference_price": order_result.get("broker_entry_reference_price"),
         "broker_exit_levels": order_result.get("broker_exit_levels"),
+        "super_order_post_fill_update": order_result.get("super_order_post_fill_update"),
         "order_type": order_result.get("order_type") or signal.order_type or DEFAULT_ORDER_TYPE,
         "product_type": signal.product_type or DEFAULT_PRODUCT_TYPE,
         "opened_at": utc_now(),
@@ -675,6 +825,204 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
     }
 
 
+def _is_opposite_option_entry(signal: NormalizedSignal, position: dict[str, Any] | None = None) -> bool:
+    position = position or get_open_position()
+    if signal.action != "ENTRY" or signal.side != "BUY" or not position.get("has_open_position"):
+        return False
+    current_side = str(position.get("option_side") or "").upper()
+    incoming_side = str(signal.option_side or "").upper()
+    return {current_side, incoming_side} == {"CE", "PE"}
+
+
+def _exit_signal_from_position(position: dict[str, Any], trigger_signal: NormalizedSignal) -> NormalizedSignal:
+    return NormalizedSignal(
+        payload_format="NOVA",
+        secret=trigger_signal.secret,
+        signal_id=f"{trigger_signal.signal_id}-REVERSAL-EXIT",
+        strategy_code=position.get("strategy_code") or trigger_signal.strategy_code,
+        action="EXIT",
+        side="SELL",
+        symbol=position.get("symbol") or trigger_signal.symbol,
+        instrument_type=position.get("instrument_type") or trigger_signal.instrument_type,
+        exchange_segment=position.get("exchange_segment") or trigger_signal.exchange_segment or DEFAULT_EXCHANGE_SEGMENT,
+        security_id=position.get("security_id"),
+        trading_symbol=position.get("trading_symbol"),
+        option_side=position.get("option_side"),
+        strike=position.get("strike"),
+        expiry=position.get("expiry"),
+        qty=int(position.get("qty") or trigger_signal.qty),
+        order_type=position.get("order_type") or DEFAULT_ORDER_TYPE,
+        product_type=position.get("product_type") or DEFAULT_PRODUCT_TYPE,
+        source="opposite_option_reversal",
+        raw_payload={
+            "reversal": True,
+            "reversal_trigger_signal_id": trigger_signal.signal_id,
+            "reversal_from_option_side": position.get("option_side"),
+            "reversal_to_option_side": trigger_signal.option_side,
+        },
+    )
+
+
+def route_reversal_signal(signal: NormalizedSignal) -> dict[str, Any]:
+    open_position = get_open_position()
+    update_app_state(
+        state="REVERSAL_SIGNAL_RECEIVED",
+        last_signal_id=signal.signal_id,
+        last_alert_at=utc_now(),
+        last_message=(
+            f"Opposite {signal.option_side} entry received while "
+            f"{open_position.get('option_side')} is open. Reversal started."
+        ),
+    )
+
+    reversal_decision = evaluate_reversal_entry(signal)
+    if not reversal_decision.allowed:
+        return _blocked("BLOCKED", reversal_decision.reason, signal)
+
+    exit_signal = _exit_signal_from_position(open_position, signal)
+    exit_decision = evaluate_exit(exit_signal)
+    if not exit_decision.allowed:
+        return _blocked("BLOCKED", exit_decision.reason, exit_signal)
+
+    update_app_state(
+        state="REVERSAL_EXIT_SENDING",
+        last_message=f"Exiting {open_position.get('option_side')} before entering {signal.option_side}.",
+    )
+    exit_result = _place_order(exit_signal, exit_decision.final_qty, "EXIT")
+    if exit_result.get("blocked"):
+        return {
+            **exit_result,
+            "status": "REVERSAL_EXIT_BLOCKED",
+            "reversal": {
+                "from_option_side": open_position.get("option_side"),
+                "to_option_side": signal.option_side,
+            },
+        }
+
+    if not exit_result.get("success"):
+        reason = exit_result.get("error") or "Reversal exit order failed."
+        log_error_event("REVERSAL_EXIT_FAILED", reason, metadata={"signal_id": signal.signal_id, "exit_result": exit_result})
+        update_app_state(state="ERROR", last_message=reason)
+        return {
+            **exit_result,
+            "blocked": False,
+            "success": False,
+            "status": "REVERSAL_EXIT_FAILED",
+            "reason": reason,
+            "reversal": {
+                "from_option_side": open_position.get("option_side"),
+                "to_option_side": signal.option_side,
+                "exit_result": exit_result,
+            },
+        }
+
+    if exit_result.get("status") != "TRADED":
+        reason = "Reversal exit accepted but not confirmed TRADED; opposite entry was not sent."
+        current = dict(get_open_position())
+        if current.get("has_open_position"):
+            current["reversal_exit"] = {
+                "status": exit_result.get("status"),
+                "order_id": exit_result.get("order_id"),
+                "checked_at": utc_now(),
+                "message": reason,
+            }
+            set_open_position(current)
+        log_audit_event(
+            "REVERSAL_EXIT_PENDING",
+            reason,
+            severity="WARNING",
+            metadata={"signal_id": signal.signal_id, "exit_result": exit_result},
+        )
+        update_app_state(state="WAITING_EXIT", last_message=reason)
+        return {
+            **exit_result,
+            "blocked": False,
+            "success": False,
+            "status": "REVERSAL_EXIT_PENDING",
+            "reason": reason,
+            "reversal": {
+                "from_option_side": open_position.get("option_side"),
+                "to_option_side": signal.option_side,
+                "exit_result": exit_result,
+            },
+        }
+
+    super_order_leg_cancellations = _cancel_super_order_exit_legs(open_position)
+    clear_open_position()
+    if settings.DHAN_MODE.upper() == "REAL":
+        refresh_wallet_snapshot(force=True, log_event=True)
+
+    update_app_state(
+        state="REVERSAL_ENTRY_SENDING",
+        last_message=f"{open_position.get('option_side')} exited. Entering {signal.option_side}.",
+    )
+    entry_result = _place_order(
+        signal,
+        reversal_decision.final_qty,
+        "ENTRY",
+        skip_entry_preflight=True,
+    )
+    if entry_result.get("blocked"):
+        return {
+            **entry_result,
+            "status": "REVERSAL_ENTRY_BLOCKED",
+            "reversal": {
+                "from_option_side": open_position.get("option_side"),
+                "to_option_side": signal.option_side,
+                "exit_result": exit_result,
+                "super_order_leg_cancellations": super_order_leg_cancellations,
+            },
+        }
+
+    if entry_result.get("success"):
+        if settings.DHAN_MODE.upper() == "REAL":
+            refresh_wallet_snapshot(force=True, log_event=True)
+        set_open_position(_entry_position(signal, entry_result, reversal_decision.final_qty))
+        update_app_state(
+            state="WAITING_EXIT",
+            last_message=f"Reversal complete: entered {signal.option_side} in {settings.DHAN_MODE.upper()} mode",
+        )
+        log_audit_event(
+            "REVERSAL_ORDER_PLACED",
+            f"Exited {open_position.get('option_side')} and entered {signal.option_side}.",
+            metadata={
+                "signal_id": signal.signal_id,
+                "exit_order_id": exit_result.get("order_id"),
+                "entry_order_id": entry_result.get("order_id"),
+                "super_order_leg_cancellations": super_order_leg_cancellations,
+            },
+        )
+        return {
+            **entry_result,
+            "status": "REVERSAL_ORDER_PLACED",
+            "reversal": {
+                "from_option_side": open_position.get("option_side"),
+                "to_option_side": signal.option_side,
+                "exit_result": exit_result,
+                "entry_result": entry_result,
+                "super_order_leg_cancellations": super_order_leg_cancellations,
+            },
+        }
+
+    reason = entry_result.get("error") or "Reversal entry order failed after exit completed."
+    log_error_event("REVERSAL_ENTRY_FAILED", reason, metadata={"signal_id": signal.signal_id, "entry_result": entry_result})
+    update_app_state(state="ERROR", last_message=reason)
+    return {
+        **entry_result,
+        "blocked": False,
+        "success": False,
+        "status": "REVERSAL_ENTRY_FAILED",
+        "reason": reason,
+        "reversal": {
+            "from_option_side": open_position.get("option_side"),
+            "to_option_side": signal.option_side,
+            "exit_result": exit_result,
+            "entry_result": entry_result,
+            "super_order_leg_cancellations": super_order_leg_cancellations,
+        },
+    }
+
+
 def route_entry_signal(signal: NormalizedSignal) -> dict[str, Any]:
     update_app_state(
         state="ENTRY_SIGNAL_RECEIVED",
@@ -684,7 +1032,12 @@ def route_entry_signal(signal: NormalizedSignal) -> dict[str, Any]:
     )
     broker_reconcile = _reconcile_tracked_position_before_entry(signal)
     if broker_reconcile and not broker_reconcile.allowed:
+        if _is_opposite_option_entry(signal):
+            return route_reversal_signal(signal)
         return _blocked("BLOCKED", broker_reconcile.reason, signal)
+
+    if _is_opposite_option_entry(signal):
+        return route_reversal_signal(signal)
 
     decision = evaluate_entry(signal)
     if not decision.allowed:
@@ -740,6 +1093,7 @@ def route_exit_signal(signal: NormalizedSignal) -> dict[str, Any]:
         return order_result
 
     if order_result.get("success"):
+        super_order_leg_cancellations = _cancel_super_order_exit_legs(open_position)
         clear_open_position()
         if settings.DHAN_MODE.upper() == "REAL":
             refresh_wallet_snapshot(force=True, log_event=True)
@@ -754,10 +1108,11 @@ def route_exit_signal(signal: NormalizedSignal) -> dict[str, Any]:
                 "signal_id": signal.signal_id,
                 "order_id": order_result.get("order_id"),
                 "closed_security_id": open_position.get("security_id"),
+                "super_order_leg_cancellations": super_order_leg_cancellations,
                 "payload_format": signal.payload_format,
             },
         )
-        return {**order_result, "status": "ORDER_PLACED"}
+        return {**order_result, "status": "ORDER_PLACED", "super_order_leg_cancellations": super_order_leg_cancellations}
 
     reason = order_result.get("error") or "Dhan exit order request failed"
     log_error_event("EXIT_ORDER_FAILED", reason, metadata={"signal_id": signal.signal_id})
