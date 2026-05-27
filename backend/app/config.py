@@ -32,6 +32,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "server_side_exit_enabled": True,
     "marketfeed_ws_enabled": True,
     "option_ltp_source": "AUTO",
+    "option_exit_mode": "DHAN_SUPER",
     "option_ws_stale_seconds": 5.0,
     "option_rest_fallback_enabled": True,
     "option_rest_fallback_cooldown_seconds": 15.0,

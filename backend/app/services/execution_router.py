@@ -12,6 +12,7 @@ from app.services.security_id_resolver import resolve_security_id
 from app.services.state_store import (
     clear_open_position,
     get_open_position,
+    get_runtime_settings,
     set_open_position,
     update_app_state,
     utc_now,
@@ -94,6 +95,62 @@ def _build_dhan_payload_and_resolution(signal: NormalizedSignal, qty: int, actio
 def _build_dhan_payload(signal: NormalizedSignal, qty: int, action: str) -> dict[str, Any]:
     payload, _resolution = _build_dhan_payload_and_resolution(signal, qty, action)
     return payload
+
+
+def _runtime_float(runtime: dict[str, Any], key: str, default: float) -> float:
+    try:
+        value = float(runtime.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _round_option_tick(price: float) -> float:
+    return round(max(round(price / 0.05) * 0.05, 0.05), 2)
+
+
+def _broker_exit_levels(reference_price: float, runtime: dict[str, Any]) -> tuple[float, float, float, float]:
+    sl_percent = _runtime_float(runtime, "option_sl_percent", 10.0)
+    tp_percent = _runtime_float(runtime, "option_tp_percent", 20.0)
+    stop_loss_price = _round_option_tick(reference_price * (1 - sl_percent / 100))
+    target_price = _round_option_tick(reference_price * (1 + tp_percent / 100))
+    return sl_percent, tp_percent, stop_loss_price, target_price
+
+
+def _option_exit_mode(runtime: dict[str, Any]) -> str:
+    mode = str(runtime.get("option_exit_mode") or "DHAN_SUPER").strip().upper()
+    return mode if mode in {"DHAN_SUPER", "SERVER"} else "DHAN_SUPER"
+
+
+def _build_dhan_super_order_payload(
+    *,
+    base_payload: dict[str, Any],
+    reference_ltp: float,
+    runtime: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    sl_percent, tp_percent, stop_loss_price, target_price = _broker_exit_levels(reference_ltp, runtime)
+    payload = {
+        "dhanClientId": base_payload["dhanClientId"],
+        "correlationId": base_payload["correlationId"],
+        "transactionType": base_payload["transactionType"],
+        "exchangeSegment": base_payload["exchangeSegment"],
+        "productType": base_payload["productType"],
+        "orderType": base_payload["orderType"],
+        "securityId": base_payload["securityId"],
+        "quantity": base_payload["quantity"],
+        "price": base_payload["price"],
+        "targetPrice": target_price,
+        "stopLossPrice": stop_loss_price,
+        "trailingJump": 0,
+    }
+    levels = {
+        "reference_ltp": reference_ltp,
+        "sl_percent": sl_percent,
+        "tp_percent": tp_percent,
+        "stop_loss_price": stop_loss_price,
+        "target_price": target_price,
+    }
+    return payload, levels
 
 
 def _blocked(
@@ -330,6 +387,9 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
     dhan_mode = settings.DHAN_MODE.upper()
     creds = get_dhan_credentials()
     request_payload, security_id_resolution = _build_dhan_payload_and_resolution(signal, qty, action)
+    runtime = get_runtime_settings()
+    exit_mode = _option_exit_mode(runtime)
+    use_super_order = dhan_mode == "REAL" and action == "ENTRY" and exit_mode == "DHAN_SUPER"
 
     if dhan_mode == "REAL":
         if not settings.ENABLE_LIVE_ORDERS:
@@ -407,17 +467,46 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
                 trading_symbol=request_payload.get("tradingSymbol"),
             )
 
+    super_order_levels: dict[str, Any] | None = None
+    order_request_payload = request_payload
+    place_method = "orders"
+    if use_super_order:
+        ltp_result = client.get_ltp(
+            client_id=client_id,
+            access_token=access_token,
+            exchange_segment=str(request_payload.get("exchangeSegment") or ""),
+            security_id=str(request_payload.get("securityId") or ""),
+        )
+        if not ltp_result.success or ltp_result.ltp is None or float(ltp_result.ltp) <= 0:
+            return _blocked(
+                "BLOCKED",
+                "Dhan Super Order blocked: could not fetch option LTP for broker-side SL/TP.",
+                signal,
+                security_id_resolution=security_id_resolution,
+                security_id=request_payload.get("securityId"),
+                trading_symbol=request_payload.get("tradingSymbol"),
+            )
+        order_request_payload, super_order_levels = _build_dhan_super_order_payload(
+            base_payload=request_payload,
+            reference_ltp=float(ltp_result.ltp),
+            runtime=runtime,
+        )
+        place_method = "super_orders"
+
     log_order_event(
         {
             "phase": "before_request",
             "signal_id": signal.signal_id,
             "action": action,
             "side": signal.side,
+            "place_method": place_method,
+            "exit_mode": exit_mode,
             "dhan_mode": dhan_mode,
             "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
             "market_closed_debug": settings.MARKET_CLOSED_DEBUG,
             "force_allow_order_when_market_closed": settings.FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED,
-            "request": _public_order_request(request_payload),
+            "request": _public_order_request(order_request_payload),
+            "super_order_levels": super_order_levels,
             "security_id": request_payload.get("securityId"),
             "security_id_resolution": security_id_resolution,
             "trading_symbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
@@ -428,7 +517,10 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
         }
     )
 
-    result = client.place_order(client_id=client_id, access_token=access_token, payload=request_payload)
+    if use_super_order:
+        result = client.place_super_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
+    else:
+        result = client.place_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
 
     log_order_event(
         {
@@ -436,6 +528,8 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
             "signal_id": signal.signal_id,
             "action": action,
             "side": signal.side,
+            "place_method": place_method,
+            "exit_mode": exit_mode,
             "dhan_mode": dhan_mode,
             "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
             "success": result.success,
@@ -449,6 +543,7 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
             "security_id": request_payload.get("securityId"),
             "security_id_resolution": security_id_resolution,
             "trading_symbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
+            "super_order_levels": super_order_levels,
             "qty": qty,
             "order_type": request_payload["orderType"],
             "product_type": request_payload["productType"],
@@ -500,6 +595,12 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
         "interpreted_error": result.interpreted_error,
         "raw_response": result.raw_response,
         "order_status_poll": order_status_poll,
+        "place_method": place_method,
+        "exit_management": "DHAN_SUPER" if use_super_order else "SERVER",
+        "broker_sl_price": super_order_levels.get("stop_loss_price") if super_order_levels else None,
+        "broker_tp_price": super_order_levels.get("target_price") if super_order_levels else None,
+        "broker_entry_reference_price": super_order_levels.get("reference_ltp") if super_order_levels else None,
+        "broker_exit_levels": super_order_levels,
         "payload_format": signal.payload_format,
         "normalized_action": signal.action,
         "normalized_side": signal.side,
@@ -516,6 +617,15 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
 
 def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty: int) -> dict[str, Any]:
     entry_price = order_result.get("avg_price")
+    exit_management = order_result.get("exit_management") or "SERVER"
+    broker_sl_price = order_result.get("broker_sl_price")
+    broker_tp_price = order_result.get("broker_tp_price")
+    if entry_price is None:
+        message = "Waiting for Dhan to confirm entry fill price."
+    elif exit_management == "DHAN_SUPER":
+        message = "Dhan Super Order SL/TP is active; backend is display-only."
+    else:
+        message = "Server-side option premium monitor is armed."
     return {
         "has_open_position": True,
         "strategy_code": signal.strategy_code,
@@ -530,6 +640,11 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
         "qty": qty,
         "entry_order_id": order_result.get("order_id"),
         "entry_price": entry_price,
+        "exit_management": exit_management,
+        "broker_sl_price": broker_sl_price,
+        "broker_tp_price": broker_tp_price,
+        "broker_entry_reference_price": order_result.get("broker_entry_reference_price"),
+        "broker_exit_levels": order_result.get("broker_exit_levels"),
         "order_type": signal.order_type or DEFAULT_ORDER_TYPE,
         "product_type": signal.product_type or DEFAULT_PRODUCT_TYPE,
         "opened_at": utc_now(),
@@ -537,11 +652,10 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
             "source": "dhan_order_status" if entry_price is not None else "pending_entry_fill",
             "status": "tracking_pending" if entry_price is not None else "waiting_entry_fill",
             "entry_price": entry_price,
-            "message": (
-                "Server-side option premium monitor is armed."
-                if entry_price is not None
-                else "Waiting for Dhan to confirm entry fill price before arming SL/TP."
-            ),
+            "sl_price": broker_sl_price,
+            "tp_price": broker_tp_price,
+            "exit_management": exit_management,
+            "message": message,
             "last_checked_at": utc_now(),
         },
     }

@@ -118,6 +118,44 @@ def test_place_order_uses_v2_orders_endpoint(monkeypatch):
     assert recorder["json"] == payload
 
 
+def test_place_super_order_uses_v2_super_orders_endpoint(monkeypatch):
+    recorder = {}
+    response = httpx.Response(200, json={"orderId": "112111182198", "orderStatus": "PENDING"})
+    patch_http_client(monkeypatch, response, recorder)
+    monkeypatch.setattr(
+        "app.services.dhan_client.get_outgoing_ip",
+        lambda timeout=2.0: {"outgoing_ip": "203.0.113.10", "ok": True, "error": None},
+    )
+    monkeypatch.setattr("app.services.dhan_client._market_is_open", lambda: True)
+    monkeypatch.setattr("app.services.dhan_client.log_order_event", lambda event: event)
+    payload = {
+        "dhanClientId": "1000000001",
+        "correlationId": "test-correlation-01",
+        "transactionType": "BUY",
+        "exchangeSegment": "NSE_FNO",
+        "productType": "INTRADAY",
+        "orderType": "MARKET",
+        "securityId": "123456",
+        "quantity": 65,
+        "price": 0,
+        "targetPrice": 120,
+        "stopLossPrice": 90,
+        "trailingJump": 0,
+    }
+
+    result = RealDhanClient().place_super_order(
+        client_id="1000000001",
+        access_token="token",
+        payload=payload,
+    )
+
+    assert result.success is True
+    assert result.order_id == "112111182198"
+    assert recorder["method"] == "POST"
+    assert recorder["url"] == f"{DHAN_BASE_URL}/super/orders"
+    assert recorder["json"] == payload
+
+
 def test_place_order_refuses_raw_pine_payload_before_http(monkeypatch):
     recorder = {}
     response = httpx.Response(200, json={"orderId": "should-not-be-used"})

@@ -55,6 +55,7 @@ class RiskSetupRequest(BaseModel):
     server_side_exit_enabled: bool = True
     marketfeed_ws_enabled: bool = True
     option_ltp_source: str = "AUTO"
+    option_exit_mode: str = "DHAN_SUPER"
     option_ws_stale_seconds: float = Field(default=5.0, ge=1.0)
     option_rest_fallback_enabled: bool = True
     option_rest_fallback_cooldown_seconds: float = Field(default=15.0, ge=1.0)
@@ -161,6 +162,8 @@ def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, li
         issues.append("Option REST fallback cooldown seconds must be at least 1.")
     if str(runtime.get("option_ltp_source") or "WEBSOCKET").upper() not in {"WEBSOCKET", "REST", "AUTO"}:
         issues.append("Option LTP source must be WEBSOCKET, REST, or AUTO.")
+    if str(runtime.get("option_exit_mode") or "DHAN_SUPER").upper() not in {"DHAN_SUPER", "SERVER"}:
+        issues.append("Option exit mode must be DHAN_SUPER or SERVER.")
     return not issues, issues
 
 
@@ -243,6 +246,7 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
             "server_side_exit_enabled": runtime.get("server_side_exit_enabled"),
             "marketfeed_ws_enabled": runtime.get("marketfeed_ws_enabled"),
             "option_ltp_source": runtime.get("option_ltp_source"),
+            "option_exit_mode": runtime.get("option_exit_mode"),
             "option_ws_stale_seconds": runtime.get("option_ws_stale_seconds"),
             "option_rest_fallback_enabled": runtime.get("option_rest_fallback_enabled"),
             "option_rest_fallback_cooldown_seconds": runtime.get("option_rest_fallback_cooldown_seconds"),
@@ -362,6 +366,7 @@ def configure_risk(body: RiskSetupRequest) -> dict[str, Any]:
         server_side_exit_enabled=body.server_side_exit_enabled,
         marketfeed_ws_enabled=body.marketfeed_ws_enabled,
         option_ltp_source=body.option_ltp_source.upper(),
+        option_exit_mode=body.option_exit_mode.upper(),
         option_ws_stale_seconds=body.option_ws_stale_seconds,
         option_rest_fallback_enabled=body.option_rest_fallback_enabled,
         option_rest_fallback_cooldown_seconds=body.option_rest_fallback_cooldown_seconds,

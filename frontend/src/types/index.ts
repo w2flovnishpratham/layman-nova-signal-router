@@ -58,6 +58,7 @@ export interface RuntimeSettings {
   server_side_exit_enabled?: boolean
   marketfeed_ws_enabled?: boolean
   option_ltp_source?: 'WEBSOCKET' | 'REST' | 'AUTO' | string
+  option_exit_mode?: 'DHAN_SUPER' | 'SERVER' | string
   option_ws_stale_seconds?: number
   option_rest_fallback_enabled?: boolean
   option_rest_fallback_cooldown_seconds?: number
@@ -110,6 +111,7 @@ export interface RiskSetupPayload {
   server_side_exit_enabled?: boolean
   marketfeed_ws_enabled?: boolean
   option_ltp_source?: 'WEBSOCKET' | 'REST' | 'AUTO' | string
+  option_exit_mode?: 'DHAN_SUPER' | 'SERVER' | string
   option_ws_stale_seconds?: number
   option_rest_fallback_enabled?: boolean
   option_rest_fallback_cooldown_seconds?: number

@@ -108,6 +108,18 @@ def _exit_levels(entry_price: float, runtime: dict[str, Any]) -> tuple[float, fl
     return sl_percent, tp_percent, sl_price, tp_price
 
 
+def _broker_managed_exit(position: dict[str, Any]) -> bool:
+    return str(position.get("exit_management") or "").upper() == "DHAN_SUPER"
+
+
+def _display_exit_levels(position: dict[str, Any], entry_price: float, runtime: dict[str, Any]) -> tuple[float, float, float, float]:
+    sl_percent, tp_percent, sl_price, tp_price = _exit_levels(entry_price, runtime)
+    if _broker_managed_exit(position):
+        sl_price = _as_float(position.get("broker_sl_price"), sl_price) or sl_price
+        tp_price = _as_float(position.get("broker_tp_price"), tp_price) or tp_price
+    return sl_percent, tp_percent, sl_price, tp_price
+
+
 def _pnl_snapshot(
     *,
     position: dict[str, Any],
@@ -126,6 +138,7 @@ def _pnl_snapshot(
     return {
         "source": source,
         "status": status,
+        "exit_management": str(position.get("exit_management") or "SERVER").upper(),
         "entry_price": entry_price,
         "ltp": ltp,
         "qty": qty,
@@ -496,7 +509,7 @@ def monitor_once() -> None:
         )
         return
 
-    _sl_percent, _tp_percent, sl_price, tp_price = _exit_levels(entry_price, runtime)
+    _sl_percent, _tp_percent, sl_price, tp_price = _display_exit_levels(position, entry_price, runtime)
     ltp = float(quote.ltp)
     exit_reason: str | None = None
     status = "tracking"
@@ -520,7 +533,7 @@ def monitor_once() -> None:
     )
     updated = _with_live_pnl(position, snapshot)
 
-    if exit_reason:
+    if exit_reason and not _broker_managed_exit(updated):
         _route_server_exit(updated, exit_reason, snapshot)
 
 
