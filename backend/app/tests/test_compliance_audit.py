@@ -25,7 +25,7 @@ from app.services import audit_logger, credential_vault, state_store
 from app.services import risk_manager
 from app.services.dhan_client import DhanListResult
 from app.services.dhan_debugger import validate_dhan_payload
-from app.services.execution_router import _build_dhan_payload_and_resolution
+from app.services.execution_router import _build_dhan_payload_and_resolution, _build_dhan_super_order_payload
 from app.services.security_id_resolver import (
     NIFTY_UNDERLYING_ID,
     resolve_security_id,
@@ -561,6 +561,35 @@ class TestDhanPayloadCompliance:
         signal = make_signal()
         payload, _ = _build_dhan_payload_and_resolution(signal, 1, "ENTRY")
         assert payload["triggerPrice"] == 0
+
+    def test_super_order_uses_limit_price_for_broker_side_sltp(self):
+        """Dhan Super Orders validate target/SL against entry price, so never send price=0."""
+        base_payload = {
+            "dhanClientId": "1000000001",
+            "correlationId": "super-order-test",
+            "transactionType": "BUY",
+            "exchangeSegment": "NSE_FNO",
+            "productType": "INTRADAY",
+            "orderType": "MARKET",
+            "securityId": "57046",
+            "quantity": 65,
+            "price": 0,
+        }
+
+        payload, levels = _build_dhan_super_order_payload(
+            base_payload=base_payload,
+            reference_ltp=156.4,
+            runtime={"option_sl_percent": 5, "option_tp_percent": 10},
+        )
+
+        assert payload["orderType"] == "LIMIT"
+        assert payload["price"] > 0
+        assert payload["price"] == levels["entry_limit_price"]
+        assert payload["targetPrice"] == levels["target_price"]
+        assert payload["stopLossPrice"] == levels["stop_loss_price"]
+        assert payload["targetPrice"] > payload["price"]
+        assert payload["stopLossPrice"] < payload["price"]
+        assert levels["reference_ltp"] == 156.4
 
     def test_after_market_order_is_false(self, monkeypatch):
         monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", True)

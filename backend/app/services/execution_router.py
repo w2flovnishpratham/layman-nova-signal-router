@@ -109,11 +109,21 @@ def _round_option_tick(price: float) -> float:
     return round(max(round(price / 0.05) * 0.05, 0.05), 2)
 
 
+def _super_order_entry_limit_price(reference_ltp: float) -> tuple[float, float]:
+    buffer_percent = 2.0
+    entry_price = _round_option_tick(reference_ltp * (1 + buffer_percent / 100))
+    return entry_price, buffer_percent
+
+
 def _broker_exit_levels(reference_price: float, runtime: dict[str, Any]) -> tuple[float, float, float, float]:
     sl_percent = _runtime_float(runtime, "option_sl_percent", 10.0)
     tp_percent = _runtime_float(runtime, "option_tp_percent", 20.0)
     stop_loss_price = _round_option_tick(reference_price * (1 - sl_percent / 100))
     target_price = _round_option_tick(reference_price * (1 + tp_percent / 100))
+    if target_price <= reference_price:
+        target_price = _round_option_tick(reference_price + 0.05)
+    if stop_loss_price >= reference_price:
+        stop_loss_price = _round_option_tick(reference_price - 0.05)
     return sl_percent, tp_percent, stop_loss_price, target_price
 
 
@@ -128,23 +138,26 @@ def _build_dhan_super_order_payload(
     reference_ltp: float,
     runtime: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    sl_percent, tp_percent, stop_loss_price, target_price = _broker_exit_levels(reference_ltp, runtime)
+    entry_price, buffer_percent = _super_order_entry_limit_price(reference_ltp)
+    sl_percent, tp_percent, stop_loss_price, target_price = _broker_exit_levels(entry_price, runtime)
     payload = {
         "dhanClientId": base_payload["dhanClientId"],
         "correlationId": base_payload["correlationId"],
         "transactionType": base_payload["transactionType"],
         "exchangeSegment": base_payload["exchangeSegment"],
         "productType": base_payload["productType"],
-        "orderType": base_payload["orderType"],
+        "orderType": "LIMIT",
         "securityId": base_payload["securityId"],
         "quantity": base_payload["quantity"],
-        "price": base_payload["price"],
+        "price": entry_price,
         "targetPrice": target_price,
         "stopLossPrice": stop_loss_price,
         "trailingJump": 0,
     }
     levels = {
         "reference_ltp": reference_ltp,
+        "entry_limit_price": entry_price,
+        "entry_limit_buffer_percent": buffer_percent,
         "sl_percent": sl_percent,
         "tp_percent": tp_percent,
         "stop_loss_price": stop_loss_price,
@@ -511,7 +524,7 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
             "security_id_resolution": security_id_resolution,
             "trading_symbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
             "qty": qty,
-            "order_type": request_payload["orderType"],
+            "order_type": order_request_payload["orderType"],
             "product_type": request_payload["productType"],
             **_normalized_log_fields(signal),
         }
@@ -545,7 +558,7 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
             "trading_symbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
             "super_order_levels": super_order_levels,
             "qty": qty,
-            "order_type": request_payload["orderType"],
+            "order_type": order_request_payload["orderType"],
             "product_type": request_payload["productType"],
             **_normalized_log_fields(signal),
         }
@@ -601,6 +614,7 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str) -> dict[str, A
         "broker_tp_price": super_order_levels.get("target_price") if super_order_levels else None,
         "broker_entry_reference_price": super_order_levels.get("reference_ltp") if super_order_levels else None,
         "broker_exit_levels": super_order_levels,
+        "order_type": order_request_payload.get("orderType"),
         "payload_format": signal.payload_format,
         "normalized_action": signal.action,
         "normalized_side": signal.side,
@@ -645,7 +659,7 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
         "broker_tp_price": broker_tp_price,
         "broker_entry_reference_price": order_result.get("broker_entry_reference_price"),
         "broker_exit_levels": order_result.get("broker_exit_levels"),
-        "order_type": signal.order_type or DEFAULT_ORDER_TYPE,
+        "order_type": order_result.get("order_type") or signal.order_type or DEFAULT_ORDER_TYPE,
         "product_type": signal.product_type or DEFAULT_PRODUCT_TYPE,
         "opened_at": utc_now(),
         "live_pnl": {
