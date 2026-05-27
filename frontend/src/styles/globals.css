@@ -261,6 +261,15 @@ body {
 }
 .input::placeholder { color: #5e5a53; }
 
+.input:-webkit-autofill,
+.input:-webkit-autofill:hover, 
+.input:-webkit-autofill:focus, 
+.input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 100px #151513 inset !important;
+  -webkit-text-fill-color: #f4f1ea !important;
+  caret-color: #f4f1ea;
+}
+
 /* === Navigation === */
 .nav-icon {
   display: flex;
