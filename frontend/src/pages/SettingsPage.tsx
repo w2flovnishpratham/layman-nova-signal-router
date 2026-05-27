@@ -196,7 +196,7 @@ export default function SettingsPage() {
           <h2 className="text-lg font-semibold">Reconnect Dhan</h2>
           <div className="grid grid-cols-1 gap-2 text-sm text-[#9a968f] sm:grid-cols-2">
             <p>Saved client: <span className="font-mono text-[#d8d3c8]">{status.dhan_client_id_masked || '-'}</span></p>
-            <p>Saved token: <span className="font-mono text-[#d8d3c8]">{status.access_token_masked || (status.access_token_present ? 'present' : '-')}</span></p>
+            <p>Saved token: <span className="font-mono text-[#d8d3c8] break-all">{status.access_token_masked || (status.access_token_present ? 'present' : '-')}</span></p>
           </div>
           <label className="block text-sm">
             <span className="mb-1 block text-[#d8d3c8]">Dhan Client ID</span>
@@ -218,7 +218,7 @@ export default function SettingsPage() {
 
         <form onSubmit={updateSecret} className="card space-y-4">
           <h2 className="text-lg font-semibold">Reset Webhook Secret</h2>
-          <p className="text-sm text-[#9a968f]">Saved secret: <span className="font-mono text-[#d8d3c8]">{status.webhook_secret_masked || (status.webhook_secret_set ? 'present' : '-')}</span></p>
+          <p className="text-sm text-[#9a968f]">Saved secret: <span className="font-mono text-[#d8d3c8] break-all">{status.webhook_secret_masked || (status.webhook_secret_set ? 'present' : '-')}</span></p>
           <label className="block text-sm">
             <span className="mb-1 block text-[#d8d3c8]">New Webhook Secret</span>
             <input className="input" type="password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="off" minLength={MIN_WEBHOOK_SECRET_LENGTH} placeholder={status.webhook_secret_masked ? `Saved ${status.webhook_secret_masked}` : 'Required'} required />

@@ -523,7 +523,7 @@ export default function SetupPage() {
                 <form onSubmit={(event) => submitDhan(event, 'connect')} className="space-y-4">
                   <div className="grid grid-cols-1 gap-2 text-sm text-[#9a968f] sm:grid-cols-2">
                     <p>Saved client<br /><span className="font-mono text-[#d8d3c8]">{status.dhan_client_id_masked || '-'}</span></p>
-                    <p>Saved token<br /><span className="font-mono text-[#d8d3c8]">{status.access_token_masked || (status.access_token_present ? 'present' : '-')}</span></p>
+                    <p>Saved token<br /><span className="font-mono text-[#d8d3c8] break-all">{status.access_token_masked || (status.access_token_present ? 'present' : '-')}</span></p>
                   </div>
                   <label className="block text-sm">
                     <span className="mb-1 block text-[#d8d3c8]">Dhan Client ID</span>
@@ -582,7 +582,7 @@ export default function SetupPage() {
                       Generate Random Secret
                     </button>
                   </div>
-                  {status.webhook_secret_set && <p className="text-sm text-[#98e94d]">Webhook secret saved: <span className="font-mono">{status.webhook_secret_masked || 'present'}</span></p>}
+                  {status.webhook_secret_set && <p className="text-sm text-[#98e94d]">Webhook secret saved: <span className="font-mono break-all">{status.webhook_secret_masked || 'present'}</span></p>}
                 </form>
               </div>
 
