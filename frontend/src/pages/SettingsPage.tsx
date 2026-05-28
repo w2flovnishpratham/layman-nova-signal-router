@@ -12,6 +12,7 @@ import {
   stopEngine,
   updateRiskSettings,
 } from '../api/dashboard'
+import SecretInput from '../components/SecretInput'
 import { DhanConnectPayload, DhanDebugConfig, RiskSettingsPatchPayload, RiskSetupPayload, SetupStatus } from '../types'
 
 const MIN_WEBHOOK_SECRET_LENGTH = 5
@@ -212,11 +213,11 @@ export default function SettingsPage() {
           </div>
           <label className="block text-sm">
             <span className="mb-1 block text-[#d8d3c8]">Dhan Client ID</span>
-            <input className="input" value={clientId} onChange={(event) => setClientId(event.target.value)} autoComplete="off" placeholder={status.dhan_client_id_masked ? `Saved ${status.dhan_client_id_masked}` : 'Required'} required={!status.dhan_client_id_masked} />
+            <SecretInput value={clientId} onChange={(event) => setClientId(event.target.value)} autoComplete="off" placeholder="Enter or update Dhan Client ID" required={!status.dhan_client_id_masked} revealLabel="Dhan Client ID" />
           </label>
           <label className="block text-sm">
             <span className="mb-1 block text-[#d8d3c8]">Dhan Access Token</span>
-            <input className="input" type="password" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} autoComplete="new-password" placeholder={status.access_token_masked ? `Saved ${formatMasked(status.access_token_masked)}` : 'Required'} required={!status.access_token_present} />
+            <SecretInput value={accessToken} onChange={(event) => setAccessToken(event.target.value)} autoComplete="new-password" placeholder="Enter or update Dhan Access Token" required={!status.access_token_present} revealLabel="Dhan Access Token" />
           </label>
           <div className="flex flex-wrap gap-2">
             <button disabled={busy === 'dhan'} className="btn-primary" type="submit">
@@ -233,7 +234,7 @@ export default function SettingsPage() {
           <p className="text-sm text-[#9a968f]">Saved secret: <span className="font-mono text-[#d8d3c8] break-all">{formatMasked(status.webhook_secret_masked) || (status.webhook_secret_set ? 'present' : '-')}</span></p>
           <label className="block text-sm">
             <span className="mb-1 block text-[#d8d3c8]">New Webhook Secret</span>
-            <input className="input" type="password" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="new-password" minLength={MIN_WEBHOOK_SECRET_LENGTH} placeholder={status.webhook_secret_masked ? `Saved ${formatMasked(status.webhook_secret_masked)}` : 'Required'} required />
+            <SecretInput value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="new-password" minLength={MIN_WEBHOOK_SECRET_LENGTH} placeholder="Enter or update webhook secret" required revealLabel="webhook secret" />
           </label>
           <div className="flex flex-wrap gap-2">
             <button disabled={busy === 'secret'} className="btn-primary" type="submit">

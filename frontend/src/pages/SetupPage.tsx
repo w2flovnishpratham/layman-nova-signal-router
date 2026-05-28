@@ -22,6 +22,7 @@ import {
   stopEngine,
 } from '../api/dashboard'
 import ConfirmModal from '../components/ConfirmModal'
+import SecretInput from '../components/SecretInput'
 import { DhanConnectPayload, RiskSetupPayload, SetupStatus } from '../types'
 
 const steps = ['Connect Dhan', 'Wallet Verified', 'Webhook Secret', 'Risk Settings', 'Start Engine']
@@ -539,11 +540,11 @@ export default function SetupPage() {
                   </div>
                   <label className="block text-sm">
                     <span className="mb-1 block text-[#d8d3c8]">Dhan Client ID</span>
-                    <input value={clientId} onChange={(event) => setClientId(event.target.value)} className="input" autoComplete="off" placeholder={status.dhan_client_id_masked ? `Saved ${status.dhan_client_id_masked}` : 'Required'} required={!status.dhan_client_id_masked} />
+                    <SecretInput value={clientId} onChange={(event) => setClientId(event.target.value)} autoComplete="off" placeholder="Enter or update Dhan Client ID" required={!status.dhan_client_id_masked} revealLabel="Dhan Client ID" />
                   </label>
                   <label className="block text-sm">
                     <span className="mb-1 block text-[#d8d3c8]">Dhan Access Token</span>
-                    <input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="input" type="password" autoComplete="new-password" placeholder={status.access_token_masked ? `Saved ${formatMasked(status.access_token_masked)}` : 'Required'} required={!status.access_token_present} />
+                    <SecretInput value={accessToken} onChange={(event) => setAccessToken(event.target.value)} autoComplete="new-password" placeholder="Enter or update Dhan Access Token" required={!status.access_token_present} revealLabel="Dhan Access Token" />
                   </label>
                   {!status.vault.ready && (
                     <p className="rounded-md border border-amber-800 bg-amber-950 p-3 text-sm text-amber-200">{status.vault.error}</p>
@@ -584,7 +585,7 @@ export default function SetupPage() {
                 <form onSubmit={submitSecret} className="space-y-4">
                   <label className="block text-sm">
                     <span className="mb-1 block text-[#d8d3c8]">Webhook Secret</span>
-                    <input value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} className="input" type="password" autoComplete="new-password" minLength={MIN_WEBHOOK_SECRET_LENGTH} placeholder={status.webhook_secret_masked ? `Saved ${formatMasked(status.webhook_secret_masked)}` : 'Required'} required={!status.webhook_secret_set} />
+                    <SecretInput value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="new-password" minLength={MIN_WEBHOOK_SECRET_LENGTH} placeholder="Enter or update webhook secret" required={!status.webhook_secret_set} revealLabel="webhook secret" />
                   </label>
                   <div className="flex flex-wrap gap-2">
                     <button disabled={busy === 'secret'} className="btn-primary" type="submit">
