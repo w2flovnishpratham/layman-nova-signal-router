@@ -1,5 +1,5 @@
 import { AlertTriangle, ShieldAlert, X } from 'lucide-react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 interface ConfirmModalProps {
   isOpen: boolean
@@ -8,6 +8,7 @@ interface ConfirmModalProps {
   confirmText?: string
   cancelText?: string
   variant?: 'danger' | 'warning' | 'primary'
+  requiredText?: string
   onConfirm: () => void
   onCancel: () => void
 }
@@ -19,9 +20,12 @@ export default function ConfirmModal({
   confirmText = 'Confirm',
   cancelText = 'Cancel',
   variant = 'primary',
+  requiredText,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
+  const [typedText, setTypedText] = useState('')
+
   // Prevent body scroll when modal is open
   useEffect(() => {
     if (isOpen) {
@@ -33,6 +37,10 @@ export default function ConfirmModal({
       document.body.style.overflow = ''
     }
   }, [isOpen])
+
+  useEffect(() => {
+    if (isOpen) setTypedText('')
+  }, [isOpen, requiredText])
 
   if (!isOpen) return null
 
@@ -61,6 +69,8 @@ export default function ConfirmModal({
   }
 
   const { border, bg: variantBg, accent, btn, icon: Icon } = variantColors[variant]
+  const requiresTypedConfirmation = Boolean(requiredText)
+  const canConfirm = !requiresTypedConfirmation || typedText.trim() === requiredText
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -105,6 +115,17 @@ export default function ConfirmModal({
             <p className="text-sm text-[#9a968f] leading-relaxed mt-2 whitespace-pre-wrap">
               {message}
             </p>
+            {requiresTypedConfirmation && (
+              <label className="mt-4 block text-xs font-semibold text-[#d8d3c8]">
+                Type <span className="font-mono text-[#f4f1ea]">{requiredText}</span> to confirm
+                <input
+                  className="mt-2 w-full rounded-lg border border-[#2b2a26] bg-[#090908] px-3 py-2 font-mono text-sm text-[#f4f1ea] outline-none focus:border-red-500"
+                  value={typedText}
+                  onChange={(event) => setTypedText(event.target.value)}
+                  autoComplete="off"
+                />
+              </label>
+            )}
           </div>
         </div>
 
@@ -120,7 +141,8 @@ export default function ConfirmModal({
           <button
             type="button"
             onClick={onConfirm}
-            className={`px-5 py-2 text-xs font-bold rounded-full transition-all cursor-pointer shadow-lg ${btn}`}
+            disabled={!canConfirm}
+            className={`px-5 py-2 text-xs font-bold rounded-full transition-all shadow-lg disabled:cursor-not-allowed disabled:opacity-45 ${canConfirm ? 'cursor-pointer' : ''} ${btn}`}
           >
             {confirmText}
           </button>

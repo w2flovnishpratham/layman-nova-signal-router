@@ -1,25 +1,31 @@
 from __future__ import annotations
 
+from collections import Counter
 from copy import deepcopy
+import csv
 import json
+from pathlib import Path
 import threading
+import time
 from typing import Any
 import uuid
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field, field_validator
 
-from app.config import settings
+from app.config import BACKEND_DIR, RUNTIME_STATE_DIR, settings
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import (
     VaultError,
     WEBHOOK_SECRET_MIN_LENGTH,
     clear_dhan_credentials,
+    dhan_credentials_snapshot,
     dhan_metadata,
     dhan_token_age_metadata,
     get_dhan_credentials,
     get_webhook_secret,
     mask_client_id,
+    restore_dhan_credentials_snapshot,
     save_dhan_credentials,
     save_webhook_secret,
     vault_status,
@@ -42,6 +48,91 @@ from app.services.state_store import (
 
 
 router = APIRouter()
+
+DHAN_CONNECT_RATE_LIMIT_MAX_ATTEMPTS = 5
+DHAN_CONNECT_RATE_LIMIT_WINDOW_SECONDS = 5 * 60
+RISK_OPTION_SL_MAX_PERCENT = 80.0
+RISK_OPTION_TP_MAX_PERCENT = 500.0
+_DHAN_CONNECT_RATE_LIMIT: dict[str, list[float]] = {}
+_DHAN_CONNECT_RATE_LIMIT_LOCK = threading.RLock()
+_NIFTY_LOT_SIZE_CACHE: dict[str, Any] = {"key": None, "lot_size": None}
+
+
+def _validate_sl_percent(value: float | None) -> float | None:
+    if value is None:
+        return value
+    if not 0 < float(value) < RISK_OPTION_SL_MAX_PERCENT:
+        raise ValueError(f"Option SL percent must be greater than 0 and less than {RISK_OPTION_SL_MAX_PERCENT:g}.")
+    return value
+
+
+def _validate_tp_percent(value: float | None) -> float | None:
+    if value is None:
+        return value
+    if not 0 < float(value) < RISK_OPTION_TP_MAX_PERCENT:
+        raise ValueError(f"Option TP percent must be greater than 0 and less than {RISK_OPTION_TP_MAX_PERCENT:g}.")
+    return value
+
+
+def _scrip_master_candidates() -> list[Path]:
+    configured = Path(settings.DHAN_SCRIP_MASTER_PATH)
+    target = configured if configured.is_absolute() else BACKEND_DIR / configured
+    return [target, RUNTIME_STATE_DIR / "api-scrip-master-detailed.csv"]
+
+
+def _current_nifty_lot_size_from_scrip_master() -> int | None:
+    candidates = [path for path in _scrip_master_candidates() if path.exists()]
+    cache_key = tuple((str(path), path.stat().st_mtime_ns, path.stat().st_size) for path in candidates)
+    if _NIFTY_LOT_SIZE_CACHE.get("key") == cache_key:
+        return _NIFTY_LOT_SIZE_CACHE.get("lot_size")
+
+    lot_size: int | None = None
+    for path in candidates:
+        counts: Counter[int] = Counter()
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    underlying = str(row.get("UNDERLYING_SYMBOL") or row.get("SEM_SMST_SECURITY_NAME") or "").upper()
+                    symbol_name = str(row.get("SYMBOL_NAME") or row.get("SM_SYMBOL_NAME") or "").upper()
+                    instrument = str(row.get("INSTRUMENT") or row.get("INSTRUMENT_TYPE") or row.get("SEM_INSTRUMENT_NAME") or "").upper()
+                    option_type = str(row.get("OPTION_TYPE") or row.get("SEM_OPTION_TYPE") or "").upper()
+                    if "NIFTY" != underlying and symbol_name != "NIFTY":
+                        continue
+                    if "OPT" not in instrument and option_type not in {"CE", "PE"}:
+                        continue
+                    raw_lot = row.get("LOT_SIZE") or row.get("SEM_LOT_UNITS") or row.get("LOT_UNITS")
+                    try:
+                        parsed_lot = int(float(str(raw_lot or "").strip()))
+                    except (TypeError, ValueError):
+                        continue
+                    if parsed_lot > 0:
+                        counts[parsed_lot] += 1
+            if counts:
+                lot_size = counts.most_common(1)[0][0]
+                break
+        except OSError:
+            continue
+
+    _NIFTY_LOT_SIZE_CACHE.update({"key": cache_key, "lot_size": lot_size})
+    return lot_size
+
+
+def _minimum_real_nifty_order_qty() -> int | None:
+    if settings.DHAN_MODE.upper() != "REAL":
+        return None
+    return _current_nifty_lot_size_from_scrip_master()
+
+
+def _validate_max_qty_per_order(value: int | None) -> int | None:
+    if value is None:
+        return value
+    minimum = _minimum_real_nifty_order_qty()
+    if minimum and int(value) < minimum:
+        raise ValueError(
+            f"Max quantity per order must be at least current NIFTY lot size ({minimum}) in REAL mode. "
+            f"Signal qty is absolute Dhan quantity, not lot count."
+        )
+    return value
 
 
 class DhanConnectRequest(BaseModel):
@@ -70,6 +161,10 @@ class RiskSetupRequest(BaseModel):
     allow_entry: bool = True
     allow_exit: bool = True
 
+    _max_qty_business_rule = field_validator("max_qty_per_order")(_validate_max_qty_per_order)
+    _sl_business_rule = field_validator("option_sl_percent")(_validate_sl_percent)
+    _tp_business_rule = field_validator("option_tp_percent")(_validate_tp_percent)
+
 
 class RiskSettingsPatchRequest(BaseModel):
     max_qty_per_order: int | None = Field(default=None, ge=1)
@@ -88,6 +183,10 @@ class RiskSettingsPatchRequest(BaseModel):
     allow_entry: bool | None = None
     allow_exit: bool | None = None
 
+    _max_qty_business_rule = field_validator("max_qty_per_order")(_validate_max_qty_per_order)
+    _sl_business_rule = field_validator("option_sl_percent")(_validate_sl_percent)
+    _tp_business_rule = field_validator("option_tp_percent")(_validate_tp_percent)
+
 
 def public_base_url() -> str:
     return settings.BACKEND_PUBLIC_BASE_URL.rstrip("/")
@@ -96,6 +195,61 @@ def public_base_url() -> str:
 def tradingview_webhook_url() -> str:
     base = public_base_url()
     return f"{base}/webhook/tradingview" if base else ""
+
+
+def _request_client_ip(request: Request) -> str:
+    real_ip = (request.headers.get("x-real-ip") or "").strip()
+    if real_ip:
+        return real_ip.split(",")[0].strip()
+    forwarded_for = (request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _enforce_dhan_connect_rate_limit(request: Request) -> None:
+    client_ip = _request_client_ip(request)
+    now = time.monotonic()
+    cutoff = now - DHAN_CONNECT_RATE_LIMIT_WINDOW_SECONDS
+    with _DHAN_CONNECT_RATE_LIMIT_LOCK:
+        attempts = [timestamp for timestamp in _DHAN_CONNECT_RATE_LIMIT.get(client_ip, []) if timestamp >= cutoff]
+        if len(attempts) >= DHAN_CONNECT_RATE_LIMIT_MAX_ATTEMPTS:
+            retry_after = max(1, int(DHAN_CONNECT_RATE_LIMIT_WINDOW_SECONDS - (now - attempts[0])))
+            _DHAN_CONNECT_RATE_LIMIT[client_ip] = attempts
+            log_audit_event(
+                "DHAN_CONNECT_RATE_LIMITED",
+                "Dhan connect attempt rate-limited.",
+                severity="WARNING",
+                metadata={"client_ip": client_ip, "retry_after_seconds": retry_after},
+            )
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many Dhan connect attempts. Try again in {retry_after} seconds.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        attempts.append(now)
+        _DHAN_CONNECT_RATE_LIMIT[client_ip] = attempts
+
+
+def _rollback_dhan_connect(previous_dhan: dict[str, Any] | None, previous_wallet: dict[str, Any], reason: str) -> None:
+    try:
+        restore_dhan_credentials_snapshot(previous_dhan)
+        set_wallet_snapshot(previous_wallet)
+        log_audit_event(
+            "DHAN_CONNECT_ROLLED_BACK",
+            "Dhan connect state rolled back after setup failure.",
+            severity="WARNING",
+            metadata={"reason": reason},
+        )
+    except Exception as rollback_exc:  # pragma: no cover - last-resort observability.
+        log_audit_event(
+            "DHAN_CONNECT_ROLLBACK_FAILED",
+            "Dhan connect rollback failed; manual credential check required.",
+            severity="ERROR",
+            metadata={"reason": reason, "rollback_error": str(rollback_exc)},
+        )
 
 
 def _model_dump(model: BaseModel, **kwargs: Any) -> dict[str, Any]:
@@ -196,8 +350,12 @@ def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, li
         issues.append("Daily loss limit must be greater than zero.")
     if float(runtime.get("option_sl_percent") or 0) <= 0:
         issues.append("Option SL percent must be greater than zero.")
+    elif float(runtime.get("option_sl_percent") or 0) >= RISK_OPTION_SL_MAX_PERCENT:
+        issues.append(f"Option SL percent must be less than {RISK_OPTION_SL_MAX_PERCENT:g}.")
     if float(runtime.get("option_tp_percent") or 0) <= 0:
         issues.append("Option TP percent must be greater than zero.")
+    elif float(runtime.get("option_tp_percent") or 0) >= RISK_OPTION_TP_MAX_PERCENT:
+        issues.append(f"Option TP percent must be less than {RISK_OPTION_TP_MAX_PERCENT:g}.")
     if float(runtime.get("option_ltp_poll_seconds") or 0) < 1:
         issues.append("Option LTP poll seconds must be at least 1.")
     if float(runtime.get("option_ws_stale_seconds") or 0) < 1:
@@ -208,6 +366,11 @@ def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, li
         issues.append("Option LTP source must be WEBSOCKET, REST, or AUTO.")
     if str(runtime.get("option_exit_mode") or "DHAN_SUPER").upper() not in {"DHAN_SUPER", "SERVER"}:
         issues.append("Option exit mode must be DHAN_SUPER or SERVER.")
+    minimum_qty = _minimum_real_nifty_order_qty()
+    if minimum_qty and int(runtime.get("max_qty_per_order") or 0) < minimum_qty:
+        issues.append(
+            f"Max quantity per order must be at least current NIFTY lot size ({minimum_qty}) in REAL mode."
+        )
     return not issues, issues
 
 
@@ -322,7 +485,8 @@ def setup_status() -> dict[str, Any]:
 
 
 @router.post("/setup/dhan/connect")
-def connect_dhan(body: DhanConnectRequest) -> dict[str, Any]:
+def connect_dhan(body: DhanConnectRequest, request: Request) -> dict[str, Any]:
+    _enforce_dhan_connect_rate_limit(request)
     existing = get_dhan_credentials()
     submitted_client_id = (body.client_id or "").strip()
     submitted_access_token = (body.access_token or "").strip()
@@ -343,16 +507,25 @@ def connect_dhan(body: DhanConnectRequest) -> dict[str, Any]:
         log_audit_event("DHAN_CONNECT_FAILED", message, severity="WARNING", metadata=details)
         raise HTTPException(status_code=400, detail={"message": message, **details})
 
-    if has_credential_changes:
-        try:
+    previous_dhan = dhan_credentials_snapshot()
+    previous_wallet = get_wallet_snapshot()
+    try:
+        if has_credential_changes:
             save_dhan_credentials(client_id, access_token)
-        except VaultError as exc:
-            log_audit_event("DHAN_CONNECT_BLOCKED", str(exc), severity="WARNING")
-            raise HTTPException(status_code=400, detail=f"Dhan connection failed: {exc}") from exc
+        wallet = set_wallet_snapshot(_wallet_from_funds(funds, get_wallet_snapshot())) if funds else get_wallet_snapshot()
+        token_meta = dhan_token_age_metadata()
+        outgoing = get_outgoing_ip(timeout=3.0)
+    except VaultError as exc:
+        if has_credential_changes:
+            _rollback_dhan_connect(previous_dhan, previous_wallet, str(exc))
+        log_audit_event("DHAN_CONNECT_BLOCKED", str(exc), severity="WARNING")
+        raise HTTPException(status_code=400, detail=f"Dhan connection failed: {exc}") from exc
+    except Exception as exc:
+        if has_credential_changes:
+            _rollback_dhan_connect(previous_dhan, previous_wallet, str(exc))
+        log_audit_event("DHAN_CONNECT_BLOCKED", str(exc), severity="ERROR")
+        raise HTTPException(status_code=400, detail=f"Dhan connection failed: {exc}") from exc
 
-    wallet = set_wallet_snapshot(_wallet_from_funds(funds, get_wallet_snapshot())) if funds else get_wallet_snapshot()
-    token_meta = dhan_token_age_metadata()
-    outgoing = get_outgoing_ip(timeout=3.0)
     log_audit_event(
         "DHAN_CONNECTED",
         "Dhan connected successfully.",

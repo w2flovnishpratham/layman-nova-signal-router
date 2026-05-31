@@ -14,6 +14,7 @@ import {
   stopEngine,
   updateRiskSettings,
 } from '../api/dashboard'
+import ConfirmModal from '../components/ConfirmModal'
 import SecretInput from '../components/SecretInput'
 import { DhanConnectPayload, DhanDebugConfig, RiskSettingsPatchPayload, RiskSetupPayload, ScripMasterStatus, SetupStatus } from '../types'
 
@@ -101,6 +102,19 @@ export default function SettingsPage() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [scripStatus, setScripStatus] = useState<ScripMasterStatus | null>(null)
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean
+    title: string
+    message: string
+    variant: 'danger' | 'warning' | 'primary'
+    onConfirm: () => void
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    variant: 'primary',
+    onConfirm: () => {},
+  })
 
   const loadData = async () => {
     const [response, scripResponse] = await Promise.all([
@@ -127,11 +141,12 @@ export default function SettingsPage() {
     return () => window.clearInterval(id)
   }, [scripStatus?.refresh_job.status, scripStatus?.refresh_job.job_id])
 
-  const run = async (key: string, action: Promise<unknown>, done: string) => {
+  const run = async (key: string, action: () => Promise<unknown>, done: string) => {
+    if (busy) return
     setBusy(key)
     setError('')
     try {
-      await action
+      await action()
       setMessage(done)
       await loadData()
     } catch (err) {
@@ -139,6 +154,27 @@ export default function SettingsPage() {
     } finally {
       setBusy(null)
     }
+  }
+
+  const confirmRun = (
+    title: string,
+    message: string,
+    key: string,
+    action: () => Promise<unknown>,
+    done: string,
+    variant: 'danger' | 'warning' | 'primary'
+  ) => {
+    if (busy) return
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      variant,
+      onConfirm: () => {
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }))
+        run(key, action, done)
+      },
+    })
   }
 
   const reconnectDhan = async (event: FormEvent) => {
@@ -165,7 +201,7 @@ export default function SettingsPage() {
       return
     }
 
-    await run('dhan', connectDhan(payload), 'Dhan credentials updated.')
+    await run('dhan', () => connectDhan(payload), 'Dhan credentials updated.')
     setClientId('')
     setAccessToken('')
   }
@@ -178,7 +214,7 @@ export default function SettingsPage() {
       setError(WEBHOOK_SECRET_LENGTH_ERROR)
       return
     }
-    await run('secret', saveWebhookSecret(trimmedSecret), 'Webhook secret updated.')
+    await run('secret', () => saveWebhookSecret(trimmedSecret), 'Webhook secret updated.')
     setWebhookSecret('')
   }
 
@@ -193,10 +229,11 @@ export default function SettingsPage() {
       allow_entry: risk.allow_entry,
       allow_exit: risk.allow_exit,
     }
-    await run('risk', updateRiskSettings(payload), 'Risk settings updated.')
+    await run('risk', () => updateRiskSettings(payload), 'Risk settings updated.')
   }
 
   const startScripRefresh = async () => {
+    if (busy) return
     setBusy('scrip')
     setError('')
     try {
@@ -220,6 +257,7 @@ export default function SettingsPage() {
     )
   }
   const scripJobRunning = scripStatus?.refresh_job.status === 'RUNNING'
+  const isBusy = busy !== null
 
   return (
     <div className="space-y-6">
@@ -228,7 +266,7 @@ export default function SettingsPage() {
           <h1 className="text-2xl font-semibold">Settings</h1>
           <p className="mt-1 text-sm text-[#9a968f]">Reconnect Dhan, rotate webhook secret, update risk, and control safety switches.</p>
         </div>
-        <button onClick={() => loadData()} className="btn-ghost flex items-center gap-2 self-start">
+        <button onClick={() => loadData()} disabled={isBusy} className="btn-ghost flex items-center gap-2 self-start">
           <RefreshCw size={16} /> Refresh
         </button>
       </div>
@@ -258,10 +296,10 @@ export default function SettingsPage() {
             <SecretInput value={accessToken} onChange={(event) => setAccessToken(event.target.value)} autoComplete="new-password" placeholder="Enter or update Dhan Access Token" required={!status.access_token_present} revealLabel="Dhan Access Token" />
           </label>
           <div className="flex flex-wrap gap-2">
-            <button disabled={busy === 'dhan'} className="btn-primary" type="submit">
+            <button disabled={isBusy} className="btn-primary" type="submit">
               Save Dhan
             </button>
-            <button disabled={busy === 'disconnect'} className="btn-ghost" type="button" onClick={() => run('disconnect', disconnectDhan(), 'Dhan disconnected and engine stopped.')}>
+            <button disabled={isBusy} className="btn-ghost" type="button" onClick={() => run('disconnect', () => disconnectDhan(), 'Dhan disconnected and engine stopped.')}>
               Disconnect
             </button>
           </div>
@@ -275,10 +313,10 @@ export default function SettingsPage() {
             <SecretInput value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="new-password" minLength={MIN_WEBHOOK_SECRET_LENGTH} placeholder="Enter or update webhook secret" required revealLabel="webhook secret" />
           </label>
           <div className="flex flex-wrap gap-2">
-            <button disabled={busy === 'secret'} className="btn-primary" type="submit">
+            <button disabled={isBusy} className="btn-primary" type="submit">
               Save Secret
             </button>
-            <button onClick={() => setWebhookSecret(randomSecret())} className="btn-ghost" type="button">
+            <button onClick={() => setWebhookSecret(randomSecret())} disabled={isBusy} className="btn-ghost" type="button">
               Generate Random Secret
             </button>
           </div>
@@ -288,7 +326,7 @@ export default function SettingsPage() {
       <section className="card space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-lg font-semibold">Dhan Scrip Master</h2>
-          <button onClick={startScripRefresh} disabled={busy === 'scrip' || scripJobRunning} className="btn-ghost flex items-center gap-2" type="button">
+          <button onClick={startScripRefresh} disabled={isBusy || scripJobRunning} className="btn-ghost flex items-center gap-2" type="button">
             <RefreshCw size={16} className={scripJobRunning ? 'animate-spin' : ''} /> Refresh
           </button>
         </div>
@@ -329,11 +367,11 @@ export default function SettingsPage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="block text-sm">
             <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option SL %</span>
-            <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_sl_percent || ''} onChange={(e) => setRisk({ ...risk, option_sl_percent: Number(e.target.value) })} required />
+            <input className="input no-spinner" type="number" min={0.1} max={79.9} step={0.1} value={risk.option_sl_percent || ''} onChange={(e) => setRisk({ ...risk, option_sl_percent: Number(e.target.value) })} required />
           </label>
           <label className="block text-sm">
             <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option TP %</span>
-            <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_tp_percent || ''} onChange={(e) => setRisk({ ...risk, option_tp_percent: Number(e.target.value) })} required />
+            <input className="input no-spinner" type="number" min={0.1} max={499.9} step={0.1} value={risk.option_tp_percent || ''} onChange={(e) => setRisk({ ...risk, option_tp_percent: Number(e.target.value) })} required />
           </label>
         </div>
         <div className="flex flex-wrap gap-3">
@@ -348,7 +386,7 @@ export default function SettingsPage() {
             <span className="nova-toggle__label">Allow exit</span>
           </label>
         </div>
-        <button disabled={busy === 'risk'} className="btn-primary" type="submit">
+        <button disabled={isBusy} className="btn-primary" type="submit">
           Save Risk Settings
         </button>
       </form>
@@ -357,10 +395,10 @@ export default function SettingsPage() {
         <div className="card space-y-4">
           <h2 className="text-lg font-semibold">Engine Control</h2>
           <div className="flex flex-wrap gap-2">
-            <button onClick={() => run('stop', stopEngine(), 'Engine stopped.')} className="btn-ghost flex items-center gap-2" type="button">
+            <button onClick={() => confirmRun('Stop Engine', 'Stop the engine? No new alerts will be processed.', 'stop', () => stopEngine(), 'Engine stopped.', 'warning')} disabled={isBusy} className="btn-ghost flex items-center gap-2" type="button">
               <Square size={16} /> Stop Engine
             </button>
-            <button onClick={() => run('resume', resumeTrading(), 'Emergency stop cleared.')} className="btn-primary" type="button">
+            <button onClick={() => run('resume', () => resumeTrading(), 'Emergency stop cleared.')} disabled={isBusy} className="btn-primary" type="button">
               Resume
             </button>
           </div>
@@ -370,13 +408,13 @@ export default function SettingsPage() {
         <div className="card space-y-4">
           <h2 className="text-lg font-semibold">Safety</h2>
           <div className="flex flex-wrap gap-2">
-            <button onClick={() => run('emergency', emergencyStop(), 'Emergency stop activated.')} className="btn-danger flex items-center gap-2" type="button">
+            <button onClick={() => confirmRun('Activate Emergency Stop', 'No new entries will be routed. Are you sure you want to stop trading?', 'emergency', () => emergencyStop(), 'Emergency stop activated.', 'danger')} disabled={isBusy} className="btn-danger flex items-center gap-2" type="button">
               <ShieldAlert size={16} /> Emergency Stop
             </button>
-            <button onClick={() => run('kill-on', setGlobalKillSwitch(true), 'Global kill switch enabled.')} className="btn-danger flex items-center gap-2" type="button">
+            <button onClick={() => confirmRun('Enable Kill Switch', 'Turn ON the global kill switch? All trading will pause.', 'kill-on', () => setGlobalKillSwitch(true), 'Global kill switch enabled.', 'danger')} disabled={isBusy} className="btn-danger flex items-center gap-2" type="button">
               <AlertTriangle size={16} /> Kill Switch On
             </button>
-            <button onClick={() => run('kill-off', setGlobalKillSwitch(false), 'Global kill switch cleared.')} className="btn-ghost" type="button">
+            <button onClick={() => confirmRun('Disable Kill Switch', 'Turn OFF the global kill switch?', 'kill-off', () => setGlobalKillSwitch(false), 'Global kill switch cleared.', 'primary')} disabled={isBusy} className="btn-ghost" type="button">
               Kill Switch Off
             </button>
           </div>
@@ -399,6 +437,14 @@ export default function SettingsPage() {
           {debug.warnings.length > 0 && <p className="text-sm text-amber-300">{debug.warnings.join(' ')}</p>}
         </section>
       )}
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+      />
     </div>
   )
 }

@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.config import settings
 from app.services.audit_logger import log_audit_event
@@ -22,6 +22,10 @@ router = APIRouter()
 
 class ToggleRequest(BaseModel):
     enabled: bool
+
+
+class FreshStartRequest(BaseModel):
+    confirmation: str
 
 
 @router.post("/emergency-stop")
@@ -62,7 +66,9 @@ def reset_state() -> dict:
 
 
 @router.post("/fresh-start")
-def fresh_start() -> dict:
+def fresh_start(body: FreshStartRequest) -> dict:
+    if body.confirmation.strip() != "FRESH START":
+        raise HTTPException(status_code=400, detail="Type FRESH START to confirm this destructive action.")
     open_position = get_open_position()
     if open_position.get("has_open_position"):
         return {"ok": False, "message": "Fresh start skipped because an open position is tracked."}

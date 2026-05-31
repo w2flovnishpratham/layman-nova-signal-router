@@ -198,6 +198,20 @@ def save_dhan_credentials(client_id: str, access_token: str) -> dict[str, Any]:
     return dhan_metadata()
 
 
+def dhan_credentials_snapshot() -> dict[str, Any] | None:
+    payload = _read_payload()
+    dhan = payload.get("dhan")
+    if isinstance(dhan, dict):
+        return deepcopy(dhan)
+    return None
+
+
+def restore_dhan_credentials_snapshot(snapshot: dict[str, Any] | None) -> None:
+    payload = _read_payload()
+    payload["dhan"] = deepcopy(snapshot) if isinstance(snapshot, dict) else None
+    _write_payload(payload)
+
+
 def clear_dhan_credentials() -> None:
     payload = _read_payload()
     payload["dhan"] = None

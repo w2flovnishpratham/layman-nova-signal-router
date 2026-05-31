@@ -47,7 +47,7 @@ export const emergencyStop = () => api.post('/control/emergency-stop')
 export const resumeTrading = () => api.post('/control/resume')
 export const setGlobalKillSwitch = (enabled: boolean) => api.post('/control/global-kill-switch', { enabled })
 export const resetRuntimeState = () => api.post('/control/reset-state')
-export const freshStart = () => api.post<{ ok: boolean; message?: string }>('/control/fresh-start')
+export const freshStart = (confirmation: string) => api.post<{ ok: boolean; message?: string }>('/control/fresh-start', { confirmation })
 export const clearSeenSignals = () => api.post('/control/clear-seen-signals')
 export const testDhan = () => api.post<{ success: boolean; message: string; wallet?: WalletSnapshot }>('/broker/dhan/test')
 

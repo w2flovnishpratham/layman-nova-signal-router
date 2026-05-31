@@ -32,10 +32,10 @@ Severity: Critical / High / Medium / Low
 
 | ID | Sev | Item | Status | Notes |
 |---|---|---|---|---|
-| H3 | High | No rate limit on /setup/dhan/* | Pending | Per-IP throttle, 5/5min |
-| H4 | High | connect_dhan partial-state failure | Pending | Transactional rollback |
-| H5 | High | Risk settings business-rule gaps | Pending | Validators: SL 0-80%, TP 0-500%, qty >= lot size |
-| H7 | High | Destructive POSTs no confirmation | Pending | Wire ConfirmModal to all /control/* dangerous endpoints |
+| H3 | High | No rate limit on /setup/dhan/* | Done | Per-IP throttle, 5 Dhan connect attempts / 5 minutes |
+| H4 | High | connect_dhan partial-state failure | Done | Credential and wallet snapshot rollback around connect save flow |
+| H5 | High | Risk settings business-rule gaps | Done | Validators: SL 0-80%, TP 0-500%, REAL-mode max qty >= current Dhan NIFTY lot size |
+| H7 | High | Destructive POSTs no confirmation | Done | ConfirmModal on dangerous controls; fresh-start requires typed `FRESH START` request body |
 | H8 | High | Concurrent settings edits | Pending | Optimistic locking via version field |
 | H9 | High | Backend restart during form submit | Pending | Graceful shutdown flushes state |
 | H10 | Medium | Webhook secret strength | Done | Min length 16 + entropy check in setup, readiness, and webhook routing |
@@ -69,7 +69,7 @@ Severity: Critical / High / Medium / Low
 
 | ID | Sev | Item | Status | Notes |
 |---|---|---|---|---|
-| FE-H1 | High | Setup form busy is single string (race) | Pending | Per-button busy flag |
+| FE-H1 | High | Setup form busy is single string (race) | Done | Mutating form/control buttons are disabled while a request is in flight |
 | FE-H2 | High | No request deduplication | Pending | Cache in-flight promises by URL |
 | FE-H3 | High | ConfirmModal closes on backdrop click | Pending | Disable for destructive variants |
 | FE-H4 | High | ConfirmModal: no focus trap / Esc-to-close | Pending | Add keyboard handling |
@@ -92,7 +92,7 @@ Severity: Critical / High / Medium / Low
 | ID | Sev | Item | Status | Notes |
 |---|---|---|---|---|
 | P1 | Critical | No frontend tests | Pending | Vitest + React Testing Library scaffold |
-| P2 | Critical | No CI/CD | Pending | GitHub Actions: pytest, npm build, lint |
+| P2 | Critical | No CI/CD | Done | GitHub Actions runs backend tests, frontend build, and VPS deploy |
 | P3 | Critical | No state file backup | Pending | Nightly tar to off-VPS storage |
 | P4 | Critical | No uptime monitoring | Pending | UptimeRobot / BetterStack on /health |
 | P5 | High | No Docker setup | Pending | docker-compose for backend + nginx |
@@ -122,6 +122,7 @@ Most recent fixes at the top.
 
 | Date | ID(s) | Commit | Notes |
 |---|---|---|---|
+| 2026-06-01 | H3, H4, H5, H6, H7 | _(pending push)_ | Rate-limited Dhan connect attempts, transactional connect rollback, risk business validators, in-flight button guards, and destructive-control confirmations |
 | 2026-05-31 | C5 | _(pending push)_ | Dhan order and Super Order timeouts recover matching order-book rows by correlationId; unresolved timeouts surface ORDER_STATE_UNKNOWN |
 | 2026-05-31 | C6 | _(pending push)_ | Startup reconciler verifies persisted open position against Dhan before monitors start; clears stale local state or re-adopts visible Super Order legs |
 | 2026-05-31 | H12 | _(pending push)_ | Scrip master refresh now starts async job and status endpoint exposes `refresh_job` |

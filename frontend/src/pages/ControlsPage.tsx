@@ -70,17 +70,20 @@ export default function ControlsPage() {
   const status = useSystemStatus()
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean
     title: string
     message: string
     variant: 'danger' | 'warning' | 'primary'
+    requiredText?: string
     onConfirm: () => void
   }>({
     isOpen: false,
     title: '',
     message: '',
     variant: 'primary',
+    requiredText: undefined,
     onConfirm: () => {},
   })
 
@@ -92,24 +95,32 @@ export default function ControlsPage() {
     message: string,
     action: () => Promise<unknown>,
     successMsg: string,
-    variant: 'danger' | 'warning' | 'primary'
+    variant: 'danger' | 'warning' | 'primary',
+    requiredText?: string
   ) => {
+    if (busy) return
     setConfirmModal({
       isOpen: true,
       title,
       message,
       variant,
+      requiredText,
       onConfirm: async () => {
         setConfirmModal((prev) => ({ ...prev, isOpen: false }))
+        setBusy(title)
         try {
           await action()
           ok(successMsg)
         } catch {
           err('Request failed — check backend logs.')
+        } finally {
+          setBusy(null)
         }
       },
     })
   }
+
+  const isBusy = busy !== null
 
   return (
     <div className="space-y-8 w-full">
@@ -144,14 +155,15 @@ export default function ControlsPage() {
       <section className="space-y-3">
         <SectionLabel>Emergency</SectionLabel>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <CtrlBtn icon={ShieldAlert} label="Emergency stop" description="Immediately block all new entry risk checks." variant="danger"
+          <CtrlBtn icon={ShieldAlert} label="Emergency stop" description="Immediately block all new entry risk checks." variant="danger" disabled={isBusy}
             onClick={() => triggerConfirm('Activate Emergency Stop', 'No new entries will be routed. Are you sure you want to stop trading?', emergencyStop, 'Emergency stop activated.', 'danger')} />
-          <CtrlBtn icon={ShieldCheck} label="Resume trading" description="Clear emergency stop and kill switch. Re-enables normal flow." variant="primary"
+          <CtrlBtn icon={ShieldCheck} label="Resume trading" description="Clear emergency stop and kill switch. Re-enables normal flow." variant="primary" disabled={isBusy}
             onClick={() => triggerConfirm('Resume Trading', 'Resume trading? Risk checks will be re-enabled.', resumeTrading, 'Trading resumed.', 'primary')} />
           <CtrlBtn icon={Zap}
             label="Toggle kill switch"
             description={status.killSwitch ? 'Kill switch ON — click to turn OFF.' : 'Kill switch OFF — click to turn ON.'}
             variant={status.killSwitch ? 'danger' : 'warning'}
+            disabled={isBusy}
             onClick={() => triggerConfirm(
               status.killSwitch ? 'Disable Kill Switch' : 'Enable Kill Switch',
               status.killSwitch ? 'Turn OFF the global kill switch?' : 'Turn ON the global kill switch? All trading will pause.',
@@ -159,7 +171,7 @@ export default function ControlsPage() {
               `Kill switch ${status.killSwitch ? 'disabled' : 'enabled'}.`,
               status.killSwitch ? 'primary' : 'danger'
             )} />
-          <CtrlBtn icon={Square} label="Stop engine" description="Stop the signal routing engine. No new alerts will be processed." variant="warning"
+          <CtrlBtn icon={Square} label="Stop engine" description="Stop the signal routing engine. No new alerts will be processed." variant="warning" disabled={isBusy}
             onClick={() => triggerConfirm('Stop Engine', 'Stop the engine? No new alerts will be processed.', stopEngine, 'Engine stopped.', 'warning')} />
         </div>
       </section>
@@ -167,9 +179,9 @@ export default function ControlsPage() {
       <section className="space-y-3">
         <SectionLabel>Entry flow</SectionLabel>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <CtrlBtn icon={Square} label="Pause entries" description="Block new entry orders without clearing position state." variant="warning"
+          <CtrlBtn icon={Square} label="Pause entries" description="Block new entry orders without clearing position state." variant="warning" disabled={isBusy}
             onClick={() => triggerConfirm('Pause Entries', 'Pause new entries?', pauseEntries, 'Entries paused.', 'warning')} />
-          <CtrlBtn icon={RefreshCw} label="Resume entries" description="Re-enable entry routing after a pause." variant="primary"
+          <CtrlBtn icon={RefreshCw} label="Resume entries" description="Re-enable entry routing after a pause." variant="primary" disabled={isBusy}
             onClick={() => triggerConfirm('Resume Entries', 'Resume entry routing?', resumeEntries, 'Entries resumed.', 'primary')} />
         </div>
       </section>
@@ -177,12 +189,12 @@ export default function ControlsPage() {
       <section className="space-y-3">
         <SectionLabel>State management</SectionLabel>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <CtrlBtn icon={RefreshCw} label="Clear seen signals" description="Reset duplicate-detection cache. Allows re-processing of old signal IDs." variant="ghost"
+          <CtrlBtn icon={RefreshCw} label="Clear seen signals" description="Reset duplicate-detection cache. Allows re-processing of old signal IDs." variant="ghost" disabled={isBusy}
             onClick={() => triggerConfirm('Clear Seen Signals', 'Clear seen signals cache? Old signal IDs can re-trigger.', clearSeenSignals, 'Seen signals cleared.', 'primary')} />
-          <CtrlBtn icon={Trash2} label="Reset runtime state" description="Clear open position and app state. Does not affect broker orders." variant="warning"
+          <CtrlBtn icon={Trash2} label="Reset runtime state" description="Clear open position and app state. Does not affect broker orders." variant="warning" disabled={isBusy}
             onClick={() => triggerConfirm('Reset Runtime State', 'Reset runtime state? Local position tracking will be cleared.', resetRuntimeState, 'Runtime state reset.', 'warning')} />
-          <CtrlBtn icon={AlertTriangle} label="Fresh start" description="Full reset: clears position, signals, state. Use after a manual close in Dhan." variant="danger"
-            onClick={() => triggerConfirm('Fresh Start', 'Full fresh start? This clears all local state including position tracking.', freshStart, 'Fresh start complete.', 'danger')} />
+          <CtrlBtn icon={AlertTriangle} label="Fresh start" description="Full reset: clears position, signals, state. Use after a manual close in Dhan." variant="danger" disabled={isBusy}
+            onClick={() => triggerConfirm('Fresh Start', 'Full fresh start? This clears all local state including position tracking.', () => freshStart('FRESH START'), 'Fresh start complete.', 'danger', 'FRESH START')} />
         </div>
       </section>
 
@@ -211,8 +223,9 @@ export default function ControlsPage() {
         title={confirmModal.title}
         message={confirmModal.message}
         variant={confirmModal.variant}
+        requiredText={confirmModal.requiredText}
         onConfirm={confirmModal.onConfirm}
-        onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+        onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false, requiredText: undefined }))}
       />
     </div>
   )

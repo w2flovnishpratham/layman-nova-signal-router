@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import settings
+from app.routers import setup as setup_router
 from app.schemas.signal import NormalizedSignal
 from app.services import audit_logger, credential_vault, state_store
 from app.services import risk_manager
@@ -75,6 +76,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "WEBHOOK_TRADING_ENABLED", True)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
     monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
+    setup_router._DHAN_CONNECT_RATE_LIMIT.clear()
 
     from app.main import app
 
@@ -1446,6 +1448,77 @@ class TestEngineStartReadiness:
 # ===========================================================================
 
 class TestSetupSecurity:
+    def test_dhan_connect_is_rate_limited_per_client_ip(self, client, monkeypatch):
+        setup_router._DHAN_CONNECT_RATE_LIMIT.clear()
+        validation_calls = {"count": 0}
+
+        def fake_validate(client_id: str, access_token: str):
+            validation_calls["count"] += 1
+            return False, "Dhan connection failed: token invalid.", None, {"status_code": 401}
+
+        monkeypatch.setattr(setup_router, "validate_dhan_credentials", fake_validate)
+        headers = {"x-real-ip": "198.51.100.10"}
+
+        try:
+            for index in range(setup_router.DHAN_CONNECT_RATE_LIMIT_MAX_ATTEMPTS):
+                response = client.post(
+                    "/api/setup/dhan/connect",
+                    json={"client_id": "1000000001", "access_token": f"bad-token-{index}"},
+                    headers=headers,
+                )
+                assert response.status_code == 400
+
+            blocked = client.post(
+                "/api/setup/dhan/connect",
+                json={"client_id": "1000000001", "access_token": "bad-token-over-limit"},
+                headers=headers,
+            )
+
+            assert blocked.status_code == 429
+            assert blocked.headers["retry-after"]
+            assert "Too many Dhan connect attempts" in blocked.json()["detail"]
+            assert validation_calls["count"] == setup_router.DHAN_CONNECT_RATE_LIMIT_MAX_ATTEMPTS
+        finally:
+            setup_router._DHAN_CONNECT_RATE_LIMIT.clear()
+
+    def test_connect_dhan_rolls_back_saved_credentials_if_save_fails(self, client, monkeypatch):
+        client.post(
+            "/api/setup/dhan/connect",
+            json={"client_id": "1000000001", "access_token": "old-token"},
+            headers={"x-real-ip": "198.51.100.20"},
+        )
+        previous_wallet = state_store.set_wallet_snapshot(
+            {
+                **state_store.default_wallet_snapshot(),
+                "success": True,
+                "message": "Previous wallet snapshot.",
+                "available_balance": 12345.0,
+            }
+        )
+
+        def fake_save(client_id: str, access_token: str):
+            credential_vault._LOCAL_MEMORY_PAYLOAD["dhan"] = {
+                "client_id": client_id,
+                "access_token": access_token,
+                "connected_at": state_store.utc_now(),
+            }
+            raise credential_vault.VaultError("simulated vault write failure")
+
+        monkeypatch.setattr(setup_router, "save_dhan_credentials", fake_save)
+
+        response = client.post(
+            "/api/setup/dhan/connect",
+            json={"client_id": "1000000002", "access_token": "new-token"},
+            headers={"x-real-ip": "198.51.100.20"},
+        )
+
+        creds = credential_vault.get_dhan_credentials()
+        assert response.status_code == 400
+        assert creds is not None
+        assert creds.client_id == "1000000001"
+        assert creds.access_token == "old-token"
+        assert state_store.get_wallet_snapshot()["available_balance"] == previous_wallet["available_balance"]
+
     def test_connect_dhan_does_not_return_access_token(self, client):
         """POST /api/setup/dhan/connect must never return the access_token."""
         response = client.post(
@@ -1507,6 +1580,38 @@ class TestSetupSecurity:
         assert saved["option_ltp_source"] == "REST"
         assert saved["option_exit_mode"] == "SERVER"
         assert saved["option_ws_stale_seconds"] == 9
+
+    def test_risk_settings_reject_extreme_sl_and_tp_percentages(self, client):
+        sl_response = client.patch("/api/setup/risk", json={"option_sl_percent": 80})
+        tp_response = client.patch("/api/setup/risk", json={"option_tp_percent": 500})
+
+        assert sl_response.status_code == 422
+        assert tp_response.status_code == 422
+        assert "less than 80" in str(sl_response.json())
+        assert "less than 500" in str(tp_response.json())
+
+    def test_real_mode_risk_settings_require_current_nifty_lot_size(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(setup_router, "_current_nifty_lot_size_from_scrip_master", lambda: 65)
+
+        too_small = client.patch("/api/setup/risk", json={"max_qty_per_order": 1})
+        valid = client.patch("/api/setup/risk", json={"max_qty_per_order": 65})
+
+        assert too_small.status_code == 422
+        assert "current NIFTY lot size (65)" in str(too_small.json())
+        assert valid.status_code == 200
+        assert valid.json()["settings"]["max_qty_per_order"] == 65
+
+    def test_fresh_start_requires_typed_confirmation(self, client):
+        missing = client.post("/api/control/fresh-start", json={})
+        wrong = client.post("/api/control/fresh-start", json={"confirmation": "fresh start"})
+        valid = client.post("/api/control/fresh-start", json={"confirmation": "FRESH START"})
+
+        assert missing.status_code == 422
+        assert wrong.status_code == 400
+        assert "Type FRESH START" in wrong.json()["detail"]
+        assert valid.status_code == 200
+        assert valid.json()["ok"] is True
 
     def test_setup_status_does_not_return_access_token(self, client):
         """GET /api/setup/status must never expose the access token."""

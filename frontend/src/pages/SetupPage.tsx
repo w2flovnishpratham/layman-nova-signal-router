@@ -329,6 +329,7 @@ export default function SetupPage() {
 
   const submitDhan = async (event: { preventDefault: () => void }, action: 'connect' | 'test') => {
     event.preventDefault()
+    if (busy) return
     setBusy(action)
     setError('')
     setMessage('')
@@ -360,6 +361,7 @@ export default function SetupPage() {
 
   const submitSecret = async (event: FormEvent) => {
     event.preventDefault()
+    if (busy) return
     const trimmedSecret = webhookSecret.trim()
     if (trimmedSecret.length < MIN_WEBHOOK_SECRET_LENGTH) {
       setMessage('')
@@ -382,6 +384,7 @@ export default function SetupPage() {
 
   const submitRisk = async (event: FormEvent) => {
     event.preventDefault()
+    if (busy) return
     setBusy('risk')
     setError('')
     try {
@@ -426,6 +429,7 @@ export default function SetupPage() {
   }
 
   const executeStartEngine = async (live: boolean) => {
+    if (busy) return
     setBusy('engine')
     setError('')
     try {
@@ -441,6 +445,7 @@ export default function SetupPage() {
   }
 
   const runStopEngine = async () => {
+    if (busy) return
     setBusy('stop-engine')
     setError('')
     try {
@@ -476,6 +481,7 @@ export default function SetupPage() {
     risk: Boolean(status.risk_configured),
   }
   const setupComplete = completed.dhan && completed.secret && completed.risk
+  const isBusy = busy !== null
 
   return (
     <div className="space-y-6">
@@ -484,7 +490,7 @@ export default function SetupPage() {
           <h1 className="text-2xl font-semibold">Setup</h1>
           <p className="mt-1 text-sm text-[#9a968f]">Connect Dhan, save your webhook secret, set risk limits, then start the engine.</p>
         </div>
-        <button onClick={() => loadData()} className="btn-ghost flex items-center gap-2 self-start">
+        <button onClick={() => loadData()} disabled={isBusy} className="btn-ghost flex items-center gap-2 self-start">
           <RefreshCw size={16} /> Refresh
         </button>
       </div>
@@ -555,10 +561,10 @@ export default function SetupPage() {
                     <p className="rounded-md border border-amber-800 bg-amber-950 p-3 text-sm text-amber-200">{status.vault.error}</p>
                   )}
                   <div className="flex flex-wrap gap-2">
-                    <button disabled={busy === 'connect'} className="btn-primary" type="submit">
+                    <button disabled={isBusy} className="btn-primary" type="submit">
                       Connect Dhan
                     </button>
-                    <button disabled={busy === 'test'} onClick={(event) => submitDhan(event, 'test')} className="btn-ghost" type="button">
+                    <button disabled={isBusy} onClick={(event) => submitDhan(event, 'test')} className="btn-ghost" type="button">
                       Test Connection
                     </button>
                   </div>
@@ -593,10 +599,10 @@ export default function SetupPage() {
                     <SecretInput value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} autoComplete="new-password" minLength={MIN_WEBHOOK_SECRET_LENGTH} placeholder="Enter or update webhook secret" required={!status.webhook_secret_set} revealLabel="webhook secret" />
                   </label>
                   <div className="flex flex-wrap gap-2">
-                    <button disabled={busy === 'secret'} className="btn-primary" type="submit">
+                    <button disabled={isBusy} className="btn-primary" type="submit">
                       Save Secret
                     </button>
-                    <button onClick={() => setWebhookSecret(randomSecret())} className="btn-ghost" type="button">
+                    <button onClick={() => setWebhookSecret(randomSecret())} disabled={isBusy} className="btn-ghost" type="button">
                       Generate Random Secret
                     </button>
                   </div>
@@ -644,11 +650,11 @@ export default function SetupPage() {
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <label className="block text-sm">
                   <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option SL %</span>
-                  <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_sl_percent || ''} onChange={(event) => setRisk({ ...risk, option_sl_percent: Number(event.target.value) })} required />
+                  <input className="input no-spinner" type="number" min={0.1} max={79.9} step={0.1} value={risk.option_sl_percent || ''} onChange={(event) => setRisk({ ...risk, option_sl_percent: Number(event.target.value) })} required />
                 </label>
                 <label className="block text-sm">
                   <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option TP %</span>
-                  <input className="input no-spinner" type="number" min={0.1} step={0.1} value={risk.option_tp_percent || ''} onChange={(event) => setRisk({ ...risk, option_tp_percent: Number(event.target.value) })} required />
+                  <input className="input no-spinner" type="number" min={0.1} max={499.9} step={0.1} value={risk.option_tp_percent || ''} onChange={(event) => setRisk({ ...risk, option_tp_percent: Number(event.target.value) })} required />
                 </label>
               </div>
               <div className="flex flex-wrap gap-3">
@@ -663,7 +669,7 @@ export default function SetupPage() {
                   <span className="nova-toggle__label">Allow exit</span>
                 </label>
               </div>
-              <button disabled={busy === 'risk'} className="btn-primary" type="submit">
+              <button disabled={isBusy} className="btn-primary" type="submit">
                 Save Risk Settings
               </button>
             </form>
@@ -678,7 +684,7 @@ export default function SetupPage() {
             </div>
             <div className="mt-4 flex flex-col gap-3 text-sm md:flex-row md:items-center md:justify-between">
               <p className="min-w-0 break-all font-mono text-[#d8d3c8]">{status.webhook_url || '-'}</p>
-              <button onClick={copyWebhook} className="btn-ghost flex items-center gap-2 self-start" type="button">
+              <button onClick={copyWebhook} disabled={isBusy} className="btn-ghost flex items-center gap-2 self-start" type="button">
                 <Copy size={16} /> Copy URL
               </button>
             </div>
@@ -693,10 +699,10 @@ export default function SetupPage() {
             <p className="mt-1 text-sm text-[#9a968f]">Webhook trading is enabled only after this setup check passes.</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button onClick={runStartEngine} disabled={busy === 'engine' || status.engine_started} className="btn-primary flex items-center gap-2" type="button">
+            <button onClick={runStartEngine} disabled={isBusy || status.engine_started} className="btn-primary flex items-center gap-2" type="button">
               <Play size={16} /> Start Engine
             </button>
-            <button onClick={runStopEngine} disabled={busy === 'stop-engine' || !status.engine_started} className="btn-ghost btn-stop-engine flex items-center gap-2" type="button">
+            <button onClick={runStopEngine} disabled={isBusy || !status.engine_started} className="btn-ghost btn-stop-engine flex items-center gap-2" type="button">
               <Square size={16} /> Stop Engine
             </button>
           </div>
