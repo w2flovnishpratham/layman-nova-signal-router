@@ -11,6 +11,8 @@ import {
   RiskSetupPayload,
   RiskSettingsPatchPayload,
   SetupStatus,
+  ScripMasterRefreshResponse,
+  ScripMasterStatus,
   WalletSnapshot,
   WebhookUrlInfo,
 } from '../types'
@@ -32,9 +34,11 @@ export const getOrders = () => api.get<OrderEvent[]>('/orders')
 export const getLogs = () => api.get<LogBundle>('/logs')
 export const getPositions = () => api.get<OpenPosition>('/positions')
 export const getWebhookUrl = () => api.get<WebhookUrlInfo>('/system/webhook-url')
-export const getChatFeed = () => api.get<any[]>('/dashboard/chat-feed')
+export const getChatFeed = (todayOnly = false) => api.get<any[]>('/dashboard/chat-feed', { params: todayOnly ? { today_only: true } : {} })
 export const getDhanFunds = () => api.get<WalletSnapshot>('/broker/dhan/funds')
 export const getDhanDebugConfig = () => api.get<DhanDebugConfig>('/debug/dhan/config')
+export const refreshScripMaster = () => api.post<ScripMasterRefreshResponse>('/setup/scrip-master/refresh')
+export const getScripMasterStatus = () => api.get<ScripMasterStatus>('/setup/scrip-master/status')
 export const prepareDhanOrder = (payload: Record<string, unknown>) => api.post<Record<string, unknown>>('/debug/dhan/prepare-order', payload)
 export const dryRunLiveDhanOrder = (payload: Record<string, unknown>) => api.post<Record<string, unknown>>('/debug/dhan/live-order-dry-run', payload)
 export const safeDhanPing = () => api.post<Record<string, unknown>>('/debug/dhan/ping-safe')

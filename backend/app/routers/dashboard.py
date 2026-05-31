@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Query
 
 from app.config import settings
@@ -9,7 +10,7 @@ from app.routers.setup import tradingview_webhook_url
 from app.services.audit_logger import read_jsonl
 from app.services.credential_vault import dhan_metadata, get_dhan_credentials, webhook_secret_metadata
 from app.services.position_reconciler import get_reconciled_open_position
-from app.services.state_store import get_app_state, get_runtime_settings
+from app.services.state_store import get_app_state, get_external_positions, get_runtime_settings
 from app.services.wallet_service import refresh_wallet_snapshot
 
 
@@ -68,6 +69,7 @@ def dashboard_summary() -> dict:
         "engine_started": bool(app_state.get("webhook_trading_enabled")),
         "app_state": app_state,
         "open_position": open_position,
+        "external_positions": get_external_positions(),
         "wallet": wallet,
         "settings": runtime_settings,
         "webhook_url": tradingview_url,
@@ -140,12 +142,40 @@ def webhook_url() -> dict:
 
 
 @router.get("/dashboard/chat-feed")
-def chat_feed() -> list[dict]:
+def chat_feed(today_only: bool = Query(default=False)) -> list[dict]:
     # Read latest events from log files
     webhook_events = read_jsonl("webhook", limit=100)
     order_events = read_jsonl("order", limit=100)
     audit_events = read_jsonl("audit", limit=100)
     error_events = read_jsonl("error", limit=100)
+
+    # Optionally restrict to today's IST date so the Setup page only shows
+    # the current session's activity. Full history remains available via
+    # /logs (LogsPage) and the dedicated Activities table.
+    if today_only:
+        ist = ZoneInfo("Asia/Kolkata")
+        ist_today_start = datetime.now(ist).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start_utc = ist_today_start.astimezone(timezone.utc)
+
+        def _ev_ts(ev: dict) -> datetime:
+            ts = ev.get("timestamp")
+            if not ts:
+                return datetime.fromisoformat("1970-01-01T00:00:00+00:00")
+            try:
+                parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed
+            except Exception:
+                return datetime.fromisoformat("1970-01-01T00:00:00+00:00")
+
+        def _today_only(events: list[dict]) -> list[dict]:
+            return [ev for ev in events if _ev_ts(ev) >= today_start_utc]
+
+        webhook_events = _today_only(webhook_events)
+        order_events = _today_only(order_events)
+        audit_events = _today_only(audit_events)
+        error_events = _today_only(error_events)
 
     # Parse ISO timestamp to datetime object
     def parse_ts(ts_str: str | None) -> datetime:

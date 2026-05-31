@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { getDashboardSummary } from '../api/dashboard'
+import { usePolling } from './usePolling'
 import type { DashboardSummary } from '../types'
 
 export type StatusKind = 'loading' | 'ready' | 'live' | 'blocked' | 'error'
@@ -59,20 +60,19 @@ function deriveStatus(data: DashboardSummary | null, fetchError: boolean): Syste
   }
 }
 
-export function useSystemStatus(intervalMs = 5000): SystemStatus {
+// FE-C2 — Was 5s. Bumped to 10s because this is the global topbar pill,
+// rendered on every page; sub-10s freshness for "is the backend alive" is
+// overkill. usePolling also pauses while document.hidden (FE-C3).
+export function useSystemStatus(intervalMs = 10000): SystemStatus {
   const [data, setData] = useState<DashboardSummary | null>(null)
   const [fetchError, setFetchError] = useState(false)
 
-  useEffect(() => {
-    const run = () => {
-      getDashboardSummary()
-        .then(r => { setData(r.data); setFetchError(false) })
-        .catch(() => setFetchError(true))
-    }
-    run()
-    const id = window.setInterval(run, intervalMs)
-    return () => window.clearInterval(id)
-  }, [intervalMs])
+  const run = () =>
+    getDashboardSummary()
+      .then(r => { setData(r.data); setFetchError(false) })
+      .catch(() => setFetchError(true))
+
+  usePolling(run, intervalMs)
 
   return deriveStatus(data, fetchError)
 }

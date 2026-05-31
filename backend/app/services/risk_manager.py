@@ -90,8 +90,10 @@ def _common_signal_checks(payload: NormalizedSignal) -> RiskDecision | None:
     return None
 
 
-def evaluate_entry(payload: NormalizedSignal) -> RiskDecision:
-    runtime = get_runtime_settings()
+def evaluate_entry(payload: NormalizedSignal, runtime: dict | None = None) -> RiskDecision:
+    # C11 — Use the caller's snapshot if provided; otherwise read live.
+    if runtime is None:
+        runtime = get_runtime_settings()
     common = _common_signal_checks(payload)
     if common:
         return common
@@ -138,8 +140,10 @@ def _is_opposite_option_side(left: str | None, right: str | None) -> bool:
     return {left_side, right_side} == {"CE", "PE"}
 
 
-def evaluate_reversal_entry(payload: NormalizedSignal) -> RiskDecision:
-    runtime = get_runtime_settings()
+def evaluate_reversal_entry(payload: NormalizedSignal, runtime: dict | None = None) -> RiskDecision:
+    # C11 — Use the caller's snapshot if provided; otherwise read live.
+    if runtime is None:
+        runtime = get_runtime_settings()
     common = _common_signal_checks(payload)
     if common:
         return common
@@ -181,8 +185,10 @@ def evaluate_reversal_entry(payload: NormalizedSignal) -> RiskDecision:
     return RiskDecision(True, "Opposite option-side reversal checks passed.", final_qty=payload.qty)
 
 
-def evaluate_exit(payload: NormalizedSignal) -> RiskDecision:
-    runtime = get_runtime_settings()
+def evaluate_exit(payload: NormalizedSignal, runtime: dict | None = None) -> RiskDecision:
+    # C11 — Use the caller's snapshot if provided; otherwise read live.
+    if runtime is None:
+        runtime = get_runtime_settings()
     common = _common_signal_checks(payload)
     if common:
         return common

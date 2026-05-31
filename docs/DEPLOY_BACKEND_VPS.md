@@ -119,6 +119,18 @@ sudo systemctl start nova-signal-router
 sudo systemctl status nova-signal-router
 ```
 
+Allow your deploy user to restart only this service without an interactive password:
+
+```bash
+sudo visudo -f /etc/sudoers.d/nova-deploy
+```
+
+Add this line, replacing `deploy` with your VPS SSH username:
+
+```sudoers
+deploy ALL=(root) NOPASSWD: /bin/systemctl restart nova-signal-router, /bin/systemctl is-active nova-signal-router, /bin/systemctl status nova-signal-router
+```
+
 ---
 
 ## 7. Nginx reverse proxy
@@ -201,3 +213,87 @@ This downloads to `backend/data/api-scrip-master-detailed.csv` for security ID r
 6. Send a test TradingView alert. Confirm it shows `BLOCKED (live orders disabled)`.
 7. Once dry-run passes: set `ENABLE_LIVE_ORDERS=true` in `.env`, restart backend.
 8. Send one real alert with `qty=1`. Monitor in dashboard and Dhan portal.
+
+---
+
+## 13. Git-based VPS deploy
+
+The repository should exist on the VPS at `/opt/nova-signal-router`.
+
+First-time clone:
+
+```bash
+sudo mkdir -p /opt/nova-signal-router
+sudo chown -R deploy:deploy /opt/nova-signal-router
+git clone git@github.com:YOUR_GITHUB_USER/YOUR_REPO.git /opt/nova-signal-router
+```
+
+Manual deploy and restart from the VPS:
+
+```bash
+cd /opt/nova-signal-router
+bash scripts/deploy_vps.sh origin/main
+```
+
+Manual deploy and restart from your local machine:
+
+```bash
+git push origin main
+ssh deploy@YOUR_VPS_IP "cd /opt/nova-signal-router && bash scripts/deploy_vps.sh origin/main"
+```
+
+The deploy script:
+- fetches the target git ref
+- installs backend requirements into `backend/.venv`
+- compiles backend Python files
+- keeps `.env`, `runtime_state`, `runtime_logs`, and `data` on the VPS
+- restarts `nova-signal-router`
+- checks `/api/health`
+
+---
+
+## 14. GitHub Actions CI/CD
+
+The workflow lives at `.github/workflows/ci-deploy.yml`.
+
+It runs on every push to `main`:
+1. backend tests: `python -m pytest backend/app/tests`
+2. frontend build: `npm ci && npm run build`
+3. SSH deploy to VPS
+4. systemd restart
+5. health check
+
+Create these GitHub repository secrets:
+
+| Secret | Example |
+|---|---|
+| `VPS_HOST` | `203.0.113.10` |
+| `VPS_PORT` | `22` |
+| `VPS_USER` | `deploy` |
+| `VPS_SSH_KEY` | Private key for the deploy user |
+
+Optional GitHub repository variables:
+
+| Variable | Default |
+|---|---|
+| `VPS_APP_DIR` | `/opt/nova-signal-router` |
+| `VPS_SERVICE_NAME` | `nova-signal-router` |
+| `VPS_HEALTH_URL` | `http://127.0.0.1:8000/api/health` |
+
+Generate a deploy SSH key locally:
+
+```bash
+ssh-keygen -t ed25519 -C "nova-github-deploy" -f ~/.ssh/nova_github_deploy
+```
+
+Put the public key on the VPS:
+
+```bash
+ssh-copy-id -i ~/.ssh/nova_github_deploy.pub deploy@YOUR_VPS_IP
+```
+
+Store the private key in GitHub secret `VPS_SSH_KEY`:
+
+```bash
+cat ~/.ssh/nova_github_deploy
+```

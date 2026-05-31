@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Toaster } from 'sonner'
+import ErrorBoundary from './components/ErrorBoundary'
 import Layout from './components/Layout'
 import ControlsPage from './pages/ControlsPage'
 import DashboardPage from './pages/DashboardPage'
@@ -12,6 +13,7 @@ import SetupPage from './pages/SetupPage'
 
 export default function App() {
   return (
+    <ErrorBoundary>
     <BrowserRouter>
       {/* Global toasts — bottom-right, dark theme */}
       <Toaster
@@ -54,5 +56,6 @@ export default function App() {
         <Route path="*"           element={<Navigate to="/"               replace />} />
       </Routes>
     </BrowserRouter>
+    </ErrorBoundary>
   )
 }

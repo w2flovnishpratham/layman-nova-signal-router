@@ -70,3 +70,6 @@ Thumbs.db
 # ── Sensitive runtime files ──────────────────────────────────
 # Credentials file is encrypted but should still never be committed
 backend/runtime_state/credentials.enc.json
+
+# Local WIP backups (do not commit)
+*.wip-broken.bak

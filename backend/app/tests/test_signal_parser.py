@@ -1,9 +1,12 @@
 from app.services.signal_parser import parse_webhook_payload
 
 
+TEST_WEBHOOK_SECRET = "nova-7Kx9mQ2pL8sZ-2026"
+
+
 def nova_payload(action="ENTRY", side="BUY", signal_id="nova-001"):
     return {
-        "secret": "test-secret",
+        "secret": TEST_WEBHOOK_SECRET,
         "signal_id": signal_id,
         "strategy_code": "TRADINGVIEW_NIFTY_V1",
         "action": action,
@@ -25,7 +28,7 @@ def nova_payload(action="ENTRY", side="BUY", signal_id="nova-001"):
 
 def pine_payload(transaction_type="B", quantity="1", signal_id=None):
     payload = {
-        "secret": "test-secret",
+        "secret": TEST_WEBHOOK_SECRET,
         "alertType": "multi_leg_order",
         "order_legs": [
             {

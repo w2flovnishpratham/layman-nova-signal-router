@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
+import threading
 from typing import Any
+import uuid
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -10,6 +13,7 @@ from app.config import settings
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import (
     VaultError,
+    WEBHOOK_SECRET_MIN_LENGTH,
     clear_dhan_credentials,
     dhan_metadata,
     dhan_token_age_metadata,
@@ -19,6 +23,7 @@ from app.services.credential_vault import (
     save_dhan_credentials,
     save_webhook_secret,
     vault_status,
+    webhook_secret_strength_error,
     webhook_secret_metadata,
 )
 from app.services.dhan_client import DhanFundsResult, MockDhanClient, RealDhanClient
@@ -45,7 +50,7 @@ class DhanConnectRequest(BaseModel):
 
 
 class WebhookSecretRequest(BaseModel):
-    webhook_secret: str = Field(..., min_length=5)
+    webhook_secret: str = Field(..., min_length=WEBHOOK_SECRET_MIN_LENGTH)
 
 
 class RiskSetupRequest(BaseModel):
@@ -219,6 +224,10 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
         issues.append("Dhan credentials are not connected.")
     if not webhook_secret:
         issues.append("Webhook secret is not set.")
+    else:
+        secret_strength_error = webhook_secret_strength_error(webhook_secret)
+        if secret_strength_error:
+            issues.append(secret_strength_error)
     if not base_url:
         issues.append("BACKEND_PUBLIC_BASE_URL is not set.")
     elif "yourdomain.com" in base_url:
@@ -431,6 +440,125 @@ DHAN_SCRIP_MASTER_URLS = [
     "https://images.dhan.co/api-data/api-scrip-master-detailed.csv",
 ]
 _scrip_master_last_download: dict[str, Any] = {"downloaded_at": None, "ok": None, "error": None, "path": None}
+_scrip_master_job_lock = threading.RLock()
+_scrip_master_refresh_job: dict[str, Any] = {
+    "job_id": None,
+    "status": "IDLE",
+    "started_at": None,
+    "finished_at": None,
+    "success": None,
+    "message": None,
+    "error": None,
+    "path": None,
+    "size_bytes": None,
+    "results": [],
+}
+
+
+def _scrip_master_job_snapshot() -> dict[str, Any]:
+    with _scrip_master_job_lock:
+        return deepcopy(_scrip_master_refresh_job)
+
+
+def _download_scrip_master_sync() -> dict[str, Any]:
+    import httpx as _httpx
+    from app.config import settings as _s, BACKEND_DIR, RUNTIME_STATE_DIR
+    from pathlib import Path
+
+    configured = Path(_s.DHAN_SCRIP_MASTER_PATH)
+    target = configured if configured.is_absolute() else BACKEND_DIR / configured
+
+    results = []
+    for url in DHAN_SCRIP_MASTER_URLS:
+        try:
+            response = _httpx.get(url, timeout=60.0, follow_redirects=True)
+            response.raise_for_status()
+            content = response.content
+            if not content or len(content) < 100:
+                results.append({"url": url, "ok": False, "error": "Response too small; not a valid CSV."})
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            fallback = RUNTIME_STATE_DIR / "api-scrip-master-detailed.csv"
+            if "detailed" in url:
+                fallback.parent.mkdir(parents=True, exist_ok=True)
+                fallback.write_bytes(content)
+            downloaded_at = utc_now()
+            log_audit_event("SCRIP_MASTER_REFRESHED", f"Downloaded from {url}", metadata={"path": str(target), "size_bytes": len(content)})
+            results.append({"url": url, "ok": True, "size_bytes": len(content), "path": str(target)})
+            return {
+                "success": True,
+                "path": str(target),
+                "downloaded_at": downloaded_at,
+                "size_bytes": len(content),
+                "results": results,
+                "message": "Dhan scrip master downloaded successfully.",
+                "url": url,
+            }
+        except Exception as exc:
+            results.append({"url": url, "ok": False, "error": str(exc)})
+
+    return {
+        "success": False,
+        "path": str(target),
+        "downloaded_at": utc_now(),
+        "size_bytes": None,
+        "results": results,
+        "message": "All Dhan scrip master download URLs failed.",
+        "error": "All Dhan scrip master download URLs failed.",
+    }
+
+
+def _run_scrip_master_refresh_job(job_id: str) -> None:
+    try:
+        result = _download_scrip_master_sync()
+    except Exception as exc:  # pragma: no cover - defensive guard around the worker.
+        result = {
+            "success": False,
+            "path": None,
+            "downloaded_at": utc_now(),
+            "size_bytes": None,
+            "results": [],
+            "message": "Dhan scrip master refresh failed.",
+            "error": str(exc),
+        }
+
+    finished_at = utc_now()
+    success = bool(result.get("success"))
+    with _scrip_master_job_lock:
+        if _scrip_master_refresh_job.get("job_id") != job_id:
+            return
+        _scrip_master_refresh_job.update(
+            {
+                "status": "SUCCEEDED" if success else "FAILED",
+                "finished_at": finished_at,
+                "success": success,
+                "message": result.get("message"),
+                "error": result.get("error"),
+                "path": result.get("path"),
+                "size_bytes": result.get("size_bytes"),
+                "results": result.get("results") or [],
+            }
+        )
+        _scrip_master_last_download.update(
+            {
+                "downloaded_at": result.get("downloaded_at") or finished_at,
+                "ok": success,
+                "error": result.get("error"),
+                "path": result.get("path"),
+                "url": result.get("url"),
+                "size_bytes": result.get("size_bytes"),
+                "job_id": job_id,
+            }
+        )
+
+    if not success:
+        log_audit_event(
+            "SCRIP_MASTER_REFRESH_FAILED",
+            str(result.get("message") or "Dhan scrip master refresh failed."),
+            severity="WARNING",
+            metadata={"job_id": job_id, "results": result.get("results") or []},
+        )
 
 
 @router.post("/setup/scrip-master/refresh")
@@ -443,56 +571,46 @@ def refresh_scrip_master() -> dict[str, Any]:
       https://images.dhan.co/api-data/api-scrip-master.csv
       https://images.dhan.co/api-data/api-scrip-master-detailed.csv
     """
-    import httpx as _httpx
-    from app.config import settings as _s, BACKEND_DIR, RUNTIME_STATE_DIR
-    from pathlib import Path
+    with _scrip_master_job_lock:
+        if _scrip_master_refresh_job.get("status") == "RUNNING":
+            job = deepcopy(_scrip_master_refresh_job)
+            return {
+                "success": True,
+                "accepted": False,
+                "job_id": job.get("job_id"),
+                "status": job.get("status"),
+                "refresh_job": job,
+                "message": "Scrip master refresh is already running.",
+            }
 
-    # Resolve target path
-    configured = Path(_s.DHAN_SCRIP_MASTER_PATH)
-    target = configured if configured.is_absolute() else BACKEND_DIR / configured
-
-    results = []
-    success = False
-    for url in DHAN_SCRIP_MASTER_URLS:
-        try:
-            response = _httpx.get(url, timeout=60.0, follow_redirects=True)
-            response.raise_for_status()
-            content = response.content
-            if not content or len(content) < 100:
-                results.append({"url": url, "ok": False, "error": "Response too small; not a valid CSV."})
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content)
-            # Also save a copy to runtime_state for the resolver fallback path
-            fallback = RUNTIME_STATE_DIR / "api-scrip-master-detailed.csv"
-            if "detailed" in url:
-                fallback.write_bytes(content)
-            downloaded_at = utc_now()
-            _scrip_master_last_download.update({
-                "downloaded_at": downloaded_at,
-                "ok": True,
+        job_id = uuid.uuid4().hex
+        started_at = utc_now()
+        _scrip_master_refresh_job.update(
+            {
+                "job_id": job_id,
+                "status": "RUNNING",
+                "started_at": started_at,
+                "finished_at": None,
+                "success": None,
+                "message": "Dhan scrip master refresh started.",
                 "error": None,
-                "path": str(target),
-                "url": url,
-                "size_bytes": len(content),
-            })
-            log_audit_event("SCRIP_MASTER_REFRESHED", f"Downloaded from {url}", metadata={"path": str(target), "size_bytes": len(content)})
-            results.append({"url": url, "ok": True, "size_bytes": len(content), "path": str(target)})
-            success = True
-            break  # Use first successful URL
-        except Exception as exc:
-            results.append({"url": url, "ok": False, "error": str(exc)})
+                "path": None,
+                "size_bytes": None,
+                "results": [],
+            }
+        )
+        job = deepcopy(_scrip_master_refresh_job)
 
-    if not success:
-        return {"success": False, "results": results, "message": "All Dhan scrip master download URLs failed."}
-
+    thread = threading.Thread(target=_run_scrip_master_refresh_job, args=(job_id,), name=f"scrip-master-refresh-{job_id[:8]}", daemon=True)
+    thread.start()
+    log_audit_event("SCRIP_MASTER_REFRESH_STARTED", "Dhan scrip master refresh job started.", metadata={"job_id": job_id})
     return {
         "success": True,
-        "path": str(target),
-        "downloaded_at": _scrip_master_last_download["downloaded_at"],
-        "size_bytes": _scrip_master_last_download.get("size_bytes"),
-        "results": results,
-        "message": "Dhan scrip master downloaded successfully.",
+        "accepted": True,
+        "job_id": job_id,
+        "status": "RUNNING",
+        "refresh_job": job,
+        "message": "Dhan scrip master refresh started. Poll /api/setup/scrip-master/status for completion.",
     }
 
 
@@ -518,6 +636,7 @@ def scrip_master_status() -> dict[str, Any]:
         "auto_resolve_security_id": _s.AUTO_RESOLVE_SECURITY_ID,
         "allow_default_security_id": _s.ALLOW_DEFAULT_SECURITY_ID,
         "last_download": _scrip_master_last_download,
+        "refresh_job": _scrip_master_job_snapshot(),
         "download_urls": DHAN_SCRIP_MASTER_URLS,
     }
 

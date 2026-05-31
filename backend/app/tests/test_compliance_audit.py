@@ -30,6 +30,8 @@ from app.services.execution_router import (
     _build_dhan_super_order_payload,
     _place_order,
     route_entry_signal,
+    route_exit_signal,
+    route_signal,
 )
 from app.services.security_id_resolver import (
     NIFTY_UNDERLYING_ID,
@@ -40,7 +42,7 @@ from app.services.signal_parser import (
     UnsupportedPayloadFormatError,
     parse_webhook_payload,
 )
-from app.tests.test_signal_parser import nova_payload, pine_payload
+from app.tests.test_signal_parser import TEST_WEBHOOK_SECRET, nova_payload, pine_payload
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +81,7 @@ def client(tmp_path, monkeypatch):
     with TestClient(app) as test_client:
         test_client.post("/api/control/reset-state")
         test_client.post("/api/control/clear-seen-signals")
-        test_client.post("/api/setup/webhook-secret", json={"webhook_secret": "test-secret"})
+        test_client.post("/api/setup/webhook-secret", json={"webhook_secret": TEST_WEBHOOK_SECRET})
         test_client.post(
             "/api/setup/risk",
             json={
@@ -102,7 +104,7 @@ def make_signal(
 ) -> NormalizedSignal:
     return NormalizedSignal(
         payload_format="PINE_MULTI_LEG",
-        secret="test-secret",
+        secret=TEST_WEBHOOK_SECRET,
         signal_id="compliance-test",
         strategy_code="TRADINGVIEW_NIFTY_V1",
         action=action,  # type: ignore[arg-type]
@@ -180,6 +182,28 @@ class TestWebhookSecretFlow:
         # Must only be a boolean, not the actual secret value
         assert isinstance(body["webhook_secret_set"], bool)
 
+    def test_webhook_secret_requires_minimum_length_and_entropy(self, client):
+        short_response = client.post("/api/setup/webhook-secret", json={"webhook_secret": "short"})
+        assert short_response.status_code == 422
+
+        weak_response = client.post("/api/setup/webhook-secret", json={"webhook_secret": "1234567890123456"})
+        assert weak_response.status_code == 400
+        assert "too weak" in weak_response.json()["detail"]
+
+        strong_response = client.post("/api/setup/webhook-secret", json={"webhook_secret": TEST_WEBHOOK_SECRET})
+        assert strong_response.status_code == 200
+        assert strong_response.json()["webhook_secret_set"] is True
+
+    def test_existing_weak_webhook_secret_blocks_routing(self, client):
+        credential_vault._LOCAL_MEMORY_PAYLOAD["webhook_secret"] = "1234567890123456"
+
+        response = client.post("/webhook/tradingview", json=pine_payload("B"))
+
+        assert response.status_code == 403
+        body = response.json()
+        assert body["status"] == "SETUP_INCOMPLETE"
+        assert "too weak" in body["message"]
+
 
 # ===========================================================================
 # TASK 3 / TASK 18: Signal parser edge cases
@@ -200,7 +224,7 @@ class TestSignalParserEdgeCases:
 
     def test_missing_order_legs_blocks(self):
         payload = {
-            "secret": "test-secret",
+            "secret": TEST_WEBHOOK_SECRET,
             "alertType": "multi_leg_order",
             # No order_legs key
         }
@@ -209,7 +233,7 @@ class TestSignalParserEdgeCases:
 
     def test_empty_order_legs_array_blocks(self):
         payload = {
-            "secret": "test-secret",
+            "secret": TEST_WEBHOOK_SECRET,
             "alertType": "multi_leg_order",
             "order_legs": [],
         }
@@ -224,7 +248,7 @@ class TestSignalParserEdgeCases:
 
     def test_unsupported_payload_format_raises(self):
         with pytest.raises(UnsupportedPayloadFormatError):
-            parse_webhook_payload({"secret": "test-secret", "foo": "bar"})
+            parse_webhook_payload({"secret": TEST_WEBHOOK_SECRET, "foo": "bar"})
 
     def test_nova_requires_strategy_code(self):
         # Without strategy_code the NOVA format cannot be detected by the parser,
@@ -379,7 +403,7 @@ class TestLiveOrderGating:
         # its local binding, not the credential_vault module attribute.
         monkeypatch.setattr(
             "app.routers.webhook.get_webhook_secret",
-            lambda: "test-secret",
+            lambda: TEST_WEBHOOK_SECRET,
         )
         real_called = {"called": False}
 
@@ -401,6 +425,92 @@ class TestLiveOrderGating:
         assert real_called["called"] is False
         assert body["accepted"] is False
         assert "ENABLE_LIVE_ORDERS=false" in body.get("message", "") or body["status"] == "BLOCKED"
+
+    def test_expired_token_blocks_signal_before_dhan_preflight(self, monkeypatch, client):
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(
+            "app.services.execution_router.dhan_token_age_metadata",
+            lambda: {
+                "token_saved_at": "2026-05-30T09:00:00+00:00",
+                "token_age_minutes": 1500,
+                "token_estimated_expiry_at": "2026-05-31T09:00:00+00:00",
+                "token_expired": True,
+                "token_warn": True,
+                "token_max_age_hours": 24,
+                "token_warn_age_hours": 23,
+            },
+        )
+
+        class DhanMustNotBeCalled:
+            def __init__(self):
+                raise AssertionError("Dhan client must not be created when token is expired")
+
+        monkeypatch.setattr("app.services.execution_router.RealDhanClient", DhanMustNotBeCalled)
+
+        result = route_signal(make_signal(security_id="CE123").model_copy(update={"signal_id": "expired-token-001"}))
+
+        assert result["blocked"] is True
+        assert result["success"] is False
+        assert result["block_code"] == "DHAN_TOKEN_EXPIRED"
+        assert "Dhan token expired" in result["reason"]
+        assert result["token_age"]["token_expired"] is True
+
+    def test_fresh_token_allows_live_signal_to_reach_dhan(self, monkeypatch, client):
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", False)
+        monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "")
+        monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
+        monkeypatch.setattr(
+            "app.services.execution_router.dhan_token_age_metadata",
+            lambda: {
+                "token_saved_at": "2026-05-31T09:00:00+00:00",
+                "token_age_minutes": 30,
+                "token_estimated_expiry_at": "2026-06-01T09:00:00+00:00",
+                "token_expired": False,
+                "token_warn": False,
+                "token_max_age_hours": 24,
+                "token_warn_age_hours": 23,
+            },
+        )
+        monkeypatch.setattr(
+            "app.services.execution_router.get_dhan_credentials",
+            lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
+        )
+        monkeypatch.setattr("app.services.execution_router.refresh_wallet_snapshot", lambda **kwargs: {})
+        state_store.update_runtime_settings(
+            option_exit_mode="SERVER",
+            max_qty_per_order=1,
+            max_trades_per_day=5,
+            allow_entry=True,
+            allow_exit=True,
+        )
+        calls = {"placed": 0}
+
+        class FreshTokenDhanClient:
+            def get_positions_snapshot(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="positions", items=[])
+
+            def get_order_book(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="orders", items=[])
+
+            def place_order(self, *, client_id, access_token, payload):
+                calls["placed"] += 1
+                return DhanOrderResult(
+                    success=True,
+                    order_id="FRESH-TOKEN-ENTRY",
+                    status="TRADED",
+                    avg_price=100.0,
+                    raw_response={"orderId": "FRESH-TOKEN-ENTRY", "orderStatus": "TRADED", "avgPrice": 100.0},
+                )
+
+        monkeypatch.setattr("app.services.execution_router.RealDhanClient", FreshTokenDhanClient)
+
+        result = route_signal(make_signal(security_id="CE123").model_copy(update={"signal_id": "fresh-token-001"}))
+
+        assert result["status"] == "ORDER_PLACED"
+        assert calls["placed"] == 1
 
     def test_missing_security_id_blocks_before_dhan(self, monkeypatch, client):
         """Missing securityId must block the order before calling Dhan."""
@@ -434,7 +544,7 @@ class TestLiveOrderGating:
         monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", True)
         monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "123456")
         monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
-        monkeypatch.setattr("app.routers.webhook.get_webhook_secret", lambda: "test-secret")
+        monkeypatch.setattr("app.routers.webhook.get_webhook_secret", lambda: TEST_WEBHOOK_SECRET)
         monkeypatch.setattr(
             "app.services.execution_router.get_dhan_credentials",
             lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
@@ -467,7 +577,225 @@ class TestLiveOrderGating:
         assert "Dhan already has open position" in body.get("message", "")
         assert real_called["called"] is False
 
-    def test_opposite_option_entry_exits_then_enters_reversal(self, monkeypatch, client):
+    def test_stale_local_position_is_cleared_when_dhan_is_flat_before_new_entry(self, monkeypatch, client):
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", False)
+        monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "")
+        monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
+        monkeypatch.setattr(
+            "app.services.execution_router.get_dhan_credentials",
+            lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
+        )
+        monkeypatch.setattr("app.services.execution_router.refresh_wallet_snapshot", lambda **kwargs: {})
+        state_store.update_runtime_settings(
+            option_exit_mode="SERVER",
+            max_qty_per_order=1,
+            max_trades_per_day=5,
+            allow_entry=True,
+            allow_exit=True,
+        )
+        state_store.set_open_position(
+            {
+                "has_open_position": True,
+                "strategy_code": "TRADINGVIEW_NIFTY_V1",
+                "symbol": "NIFTY",
+                "instrument_type": "OPTIDX",
+                "exchange_segment": "NSE_FNO",
+                "security_id": "PE123",
+                "trading_symbol": "NIFTY 2026-05-28 22500 PE",
+                "option_side": "PE",
+                "strike": 22500.0,
+                "expiry": "2026-05-28",
+                "qty": 1,
+                "entry_order_id": "ENTRY-PE",
+                "entry_price": 100.0,
+                "exit_management": "SERVER",
+                "opened_at": state_store.utc_now(),
+            }
+        )
+        calls = {"placed": 0}
+
+        class FlatDhanClient:
+            def get_positions_snapshot(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="positions", items=[])
+
+            def get_order_book(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="orders", items=[])
+
+            def place_order(self, *, client_id, access_token, payload):
+                calls["placed"] += 1
+                return DhanOrderResult(
+                    success=True,
+                    order_id="ENTRY-CE",
+                    status="TRADED",
+                    avg_price=110.0,
+                    raw_response={"orderId": "ENTRY-CE", "orderStatus": "TRADED", "avgPrice": 110.0},
+                )
+
+        monkeypatch.setattr("app.services.execution_router.RealDhanClient", FlatDhanClient)
+
+        ce_signal = make_signal(security_id="CE456").model_copy(
+            update={
+                "signal_id": "stale-local-to-ce-001",
+                "trading_symbol": "NIFTY 2026-05-28 22500 CE",
+                "option_side": "CE",
+                "security_id": "CE456",
+            }
+        )
+        result = route_entry_signal(ce_signal)
+
+        assert result["status"] == "ORDER_PLACED"
+        assert calls["placed"] == 1
+        open_position = state_store.get_open_position()
+        assert open_position["has_open_position"] is True
+        assert open_position["option_side"] == "CE"
+        assert open_position["entry_order_id"] == "ENTRY-CE"
+
+    def test_partial_entry_fill_tracks_only_filled_quantity(self, monkeypatch, client):
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", False)
+        monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "")
+        monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
+        monkeypatch.setattr(
+            "app.services.execution_router.get_dhan_credentials",
+            lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
+        )
+        monkeypatch.setattr("app.services.execution_router.refresh_wallet_snapshot", lambda **kwargs: {})
+        state_store.update_runtime_settings(
+            option_exit_mode="SERVER",
+            max_qty_per_order=65,
+            max_trades_per_day=5,
+            allow_entry=True,
+            allow_exit=True,
+        )
+
+        class PartialEntryDhanClient:
+            def get_positions_snapshot(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="positions", items=[])
+
+            def get_order_book(self, *, client_id, access_token):
+                return DhanListResult(success=True, message="orders", items=[])
+
+            def place_order(self, *, client_id, access_token, payload):
+                return DhanOrderResult(
+                    success=True,
+                    order_id="ENTRY-PARTIAL",
+                    status="PENDING",
+                    avg_price=None,
+                    raw_response={"orderId": "ENTRY-PARTIAL", "orderStatus": "PENDING"},
+                )
+
+            def poll_order_status(self, *, client_id, access_token, order_id, max_polls=4, poll_delay=1.5):
+                return DhanOrderStatusResult(
+                    success=True,
+                    order_id=order_id,
+                    order_status="EXPIRED",
+                    is_terminal=True,
+                    is_filled=False,
+                    avg_price=120.0,
+                    raw_response={"orderId": order_id, "orderStatus": "EXPIRED", "filled_qty": 30},
+                    filled_qty=30,
+                    remaining_qty=35,
+                )
+
+        monkeypatch.setattr("app.services.execution_router.RealDhanClient", PartialEntryDhanClient)
+
+        result = route_entry_signal(make_signal(security_id="CE123", qty=65))
+
+        assert result["status"] == "PARTIAL_ENTRY_FILLED"
+        assert result["partial_fill"] is True
+        assert result["filled_qty"] == 30
+        open_position = state_store.get_open_position()
+        assert open_position["qty"] == 30
+        assert open_position["requested_qty"] == 65
+        assert open_position["partial_fill"] is True
+
+    def test_partial_exit_fill_reduces_local_open_quantity(self, monkeypatch, client):
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", False)
+        monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "")
+        monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
+        monkeypatch.setattr(
+            "app.services.execution_router.get_dhan_credentials",
+            lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
+        )
+        monkeypatch.setattr("app.services.execution_router.refresh_wallet_snapshot", lambda **kwargs: {})
+        state_store.update_runtime_settings(allow_entry=True, allow_exit=True)
+        state_store.set_open_position(
+            {
+                "has_open_position": True,
+                "strategy_code": "TRADINGVIEW_NIFTY_V1",
+                "symbol": "NIFTY",
+                "instrument_type": "OPTIDX",
+                "exchange_segment": "NSE_FNO",
+                "security_id": "CE123",
+                "trading_symbol": "NIFTY 2026-05-28 22500 CE",
+                "option_side": "CE",
+                "strike": 22500.0,
+                "expiry": "2026-05-28",
+                "qty": 65,
+                "entry_order_id": "ENTRY-CE",
+                "entry_price": 100.0,
+                "exit_management": "SERVER",
+                "opened_at": state_store.utc_now(),
+            }
+        )
+
+        class PartialExitDhanClient:
+            def place_order(self, *, client_id, access_token, payload):
+                return DhanOrderResult(
+                    success=True,
+                    order_id="EXIT-PARTIAL",
+                    status="PENDING",
+                    avg_price=None,
+                    raw_response={"orderId": "EXIT-PARTIAL", "orderStatus": "PENDING"},
+                )
+
+            def poll_order_status(self, *, client_id, access_token, order_id, max_polls=4, poll_delay=1.5):
+                return DhanOrderStatusResult(
+                    success=True,
+                    order_id=order_id,
+                    order_status="EXPIRED",
+                    is_terminal=True,
+                    is_filled=False,
+                    avg_price=95.0,
+                    raw_response={"orderId": order_id, "orderStatus": "EXPIRED", "filled_qty": 30},
+                    filled_qty=30,
+                    remaining_qty=35,
+                )
+
+        monkeypatch.setattr("app.services.execution_router.RealDhanClient", PartialExitDhanClient)
+
+        exit_signal = make_signal(security_id="CE123", qty=65, action="EXIT", side="SELL")
+        result = route_exit_signal(exit_signal)
+
+        assert result["status"] == "PARTIAL_EXIT_FILLED"
+        assert result["partial_fill"] is True
+        assert result["filled_qty"] == 30
+        open_position = state_store.get_open_position()
+        assert open_position["has_open_position"] is True
+        assert open_position["qty"] == 35
+        assert open_position["partial_exit"]["filled_qty"] == 30
+
+    @pytest.mark.parametrize(
+        ("current_side", "incoming_side", "current_security_id", "incoming_security_id"),
+        [
+            ("CE", "PE", "CE123", "PE456"),
+            ("PE", "CE", "PE123", "CE456"),
+        ],
+    )
+    def test_opposite_option_entry_exits_then_enters_reversal(
+        self,
+        monkeypatch,
+        client,
+        current_side,
+        incoming_side,
+        current_security_id,
+        incoming_security_id,
+    ):
         monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
         monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
         monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", False)
@@ -494,13 +822,13 @@ class TestLiveOrderGating:
                 "symbol": "NIFTY",
                 "instrument_type": "OPTIDX",
                 "exchange_segment": "NSE_FNO",
-                "security_id": "CE123",
-                "trading_symbol": "NIFTY 2026-05-28 22500 CE",
-                "option_side": "CE",
+                "security_id": current_security_id,
+                "trading_symbol": f"NIFTY 2026-05-28 22500 {current_side}",
+                "option_side": current_side,
                 "strike": 22500.0,
                 "expiry": "2026-05-28",
                 "qty": 1,
-                "entry_order_id": "SUPER-CE",
+                "entry_order_id": f"SUPER-{current_side}",
                 "entry_price": 100.0,
                 "exit_management": "DHAN_SUPER",
                 "broker_sl_price": 70.0,
@@ -517,7 +845,13 @@ class TestLiveOrderGating:
                 return DhanListResult(
                     success=True,
                     message="positions",
-                    items=[{"tradingSymbol": "NIFTY 2026-05-28 22500 CE", "securityId": "CE123", "netQty": 1}],
+                    items=[
+                        {
+                            "tradingSymbol": f"NIFTY 2026-05-28 22500 {current_side}",
+                            "securityId": current_security_id,
+                            "netQty": 1,
+                        }
+                    ],
                 )
 
             def get_order_book(self, *, client_id, access_token):
@@ -527,10 +861,10 @@ class TestLiveOrderGating:
                 calls["orders"].append(payload)
                 return DhanOrderResult(
                     success=True,
-                    order_id="EXIT-CE",
+                    order_id=f"EXIT-{current_side}",
                     status="TRADED",
                     avg_price=95.0,
-                    raw_response={"orderId": "EXIT-CE", "orderStatus": "TRADED", "avgPrice": 95.0},
+                    raw_response={"orderId": f"EXIT-{current_side}", "orderStatus": "TRADED", "avgPrice": 95.0},
                 )
 
             def cancel_super_order_leg(self, *, client_id, access_token, order_id, leg_name):
@@ -550,10 +884,10 @@ class TestLiveOrderGating:
                 calls["super_orders"].append(payload)
                 return DhanOrderResult(
                     success=True,
-                    order_id="SUPER-PE",
+                    order_id=f"SUPER-{incoming_side}",
                     status="TRADED",
                     avg_price=110.0,
-                    raw_response={"orderId": "SUPER-PE", "orderStatus": "TRADED", "avgPrice": 110.0},
+                    raw_response={"orderId": f"SUPER-{incoming_side}", "orderStatus": "TRADED", "avgPrice": 110.0},
                 )
 
             def modify_super_order(self, *, client_id, access_token, order_id, payload):
@@ -568,26 +902,26 @@ class TestLiveOrderGating:
 
         monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
 
-        pe_signal = make_signal(security_id="PE456").model_copy(
+        incoming_signal = make_signal(security_id=incoming_security_id).model_copy(
             update={
-                "signal_id": "reversal-pe-001",
-                "trading_symbol": "NIFTY 2026-05-28 22500 PE",
-                "option_side": "PE",
-                "security_id": "PE456",
+                "signal_id": f"reversal-{incoming_side.lower()}-001",
+                "trading_symbol": f"NIFTY 2026-05-28 22500 {incoming_side}",
+                "option_side": incoming_side,
+                "security_id": incoming_security_id,
             }
         )
-        result = route_entry_signal(pe_signal)
+        result = route_entry_signal(incoming_signal)
 
         assert result["status"] == "REVERSAL_ORDER_PLACED"
         assert calls["orders"][0]["transactionType"] == "SELL"
-        assert calls["orders"][0]["securityId"] == "CE123"
+        assert calls["orders"][0]["securityId"] == current_security_id
         assert calls["super_orders"][0]["transactionType"] == "BUY"
-        assert calls["super_orders"][0]["securityId"] == "PE456"
+        assert calls["super_orders"][0]["securityId"] == incoming_security_id
         assert calls["super_orders"][0]["orderType"] == "MARKET"
         assert {item["leg_name"] for item in calls["cancelled"]} == {"TARGET_LEG", "STOP_LOSS_LEG"}
         assert calls["modified"][0]["targetPrice"] == 176.0
         assert calls["modified"][1]["stopLossPrice"] == 77.0
-        assert state_store.get_open_position()["option_side"] == "PE"
+        assert state_store.get_open_position()["option_side"] == incoming_side
 
     def test_real_entry_blocks_when_dhan_has_pending_order(self, monkeypatch, client):
         """Before live ENTRY, broker order book is checked and pending orders block order placement."""
@@ -596,7 +930,7 @@ class TestLiveOrderGating:
         monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", True)
         monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "123456")
         monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
-        monkeypatch.setattr("app.routers.webhook.get_webhook_secret", lambda: "test-secret")
+        monkeypatch.setattr("app.routers.webhook.get_webhook_secret", lambda: TEST_WEBHOOK_SECRET)
         monkeypatch.setattr(
             "app.services.execution_router.get_dhan_credentials",
             lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
@@ -988,7 +1322,7 @@ class TestEngineStartReadiness:
         from app.main import app
         with TestClient(app) as c:
             # Set webhook secret but NOT Dhan credentials
-            c.post("/api/setup/webhook-secret", json={"webhook_secret": "test-secret"})
+            c.post("/api/setup/webhook-secret", json={"webhook_secret": TEST_WEBHOOK_SECRET})
             c.post("/api/setup/risk", json={
                 "max_qty_per_order": 1, "max_trades_per_day": 5,
                 "daily_loss_limit": 500, "allow_entry": True, "allow_exit": True,
@@ -1055,7 +1389,7 @@ class TestEngineStartReadiness:
         credential_vault._LOCAL_MEMORY_PAYLOAD.update({
             "version": 1,
             "dhan": {"client_id": "1000000001", "access_token": "old-token", "connected_at": old_time},
-            "webhook_secret": "test-secret",
+            "webhook_secret": TEST_WEBHOOK_SECRET,
         })
         log_files = {
             "webhook": log_dir / "webhook_events.jsonl",

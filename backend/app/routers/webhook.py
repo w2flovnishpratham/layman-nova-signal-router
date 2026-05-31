@@ -7,9 +7,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.config import BLOCK_DUPLICATE_SIGNALS, settings
-from app.schemas.signal import WebhookResponse
+from app.schemas.signal import NormalizedSignal, WebhookResponse
 from app.services.audit_logger import log_audit_event, log_error_event, log_webhook_event
-from app.services.credential_vault import get_webhook_secret
+from app.services.credential_vault import get_webhook_secret, webhook_secret_strength_error
 from app.services.execution_router import route_signal
 from app.services.signal_parser import PayloadParseError, UnsupportedPayloadFormatError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
@@ -19,6 +19,8 @@ from app.services.state_store import add_seen_signal, has_seen_signal, update_ap
 router = APIRouter()
 _PROCESSING_SIGNAL_IDS: set[str] = set()
 _PROCESSING_LOCK = threading.RLock()
+_STRATEGY_LOCKS: dict[str, threading.Lock] = {}
+_STRATEGY_LOCKS_GUARD = threading.RLock()
 
 
 def _response(status_code: int, payload: WebhookResponse) -> JSONResponse:
@@ -36,6 +38,89 @@ def _begin_processing_signal(signal_id: str) -> bool:
 def _finish_processing_signal(signal_id: str) -> None:
     with _PROCESSING_LOCK:
         _PROCESSING_SIGNAL_IDS.discard(signal_id)
+
+
+def _strategy_lock_key(strategy_code: str | None) -> str:
+    key = str(strategy_code or "DEFAULT").strip().upper()
+    return key or "DEFAULT"
+
+
+def _get_strategy_lock(strategy_code: str | None) -> tuple[str, threading.Lock]:
+    key = _strategy_lock_key(strategy_code)
+    with _STRATEGY_LOCKS_GUARD:
+        lock = _STRATEGY_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _STRATEGY_LOCKS[key] = lock
+        return key, lock
+
+
+def _route_payload(payload: NormalizedSignal, client_host: str) -> tuple[dict | None, JSONResponse | None]:
+    try:
+        update_app_state(
+            last_signal_id=payload.signal_id,
+            last_alert_at=utc_now(),
+            last_message=f"{payload.action} {payload.payload_format} alert accepted for routing",
+        )
+        log_audit_event(
+            "SIGNAL_RECEIVED",
+            (
+                f"Existing Pine multi_leg_order alert received and normalized as {payload.action}/{payload.side}."
+                if payload.payload_format == "PINE_MULTI_LEG"
+                else f"NOVA {payload.action} signal received for {payload.trading_symbol or payload.symbol}"
+            ),
+            metadata={
+                "signal_id": payload.signal_id,
+                "action": payload.action,
+                "side": payload.side,
+                "payload_format": payload.payload_format,
+                "qty": payload.qty,
+                "symbol": payload.symbol,
+                "strike": payload.strike,
+                "expiry": payload.expiry,
+                "option_side": payload.option_side,
+            },
+        )
+
+        try:
+            execution_result = route_signal(payload)
+        except Exception as exc:
+            message = f"Webhook routing failed: {exc}"
+            log_error_event(
+                "WEBHOOK_ROUTING_FAILED",
+                message,
+                metadata={
+                    "signal_id": payload.signal_id,
+                    "payload_format": payload.payload_format,
+                    "action": payload.action,
+                    "side": payload.side,
+                    "client_host": client_host,
+                },
+            )
+            update_app_state(
+                state="ERROR",
+                last_signal_id=payload.signal_id,
+                last_alert_at=utc_now(),
+                last_message=message,
+            )
+            return None, _response(
+                500,
+                WebhookResponse(
+                    accepted=False,
+                    signal_id=payload.signal_id,
+                    action=payload.action,
+                    payload_format=payload.payload_format,
+                    status="ERROR",
+                    message=message,
+                ),
+            )
+
+        if BLOCK_DUPLICATE_SIGNALS:
+            add_seen_signal(payload.signal_id)
+        return execution_result, None
+    finally:
+        if BLOCK_DUPLICATE_SIGNALS:
+            _finish_processing_signal(payload.signal_id)
 
 
 @router.post("/tradingview")
@@ -141,6 +226,30 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 payload_format=payload.payload_format,
                 status="SETUP_INCOMPLETE",
                 message="Webhook secret is not configured. Complete setup first.",
+            ),
+        )
+
+    secret_strength_error = webhook_secret_strength_error(expected_secret)
+    if secret_strength_error:
+        log_audit_event(
+            "WEBHOOK_SECRET_WEAK",
+            secret_strength_error,
+            severity="WARNING",
+            metadata={
+                "client_host": client_host,
+                "signal_id": payload.signal_id,
+                "payload_format": payload.payload_format,
+            },
+        )
+        return _response(
+            403,
+            WebhookResponse(
+                accepted=False,
+                signal_id=payload.signal_id,
+                action=payload.action,
+                payload_format=payload.payload_format,
+                status="SETUP_INCOMPLETE",
+                message=secret_strength_error,
             ),
         )
 
@@ -263,51 +372,28 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
             ),
         )
 
-    update_app_state(
-        last_signal_id=payload.signal_id,
-        last_alert_at=utc_now(),
-        last_message=f"{payload.action} {payload.payload_format} alert accepted for routing",
-    )
-    log_audit_event(
-        "SIGNAL_RECEIVED",
-        (
-            f"Existing Pine multi_leg_order alert received and normalized as {payload.action}/{payload.side}."
-            if payload.payload_format == "PINE_MULTI_LEG"
-            else f"NOVA {payload.action} signal received for {payload.trading_symbol or payload.symbol}"
-        ),
-        metadata={
-            "signal_id": payload.signal_id,
-            "action": payload.action,
-            "side": payload.side,
-            "payload_format": payload.payload_format,
-            "qty": payload.qty,
-            "symbol": payload.symbol,
-            "strike": payload.strike,
-            "expiry": payload.expiry,
-            "option_side": payload.option_side,
-        },
-    )
-
-    try:
-        execution_result = route_signal(payload)
-    except Exception as exc:
-        message = f"Webhook routing failed: {exc}"
-        log_error_event(
-            "WEBHOOK_ROUTING_FAILED",
-            message,
+    strategy_key, strategy_lock = _get_strategy_lock(payload.strategy_code)
+    if not strategy_lock.acquire(blocking=False):
+        log_audit_event(
+            "STRATEGY_SIGNAL_QUEUED",
+            f"Signal queued because strategy {strategy_key} is already processing another alert.",
             metadata={
                 "signal_id": payload.signal_id,
+                "strategy_code": payload.strategy_code,
                 "payload_format": payload.payload_format,
-                "action": payload.action,
-                "side": payload.side,
             },
         )
-        update_app_state(
-            state="ERROR",
-            last_signal_id=payload.signal_id,
-            last_alert_at=utc_now(),
-            last_message=message,
-        )
+        strategy_lock.acquire()
+
+    try:
+        execution_result, error_response = _route_payload(payload, client_host)
+    finally:
+        strategy_lock.release()
+
+    if error_response is not None:
+        return error_response
+    if execution_result is None:
+        message = "Webhook routing failed without an execution result."
         return _response(
             500,
             WebhookResponse(
@@ -319,11 +405,7 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 message=message,
             ),
         )
-    finally:
-        if BLOCK_DUPLICATE_SIGNALS:
-            _finish_processing_signal(payload.signal_id)
-    if BLOCK_DUPLICATE_SIGNALS:
-        add_seen_signal(payload.signal_id)
+
     blocked = bool(execution_result.get("blocked"))
     success = execution_result.get("success")
     status = execution_result.get("status") or ("BLOCKED" if blocked else "ORDER_PLACED")

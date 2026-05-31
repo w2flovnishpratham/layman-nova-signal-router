@@ -25,10 +25,10 @@ Clears stored Dhan credentials and stops the engine.
 ### POST /api/setup/webhook-secret
 
 ```json
-{ "webhook_secret": "string" }
+{ "webhook_secret": "at-least-16-random-characters" }
 ```
 
-Stores the webhook secret server-side. The response returns only `webhook_secret_set`.
+Stores the webhook secret server-side. The backend rejects short or low-entropy secrets. The response returns only `webhook_secret_set`.
 
 ### POST /api/setup/risk
 
@@ -41,6 +41,18 @@ Stores the webhook secret server-side. The response returns only `webhook_secret
   "allow_exit": true
 }
 ```
+
+### POST /api/setup/scrip-master/refresh
+
+Starts a background Dhan scrip master refresh job and returns immediately.
+
+```json
+{ "success": true, "accepted": true, "job_id": "string", "status": "RUNNING" }
+```
+
+### GET /api/setup/scrip-master/status
+
+Returns configured/fallback file status, last download metadata, and `refresh_job` with `IDLE`, `RUNNING`, `SUCCEEDED`, or `FAILED`.
 
 ## Engine
 

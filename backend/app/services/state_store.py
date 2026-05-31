@@ -21,6 +21,7 @@ _LOCK = threading.RLock()
 
 APP_STATE_FILE = RUNTIME_STATE_DIR / "app_state.json"
 OPEN_POSITION_FILE = RUNTIME_STATE_DIR / "open_position.json"
+EXTERNAL_POSITIONS_FILE = RUNTIME_STATE_DIR / "external_positions.json"
 SEEN_SIGNALS_FILE = RUNTIME_STATE_DIR / "seen_signals.json"
 SETTINGS_FILE = RUNTIME_STATE_DIR / "settings.json"
 
@@ -66,8 +67,42 @@ def default_open_position() -> dict[str, Any]:
     }
 
 
+# C7 — Seen-signals TTL. Without a TTL, signal_ids accumulates forever and
+# every webhook serialises a list that grows linearly with usage. Schema
+# stays backward-compatible: we still expose "signal_ids" (a list) for any
+# legacy reader, but also persist "added_at_by_id" for prune logic.
+SEEN_SIGNAL_TTL_SECONDS = 24 * 60 * 60  # 24 hours
+
+
+def default_external_positions() -> dict[str, Any]:
+    return {
+        "status": "not_checked",
+        "message": "Dhan external-position watcher has not checked broker state yet.",
+        "last_checked_at": None,
+        "stale": False,
+        "external_count": 0,
+        "positions": [],
+        "open_orders": [],
+        "broker_active_count": 0,
+        "broker_open_order_count": 0,
+        "local_position_present": False,
+        "local_position_matched": False,
+        "manual_exit_detected": False,
+        "sl_tp_drift": {
+            "status": "not_checked",
+            "drift_detected": False,
+            "message": "Dhan SL/TP drift has not been checked yet.",
+            "checked_at": None,
+            "expected": {},
+            "actual": {},
+            "items": [],
+        },
+        "failures": [],
+    }
+
+
 def default_seen_signals() -> dict[str, Any]:
-    return {"signal_ids": []}
+    return {"signal_ids": [], "added_at_by_id": {}}
 
 
 def default_settings() -> dict[str, Any]:
@@ -96,6 +131,7 @@ def _state_defaults() -> dict[Path, Callable[[], dict[str, Any]]]:
     return {
         APP_STATE_FILE: default_app_state,
         OPEN_POSITION_FILE: default_open_position,
+        EXTERNAL_POSITIONS_FILE: default_external_positions,
         SEEN_SIGNALS_FILE: default_seen_signals,
         SETTINGS_FILE: default_settings,
     }
@@ -212,11 +248,84 @@ def clear_open_position() -> dict[str, Any]:
     return set_open_position(default_open_position())
 
 
+def get_external_positions() -> dict[str, Any]:
+    data = _read_json(EXTERNAL_POSITIONS_FILE, default_external_positions)
+    defaults = default_external_positions()
+    changed = False
+    for key, value in defaults.items():
+        if key not in data:
+            data[key] = value
+            changed = True
+    if not isinstance(data.get("positions"), list):
+        data["positions"] = []
+        changed = True
+    if not isinstance(data.get("open_orders"), list):
+        data["open_orders"] = []
+        changed = True
+    if changed:
+        set_external_positions(data)
+    return data
+
+
+def set_external_positions(data: dict[str, Any]) -> dict[str, Any]:
+    return _write_json(EXTERNAL_POSITIONS_FILE, data)
+
+
+def clear_external_positions() -> dict[str, Any]:
+    return set_external_positions(default_external_positions())
+
+
+def _prune_expired_seen_signals(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Drop entries whose added_at is older than SEEN_SIGNAL_TTL_SECONDS.
+
+    Returns (pruned_data, pruned_count). Tolerant of legacy data that has
+    only signal_ids and no added_at_by_id — those legacy entries get a
+    fresh timestamp on first prune so they survive one TTL window from the
+    moment we first see them, then expire normally.
+    """
+    signal_ids = data.get("signal_ids") or []
+    added_at_by_id = data.get("added_at_by_id") or {}
+    now = datetime.now(timezone.utc)
+    cutoff_epoch = now.timestamp() - SEEN_SIGNAL_TTL_SECONDS
+
+    keep_ids: list[str] = []
+    keep_map: dict[str, str] = {}
+    pruned = 0
+    for sid in signal_ids:
+        added_at_str = added_at_by_id.get(sid)
+        if added_at_str:
+            try:
+                added_at = datetime.fromisoformat(str(added_at_str).replace("Z", "+00:00"))
+                if added_at.tzinfo is None:
+                    added_at = added_at.replace(tzinfo=timezone.utc)
+                if added_at.timestamp() < cutoff_epoch:
+                    pruned += 1
+                    continue
+                keep_ids.append(sid)
+                keep_map[sid] = added_at_str
+            except (ValueError, TypeError):
+                # Malformed timestamp — reset it so future prunes work.
+                keep_ids.append(sid)
+                keep_map[sid] = now.isoformat()
+        else:
+            # Legacy entry without timestamp: stamp it now, keep it.
+            keep_ids.append(sid)
+            keep_map[sid] = now.isoformat()
+
+    return {"signal_ids": keep_ids, "added_at_by_id": keep_map}, pruned
+
+
 def get_seen_signals() -> dict[str, Any]:
     data = _read_json(SEEN_SIGNALS_FILE, default_seen_signals)
     if "signal_ids" not in data or not isinstance(data["signal_ids"], list):
         data = default_seen_signals()
         set_seen_signals(data)
+        return data
+    # Prune-on-read keeps both in-memory and on-disk size bounded.
+    pruned_data, pruned_count = _prune_expired_seen_signals(data)
+    if pruned_count > 0 or pruned_data != data:
+        set_seen_signals(pruned_data)
+        return pruned_data
     return data
 
 
@@ -231,8 +340,10 @@ def has_seen_signal(signal_id: str) -> bool:
 def add_seen_signal(signal_id: str) -> dict[str, Any]:
     data = get_seen_signals()
     signal_ids = data.setdefault("signal_ids", [])
+    added_at_by_id = data.setdefault("added_at_by_id", {})
     if signal_id not in signal_ids:
         signal_ids.append(signal_id)
+    added_at_by_id[signal_id] = datetime.now(timezone.utc).isoformat()
     return set_seen_signals(data)
 
 
@@ -305,6 +416,7 @@ def clear_runtime_logs() -> None:
 def fresh_runtime_start(*, clear_logs: bool = True) -> None:
     set_app_state(default_app_state())
     clear_open_position()
+    clear_external_positions()
     clear_seen_signals()
     if clear_logs:
         clear_runtime_logs()

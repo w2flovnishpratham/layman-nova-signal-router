@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { getLiveFlow } from '../api/dashboard'
+import { usePolling } from '../hooks/usePolling'
 import LiveFlowTimeline from '../components/LiveFlowTimeline'
 import { LiveFlowStep } from '../types'
 
@@ -10,13 +11,13 @@ export default function LiveFlowPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const loadData = () => {
-    getLiveFlow().then(r => { setSteps(r.data); setLastUpdated(new Date()) }).finally(() => setLoading(false))
+    getLiveFlow()
+      .then(r => { setSteps(r.data); setLastUpdated(new Date()) })
+      .catch((err) => console.warn('LiveFlowPage: failed to refresh:', err?.message ?? err))
+      .finally(() => setLoading(false))
   }
-  useEffect(() => {
-    loadData()
-    const id = window.setInterval(loadData, 3000)
-    return () => window.clearInterval(id)
-  }, [])
+  // Was 3s — bumped to 5s. LiveFlow timeline doesn't need sub-second freshness.
+  usePolling(loadData, 5000)
 
   return (
     <div className="max-w-xl">

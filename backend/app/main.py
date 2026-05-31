@@ -13,6 +13,9 @@ from app.services.credential_vault import vault_status
 from app.services.instrument_resolver import start_instrument_cache_warmup
 from app.services.option_position_monitor import start_option_position_monitor, stop_option_position_monitor
 from app.services.state_store import get_app_state, get_runtime_settings, init_runtime_files, sync_runtime_flags_from_env
+from app.services.startup_reconciler import reconcile_open_position_on_startup
+from app.workers.eod_squareoff import start_eod_squareoff_worker, stop_eod_squareoff_worker
+from app.workers.ghost_position_watcher import start_ghost_position_watcher, stop_ghost_position_watcher
 
 
 logging.basicConfig(level=logging.INFO)
@@ -41,7 +44,11 @@ async def lifespan(app: FastAPI):
         logger.warning("REAL DHAN MODE CONFIGURED.")
     if settings.ENABLE_LIVE_ORDERS:
         logger.warning("LIVE ORDERS ENABLED. REAL MONEY ORDERS MAY BE SENT AFTER RISK CHECKS.")
+    reconcile_open_position_on_startup()
     start_option_position_monitor()
+    # C1 — EOD square-off worker (15:15 IST). Runs as daemon; idempotent.
+    start_eod_squareoff_worker()
+    start_ghost_position_watcher()
     log_audit_event(
         "APP_START",
         "NOVA Signal Router backend started.",
@@ -54,6 +61,8 @@ async def lifespan(app: FastAPI):
     )
     yield
     stop_option_position_monitor()
+    stop_eod_squareoff_worker()
+    stop_ghost_position_watcher()
     logger.info("NOVA Signal Router shutting down.")
 
 

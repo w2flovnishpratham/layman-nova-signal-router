@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { getOrders } from '../api/dashboard'
+import { usePolling } from '../hooks/usePolling'
 import { OrderEvent } from '../types'
 
 const badge = (order: OrderEvent) => {
@@ -14,13 +15,12 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true)
 
   const loadData = () => {
-    getOrders().then(r => setOrders(r.data)).finally(() => setLoading(false))
+    getOrders()
+      .then(r => setOrders(r.data))
+      .catch((err) => console.warn('OrdersPage: failed to refresh:', err?.message ?? err))
+      .finally(() => setLoading(false))
   }
-  useEffect(() => {
-    loadData()
-    const id = window.setInterval(loadData, 5000)
-    return () => window.clearInterval(id)
-  }, [])
+  usePolling(loadData, 5000)
 
   return (
     <div>

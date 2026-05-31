@@ -21,7 +21,8 @@ import {
   startEngine,
   stopEngine,
 } from '../api/dashboard'
-import type { DashboardSummary, LiveFlowStep, OrderEvent, SetupStatus } from '../types'
+import { usePolling } from '../hooks/usePolling'
+import type { DashboardSummary, ExternalPositionsSnapshot, LiveFlowStep, OrderEvent, SetupStatus } from '../types'
 import ConfirmModal from '../components/ConfirmModal'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -57,6 +58,8 @@ function useAnimatedNumber(target: number | null) {
 
 function CanTradeBanner({ summary, setup }: { summary: DashboardSummary; setup: SetupStatus }) {
   const { app_state, mode } = summary
+  const tokenAge = setup.token_age
+  const tokenExpired = setup.mode.dhan_mode?.toUpperCase() === 'REAL' && tokenAge?.token_expired === true
   if (app_state.emergency_stop) return (
     <div className="can-trade-danger flex items-center gap-3">
       <ShieldAlert className="text-red-400 flex-shrink-0" size={20} />
@@ -81,6 +84,17 @@ function CanTradeBanner({ summary, setup }: { summary: DashboardSummary; setup: 
       <div>
         <p className="text-sm font-semibold text-amber-300">Blocked — Dhan not connected</p>
         <p className="text-xs text-amber-400/80 mt-0.5">Go to Setup and enter your Dhan credentials.</p>
+      </div>
+    </div>
+  )
+  if (tokenExpired) return (
+    <div className="can-trade-danger flex items-center gap-3">
+      <Clock className="text-red-400 flex-shrink-0" size={20} />
+      <div>
+        <p className="text-sm font-semibold text-red-300">Blocked - Dhan token expired</p>
+        <p className="text-xs text-red-400/80 mt-0.5">
+          Reconnect Dhan in Setup before routing alerts{typeof tokenAge?.token_age_minutes === 'number' ? ` (age ${tokenAge.token_age_minutes} min).` : '.'}
+        </p>
       </div>
     </div>
   )
@@ -116,6 +130,97 @@ function CanTradeBanner({ summary, setup }: { summary: DashboardSummary; setup: 
 // ─── Pipeline strip ──────────────────────────────────────────────────────────
 
 // ─── Pipeline strip labels mapping ──────────────────────────────────────────
+
+function ExternalPositionWarning({ snapshot }: { snapshot?: ExternalPositionsSnapshot }) {
+  const rows = [
+    ...(snapshot?.positions ?? []).map(item => ({
+      kind: 'Position',
+      symbol: item.trading_symbol ?? item.security_id ?? '-',
+      qty: item.net_qty ?? '-',
+      status: item.position_type ?? 'OPEN',
+    })),
+    ...(snapshot?.open_orders ?? []).map(item => ({
+      kind: 'Order',
+      symbol: item.trading_symbol ?? item.security_id ?? '-',
+      qty: item.remaining_quantity ?? '-',
+      status: item.order_status ?? 'OPEN',
+    })),
+  ]
+
+  if (!rows.length) return null
+
+  return (
+    <section className="card space-y-3" style={{ borderColor: 'rgba(239,68,68,0.45)', background: 'rgba(239,68,68,0.05)' }}>
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 flex-shrink-0 text-red-400" size={18} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-sm font-semibold text-red-300">Broker-only Dhan exposure detected</h2>
+            {snapshot?.last_checked_at && (
+              <span className="text-[10px] font-mono text-red-300/70">
+                {new Date(snapshot.last_checked_at).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-red-200/80">
+            These positions or open orders exist at Dhan but are not tracked as NOVA's current open position.
+          </p>
+        </div>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {rows.slice(0, 4).map((row, index) => (
+          <div key={`${row.kind}-${row.symbol}-${index}`} className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] font-bold uppercase tracking-wide text-red-300">{row.kind}</span>
+              <span className="text-[10px] font-mono text-red-200/70">{row.status}</span>
+            </div>
+            <p className="mt-1 truncate font-mono text-xs font-semibold text-red-100">{row.symbol}</p>
+            <p className="mt-0.5 text-xs text-red-200/80">Qty: {String(row.qty)}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function SlTpDriftWarning({ snapshot }: { snapshot?: ExternalPositionsSnapshot }) {
+  const drift = snapshot?.sl_tp_drift
+  if (!drift?.drift_detected) return null
+
+  return (
+    <section className="card space-y-3" style={{ borderColor: 'rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.06)' }}>
+      <div className="flex items-start gap-3">
+        <ShieldAlert className="mt-0.5 flex-shrink-0 text-amber-300" size={18} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-sm font-semibold text-amber-200">Broker SL/TP drift detected</h2>
+            {drift.checked_at && (
+              <span className="text-[10px] font-mono text-amber-200/70">
+                {new Date(drift.checked_at).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-amber-100/75">
+            {drift.message}
+          </p>
+        </div>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {(drift.items ?? []).map(item => (
+          <div key={item.leg ?? item.leg_name ?? 'leg'} className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] font-bold uppercase tracking-wide text-amber-200">{(item.leg ?? 'leg').replace('_', ' ')}</span>
+              <span className={item.drift ? 'badge-yellow' : 'badge-green'}>{item.drift ? 'DRIFT' : 'OK'}</span>
+            </div>
+            <p className="mt-1 text-xs text-amber-100/80">
+              Expected {currency(item.expected_price)} · Dhan {currency(item.actual_price)}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
 
 const PIPELINE_LABELS: Record<string, string> = {
   // Signal desk stages
@@ -496,11 +601,19 @@ export default function DashboardPage() {
     setOrders(freshOrders.slice(0, 10))
   }
 
-  useEffect(() => {
-    loadData().catch(() => toast.error('Backend APIs unreachable'))
-    const id = window.setInterval(() => loadData().catch(() => undefined), 2000)
-    return () => window.clearInterval(id)
-  }, [])
+  // FE-C2 — Was 2s, which sent 30 reqs/min/tab to the backend and hit Dhan
+  // rate limits in REAL mode. Bumped to 5s for the dashboard. usePolling
+  // also pauses while the tab is hidden (FE-C3).
+  usePolling(() => {
+    return loadData().catch((err) => {
+      // First failure shows toast, then quiet for the rest of the session.
+      // (The Layout topbar pill also reflects backend-down state.)
+      if (!(window as unknown as { __dashboardFailed?: boolean }).__dashboardFailed) {
+        ;(window as unknown as { __dashboardFailed?: boolean }).__dashboardFailed = true
+        toast.error('Backend APIs unreachable', { description: err?.message })
+      }
+    })
+  }, 5000)
 
   const copyWebhook = async () => {
     if (!setup?.webhook_url) return
@@ -568,6 +681,9 @@ export default function DashboardPage() {
       </div>
 
       <CanTradeBanner summary={summary} setup={setup} />
+
+      <ExternalPositionWarning snapshot={summary.external_positions} />
+      <SlTpDriftWarning snapshot={summary.external_positions} />
 
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard label="Engine"    value={setup.engine_started  ? 'Running'   : 'Stopped'}  accent={setup.engine_started  ? 'green' : 'amber'} />

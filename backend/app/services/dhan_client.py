@@ -85,6 +85,8 @@ class DhanOrderStatusResult:
     avg_price: float | None
     raw_response: dict[str, Any] | None
     error: str | None = None
+    filled_qty: int | None = None
+    remaining_qty: int | None = None
 
 
 @dataclass(frozen=True)
@@ -313,6 +315,17 @@ class RealDhanClient:
                 continue
         return None
 
+    def _optional_int(self, data: dict[str, Any], *keys: str) -> int | None:
+        for key in keys:
+            value = data.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                continue
+        return None
+
     def _order_avg_price(self, data: dict[str, Any]) -> float | None:
         return self._optional_float(
             data,
@@ -324,8 +337,130 @@ class RealDhanClient:
             "tradedPrice",
         )
 
+    def _order_filled_qty(self, data: dict[str, Any]) -> int | None:
+        return self._optional_int(
+            data,
+            "filled_qty",
+            "filledQty",
+            "filledQuantity",
+            "filled_quantity",
+            "tradedQuantity",
+            "tradedQty",
+            "traded_quantity",
+            "quantityTraded",
+        )
+
+    def _order_remaining_qty(self, data: dict[str, Any]) -> int | None:
+        return self._optional_int(
+            data,
+            "remainingQuantity",
+            "remainingQty",
+            "remaining_quantity",
+            "pendingQuantity",
+            "pendingQty",
+            "pending_quantity",
+            "unfilledQuantity",
+        )
+
     def _response_payload(self, parsed: dict[str, Any] | list[Any] | str) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {"raw_response": parsed}
+
+    def _order_id(self, data: dict[str, Any]) -> str | None:
+        value = data.get("orderId") or data.get("order_id") or data.get("id")
+        return str(value).strip() if value not in (None, "") else None
+
+    def _correlation_id(self, data: dict[str, Any]) -> str | None:
+        value = (
+            data.get("correlationId")
+            or data.get("correlationID")
+            or data.get("correlation_id")
+            or data.get("clientOrderId")
+            or data.get("client_order_id")
+        )
+        return str(value).strip() if value not in (None, "") else None
+
+    def _recover_order_after_timeout(
+        self,
+        *,
+        client_id: str,
+        access_token: str,
+        payload: dict[str, Any],
+        timeout_message: str,
+    ) -> DhanOrderResult:
+        correlation_id = self._correlation_id(payload)
+        if not correlation_id:
+            return DhanOrderResult(
+                success=False,
+                order_id=None,
+                status="ORDER_STATE_UNKNOWN",
+                avg_price=None,
+                raw_response={"unknown_order_state": True, "reason": "missing_correlation_id"},
+                error=f"{timeout_message}; manual Dhan verification required before sending another order.",
+                interpreted_error=interpret_dhan_error(None, timeout_message),
+            )
+
+        order_book = self.get_order_book(client_id=client_id, access_token=access_token)
+        matched_order: dict[str, Any] | None = None
+        if order_book.success:
+            for row in order_book.items:
+                if self._correlation_id(row) == correlation_id:
+                    matched_order = row
+                    break
+
+        if matched_order:
+            status = self._order_status_value(matched_order) or "PENDING"
+            success = status not in {"REJECTED", "CANCELLED", "EXPIRED"}
+            recovered = dict(matched_order)
+            recovered.update(
+                {
+                    "recovered_after_timeout": True,
+                    "correlationId": correlation_id,
+                    "order_state_unknown": False,
+                }
+            )
+            log_order_event(
+                {
+                    "event": "DHAN_ORDER_TIMEOUT_RECOVERED",
+                    "correlation_id": correlation_id,
+                    "order_id": self._order_id(matched_order),
+                    "status": status,
+                    "success": success,
+                }
+            )
+            return DhanOrderResult(
+                success=success,
+                order_id=self._order_id(matched_order),
+                status=status,
+                avg_price=self._order_avg_price(matched_order),
+                raw_response=recovered,
+                error=None if success else self._error_message(matched_order, f"Dhan order recovered after timeout with status {status}."),
+                interpreted_error=None if success else interpret_dhan_error(None, status),
+            )
+
+        raw_response = {
+            "unknown_order_state": True,
+            "correlationId": correlation_id,
+            "order_book_success": order_book.success,
+            "order_book_message": order_book.message,
+            "order_book_status_code": order_book.status_code,
+            "order_book_error": order_book.error,
+        }
+        log_order_event(
+            {
+                "event": "DHAN_ORDER_TIMEOUT_UNRESOLVED",
+                "correlation_id": correlation_id,
+                **raw_response,
+            }
+        )
+        return DhanOrderResult(
+            success=False,
+            order_id=None,
+            status="ORDER_STATE_UNKNOWN",
+            avg_price=None,
+            raw_response=raw_response,
+            error=f"{timeout_message}; no matching order found by correlationId. Manual Dhan verification required.",
+            interpreted_error=interpret_dhan_error(None, timeout_message),
+        )
 
     def _order_status_payload(self, parsed: dict[str, Any] | list[Any] | str, order_id: str) -> dict[str, Any]:
         if isinstance(parsed, dict):
@@ -514,14 +649,11 @@ class RealDhanClient:
                     "interpreted_error": interpreted_error,
                 }
             )
-            return DhanOrderResult(
-                success=False,
-                order_id=None,
-                status="TIMEOUT",
-                avg_price=None,
-                raw_response={},
-                error="Dhan API timeout",
-                interpreted_error=interpreted_error,
+            return self._recover_order_after_timeout(
+                client_id=client_id,
+                access_token=access_token,
+                payload=payload,
+                timeout_message="Dhan API timeout",
             )
         except Exception as exc:
             logger.error("Dhan place_order error: %s", exc)
@@ -617,14 +749,11 @@ class RealDhanClient:
                     "interpreted_error": interpreted_error,
                 }
             )
-            return DhanOrderResult(
-                success=False,
-                order_id=None,
-                status="TIMEOUT",
-                avg_price=None,
-                raw_response={},
-                error="Dhan Super Order API timeout",
-                interpreted_error=interpreted_error,
+            return self._recover_order_after_timeout(
+                client_id=client_id,
+                access_token=access_token,
+                payload=payload,
+                timeout_message="Dhan Super Order API timeout",
             )
         except Exception as exc:
             logger.error("Dhan place_super_order error: %s", exc)
@@ -902,6 +1031,8 @@ class RealDhanClient:
                         is_filled=(order_status == "TRADED"),
                         avg_price=avg_price,
                         raw_response=data,
+                        filled_qty=self._order_filled_qty(data),
+                        remaining_qty=self._order_remaining_qty(data),
                     )
                 if attempt < max_polls - 1:
                     time.sleep(poll_delay)
@@ -920,6 +1051,8 @@ class RealDhanClient:
                     avg_price=None,
                     raw_response=last_data or None,
                     error=str(exc),
+                    filled_qty=self._order_filled_qty(last_data) if last_data else None,
+                    remaining_qty=self._order_remaining_qty(last_data) if last_data else None,
                 )
 
         # Exhausted polls without reaching terminal status
@@ -938,6 +1071,8 @@ class RealDhanClient:
             is_filled=False,
             avg_price=None,
             raw_response=last_data or None,
+            filled_qty=self._order_filled_qty(last_data) if last_data else None,
+            remaining_qty=self._order_remaining_qty(last_data) if last_data else None,
         )
 
     def get_ltp(

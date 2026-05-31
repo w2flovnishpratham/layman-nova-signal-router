@@ -11,6 +11,65 @@ export interface AppState {
   global_kill_switch: boolean
 }
 
+export interface ExternalPositionItem {
+  source?: string
+  detected_at?: string
+  trading_symbol?: string | null
+  security_id?: string | null
+  net_qty?: number | string | null
+  position_type?: string | null
+  product_type?: string | null
+  exchange_segment?: string | null
+}
+
+export interface ExternalOrderItem {
+  source?: string
+  detected_at?: string
+  order_id?: string | null
+  order_status?: string | null
+  trading_symbol?: string | null
+  security_id?: string | null
+  remaining_quantity?: number | string | null
+}
+
+export interface ExternalPositionsSnapshot {
+  status: string
+  message: string
+  last_checked_at: string | null
+  stale?: boolean
+  external_count: number
+  positions: ExternalPositionItem[]
+  open_orders: ExternalOrderItem[]
+  broker_active_count?: number
+  broker_open_order_count?: number
+  local_position_present?: boolean
+  local_position_matched?: boolean
+  manual_exit_detected?: boolean
+  sl_tp_drift?: {
+    status: string
+    drift_detected: boolean
+    message: string
+    checked_at: string | null
+    expected?: {
+      stop_loss_price?: number | null
+      target_price?: number | null
+    }
+    actual?: {
+      stop_loss_price?: number | null
+      target_price?: number | null
+    }
+    items?: Array<{
+      leg?: string
+      expected_price?: number | null
+      actual_price?: number | null
+      drift?: boolean
+      order_id?: string | null
+      leg_name?: string | null
+    }>
+  }
+  failures?: string[]
+}
+
 export interface OpenPosition {
   has_open_position: boolean
   strategy_code: string | null
@@ -47,6 +106,7 @@ export interface OpenPosition {
     open_orders_count?: number
     failures?: string[]
   }
+  external_positions?: ExternalPositionsSnapshot
 }
 
 export interface RuntimeSettings {
@@ -92,6 +152,7 @@ export interface DashboardSummary {
   engine_started?: boolean
   app_state: AppState
   open_position: OpenPosition
+  external_positions?: ExternalPositionsSnapshot
   wallet: WalletSnapshot
   settings: RuntimeSettings
   webhook_url?: string
@@ -145,6 +206,16 @@ export interface DhanConnectPayload {
   access_token?: string
 }
 
+export interface TokenAge {
+  token_saved_at: string | null
+  token_age_minutes: number | null
+  token_estimated_expiry_at: string | null
+  token_expired: boolean | null
+  token_warn: boolean | null
+  token_max_age_hours: number | null
+  token_warn_age_hours: number | null
+}
+
 export interface SetupStatus {
   dhan_connected: boolean
   dhan_client_id_masked: string | null
@@ -160,6 +231,7 @@ export interface SetupStatus {
   outgoing_ip: string | null
   outgoing_ip_check?: Record<string, unknown>
   static_ip_note: string
+  token_age?: TokenAge
   mode: {
     dhan_mode: string
     live_orders_enabled: boolean
@@ -243,6 +315,44 @@ export interface WebhookUrlInfo {
   webhook_trading_enabled: boolean
   dhan_mode: string
   live_orders_enabled: boolean
+}
+
+export interface ScripMasterFileInfo {
+  exists: boolean
+  path: string
+  size_bytes?: number
+}
+
+export interface ScripMasterRefreshJob {
+  job_id: string | null
+  status: 'IDLE' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | string
+  started_at: string | null
+  finished_at: string | null
+  success: boolean | null
+  message: string | null
+  error: string | null
+  path: string | null
+  size_bytes: number | null
+  results: Array<Record<string, unknown>>
+}
+
+export interface ScripMasterStatus {
+  configured_path: ScripMasterFileInfo
+  fallback_path: ScripMasterFileInfo
+  auto_resolve_security_id: boolean
+  allow_default_security_id: boolean
+  last_download: Record<string, unknown>
+  refresh_job: ScripMasterRefreshJob
+  download_urls: string[]
+}
+
+export interface ScripMasterRefreshResponse {
+  success: boolean
+  accepted: boolean
+  job_id: string
+  status: string
+  refresh_job: ScripMasterRefreshJob
+  message: string
 }
 
 export interface DhanDebugConfig {

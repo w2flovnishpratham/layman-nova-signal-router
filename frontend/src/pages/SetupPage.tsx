@@ -23,10 +23,11 @@ import {
 } from '../api/dashboard'
 import ConfirmModal from '../components/ConfirmModal'
 import SecretInput from '../components/SecretInput'
+import { usePolling } from '../hooks/usePolling'
 import { DhanConnectPayload, RiskSetupPayload, SetupStatus } from '../types'
 
 const steps = ['Connect Dhan', 'Wallet Verified', 'Webhook Secret', 'Risk Settings', 'Start Engine']
-const MIN_WEBHOOK_SECRET_LENGTH = 5
+const MIN_WEBHOOK_SECRET_LENGTH = 16
 const WEBHOOK_SECRET_LENGTH_ERROR = `Webhook secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters.`
 
 type ChatFeedItem = {
@@ -288,7 +289,7 @@ export default function SetupPage() {
   const pollStatus = async () => {
     const [statusResponse, feedResponse] = await Promise.all([
       getSetupStatus(),
-      getChatFeed().catch(() => ({ data: [] as ChatFeedItem[] })),
+      getChatFeed(true).catch(() => ({ data: [] as ChatFeedItem[] })),
     ])
     setStatus(statusResponse.data)
     setChatFeed((feedResponse.data || []) as ChatFeedItem[])
@@ -302,13 +303,17 @@ export default function SetupPage() {
 
   const loadData = async () => { await pollStatus(); await loadRisk() }
 
+  // Initial full load (status + risk settings). Risk only loads once on mount
+  // so user edits don't get clobbered by the polling loop below (FE-H11).
   useEffect(() => {
     loadData().catch(() => setError('Backend is not reachable. Check VITE_API_BASE_URL and backend health.'))
-    const interval = window.setInterval(() => {
-      pollStatus().catch(() => undefined)
-    }, 3000)
-    return () => window.clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // FE-C2/FE-C3 — Was 3s setInterval. Bumped to 5s and gated by tab
+  // visibility via usePolling. pollStatus() only writes status (not risk
+  // form state), so it's safe to fire while the form is open.
+  usePolling(() => pollStatus().catch(() => undefined), 5000)
 
   useEffect(() => {
     if (status?.engine_started) setSetupFormsOpen(false)

@@ -1,10 +1,14 @@
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.services import audit_logger, credential_vault, state_store
 from app.services import risk_manager
-from app.tests.test_signal_parser import nova_payload, pine_payload
+from app.tests.test_signal_parser import TEST_WEBHOOK_SECRET, nova_payload, pine_payload
 
 
 @pytest.fixture()
@@ -39,7 +43,7 @@ def client(tmp_path, monkeypatch):
     with TestClient(app) as test_client:
         test_client.post("/api/control/reset-state")
         test_client.post("/api/control/clear-seen-signals")
-        test_client.post("/api/setup/webhook-secret", json={"webhook_secret": "test-secret"})
+        test_client.post("/api/setup/webhook-secret", json={"webhook_secret": TEST_WEBHOOK_SECRET})
         test_client.post(
             "/api/setup/risk",
             json={
@@ -67,7 +71,7 @@ def test_wrong_secret_rejected_after_parse(client):
 
 
 def test_unsupported_payload_format_rejected(client):
-    response = client.post("/webhook/tradingview", json={"secret": "test-secret", "foo": "bar"})
+    response = client.post("/webhook/tradingview", json={"secret": TEST_WEBHOOK_SECRET, "foo": "bar"})
 
     assert response.status_code == 400
     assert response.json()["status"] == "UNSUPPORTED_PAYLOAD_FORMAT"
@@ -109,6 +113,54 @@ def test_duplicate_signal_logic_works_for_generated_pine_signal_id(client):
     assert second.json()["accepted"] is False
     assert second.json()["payload_format"] == "PINE_MULTI_LEG"
     assert "duplicate signal_id" in second.json()["message"]
+
+
+def test_same_strategy_signals_are_serialized(client, monkeypatch):
+    from app.routers import webhook as webhook_router
+
+    with webhook_router._PROCESSING_LOCK:
+        webhook_router._PROCESSING_SIGNAL_IDS.clear()
+    with webhook_router._STRATEGY_LOCKS_GUARD:
+        webhook_router._STRATEGY_LOCKS.clear()
+
+    active_count = 0
+    max_active_count = 0
+    route_lock = threading.Lock()
+    routed_signal_ids: list[str] = []
+
+    def fake_route_signal(signal):
+        nonlocal active_count, max_active_count
+        with route_lock:
+            active_count += 1
+            max_active_count = max(max_active_count, active_count)
+            routed_signal_ids.append(signal.signal_id)
+        time.sleep(0.1)
+        with route_lock:
+            active_count -= 1
+        return {
+            "blocked": False,
+            "success": True,
+            "status": "ORDER_PLACED",
+            "order_id": f"MOCK-{signal.signal_id}",
+        }
+
+    monkeypatch.setattr(webhook_router, "route_signal", fake_route_signal)
+
+    first_payload = nova_payload("ENTRY", "BUY", "same-strategy-001")
+    second_payload = nova_payload("ENTRY", "BUY", "same-strategy-002")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(client.post, "/webhook/tradingview", json=first_payload)
+        second_future = executor.submit(client.post, "/webhook/tradingview", json=second_payload)
+        first = first_future.result()
+        second = second_future.result()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["accepted"] is True
+    assert second.json()["accepted"] is True
+    assert sorted(routed_signal_ids) == ["same-strategy-001", "same-strategy-002"]
+    assert max_active_count == 1
 
 
 def test_market_hours_check_falls_back_when_zoneinfo_is_missing(monkeypatch):

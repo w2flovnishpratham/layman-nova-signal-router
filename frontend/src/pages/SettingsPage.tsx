@@ -5,7 +5,9 @@ import {
   disconnectDhan,
   emergencyStop,
   getDhanDebugConfig,
+  getScripMasterStatus,
   getSetupStatus,
+  refreshScripMaster,
   resumeTrading,
   saveWebhookSecret,
   setGlobalKillSwitch,
@@ -13,9 +15,9 @@ import {
   updateRiskSettings,
 } from '../api/dashboard'
 import SecretInput from '../components/SecretInput'
-import { DhanConnectPayload, DhanDebugConfig, RiskSettingsPatchPayload, RiskSetupPayload, SetupStatus } from '../types'
+import { DhanConnectPayload, DhanDebugConfig, RiskSettingsPatchPayload, RiskSetupPayload, ScripMasterStatus, SetupStatus } from '../types'
 
-const MIN_WEBHOOK_SECRET_LENGTH = 5
+const MIN_WEBHOOK_SECRET_LENGTH = 16
 const WEBHOOK_SECRET_LENGTH_ERROR = `Webhook secret must be at least ${MIN_WEBHOOK_SECRET_LENGTH} characters.`
 
 function errorMessage(error: unknown) {
@@ -65,6 +67,13 @@ function formatMasked(value: string | null | undefined): string {
   return value
 }
 
+function displayTime(value: unknown) {
+  if (!value || typeof value !== 'string') return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return date.toLocaleString()
+}
+
 export default function SettingsPage() {
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [debug, setDebug] = useState<DhanDebugConfig | null>(null)
@@ -91,11 +100,16 @@ export default function SettingsPage() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
+  const [scripStatus, setScripStatus] = useState<ScripMasterStatus | null>(null)
 
   const loadData = async () => {
-    const response = await getSetupStatus()
+    const [response, scripResponse] = await Promise.all([
+      getSetupStatus(),
+      getScripMasterStatus().catch(() => null),
+    ])
     setStatus(response.data)
     setRisk(response.data.settings)
+    if (scripResponse) setScripStatus(scripResponse.data)
     if (response.data.debug_enabled) {
       getDhanDebugConfig().then((debugResponse) => setDebug(debugResponse.data)).catch(() => setDebug(null))
     }
@@ -104,6 +118,14 @@ export default function SettingsPage() {
   useEffect(() => {
     loadData().catch(() => setError('Backend settings APIs are not reachable.'))
   }, [])
+
+  useEffect(() => {
+    if (scripStatus?.refresh_job.status !== 'RUNNING') return
+    const id = window.setInterval(() => {
+      getScripMasterStatus().then((response) => setScripStatus(response.data)).catch(() => undefined)
+    }, 2000)
+    return () => window.clearInterval(id)
+  }, [scripStatus?.refresh_job.status, scripStatus?.refresh_job.job_id])
 
   const run = async (key: string, action: Promise<unknown>, done: string) => {
     setBusy(key)
@@ -174,6 +196,21 @@ export default function SettingsPage() {
     await run('risk', updateRiskSettings(payload), 'Risk settings updated.')
   }
 
+  const startScripRefresh = async () => {
+    setBusy('scrip')
+    setError('')
+    try {
+      const response = await refreshScripMaster()
+      setMessage(response.data.message)
+      const statusResponse = await getScripMasterStatus()
+      setScripStatus(statusResponse.data)
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   if (!status) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center text-[#d8d3c8]">
@@ -182,6 +219,7 @@ export default function SettingsPage() {
       </div>
     )
   }
+  const scripJobRunning = scripStatus?.refresh_job.status === 'RUNNING'
 
   return (
     <div className="space-y-6">
@@ -245,6 +283,29 @@ export default function SettingsPage() {
             </button>
           </div>
         </form>
+      </section>
+
+      <section className="card space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-lg font-semibold">Dhan Scrip Master</h2>
+          <button onClick={startScripRefresh} disabled={busy === 'scrip' || scripJobRunning} className="btn-ghost flex items-center gap-2" type="button">
+            <RefreshCw size={16} className={scripJobRunning ? 'animate-spin' : ''} /> Refresh
+          </button>
+        </div>
+        <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
+          <p><span className="text-[#9a968f]">Configured file:</span> {scripStatus?.configured_path.exists ? 'present' : 'missing'}</p>
+          <p><span className="text-[#9a968f]">Size:</span> {scripStatus?.configured_path.size_bytes ? `${scripStatus.configured_path.size_bytes.toLocaleString()} bytes` : '-'}</p>
+          <p><span className="text-[#9a968f]">Job:</span> {scripStatus?.refresh_job.status ?? '-'}</p>
+          <p><span className="text-[#9a968f]">Last download:</span> {displayTime(scripStatus?.last_download.downloaded_at)}</p>
+          <p><span className="text-[#9a968f]">Auto resolve:</span> {scripStatus ? String(scripStatus.auto_resolve_security_id) : '-'}</p>
+          <p><span className="text-[#9a968f]">Fallback default:</span> {scripStatus ? String(scripStatus.allow_default_security_id) : '-'}</p>
+        </div>
+        {scripStatus?.refresh_job.message && (
+          <p className={scripStatus.refresh_job.status === 'FAILED' ? 'text-sm text-red-300' : 'text-sm text-[#9a968f]'}>
+            {scripStatus.refresh_job.message}
+          </p>
+        )}
+        {scripStatus?.configured_path.path && <p className="break-all font-mono text-xs text-[#77736c]">{scripStatus.configured_path.path}</p>}
       </section>
 
       <form onSubmit={updateRisk} className="card space-y-4">

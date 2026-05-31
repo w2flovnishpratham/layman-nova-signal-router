@@ -5,7 +5,7 @@ from typing import Any
 from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE, settings
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
-from app.services.credential_vault import get_dhan_credentials
+from app.services.credential_vault import dhan_token_age_metadata, get_dhan_credentials
 from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, MockDhanClient, RealDhanClient
 from app.services.risk_manager import RiskDecision, _market_is_open, evaluate_entry, evaluate_exit, evaluate_reversal_entry
 from app.services.security_id_resolver import resolve_security_id
@@ -309,6 +309,9 @@ def _blocked(
     security_id_resolution: dict[str, Any] | None = None,
     security_id: str | None = None,
     trading_symbol: str | None = None,
+    audit_event: str | None = None,
+    audit_metadata: dict[str, Any] | None = None,
+    result_extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     log_order_event(
         {
@@ -328,14 +331,17 @@ def _blocked(
             **_normalized_log_fields(signal),
         }
     )
+    metadata = {"signal_id": signal.signal_id, "action": signal.action, "payload_format": signal.payload_format}
+    if audit_metadata:
+        metadata.update(audit_metadata)
     log_audit_event(
-        status,
+        audit_event or status,
         reason,
         severity="WARNING",
-        metadata={"signal_id": signal.signal_id, "action": signal.action, "payload_format": signal.payload_format},
+        metadata=metadata,
     )
     update_app_state(state="BLOCKED", last_message=reason)
-    return {
+    result = {
         "blocked": True,
         "status": status,
         "reason": reason,
@@ -351,6 +357,48 @@ def _blocked(
         "security_id_resolution": security_id_resolution,
         "trading_symbol": trading_symbol or signal.trading_symbol,
     }
+    if result_extra:
+        result.update(result_extra)
+    return result
+
+
+def _dhan_token_signal_preflight(signal: NormalizedSignal) -> dict[str, Any] | None:
+    if settings.DHAN_MODE.upper() != "REAL":
+        return None
+
+    token_meta = dhan_token_age_metadata()
+    age_minutes = token_meta.get("token_age_minutes")
+    if token_meta.get("token_expired") is True:
+        age_text = f" (age: {age_minutes} min)" if age_minutes is not None else ""
+        reason = f"Dhan token expired{age_text}. Reconnect Dhan in Setup before routing signals."
+        update_app_state(
+            state="BLOCKED",
+            last_signal_id=signal.signal_id,
+            last_alert_at=utc_now(),
+            last_message=reason,
+        )
+        return _blocked(
+            "BLOCKED",
+            reason,
+            signal,
+            audit_event="DHAN_TOKEN_EXPIRED_SIGNAL_BLOCK",
+            audit_metadata={"token_age": token_meta},
+            result_extra={
+                "success": False,
+                "block_code": "DHAN_TOKEN_EXPIRED",
+                "token_age": token_meta,
+            },
+        )
+
+    if token_meta.get("token_warn") is True:
+        log_audit_event(
+            "DHAN_TOKEN_EXPIRY_WARNING",
+            f"Dhan token is approaching expiry (age: {age_minutes} min).",
+            severity="WARNING",
+            metadata={"signal_id": signal.signal_id, "token_age": token_meta},
+        )
+
+    return None
 
 
 def _pick(row: dict[str, Any], *keys: str) -> Any:
@@ -368,6 +416,52 @@ def _number(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _int_value(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _filled_qty_from_raw(data: dict[str, Any] | None) -> int | None:
+    if not isinstance(data, dict):
+        return None
+    for key in (
+        "filled_qty",
+        "filledQty",
+        "filledQuantity",
+        "filled_quantity",
+        "tradedQuantity",
+        "tradedQty",
+        "traded_quantity",
+        "quantityTraded",
+    ):
+        qty = _int_value(data.get(key))
+        if qty is not None:
+            return qty
+    return None
+
+
+def _remaining_qty_from_raw(data: dict[str, Any] | None) -> int | None:
+    if not isinstance(data, dict):
+        return None
+    for key in (
+        "remainingQuantity",
+        "remainingQty",
+        "remaining_quantity",
+        "pendingQuantity",
+        "pendingQty",
+        "pending_quantity",
+        "unfilledQuantity",
+    ):
+        qty = _int_value(data.get(key))
+        if qty is not None:
+            return qty
+    return None
 
 
 def _is_active_dhan_position(row: dict[str, Any]) -> bool:
@@ -531,11 +625,22 @@ def _reconcile_tracked_position_before_entry(signal: NormalizedSignal) -> RiskDe
     return RiskDecision(False, str(preflight.get("reason") or "Trade blocked: Dhan exposure check failed."))
 
 
-def _place_order(signal: NormalizedSignal, qty: int, action: str, *, skip_entry_preflight: bool = False) -> dict[str, Any]:
+def _place_order(
+    signal: NormalizedSignal,
+    qty: int,
+    action: str,
+    *,
+    skip_entry_preflight: bool = False,
+    runtime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     dhan_mode = settings.DHAN_MODE.upper()
     creds = get_dhan_credentials()
     request_payload, security_id_resolution = _build_dhan_payload_and_resolution(signal, qty, action)
-    runtime = get_runtime_settings()
+    # C11 — Settings snapshot per signal: caller passes the snapshot taken
+    # at signal arrival. Fall back to live read only when called directly
+    # (e.g. server-side option monitor exits that aren't tied to a webhook).
+    if runtime is None:
+        runtime = get_runtime_settings()
     exit_mode = _option_exit_mode(runtime)
     use_super_order = dhan_mode == "REAL" and action == "ENTRY" and exit_mode == "DHAN_SUPER"
 
@@ -704,6 +809,8 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str, *, skip_entry_
     final_status = result.status
     final_avg_price = result.avg_price
     final_success = result.success
+    final_filled_qty = _filled_qty_from_raw(result.raw_response)
+    final_remaining_qty = _remaining_qty_from_raw(result.raw_response)
     super_order_post_fill_update: dict[str, Any] | None = None
     active_super_order_levels = super_order_levels
 
@@ -720,20 +827,54 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str, *, skip_entry_
                 "is_terminal": poll.is_terminal,
                 "is_filled": poll.is_filled,
                 "avg_price": poll.avg_price,
+                "filled_qty": poll.filled_qty,
+                "remaining_qty": poll.remaining_qty,
                 "error": poll.error,
             }
+            if poll.filled_qty is not None:
+                final_filled_qty = poll.filled_qty
+            if poll.remaining_qty is not None:
+                final_remaining_qty = poll.remaining_qty
+            if poll.avg_price is not None:
+                final_avg_price = poll.avg_price
             if poll.is_filled:
                 final_status = "TRADED"
-                final_avg_price = poll.avg_price or final_avg_price
                 final_success = True
             elif poll.is_terminal and not poll.is_filled:
-                # REJECTED / CANCELLED / EXPIRED
-                final_status = poll.order_status or final_status
-                final_success = False
+                if final_filled_qty is not None and 0 < final_filled_qty < qty:
+                    final_status = "PARTIAL_FILL"
+                    final_success = True
+                else:
+                    # REJECTED / CANCELLED / EXPIRED
+                    final_status = poll.order_status or final_status
+                    final_success = False
             else:
                 # Still pending after polling
-                final_status = "PENDING_CONFIRMATION"
+                final_status = "PARTIAL_FILL_PENDING" if final_filled_qty and final_filled_qty < qty else "PENDING_CONFIRMATION"
                 final_success = True  # order was accepted; fill pending
+
+    if final_success and final_filled_qty is None and final_status == "TRADED":
+        final_filled_qty = qty
+    partial_fill = bool(final_filled_qty is not None and 0 < final_filled_qty < qty)
+    final_qty = final_filled_qty if final_filled_qty is not None and final_filled_qty > 0 else qty
+    if partial_fill and final_status == "TRADED":
+        final_status = "PARTIAL_FILL"
+    if partial_fill:
+        log_audit_event(
+            "PARTIAL_ORDER_FILL",
+            f"Dhan filled {final_filled_qty} of requested {qty}; NOVA adjusted local quantity.",
+            severity="WARNING",
+            metadata={
+                "signal_id": signal.signal_id,
+                "action": action,
+                "order_id": result.order_id,
+                "requested_qty": qty,
+                "filled_qty": final_filled_qty,
+                "remaining_qty": final_remaining_qty,
+                "raw_status": result.status,
+                "final_status": final_status,
+            },
+        )
 
     if use_super_order and final_success and final_status == "TRADED" and final_avg_price is not None:
         active_super_order_levels, super_order_post_fill_update = _sync_super_order_exit_levels(
@@ -756,6 +897,11 @@ def _place_order(signal: NormalizedSignal, qty: int, action: str, *, skip_entry_
         "interpreted_error": result.interpreted_error,
         "raw_response": result.raw_response,
         "order_status_poll": order_status_poll,
+        "requested_qty": qty,
+        "filled_qty": final_filled_qty,
+        "remaining_qty": final_remaining_qty,
+        "final_qty": final_qty,
+        "partial_fill": partial_fill,
         "super_order_post_fill_update": super_order_post_fill_update,
         "place_method": place_method,
         "exit_management": "DHAN_SUPER" if use_super_order else "SERVER",
@@ -783,8 +929,11 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
     exit_management = order_result.get("exit_management") or "SERVER"
     broker_sl_price = order_result.get("broker_sl_price")
     broker_tp_price = order_result.get("broker_tp_price")
+    partial_fill = bool(order_result.get("partial_fill"))
     if entry_price is None:
         message = "Waiting for Dhan to confirm entry fill price."
+    elif partial_fill:
+        message = f"Partial entry fill: tracking filled quantity {qty}."
     elif exit_management == "DHAN_SUPER":
         message = "Dhan Super Order SL/TP is active; backend is display-only."
     else:
@@ -801,6 +950,9 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
         "strike": signal.strike,
         "expiry": signal.expiry,
         "qty": qty,
+        "requested_qty": order_result.get("requested_qty") or qty,
+        "filled_qty": order_result.get("filled_qty") or qty,
+        "partial_fill": partial_fill,
         "entry_order_id": order_result.get("order_id"),
         "entry_price": entry_price,
         "exit_management": exit_management,
@@ -814,8 +966,9 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
         "opened_at": utc_now(),
         "live_pnl": {
             "source": "dhan_order_status" if entry_price is not None else "pending_entry_fill",
-            "status": "tracking_pending" if entry_price is not None else "waiting_entry_fill",
+            "status": "partial_entry_fill" if partial_fill else "tracking_pending" if entry_price is not None else "waiting_entry_fill",
             "entry_price": entry_price,
+            "qty": qty,
             "sl_price": broker_sl_price,
             "tp_price": broker_tp_price,
             "exit_management": exit_management,
@@ -823,6 +976,65 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
             "last_checked_at": utc_now(),
         },
     }
+
+
+def _entry_filled_qty(order_result: dict[str, Any], requested_qty: int) -> int:
+    if order_result.get("partial_fill"):
+        filled_qty = _int_value(order_result.get("filled_qty"))
+        if filled_qty is not None and filled_qty > 0:
+            return filled_qty
+    return requested_qty
+
+
+def _failed_order_status(order_result: dict[str, Any]) -> str:
+    return "ORDER_STATE_UNKNOWN" if order_result.get("status") == "ORDER_STATE_UNKNOWN" else "ORDER_REJECTED"
+
+
+def _apply_partial_exit_fill(position: dict[str, Any], order_result: dict[str, Any], signal: NormalizedSignal) -> dict[str, Any] | None:
+    if not order_result.get("partial_fill"):
+        return None
+    filled_qty = _int_value(order_result.get("filled_qty")) or 0
+    original_qty = _int_value(position.get("qty")) or 0
+    if filled_qty <= 0 or original_qty <= 0 or filled_qty >= original_qty:
+        return None
+
+    remaining_qty = original_qty - filled_qty
+    updated = dict(position)
+    updated["qty"] = remaining_qty
+    updated["partial_exit"] = {
+        "signal_id": signal.signal_id,
+        "order_id": order_result.get("order_id"),
+        "requested_qty": order_result.get("requested_qty") or original_qty,
+        "filled_qty": filled_qty,
+        "remaining_qty": remaining_qty,
+        "status": order_result.get("status"),
+        "checked_at": utc_now(),
+    }
+    live_pnl = dict(updated.get("live_pnl") or {})
+    live_pnl.update(
+        {
+            "qty": remaining_qty,
+            "status": "partial_exit_fill",
+            "message": f"Partial exit fill: {filled_qty} filled, {remaining_qty} still open.",
+            "last_checked_at": utc_now(),
+        }
+    )
+    updated["live_pnl"] = live_pnl
+    set_open_position(updated)
+    log_audit_event(
+        "PARTIAL_EXIT_FILL",
+        f"Exit partially filled; {remaining_qty} quantity remains open.",
+        severity="WARNING",
+        metadata={
+            "signal_id": signal.signal_id,
+            "order_id": order_result.get("order_id"),
+            "previous_qty": original_qty,
+            "filled_qty": filled_qty,
+            "remaining_qty": remaining_qty,
+            "order_result": order_result,
+        },
+    )
+    return updated
 
 
 def _is_opposite_option_entry(signal: NormalizedSignal, position: dict[str, Any] | None = None) -> bool:
@@ -863,7 +1075,16 @@ def _exit_signal_from_position(position: dict[str, Any], trigger_signal: Normali
     )
 
 
-def route_reversal_signal(signal: NormalizedSignal) -> dict[str, Any]:
+def route_reversal_signal(
+    signal: NormalizedSignal,
+    runtime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    # C11 — Snapshot once on first entry. Reversal does TWO Dhan order
+    # placements (exit-existing then enter-new); both must use the same
+    # SL%/TP% snapshot.
+    if runtime is None:
+        runtime = get_runtime_settings()
+
     open_position = get_open_position()
     update_app_state(
         state="REVERSAL_SIGNAL_RECEIVED",
@@ -875,12 +1096,12 @@ def route_reversal_signal(signal: NormalizedSignal) -> dict[str, Any]:
         ),
     )
 
-    reversal_decision = evaluate_reversal_entry(signal)
+    reversal_decision = evaluate_reversal_entry(signal, runtime=runtime)
     if not reversal_decision.allowed:
         return _blocked("BLOCKED", reversal_decision.reason, signal)
 
     exit_signal = _exit_signal_from_position(open_position, signal)
-    exit_decision = evaluate_exit(exit_signal)
+    exit_decision = evaluate_exit(exit_signal, runtime=runtime)
     if not exit_decision.allowed:
         return _blocked("BLOCKED", exit_decision.reason, exit_signal)
 
@@ -888,7 +1109,7 @@ def route_reversal_signal(signal: NormalizedSignal) -> dict[str, Any]:
         state="REVERSAL_EXIT_SENDING",
         last_message=f"Exiting {open_position.get('option_side')} before entering {signal.option_side}.",
     )
-    exit_result = _place_order(exit_signal, exit_decision.final_qty, "EXIT")
+    exit_result = _place_order(exit_signal, exit_decision.final_qty, "EXIT", runtime=runtime)
     if exit_result.get("blocked"):
         return {
             **exit_result,
@@ -918,6 +1139,7 @@ def route_reversal_signal(signal: NormalizedSignal) -> dict[str, Any]:
 
     if exit_result.get("status") != "TRADED":
         reason = "Reversal exit accepted but not confirmed TRADED; opposite entry was not sent."
+        _apply_partial_exit_fill(open_position, exit_result, exit_signal)
         current = dict(get_open_position())
         if current.get("has_open_position"):
             current["reversal_exit"] = {
@@ -961,6 +1183,7 @@ def route_reversal_signal(signal: NormalizedSignal) -> dict[str, Any]:
         reversal_decision.final_qty,
         "ENTRY",
         skip_entry_preflight=True,
+        runtime=runtime,
     )
     if entry_result.get("blocked"):
         return {
@@ -977,7 +1200,7 @@ def route_reversal_signal(signal: NormalizedSignal) -> dict[str, Any]:
     if entry_result.get("success"):
         if settings.DHAN_MODE.upper() == "REAL":
             refresh_wallet_snapshot(force=True, log_event=True)
-        set_open_position(_entry_position(signal, entry_result, reversal_decision.final_qty))
+        set_open_position(_entry_position(signal, entry_result, _entry_filled_qty(entry_result, reversal_decision.final_qty)))
         update_app_state(
             state="WAITING_EXIT",
             last_message=f"Reversal complete: entered {signal.option_side} in {settings.DHAN_MODE.upper()} mode",
@@ -992,9 +1215,10 @@ def route_reversal_signal(signal: NormalizedSignal) -> dict[str, Any]:
                 "super_order_leg_cancellations": super_order_leg_cancellations,
             },
         )
+        entry_status = "PARTIAL_ENTRY_FILLED" if entry_result.get("partial_fill") else "REVERSAL_ORDER_PLACED"
         return {
             **entry_result,
-            "status": "REVERSAL_ORDER_PLACED",
+            "status": entry_status,
             "reversal": {
                 "from_option_side": open_position.get("option_side"),
                 "to_option_side": signal.option_side,
@@ -1023,7 +1247,16 @@ def route_reversal_signal(signal: NormalizedSignal) -> dict[str, Any]:
     }
 
 
-def route_entry_signal(signal: NormalizedSignal) -> dict[str, Any]:
+def route_entry_signal(
+    signal: NormalizedSignal,
+    runtime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    # C11 — Snapshot once on first entry to the pipeline. All downstream
+    # decisions (risk gate, broker payload build, SL/TP math) see the same
+    # values, even if a user changes settings mid-flight on another tab.
+    if runtime is None:
+        runtime = get_runtime_settings()
+
     update_app_state(
         state="ENTRY_SIGNAL_RECEIVED",
         last_signal_id=signal.signal_id,
@@ -1033,26 +1266,26 @@ def route_entry_signal(signal: NormalizedSignal) -> dict[str, Any]:
     broker_reconcile = _reconcile_tracked_position_before_entry(signal)
     if broker_reconcile and not broker_reconcile.allowed:
         if _is_opposite_option_entry(signal):
-            return route_reversal_signal(signal)
+            return route_reversal_signal(signal, runtime=runtime)
         return _blocked("BLOCKED", broker_reconcile.reason, signal)
 
     if _is_opposite_option_entry(signal):
-        return route_reversal_signal(signal)
+        return route_reversal_signal(signal, runtime=runtime)
 
-    decision = evaluate_entry(signal)
+    decision = evaluate_entry(signal, runtime=runtime)
     if not decision.allowed:
         return _blocked("BLOCKED", decision.reason, signal)
 
     update_app_state(state="ENTRY_RISK_CHECK", last_message="Entry risk checks passed.")
     update_app_state(state="ENTRY_ORDER_SENDING", last_message="Sending entry order to Dhan.")
-    order_result = _place_order(signal, decision.final_qty, "ENTRY")
+    order_result = _place_order(signal, decision.final_qty, "ENTRY", runtime=runtime)
     if order_result.get("blocked"):
         return order_result
 
     if order_result.get("success"):
         if settings.DHAN_MODE.upper() == "REAL":
             refresh_wallet_snapshot(force=True, log_event=True)
-        set_open_position(_entry_position(signal, order_result, decision.final_qty))
+        set_open_position(_entry_position(signal, order_result, _entry_filled_qty(order_result, decision.final_qty)))
         update_app_state(
             state="WAITING_EXIT",
             last_message=f"Entry order placed in {settings.DHAN_MODE.upper()} mode",
@@ -1066,33 +1299,58 @@ def route_entry_signal(signal: NormalizedSignal) -> dict[str, Any]:
                 "payload_format": signal.payload_format,
             },
         )
-        return {**order_result, "status": "ORDER_PLACED"}
+        entry_status = "PARTIAL_ENTRY_FILLED" if order_result.get("partial_fill") else "ORDER_PLACED"
+        return {**order_result, "status": entry_status}
 
     reason = order_result.get("error") or "Dhan order request failed"
     log_error_event("ENTRY_ORDER_FAILED", reason, metadata={"signal_id": signal.signal_id})
     update_app_state(state="ERROR", last_message=reason)
-    return {**order_result, "blocked": False, "status": "ORDER_REJECTED", "reason": reason}
+    return {**order_result, "blocked": False, "status": _failed_order_status(order_result), "reason": reason}
 
 
-def route_exit_signal(signal: NormalizedSignal) -> dict[str, Any]:
+def route_exit_signal(
+    signal: NormalizedSignal,
+    runtime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    # C11 — Snapshot once on first entry to the pipeline.
+    if runtime is None:
+        runtime = get_runtime_settings()
+
     update_app_state(
         state="EXIT_SIGNAL_RECEIVED",
         last_signal_id=signal.signal_id,
         last_alert_at=utc_now(),
         last_message=f"Exit alert received for {signal.trading_symbol or signal.symbol}",
     )
-    decision: RiskDecision = evaluate_exit(signal)
+    decision: RiskDecision = evaluate_exit(signal, runtime=runtime)
     if not decision.allowed:
         return _blocked("BLOCKED", decision.reason, signal)
 
     open_position = get_open_position()
     qty = decision.final_qty
     update_app_state(state="EXIT_ORDER_SENDING", last_message="Exit risk checks passed. Sending exit order to Dhan.")
-    order_result = _place_order(signal, qty, "EXIT")
+    order_result = _place_order(signal, qty, "EXIT", runtime=runtime)
     if order_result.get("blocked"):
         return order_result
 
     if order_result.get("success"):
+        partial_position = _apply_partial_exit_fill(open_position, order_result, signal)
+        if partial_position is not None:
+            if settings.DHAN_MODE.upper() == "REAL":
+                refresh_wallet_snapshot(force=True, log_event=True)
+            update_app_state(
+                state="WAITING_EXIT",
+                last_message=(
+                    f"Partial exit fill: {order_result.get('filled_qty')} filled, "
+                    f"{partial_position.get('qty')} still open."
+                ),
+            )
+            return {
+                **order_result,
+                "status": "PARTIAL_EXIT_FILLED",
+                "remaining_open_position": partial_position,
+            }
+
         super_order_leg_cancellations = _cancel_super_order_exit_legs(open_position)
         clear_open_position()
         if settings.DHAN_MODE.upper() == "REAL":
@@ -1117,10 +1375,18 @@ def route_exit_signal(signal: NormalizedSignal) -> dict[str, Any]:
     reason = order_result.get("error") or "Dhan exit order request failed"
     log_error_event("EXIT_ORDER_FAILED", reason, metadata={"signal_id": signal.signal_id})
     update_app_state(state="ERROR", last_message=reason)
-    return {**order_result, "blocked": False, "status": "ORDER_REJECTED", "reason": reason}
+    return {**order_result, "blocked": False, "status": _failed_order_status(order_result), "reason": reason}
 
 
 def route_signal(signal: NormalizedSignal) -> dict[str, Any]:
+    # C11 — Settings snapshot per signal. Capture runtime once at the
+    # absolute earliest point in the pipeline so two near-simultaneous
+    # signals can't end up using different SL%/TP%/max_qty/etc. just
+    # because a user clicked Save between them.
+    runtime = get_runtime_settings()
+    token_block = _dhan_token_signal_preflight(signal)
+    if token_block:
+        return token_block
     if signal.action == "ENTRY":
-        return route_entry_signal(signal)
-    return route_exit_signal(signal)
+        return route_entry_signal(signal, runtime=runtime)
+    return route_exit_signal(signal, runtime=runtime)

@@ -1,6 +1,7 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { AlertTriangle, BellRing, CheckCircle2, ClipboardList, Database, RefreshCw, Search, ShieldCheck } from 'lucide-react'
 import { getLogs } from '../api/dashboard'
+import { usePolling } from '../hooks/usePolling'
 import { LogBundle } from '../types'
 
 type LogSource = keyof LogBundle
@@ -220,14 +221,11 @@ export default function LogsPage() {
   const loadData = () => {
     getLogs()
       .then((response) => setLogs(response.data))
+      .catch((err) => console.warn('LogsPage: failed to refresh:', err?.message ?? err))
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => {
-    loadData()
-    const id = window.setInterval(loadData, 5000)
-    return () => window.clearInterval(id)
-  }, [])
+  usePolling(loadData, 5000)
 
   const allItems = useMemo(
     () => normalizeLogs(logs).sort((a, b) => b.sortValue - a.sortValue),

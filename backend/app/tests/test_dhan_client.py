@@ -50,6 +50,34 @@ def patch_http_client(monkeypatch, response, recorder):
     monkeypatch.setattr("app.services.dhan_client.httpx.Client", fake_client)
 
 
+class TimeoutThenOrderBookClient:
+    def __init__(self, recorder, order_book_response):
+        self.recorder = recorder
+        self.order_book_response = order_book_response
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def post(self, url, json, headers):
+        self.recorder.setdefault("calls", []).append(("POST", url, json))
+        raise httpx.TimeoutException("timed out")
+
+    def get(self, url, headers):
+        self.recorder.setdefault("calls", []).append(("GET", url, None))
+        return self.order_book_response
+
+
+def patch_timeout_then_order_book(monkeypatch, recorder, order_book_response):
+    def fake_client(*args, **kwargs):
+        recorder.setdefault("timeouts", []).append(kwargs.get("timeout"))
+        return TimeoutThenOrderBookClient(recorder, order_book_response)
+
+    monkeypatch.setattr("app.services.dhan_client.httpx.Client", fake_client)
+
+
 def test_validate_token_uses_v2_profile_endpoint(monkeypatch):
     recorder = {}
     response = httpx.Response(200, json={"dhanClientId": "1000000001", "tokenValidity": "30/03/2025 15:37"})
@@ -129,6 +157,93 @@ def test_place_order_uses_v2_orders_endpoint(monkeypatch):
     assert recorder["method"] == "POST"
     assert recorder["url"] == f"{DHAN_BASE_URL}/orders"
     assert recorder["json"] == payload
+
+
+def test_place_order_timeout_recovers_order_by_correlation_id(monkeypatch):
+    recorder = {}
+    patch_timeout_then_order_book(
+        monkeypatch,
+        recorder,
+        httpx.Response(
+            200,
+            json=[
+                {
+                    "orderId": "112111182198",
+                    "orderStatus": "PENDING",
+                    "correlationId": "recover-correlation-01",
+                    "avgPrice": 101.5,
+                }
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.dhan_client.get_outgoing_ip",
+        lambda timeout=2.0: {"outgoing_ip": "203.0.113.10", "ok": True, "error": None},
+    )
+    monkeypatch.setattr("app.services.dhan_client._market_is_open", lambda: True)
+    monkeypatch.setattr("app.services.dhan_client.log_order_event", lambda event: event)
+
+    result = RealDhanClient().place_order(
+        client_id="1000000001",
+        access_token="token",
+        payload={
+            "dhanClientId": "1000000001",
+            "correlationId": "recover-correlation-01",
+            "transactionType": "BUY",
+            "exchangeSegment": "NSE_FNO",
+            "productType": "INTRADAY",
+            "orderType": "MARKET",
+            "validity": "DAY",
+            "securityId": "123456",
+            "quantity": 1,
+            "disclosedQuantity": 0,
+            "price": 0,
+            "triggerPrice": 0,
+            "afterMarketOrder": False,
+        },
+    )
+
+    assert result.success is True
+    assert result.order_id == "112111182198"
+    assert result.status == "PENDING"
+    assert result.raw_response["recovered_after_timeout"] is True
+    assert ("GET", f"{DHAN_BASE_URL}/orders", None) in recorder["calls"]
+
+
+def test_place_order_timeout_without_match_returns_unknown_state(monkeypatch):
+    recorder = {}
+    patch_timeout_then_order_book(monkeypatch, recorder, httpx.Response(200, json=[]))
+    monkeypatch.setattr(
+        "app.services.dhan_client.get_outgoing_ip",
+        lambda timeout=2.0: {"outgoing_ip": "203.0.113.10", "ok": True, "error": None},
+    )
+    monkeypatch.setattr("app.services.dhan_client._market_is_open", lambda: True)
+    monkeypatch.setattr("app.services.dhan_client.log_order_event", lambda event: event)
+
+    result = RealDhanClient().place_order(
+        client_id="1000000001",
+        access_token="token",
+        payload={
+            "dhanClientId": "1000000001",
+            "correlationId": "missing-correlation-01",
+            "transactionType": "BUY",
+            "exchangeSegment": "NSE_FNO",
+            "productType": "INTRADAY",
+            "orderType": "MARKET",
+            "validity": "DAY",
+            "securityId": "123456",
+            "quantity": 1,
+            "disclosedQuantity": 0,
+            "price": 0,
+            "triggerPrice": 0,
+            "afterMarketOrder": False,
+        },
+    )
+
+    assert result.success is False
+    assert result.status == "ORDER_STATE_UNKNOWN"
+    assert result.raw_response["unknown_order_state"] is True
+    assert "Manual Dhan verification required" in result.error
 
 
 def test_place_super_order_uses_v2_super_orders_endpoint(monkeypatch):
@@ -338,6 +453,34 @@ def test_poll_order_status_reads_average_traded_price(monkeypatch):
     assert result.avg_price == 123.45
     assert recorder["method"] == "GET"
     assert recorder["url"] == f"{DHAN_BASE_URL}/orders/112111182198"
+
+
+def test_poll_order_status_reads_filled_and_remaining_quantity(monkeypatch):
+    recorder = {}
+    response = httpx.Response(
+        200,
+        json={
+            "orderId": "112111182198",
+            "orderStatus": "EXPIRED",
+            "averageTradedPrice": 123.45,
+            "filled_qty": 30,
+            "remainingQuantity": 35,
+        },
+    )
+    patch_http_client(monkeypatch, response, recorder)
+
+    result = RealDhanClient().poll_order_status(
+        client_id="1000000001",
+        access_token="token",
+        order_id="112111182198",
+        max_polls=1,
+        poll_delay=0,
+    )
+
+    assert result.is_filled is False
+    assert result.filled_qty == 30
+    assert result.remaining_qty == 35
+    assert result.avg_price == 123.45
 
 
 def test_poll_order_status_reads_single_item_list_response(monkeypatch):

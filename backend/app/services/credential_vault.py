@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import threading
 from copy import deepcopy
 from dataclasses import dataclass
@@ -21,6 +22,11 @@ except Exception:  # pragma: no cover - exercised only when dependency is absent
 CREDENTIALS_FILE = RUNTIME_STATE_DIR / "credentials.enc.json"
 _LOCK = threading.RLock()
 _LOCAL_MEMORY_PAYLOAD: dict[str, Any] = {"version": 1, "dhan": None, "webhook_secret": None}
+WEBHOOK_SECRET_MIN_LENGTH = 16
+WEBHOOK_SECRET_MIN_ENTROPY_BITS = 60.0
+WEBHOOK_SECRET_STRENGTH_MESSAGE = (
+    "Webhook secret is too weak. Use at least 16 random characters with mixed letters, numbers, or symbols."
+)
 
 
 class VaultError(RuntimeError):
@@ -278,10 +284,61 @@ def get_webhook_secret() -> str | None:
     return None
 
 
+def _webhook_secret_entropy_bits(secret: str) -> float:
+    if not secret:
+        return 0.0
+    counts = {char: secret.count(char) for char in set(secret)}
+    entropy_per_char = 0.0
+    for count in counts.values():
+        probability = count / len(secret)
+        entropy_per_char -= probability * math.log2(probability)
+    return entropy_per_char * len(secret)
+
+
+def _contains_long_sequence(secret: str, *, length: int = 8) -> bool:
+    normalized = "".join(char.lower() for char in secret if char.isalnum())
+    if len(normalized) < length:
+        return False
+    sequences = ("0123456789", "abcdefghijklmnopqrstuvwxyz")
+    for sequence in sequences:
+        for source in (sequence, sequence[::-1]):
+            for index in range(0, len(source) - length + 1):
+                if source[index : index + length] in normalized:
+                    return True
+    return False
+
+
+def webhook_secret_strength_error(webhook_secret: str | None) -> str | None:
+    secret = (webhook_secret or "").strip()
+    if len(secret) < WEBHOOK_SECRET_MIN_LENGTH:
+        return f"Webhook secret must be at least {WEBHOOK_SECRET_MIN_LENGTH} characters."
+
+    normalized = "".join(char.lower() for char in secret if char.isalnum())
+    weak_terms = (
+        "password",
+        "passcode",
+        "changeme",
+        "default",
+        "letmein",
+        "qwerty",
+        "admin",
+        "testsecret",
+        "tradingviewsecret",
+    )
+    if len(set(secret)) < 8 or any(term in normalized for term in weak_terms) or _contains_long_sequence(secret):
+        return WEBHOOK_SECRET_STRENGTH_MESSAGE
+
+    if _webhook_secret_entropy_bits(secret) < WEBHOOK_SECRET_MIN_ENTROPY_BITS:
+        return WEBHOOK_SECRET_STRENGTH_MESSAGE
+
+    return None
+
+
 def save_webhook_secret(webhook_secret: str) -> dict[str, Any]:
     webhook_secret = webhook_secret.strip()
-    if len(webhook_secret) < 5:
-        raise VaultError("Webhook secret must be at least 5 characters.")
+    strength_error = webhook_secret_strength_error(webhook_secret)
+    if strength_error:
+        raise VaultError(strength_error)
     payload = _read_payload()
     payload["webhook_secret"] = webhook_secret
     payload["webhook_secret_updated_at"] = utc_now()
