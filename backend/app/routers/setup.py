@@ -36,6 +36,7 @@ from app.services.dhan_client import DhanFundsResult, MockDhanClient, RealDhanCl
 from app.services.dhan_debugger import get_outgoing_ip
 from app.services.dhan_error_interpreter import interpret_dhan_error
 from app.services.state_store import (
+    SettingsVersionMismatch,
     default_wallet_snapshot,
     get_app_state,
     get_runtime_settings,
@@ -43,6 +44,7 @@ from app.services.state_store import (
     set_wallet_snapshot,
     update_app_state,
     update_runtime_settings,
+    update_runtime_settings_if_version,
     utc_now,
 )
 
@@ -160,6 +162,11 @@ class RiskSetupRequest(BaseModel):
     option_ltp_poll_seconds: float = Field(default=1.0, ge=1.0)
     allow_entry: bool = True
     allow_exit: bool = True
+    # H8 — Optional optimistic-locking version. If supplied, save fails with
+    # 409 Conflict when the on-disk version differs (another tab edited
+    # settings between this client's read and save). Omit to bypass the check
+    # and write unconditionally (legacy / system-initiated saves).
+    expected_version: int | None = Field(default=None, ge=0)
 
     _max_qty_business_rule = field_validator("max_qty_per_order")(_validate_max_qty_per_order)
     _sl_business_rule = field_validator("option_sl_percent")(_validate_sl_percent)
@@ -182,6 +189,8 @@ class RiskSettingsPatchRequest(BaseModel):
     option_ltp_poll_seconds: float | None = Field(default=None, ge=1.0)
     allow_entry: bool | None = None
     allow_exit: bool | None = None
+    # H8 — See RiskSetupRequest.expected_version.
+    expected_version: int | None = Field(default=None, ge=0)
 
     _max_qty_business_rule = field_validator("max_qty_per_order")(_validate_max_qty_per_order)
     _sl_business_rule = field_validator("option_sl_percent")(_validate_sl_percent)
@@ -267,8 +276,17 @@ def _normalize_risk_changes(changes: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _save_risk_settings(changes: dict[str, Any]) -> dict[str, Any]:
-    saved = update_runtime_settings(**_normalize_risk_changes(changes))
+def _save_risk_settings(
+    changes: dict[str, Any],
+    *,
+    expected_version: int | None = None,
+) -> dict[str, Any]:
+    normalized = _normalize_risk_changes(changes)
+    if expected_version is None:
+        saved = update_runtime_settings(**normalized)
+    else:
+        # H8 — Raises SettingsVersionMismatch on stale version; router converts to 409.
+        saved = update_runtime_settings_if_version(int(expected_version), **normalized)
     log_audit_event("RISK_SETTINGS_UPDATED", "Risk settings updated.", metadata=saved)
     return saved
 
@@ -589,18 +607,45 @@ def configure_webhook_secret(body: WebhookSecretRequest) -> dict[str, Any]:
     return {"success": True, "webhook_secret_set": True}
 
 
+def _version_mismatch_response(exc: SettingsVersionMismatch) -> HTTPException:
+    # H8 — 409 with the server's current version + full settings, so the
+    # client can refresh state and re-apply edits without losing context.
+    return HTTPException(
+        status_code=409,
+        detail={
+            "error": "settings_version_mismatch",
+            "message": (
+                "Settings were changed by another tab or process. Reload to see the "
+                "latest values, then re-apply your edits."
+            ),
+            "expected_version": exc.expected,
+            "current_version": exc.current,
+            "current_settings": exc.current_settings,
+        },
+    )
+
+
 @router.post("/setup/risk")
 def configure_risk(body: RiskSetupRequest) -> dict[str, Any]:
-    saved = _save_risk_settings(_model_dump(body, exclude_unset=True))
+    payload = _model_dump(body, exclude_unset=True)
+    expected_version = payload.pop("expected_version", None)
+    try:
+        saved = _save_risk_settings(payload, expected_version=expected_version)
+    except SettingsVersionMismatch as exc:
+        raise _version_mismatch_response(exc) from exc
     return {"success": True, "settings": saved}
 
 
 @router.patch("/setup/risk")
 def patch_risk(body: RiskSettingsPatchRequest) -> dict[str, Any]:
     changes = _model_dump(body, exclude_unset=True, exclude_none=True)
+    expected_version = changes.pop("expected_version", None)
     if not changes:
         return {"success": True, "settings": get_runtime_settings()}
-    saved = _save_risk_settings(changes)
+    try:
+        saved = _save_risk_settings(changes, expected_version=expected_version)
+    except SettingsVersionMismatch as exc:
+        raise _version_mismatch_response(exc) from exc
     return {"success": True, "settings": saved}
 
 

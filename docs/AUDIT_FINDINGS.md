@@ -36,7 +36,7 @@ Severity: Critical / High / Medium / Low
 | H4 | High | connect_dhan partial-state failure | Done | Credential and wallet snapshot rollback around connect save flow |
 | H5 | High | Risk settings business-rule gaps | Done | Validators: SL 0-80%, TP 0-500%, REAL-mode max qty >= current Dhan NIFTY lot size |
 | H7 | High | Destructive POSTs no confirmation | Done | ConfirmModal on dangerous controls; fresh-start requires typed `FRESH START` request body |
-| H8 | High | Concurrent settings edits | Pending | Optimistic locking via version field |
+| H8 | High | Concurrent settings edits | Done | Optimistic locking on `_version`; backend returns 409+current_settings on stale save; SetupPage reloads on conflict. |
 | H9 | High | Backend restart during form submit | Pending | Graceful shutdown flushes state |
 | H10 | Medium | Webhook secret strength | Done | Min length 16 + entropy check in setup, readiness, and webhook routing |
 | H11 | High | No CSRF on POSTs | Pending | Add when auth lands |
@@ -122,6 +122,7 @@ Most recent fixes at the top.
 
 | Date | ID(s) | Commit | Notes |
 |---|---|---|---|
+| 2026-05-30 | H8 | _(pending push)_ | Settings optimistic locking. `_version` auto-incremented on every set_runtime_settings; new update_runtime_settings_if_version raises SettingsVersionMismatch on stale write. /setup/risk POST + PATCH accept expected_version; 409 with current_settings on conflict. Frontend SetupPage sends `expected_version: risk._version`, 409 handler reloads and toasts. |
 | 2026-06-01 | H3, H4, H5, H6, H7 | _(pending push)_ | Rate-limited Dhan connect attempts, transactional connect rollback, risk business validators, in-flight button guards, and destructive-control confirmations |
 | 2026-05-31 | C5 | _(pending push)_ | Dhan order and Super Order timeouts recover matching order-book rows by correlationId; unresolved timeouts surface ORDER_STATE_UNKNOWN |
 | 2026-05-31 | C6 | _(pending push)_ | Startup reconciler verifies persisted open position against Dhan before monitors start; clears stale local state or re-adopts visible Super Order legs |

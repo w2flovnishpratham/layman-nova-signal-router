@@ -72,6 +72,39 @@ function isTradeAttentionText(value: string) {
   return /reject|blocked|failed|invalid|error|unauthor|token/i.test(value)
 }
 
+function settingsVersionConflict(error: unknown): null | {
+  message: string
+  current_settings?: Record<string, unknown>
+  current_version?: number
+} {
+  // Axios 409 surfaced from /setup/risk H8 — detail carries
+  // { error, message, expected_version, current_version, current_settings }.
+  if (error && typeof error === 'object' && 'response' in error) {
+    const resp = (error as { response?: { status?: number; data?: unknown } }).response
+    if (resp?.status === 409 && resp.data && typeof resp.data === 'object') {
+      const detail = (resp.data as { detail?: unknown }).detail
+      if (detail && typeof detail === 'object') {
+        const d = detail as {
+          error?: string
+          message?: string
+          current_settings?: Record<string, unknown>
+          current_version?: number
+        }
+        if (d.error === 'settings_version_mismatch') {
+          return {
+            message:
+              d.message ||
+              'Settings changed in another tab. Reloaded latest values; review and save again.',
+            current_settings: d.current_settings,
+            current_version: d.current_version,
+          }
+        }
+      }
+    }
+  }
+  return null
+}
+
 function errorMessage(error: unknown) {
   const response = (error as { response?: { data?: unknown } }).response
   const data = response?.data
@@ -399,12 +432,31 @@ export default function SetupPage() {
         option_rest_fallback_enabled: true,
         option_rest_fallback_cooldown_seconds: 15,
       }
-      await saveRiskSettings(payload)
+      // H8 — send the version we last read so the server can detect a
+      // concurrent edit from another tab.
+      const versionedPayload: RiskSetupPayload = {
+        ...payload,
+        expected_version: risk._version,
+      }
+      await saveRiskSettings(versionedPayload)
       setMessage('Risk settings saved.')
       await loadRisk()
       await pollStatus()
     } catch (err) {
-      setError(errorMessage(err))
+      const conflict = settingsVersionConflict(err)
+      if (conflict) {
+        // Refresh local state with the server's authoritative settings (which
+        // includes the new _version). Do NOT auto-resave — let the user
+        // confirm what to do with the now-visible newer values.
+        if (conflict.current_settings) {
+          setRisk(conflict.current_settings as unknown as RiskSetupPayload)
+        } else {
+          await loadRisk()
+        }
+        setError(conflict.message)
+      } else {
+        setError(errorMessage(err))
+      }
     } finally {
       setBusy(null)
     }

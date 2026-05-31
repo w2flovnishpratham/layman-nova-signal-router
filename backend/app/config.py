@@ -26,6 +26,9 @@ GLOBAL_KILL_SWITCH_BLOCKS_EXITS = False
 DASHBOARD_POLL_SECONDS = 2
 
 DEFAULT_RUNTIME_SETTINGS = {
+    # H8 — Optimistic-locking counter; incremented on every settings write.
+    # Clients pass the version they last read; mismatched writes return 409.
+    "_version": 0,
     "max_qty_per_order": 1,
     "max_trades_per_day": 1,
     "daily_loss_limit": 500,

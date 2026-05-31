@@ -369,13 +369,83 @@ def get_runtime_settings() -> dict[str, Any]:
     return data
 
 
+class SettingsVersionMismatch(Exception):
+    """H8 — Raised when an optimistic-locking save sees a stale version."""
+
+    def __init__(self, expected: int, current: int, current_settings: dict[str, Any]):
+        super().__init__(
+            f"Settings version mismatch: caller expected {expected}, current is {current}."
+        )
+        self.expected = expected
+        self.current = current
+        self.current_settings = current_settings
+
+
 def set_runtime_settings(data: dict[str, Any]) -> dict[str, Any]:
-    return _write_json(SETTINGS_FILE, data)
+    """Write settings; auto-increments _version so concurrent writers can
+    detect lost updates. Always increments by +1 from the previous on-disk
+    value (not from `data._version`) so the version is owned by the store,
+    never by the caller."""
+    with _LOCK:
+        existing = _read_json(SETTINGS_FILE, default_settings)
+        try:
+            current_version = int(existing.get("_version", 0))
+        except (TypeError, ValueError):
+            current_version = 0
+        data = dict(data)
+        data["_version"] = current_version + 1
+        return _write_json(SETTINGS_FILE, data)
+
+
+def set_runtime_settings_if_version(
+    data: dict[str, Any],
+    expected_version: int,
+) -> dict[str, Any]:
+    """H8 — Optimistic-locking save. Writes only if the caller's
+    `expected_version` matches the current on-disk version. Raises
+    `SettingsVersionMismatch` otherwise."""
+    with _LOCK:
+        existing = _read_json(SETTINGS_FILE, default_settings)
+        try:
+            current_version = int(existing.get("_version", 0))
+        except (TypeError, ValueError):
+            current_version = 0
+        if int(expected_version) != current_version:
+            raise SettingsVersionMismatch(
+                expected=int(expected_version),
+                current=current_version,
+                current_settings=existing,
+            )
+        data = dict(data)
+        data["_version"] = current_version + 1
+        return _write_json(SETTINGS_FILE, data)
+
+
+def update_runtime_settings_if_version(
+    expected_version: int,
+    **changes: Any,
+) -> dict[str, Any]:
+    """H8 — Version-checked variant of update_runtime_settings."""
+    data = get_runtime_settings()
+    data.update({
+        key: value for key, value in changes.items()
+        if key in default_settings() and key != "_version"
+    })
+    saved = set_runtime_settings_if_version(data, expected_version=expected_version)
+    update_app_state(
+        emergency_stop=bool(saved.get("emergency_stop")),
+        global_kill_switch=bool(saved.get("global_kill_switch")),
+    )
+    return saved
 
 
 def update_runtime_settings(**changes: Any) -> dict[str, Any]:
     data = get_runtime_settings()
-    data.update({key: value for key, value in changes.items() if key in default_settings()})
+    # H8 — _version is owned by set_runtime_settings; callers can never set it.
+    data.update({
+        key: value for key, value in changes.items()
+        if key in default_settings() and key != "_version"
+    })
     saved = set_runtime_settings(data)
     update_app_state(
         emergency_stop=bool(saved.get("emergency_stop")),

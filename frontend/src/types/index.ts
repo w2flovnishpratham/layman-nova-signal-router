@@ -127,6 +127,9 @@ export interface RuntimeSettings {
   option_ltp_poll_seconds?: number
   emergency_stop: boolean
   global_kill_switch: boolean
+  /** H8 — Monotonic version bumped on every settings write. Send back as
+   * `expected_version` on the next save to detect concurrent edits. */
+  _version?: number
 }
 
 export interface WalletSnapshot {
@@ -181,6 +184,9 @@ export interface RiskSetupPayload {
   option_ltp_poll_seconds?: number
   allow_entry: boolean
   allow_exit: boolean
+  /** H8 — Optional optimistic-locking version. Send the `_version` value
+   * read from the latest RuntimeSettings; backend returns 409 if stale. */
+  expected_version?: number
 }
 
 export interface RiskSettingsPatchPayload {
@@ -199,6 +205,8 @@ export interface RiskSettingsPatchPayload {
   option_ltp_poll_seconds?: number
   allow_entry?: boolean
   allow_exit?: boolean
+  /** H8 — See RiskSetupPayload.expected_version. */
+  expected_version?: number
 }
 
 export interface DhanConnectPayload {
