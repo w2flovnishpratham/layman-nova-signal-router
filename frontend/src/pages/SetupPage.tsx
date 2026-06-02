@@ -692,8 +692,8 @@ export default function SetupPage() {
               </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <label className="block text-sm">
-                  <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option SL %</span>
-                  <input className="input no-spinner" type="number" min={0.1} max={79.9} step={0.1} value={risk.option_sl_percent || ''} onChange={(event) => setRisk({ ...risk, option_sl_percent: Number(event.target.value) })} required />
+                  <span className="mb-1 block" style={{ color: risk.option_disable_sl ? 'var(--c-text-4)' : 'var(--c-text-2)' }}>Option SL %</span>
+                  <input className="input no-spinner" type="number" min={0.1} max={79.9} step={0.1} value={risk.option_sl_percent || ''} onChange={(event) => setRisk({ ...risk, option_sl_percent: Number(event.target.value) })} disabled={risk.option_disable_sl} required={!risk.option_disable_sl} />
                 </label>
                 <label className="block text-sm">
                   <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option TP %</span>

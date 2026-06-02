@@ -259,6 +259,10 @@ body {
   border-color: #98e94d;
   box-shadow: 0 0 0 3px rgba(152, 233, 77, 0.12);
 }
+.input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .input::placeholder { color: #5e5a53; }
 
 .input:-webkit-autofill,

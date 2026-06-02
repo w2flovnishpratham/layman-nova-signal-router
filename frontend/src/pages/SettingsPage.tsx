@@ -356,8 +356,8 @@ export default function SettingsPage() {
         </div>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="block text-sm">
-            <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option SL %</span>
-            <input className="input no-spinner" type="number" min={0.1} max={79.9} step={0.1} value={risk.option_sl_percent || ''} onChange={(e) => setRisk({ ...risk, option_sl_percent: Number(e.target.value) })} required />
+            <span className="mb-1 block" style={{ color: risk.option_disable_sl ? 'var(--c-text-4)' : 'var(--c-text-2)' }}>Option SL %</span>
+            <input className="input no-spinner" type="number" min={0.1} max={79.9} step={0.1} value={risk.option_sl_percent || ''} onChange={(e) => setRisk({ ...risk, option_sl_percent: Number(e.target.value) })} disabled={risk.option_disable_sl} required={!risk.option_disable_sl} />
           </label>
           <label className="block text-sm">
             <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Option TP %</span>
