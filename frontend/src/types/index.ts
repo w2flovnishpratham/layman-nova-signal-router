@@ -113,8 +113,7 @@ export interface RuntimeSettings {
   allow_entry: boolean
   allow_exit: boolean
   max_qty_per_order: number
-  max_trades_per_day: number
-  daily_loss_limit: number
+  option_disable_sl: boolean
   server_side_exit_enabled?: boolean
   marketfeed_ws_enabled?: boolean
   option_ltp_source?: 'WEBSOCKET' | 'REST' | 'AUTO' | string
@@ -170,8 +169,7 @@ export interface DashboardSummary {
 
 export interface RiskSetupPayload {
   max_qty_per_order: number
-  max_trades_per_day: number
-  daily_loss_limit: number
+  option_disable_sl?: boolean
   server_side_exit_enabled?: boolean
   marketfeed_ws_enabled?: boolean
   option_ltp_source?: 'WEBSOCKET' | 'REST' | 'AUTO' | string
@@ -191,8 +189,7 @@ export interface RiskSetupPayload {
 
 export interface RiskSettingsPatchPayload {
   max_qty_per_order?: number
-  max_trades_per_day?: number
-  daily_loss_limit?: number
+  option_disable_sl?: boolean
   server_side_exit_enabled?: boolean
   marketfeed_ws_enabled?: boolean
   option_ltp_source?: 'WEBSOCKET' | 'REST' | 'AUTO' | string

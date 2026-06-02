@@ -148,8 +148,7 @@ class WebhookSecretRequest(BaseModel):
 
 class RiskSetupRequest(BaseModel):
     max_qty_per_order: int = Field(default=1, ge=1)
-    max_trades_per_day: int = Field(default=1, ge=1)
-    daily_loss_limit: float = Field(default=500, gt=0)
+    option_disable_sl: bool = True
     server_side_exit_enabled: bool = True
     marketfeed_ws_enabled: bool = True
     option_ltp_source: str = "AUTO"
@@ -175,8 +174,7 @@ class RiskSetupRequest(BaseModel):
 
 class RiskSettingsPatchRequest(BaseModel):
     max_qty_per_order: int | None = Field(default=None, ge=1)
-    max_trades_per_day: int | None = Field(default=None, ge=1)
-    daily_loss_limit: float | None = Field(default=None, gt=0)
+    option_disable_sl: bool | None = None
     server_side_exit_enabled: bool | None = None
     marketfeed_ws_enabled: bool | None = None
     option_ltp_source: str | None = None
@@ -362,9 +360,6 @@ def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, li
     issues: list[str] = []
     if int(runtime.get("max_qty_per_order") or 0) <= 0:
         issues.append("Max quantity per order must be greater than zero.")
-    if int(runtime.get("max_trades_per_day") or 0) <= 0:
-        issues.append("Max trades per day must be greater than zero.")
-    if float(runtime.get("daily_loss_limit") or 0) <= 0:
         issues.append("Daily loss limit must be greater than zero.")
     if float(runtime.get("option_sl_percent") or 0) <= 0:
         issues.append("Option SL percent must be greater than zero.")
@@ -471,9 +466,9 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
             "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
         },
         "settings": {
+            "_version": runtime.get("_version"),
             "max_qty_per_order": runtime.get("max_qty_per_order"),
-            "max_trades_per_day": runtime.get("max_trades_per_day"),
-            "daily_loss_limit": runtime.get("daily_loss_limit"),
+            "option_disable_sl": runtime.get("option_disable_sl"),
             "server_side_exit_enabled": runtime.get("server_side_exit_enabled"),
             "marketfeed_ws_enabled": runtime.get("marketfeed_ws_enabled"),
             "option_ltp_source": runtime.get("option_ltp_source"),

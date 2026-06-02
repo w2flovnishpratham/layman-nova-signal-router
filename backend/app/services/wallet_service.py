@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from app.config import settings
@@ -11,6 +12,11 @@ from app.services.state_store import default_wallet_snapshot, get_wallet_snapsho
 
 
 STALE_AFTER_SECONDS = 30
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _ist_date_str() -> str:
+    return datetime.now(_IST).strftime("%Y-%m-%d")
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -25,9 +31,28 @@ def _parse_ts(value: str | None) -> datetime | None:
 def _snapshot_from_result(result: DhanFundsResult, previous: dict[str, Any] | None = None) -> dict[str, Any]:
     previous = previous or default_wallet_snapshot()
     available = result.available_balance
+
+    # R1 — Daily reset of session_start_balance at IST midnight.
+    # When the IST date changes, treat the current available balance as the
+    # new session start and zero out session_pnl. This makes session_pnl
+    # equivalent to "intraday realised P&L since today\'s first wallet read"
+    # session_pnl is still used by the dashboard for the day's P&L display.
+    today_ist = _ist_date_str()
+    prev_date_ist = previous.get("session_start_date_ist")
     session_start = previous.get("session_start_balance")
-    if session_start is None and available is not None:
+    session_start_date_ist = prev_date_ist
+
+    date_rollover = (
+        prev_date_ist is not None
+        and prev_date_ist != today_ist
+        and available is not None
+    )
+    if date_rollover:
         session_start = available
+        session_start_date_ist = today_ist
+    elif session_start is None and available is not None:
+        session_start = available
+        session_start_date_ist = today_ist
 
     session_pnl = None
     if session_start is not None and available is not None:
@@ -46,6 +71,7 @@ def _snapshot_from_result(result: DhanFundsResult, previous: dict[str, Any] | No
             "collateral_amount": result.collateral_amount,
             "blocked_payout_amount": result.blocked_payout_amount,
             "session_start_balance": session_start,
+            "session_start_date_ist": session_start_date_ist,
             "session_pnl": session_pnl,
             "last_checked_at": utc_now(),
             "raw_response": result.raw_response,

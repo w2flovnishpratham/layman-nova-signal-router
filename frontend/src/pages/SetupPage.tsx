@@ -285,8 +285,7 @@ export default function SetupPage() {
   const [webhookSecret, setWebhookSecret] = useState('')
   const [risk, setRisk] = useState<RiskSetupPayload>({
     max_qty_per_order: 1,
-    max_trades_per_day: 1,
-    daily_loss_limit: 500,
+    option_disable_sl: true,
     server_side_exit_enabled: true,
     marketfeed_ws_enabled: true,
     option_ltp_source: 'AUTO',
@@ -685,18 +684,10 @@ export default function SetupPage() {
                 <CheckCircle2 className="text-[#98e94d]" size={20} />
                 <h2 className="text-lg font-semibold">Risk Settings</h2>
               </div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4">
                 <label className="block text-sm">
                   <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max quantity per order</span>
                   <input className="input no-spinner" type="number" min={1} value={risk.max_qty_per_order || ''} onChange={(event) => setRisk({ ...risk, max_qty_per_order: Number(event.target.value) })} required />
-                </label>
-                <label className="block text-sm">
-                  <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max trades per day</span>
-                  <input className="input no-spinner" type="number" min={1} value={risk.max_trades_per_day || ''} onChange={(event) => setRisk({ ...risk, max_trades_per_day: Number(event.target.value) })} required />
-                </label>
-                <label className="block text-sm">
-                  <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Daily loss limit (INR)</span>
-                  <input className="input no-spinner" type="number" min={1} value={risk.daily_loss_limit || ''} onChange={(event) => setRisk({ ...risk, daily_loss_limit: Number(event.target.value) })} required />
                 </label>
               </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -710,6 +701,11 @@ export default function SetupPage() {
                 </label>
               </div>
               <div className="flex flex-wrap gap-3">
+                <label className="nova-toggle">
+                  <input type="checkbox" checked={risk.option_disable_sl} onChange={(e) => setRisk({ ...risk, option_disable_sl: e.target.checked })} />
+                  <span className="nova-toggle__track"><span className="nova-toggle__thumb" /></span>
+                  <span className="nova-toggle__label">Disable Stop Loss (SL)</span>
+                </label>
                 <label className="nova-toggle">
                   <input type="checkbox" checked={risk.allow_entry} onChange={(e) => setRisk({ ...risk, allow_entry: e.target.checked })} />
                   <span className="nova-toggle__track"><span className="nova-toggle__thumb" /></span>
@@ -732,7 +728,7 @@ export default function SetupPage() {
               <p><span className="text-[#9a968f]">Dhan</span><br />{completed.dhan ? `Connected ${status.dhan_client_id_masked || ''}` : 'Needs attention'}</p>
               <p><span className="text-[#9a968f]">Wallet</span><br />{currency(status.wallet.available_balance)}</p>
               <p><span className="text-[#9a968f]">Webhook</span><br />{completed.secret ? 'Secret saved' : 'Needs secret'}</p>
-              <p><span className="text-[#9a968f]">Risk</span><br />Qty {risk.max_qty_per_order} / SL {risk.option_sl_percent ?? 10}% / TP {risk.option_tp_percent ?? 20}%</p>
+              <p><span className="text-[#9a968f]">Risk</span><br />Qty {risk.max_qty_per_order} / SL {risk.option_disable_sl ? 'Disabled' : `${risk.option_sl_percent ?? 10}%`} / TP {risk.option_tp_percent ?? 20}%</p>
             </div>
             <div className="mt-4 flex flex-col gap-3 text-sm md:flex-row md:items-center md:justify-between">
               <p className="min-w-0 break-all font-mono text-[#d8d3c8]">{status.webhook_url || '-'}</p>

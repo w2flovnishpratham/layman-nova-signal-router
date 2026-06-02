@@ -83,8 +83,7 @@ export default function SettingsPage() {
   const [webhookSecret, setWebhookSecret] = useState('')
   const [risk, setRisk] = useState<RiskSetupPayload>({
     max_qty_per_order: 1,
-    max_trades_per_day: 1,
-    daily_loss_limit: 500,
+    option_disable_sl: true,
     allow_entry: true,
     allow_exit: true,
     option_sl_percent: 10,
@@ -222,8 +221,7 @@ export default function SettingsPage() {
     event.preventDefault()
     const payload: RiskSettingsPatchPayload = {
       max_qty_per_order: risk.max_qty_per_order,
-      max_trades_per_day: risk.max_trades_per_day,
-      daily_loss_limit: risk.daily_loss_limit,
+      option_disable_sl: risk.option_disable_sl,
       option_sl_percent: risk.option_sl_percent,
       option_tp_percent: risk.option_tp_percent,
       allow_entry: risk.allow_entry,
@@ -350,18 +348,10 @@ export default function SettingsPage() {
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-semibold">Risk Settings</h2>
         </div>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4">
           <label className="block text-sm">
             <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max quantity per order</span>
             <input className="input no-spinner" type="number" min={1} value={risk.max_qty_per_order || ''} onChange={(e) => setRisk({ ...risk, max_qty_per_order: Number(e.target.value) })} required />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Max trades per day</span>
-            <input className="input no-spinner" type="number" min={1} value={risk.max_trades_per_day || ''} onChange={(e) => setRisk({ ...risk, max_trades_per_day: Number(e.target.value) })} required />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block" style={{ color: 'var(--c-text-2)' }}>Daily loss limit (INR)</span>
-            <input className="input no-spinner" type="number" min={1} value={risk.daily_loss_limit || ''} onChange={(e) => setRisk({ ...risk, daily_loss_limit: Number(e.target.value) })} required />
           </label>
         </div>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -375,6 +365,11 @@ export default function SettingsPage() {
           </label>
         </div>
         <div className="flex flex-wrap gap-3">
+          <label className="nova-toggle">
+            <input type="checkbox" checked={risk.option_disable_sl} onChange={(e) => setRisk({ ...risk, option_disable_sl: e.target.checked })} />
+            <span className="nova-toggle__track"><span className="nova-toggle__thumb" /></span>
+            <span className="nova-toggle__label">Disable Stop Loss (SL)</span>
+          </label>
           <label className="nova-toggle">
             <input type="checkbox" checked={risk.allow_entry} onChange={(e) => setRisk({ ...risk, allow_entry: e.target.checked })} />
             <span className="nova-toggle__track"><span className="nova-toggle__thumb" /></span>

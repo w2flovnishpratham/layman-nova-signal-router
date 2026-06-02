@@ -30,8 +30,10 @@ DEFAULT_RUNTIME_SETTINGS = {
     # Clients pass the version they last read; mismatched writes return 409.
     "_version": 0,
     "max_qty_per_order": 1,
-    "max_trades_per_day": 1,
-    "daily_loss_limit": 500,
+    # SL disable — when True, _broker_exit_levels sets the Super Order SL
+    # leg to a floor price (~₹0.10 or 1% of entry) so it effectively never
+    # fires. Position is exited by opposite Supertrend reversal, TP, or EOD.
+    "option_disable_sl": True,
     "server_side_exit_enabled": True,
     "marketfeed_ws_enabled": True,
     "option_ltp_source": "AUTO",

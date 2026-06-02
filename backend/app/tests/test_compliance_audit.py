@@ -88,8 +88,6 @@ def client(tmp_path, monkeypatch):
             "/api/setup/risk",
             json={
                 "max_qty_per_order": 1,
-                "max_trades_per_day": 5,
-                "daily_loss_limit": 500,
                 "allow_entry": True,
                 "allow_exit": True,
             },
@@ -484,7 +482,6 @@ class TestLiveOrderGating:
         state_store.update_runtime_settings(
             option_exit_mode="SERVER",
             max_qty_per_order=1,
-            max_trades_per_day=5,
             allow_entry=True,
             allow_exit=True,
         )
@@ -593,7 +590,6 @@ class TestLiveOrderGating:
         state_store.update_runtime_settings(
             option_exit_mode="SERVER",
             max_qty_per_order=1,
-            max_trades_per_day=5,
             allow_entry=True,
             allow_exit=True,
         )
@@ -668,7 +664,6 @@ class TestLiveOrderGating:
         state_store.update_runtime_settings(
             option_exit_mode="SERVER",
             max_qty_per_order=65,
-            max_trades_per_day=5,
             allow_entry=True,
             allow_exit=True,
         )
@@ -810,10 +805,10 @@ class TestLiveOrderGating:
         monkeypatch.setattr("app.services.execution_router.refresh_wallet_snapshot", lambda **kwargs: {})
         state_store.update_runtime_settings(
             option_exit_mode="DHAN_SUPER",
+            option_disable_sl=False,
             option_sl_percent=30,
             option_tp_percent=60,
             max_qty_per_order=1,
-            max_trades_per_day=1,
             allow_entry=True,
             allow_exit=True,
         )
@@ -1065,6 +1060,7 @@ class TestDhanPayloadCompliance:
         )
         state_store.update_runtime_settings(
             option_exit_mode="DHAN_SUPER",
+            option_disable_sl=False,
             option_sl_percent=30,
             option_tp_percent=60,
             allow_entry=True,
@@ -1326,8 +1322,8 @@ class TestEngineStartReadiness:
             # Set webhook secret but NOT Dhan credentials
             c.post("/api/setup/webhook-secret", json={"webhook_secret": TEST_WEBHOOK_SECRET})
             c.post("/api/setup/risk", json={
-                "max_qty_per_order": 1, "max_trades_per_day": 5,
-                "daily_loss_limit": 500, "allow_entry": True, "allow_exit": True,
+                "max_qty_per_order": 1,
+                "allow_entry": True, "allow_exit": True,
             })
             response = c.post("/api/engine/start", json={})
         assert response.status_code == 400
@@ -1365,8 +1361,8 @@ class TestEngineStartReadiness:
             # Dhan connected (mock), but no webhook secret
             c.post("/api/setup/dhan/connect", json={"client_id": "1000000001", "access_token": "testtoken"})
             c.post("/api/setup/risk", json={
-                "max_qty_per_order": 1, "max_trades_per_day": 5,
-                "daily_loss_limit": 500, "allow_entry": True, "allow_exit": True,
+                "max_qty_per_order": 1,
+                "allow_entry": True, "allow_exit": True,
             })
             response = c.post("/api/engine/start", json={})
         assert response.status_code == 400
@@ -1409,8 +1405,8 @@ class TestEngineStartReadiness:
         from app.main import app
         with TestClient(app) as c:
             c.post("/api/setup/risk", json={
-                "max_qty_per_order": 1, "max_trades_per_day": 5,
-                "daily_loss_limit": 500, "allow_entry": True, "allow_exit": True,
+                "max_qty_per_order": 1,
+                "allow_entry": True, "allow_exit": True,
             })
             response = c.post("/api/engine/start", json={})
         assert response.status_code == 400

@@ -12,7 +12,6 @@ from app.config import (
     settings,
 )
 from app.schemas.signal import NormalizedSignal
-from app.services.audit_logger import read_jsonl
 from app.services.state_store import get_app_state, get_open_position, get_runtime_settings
 
 
@@ -46,25 +45,6 @@ def _market_is_open() -> bool:
     if now.weekday() >= 5:
         return False
     return time(9, 15) <= now.time() <= time(15, 30)
-
-
-def _entry_trades_today() -> int:
-    today = datetime.now(timezone.utc).date()
-    count = 0
-    for event in read_jsonl("order", limit=5000):
-        if event.get("action") != "ENTRY" or event.get("phase") != "after_response":
-            continue
-        if event.get("blocked") is True or event.get("success") is False:
-            continue
-        timestamp = event.get("timestamp")
-        if not timestamp:
-            continue
-        try:
-            if datetime.fromisoformat(timestamp).date() == today:
-                count += 1
-        except ValueError:
-            continue
-    return count
 
 
 def _common_signal_checks(payload: NormalizedSignal) -> RiskDecision | None:
@@ -121,16 +101,8 @@ def evaluate_entry(payload: NormalizedSignal, runtime: dict | None = None) -> Ri
     if payload.qty > max_qty:
         return RiskDecision(False, "Quantity exceeds MAX_QTY_PER_ORDER.")
 
-    max_trades = _setting_int(runtime, "max_trades_per_day", 1)
-    trades_today = _entry_trades_today()
-    if trades_today >= max_trades:
-        return RiskDecision(False, f"Trade blocked: MAX_TRADES_PER_DAY reached ({trades_today}/{max_trades}).")
-
-    loss_limit = float(runtime.get("daily_loss_limit", 500))
-    realized_pnl_today = 0.0
-    if realized_pnl_today <= -abs(loss_limit):
-        return RiskDecision(False, f"Trade blocked: DAILY_LOSS_LIMIT reached ({realized_pnl_today}).")
-
+    # Strategy uses opposite-side Supertrend flips for exits; trade-count
+    # and daily-loss ceilings were removed per the live-strategy direction.
     return RiskDecision(True, "All entry risk checks passed.", final_qty=payload.qty)
 
 
@@ -177,11 +149,8 @@ def evaluate_reversal_entry(payload: NormalizedSignal, runtime: dict | None = No
     if payload.qty > max_qty:
         return RiskDecision(False, "Quantity exceeds MAX_QTY_PER_ORDER.")
 
-    loss_limit = float(runtime.get("daily_loss_limit", 500))
-    realized_pnl_today = 0.0
-    if realized_pnl_today <= -abs(loss_limit):
-        return RiskDecision(False, f"Trade blocked: DAILY_LOSS_LIMIT reached ({realized_pnl_today}).")
-
+    # Trade-count + daily-loss ceilings removed (strategy uses opposite-side
+    # Supertrend flips as the natural exit signal).
     return RiskDecision(True, "Opposite option-side reversal checks passed.", final_qty=payload.qty)
 
 

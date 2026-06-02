@@ -112,7 +112,20 @@ def _round_option_tick(price: float) -> float:
 def _broker_exit_levels(reference_price: float, runtime: dict[str, Any]) -> tuple[float, float, float, float]:
     sl_percent = _runtime_float(runtime, "option_sl_percent", 10.0)
     tp_percent = _runtime_float(runtime, "option_tp_percent", 20.0)
-    stop_loss_price = _round_option_tick(reference_price * (1 - sl_percent / 100))
+
+    # SL disable — Dhan Super Order schema requires a stopLossPrice, so we
+    # plant a floor that normal intraday price action will never touch
+    # (max of ₹0.10 and 1% of entry). The position is then exited by the
+    # opposite Supertrend reversal, the TP leg, or the 15:15 IST EOD task.
+    disable_sl = bool(runtime.get("option_disable_sl", True))
+    if disable_sl:
+        stop_loss_price = _round_option_tick(max(0.10, reference_price * 0.01))
+        # Recompute the implied sl_percent so audit logs reflect the floor.
+        if reference_price > 0:
+            sl_percent = round((reference_price - stop_loss_price) / reference_price * 100, 2)
+    else:
+        stop_loss_price = _round_option_tick(reference_price * (1 - sl_percent / 100))
+
     target_price = _round_option_tick(reference_price * (1 + tp_percent / 100))
     if target_price <= reference_price:
         target_price = _round_option_tick(reference_price + 0.05)
@@ -155,6 +168,7 @@ def _build_dhan_super_order_payload(
         "stop_loss_price": stop_loss_price,
         "target_price": target_price,
         "levels_source": "pre_entry_ltp",
+        "sl_disabled": bool(runtime.get("option_disable_sl", True)),
     }
     return payload, levels
 
@@ -935,7 +949,11 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
     elif partial_fill:
         message = f"Partial entry fill: tracking filled quantity {qty}."
     elif exit_management == "DHAN_SUPER":
-        message = "Dhan Super Order SL/TP is active; backend is display-only."
+        sl_disabled = bool(order_result.get("broker_exit_levels", {}).get("sl_disabled"))
+        if sl_disabled:
+            message = "Dhan Super Order TP is active; SL is effectively disabled. Backend is display-only."
+        else:
+            message = "Dhan Super Order SL/TP is active; backend is display-only."
     else:
         message = "Server-side option premium monitor is armed."
     return {
@@ -1205,9 +1223,13 @@ def route_reversal_signal(
             state="WAITING_EXIT",
             last_message=f"Reversal complete: entered {signal.option_side} in {settings.DHAN_MODE.upper()} mode",
         )
+        msg = f"Exited {open_position.get('option_side')} and entered {signal.option_side}."
+        levels = entry_result.get("broker_exit_levels")
+        if levels and levels.get("sl_disabled"):
+            msg += " SL effectively disabled."
         log_audit_event(
             "REVERSAL_ORDER_PLACED",
-            f"Exited {open_position.get('option_side')} and entered {signal.option_side}.",
+            msg,
             metadata={
                 "signal_id": signal.signal_id,
                 "exit_order_id": exit_result.get("order_id"),
@@ -1290,9 +1312,13 @@ def route_entry_signal(
             state="WAITING_EXIT",
             last_message=f"Entry order placed in {settings.DHAN_MODE.upper()} mode",
         )
+        msg = f"Entry order placed in {settings.DHAN_MODE.upper()} mode"
+        levels = order_result.get("broker_exit_levels")
+        if levels and levels.get("sl_disabled"):
+            msg += ". SL effectively disabled."
         log_audit_event(
             "ORDER_PLACED",
-            f"Entry order placed in {settings.DHAN_MODE.upper()} mode",
+            msg,
             metadata={
                 "signal_id": signal.signal_id,
                 "order_id": order_result.get("order_id"),

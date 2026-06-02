@@ -48,8 +48,6 @@ def client(tmp_path, monkeypatch):
             "/api/setup/risk",
             json={
                 "max_qty_per_order": 1,
-                "max_trades_per_day": 5,
-                "daily_loss_limit": 500,
                 "allow_entry": True,
                 "allow_exit": True,
             },

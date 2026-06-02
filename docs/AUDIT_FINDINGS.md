@@ -21,6 +21,7 @@ Severity: Critical / High / Medium / Low
 | C9 | Critical | Concurrent signals -> straddle race | Done | Per-strategy mutex serializes webhook routing for same strategy_code |
 | C10 | Critical | Partial fills not handled | Done | Poll reads filled_qty; partial entries/exits adjust tracked quantity and log warnings |
 | C11 | Critical | Settings race during signal processing | Done | Snapshot runtime settings into signal context |
+| R1 | Critical | daily_loss_limit dead-code (was hardcoded `realized_pnl_today = 0.0`) | Reverted | Reverted. Settings and check removed per strategy direction (reversal alert acts as stop, daily loss limit removed). Rollover logic stays for display. |
 | H1 | Medium | Token expires mid-session | Done | `route_signal` blocks expired REAL-mode Dhan tokens before broker calls; dashboard shows expired-token banner |
 | H2 | High | Webhook secret no HMAC / freshness | Pending | HMAC signature, 60s timestamp window, nonce |
 | H13 | High | OCO race between SL and TP | Pending | Use Dhan postback URL for order updates |
@@ -122,6 +123,7 @@ Most recent fixes at the top.
 
 | Date | ID(s) | Commit | Notes |
 |---|---|---|---|
+| 2026-05-30 | R1 | _(pending push)_ | Reverted. Daily loss limit check and setting removed per strategy direction. wallet_service rollover resets session start balance and session_pnl for visual dashboard display. |
 | 2026-05-30 | H8 | _(pending push)_ | Settings optimistic locking. `_version` auto-incremented on every set_runtime_settings; new update_runtime_settings_if_version raises SettingsVersionMismatch on stale write. /setup/risk POST + PATCH accept expected_version; 409 with current_settings on conflict. Frontend SetupPage sends `expected_version: risk._version`, 409 handler reloads and toasts. |
 | 2026-06-01 | H3, H4, H5, H6, H7 | _(pending push)_ | Rate-limited Dhan connect attempts, transactional connect rollback, risk business validators, in-flight button guards, and destructive-control confirmations |
 | 2026-05-31 | C5 | _(pending push)_ | Dhan order and Super Order timeouts recover matching order-book rows by correlationId; unresolved timeouts surface ORDER_STATE_UNKNOWN |

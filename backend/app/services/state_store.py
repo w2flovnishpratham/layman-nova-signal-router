@@ -122,6 +122,11 @@ def default_wallet_snapshot() -> dict[str, Any]:
         "blocked_payout_amount": None,
         "session_start_balance": None,
         "session_pnl": None,
+        # R1 — IST date stamp on the session_start_balance. When the wallet
+        # refresher sees a new IST date, it resets session_start_balance to
+        # the current available balance and zeroes session_pnl — so
+        # session_pnl reflects today's intraday P&L (kept for display).
+        "session_start_date_ist": None,
         "last_checked_at": None,
         "raw_response": None,
     }
