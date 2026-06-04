@@ -1,0 +1,55 @@
+name: Layman backend CI and deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "deploy/**"
+      - ".github/workflows/layman-backend-ci-deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: layman-nova-vps-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements_test.txt
+      - run: pip install -r requirements.txt -r requirements_test.txt
+      - run: pytest app/tests -q
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+          printf 'Host layman-vps\n  HostName %s\n  Port %s\n  User %s\n  IdentityFile ~/.ssh/id_ed25519\n' "$VPS_HOST" "$VPS_PORT" "$VPS_USER" >> ~/.ssh/config
+      - name: Deploy isolated Layman backend
+        run: ssh layman-vps "cd /root/layman-nova-signal-router && git pull --ff-only origin main && bash deploy/deploy_vps.sh"
