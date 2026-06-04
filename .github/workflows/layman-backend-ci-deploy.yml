@@ -38,18 +38,13 @@ jobs:
     steps:
       - name: Configure SSH
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
-          VPS_USER: ${{ secrets.VPS_USER }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
-          test -n "$VPS_HOST"
-          test -n "$VPS_USER"
           test -n "$VPS_SSH_KEY"
           install -d -m 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
-          printf 'Host layman-vps\n  HostName %s\n  Port %s\n  User %s\n  IdentityFile ~/.ssh/id_ed25519\n' "$VPS_HOST" "$VPS_PORT" "$VPS_USER" >> ~/.ssh/config
+          ssh-keyscan -H -p 22 187.127.153.128 >> ~/.ssh/known_hosts
+          printf 'Host layman-vps\n  HostName 187.127.153.128\n  Port 22\n  User root\n  IdentityFile ~/.ssh/id_ed25519\n' >> ~/.ssh/config
       - name: Deploy isolated Layman backend
-        run: ssh layman-vps "cd /root/layman-nova-signal-router && git pull --ff-only origin main && bash deploy/deploy_vps.sh"
+        run: ssh layman-vps
