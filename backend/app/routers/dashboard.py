@@ -16,6 +16,9 @@ from app.services.wallet_service import refresh_wallet_snapshot
 
 router = APIRouter()
 
+CHAT_FEED_EVENT_LIMIT = 100
+CHAT_FEED_ORDER_EVENT_LIMIT = 1000
+
 
 FLOW_STEPS = [
     "WAITING_ENTRY",
@@ -144,10 +147,10 @@ def webhook_url() -> dict:
 @router.get("/dashboard/chat-feed")
 def chat_feed(today_only: bool = Query(default=False)) -> list[dict]:
     # Read latest events from log files
-    webhook_events = read_jsonl("webhook", limit=100)
-    order_events = read_jsonl("order", limit=100)
-    audit_events = read_jsonl("audit", limit=100)
-    error_events = read_jsonl("error", limit=100)
+    webhook_events = read_jsonl("webhook", limit=CHAT_FEED_EVENT_LIMIT)
+    order_events = read_jsonl("order", limit=CHAT_FEED_ORDER_EVENT_LIMIT)
+    audit_events = read_jsonl("audit", limit=CHAT_FEED_EVENT_LIMIT)
+    error_events = read_jsonl("error", limit=CHAT_FEED_EVENT_LIMIT)
 
     # Optionally restrict to today's IST date so the Setup page only shows
     # the current session's activity. Full history remains available via
@@ -271,7 +274,7 @@ def chat_feed(today_only: bool = Query(default=False)) -> list[dict]:
                     before_request = ev
                 elif phase == "after_response":
                     after_response = ev
-                elif phase == "blocked" or ev_type in {"DUPLICATE_SIGNAL", "SIGNAL_INVALID"}:
+                elif phase == "blocked" or ev_type in {"BLOCKED", "DUPLICATE_SIGNAL", "SIGNAL_INVALID"}:
                     blocked_event = ev
                 elif ev_type in {"ORDER_PLACED", "EXIT_ORDER_PLACED"}:
                     placed_event = ev

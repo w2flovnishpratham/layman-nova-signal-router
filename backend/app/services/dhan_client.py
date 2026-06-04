@@ -27,9 +27,7 @@ Endpoints not yet implemented (phase 2 TODOs):
 from __future__ import annotations
 
 import logging
-import random
 import time
-import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,6 +37,7 @@ from app.config import settings
 from app.services.audit_logger import log_order_event
 from app.services.dhan_debugger import build_dhan_headers_debug, get_outgoing_ip, validate_dhan_payload
 from app.services.dhan_error_interpreter import interpret_dhan_error
+from app.services.dhan_rate_limiter import after_dhan_response, before_dhan_request
 from app.services.risk_manager import _market_is_open
 
 
@@ -132,132 +131,19 @@ class DhanOrderResult:
         self.interpreted_error = interpreted_error
 
 
-class MockDhanClient:
-    def place_order(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanOrderResult:
-        fake_id = f"MOCK-{uuid.uuid4().hex[:12].upper()}"
-        fake_price = round(random.uniform(50.0, 500.0), 2)
-        logger.info("[MOCK] place_order order_id=%s qty=%s", fake_id, payload.get("quantity"))
-        return DhanOrderResult(
-            success=True,
-            order_id=fake_id,
-            status="TRADED",
-            avg_price=fake_price,
-            raw_response={
-                "orderId": fake_id,
-                "orderStatus": "TRADED",
-                "avgPrice": fake_price,
-                "mock": True,
-            },
-        )
-
-    def place_super_order(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanOrderResult:
-        fake_id = f"MOCK-SUPER-{uuid.uuid4().hex[:8].upper()}"
-        fake_price = round(random.uniform(50.0, 500.0), 2)
-        logger.info("[MOCK] place_super_order order_id=%s qty=%s", fake_id, payload.get("quantity"))
-        return DhanOrderResult(
-            success=True,
-            order_id=fake_id,
-            status="TRADED",
-            avg_price=fake_price,
-            raw_response={
-                "orderId": fake_id,
-                "orderStatus": "TRADED",
-                "avgPrice": fake_price,
-                "mock": True,
-                "superOrder": True,
-            },
-        )
-
-    def modify_super_order(self, *, client_id: str, access_token: str, order_id: str, payload: dict[str, Any]) -> DhanOrderResult:
-        logger.info("[MOCK] modify_super_order order_id=%s leg=%s", order_id, payload.get("legName"))
-        return DhanOrderResult(
-            success=True,
-            order_id=order_id,
-            status="TRADED",
-            avg_price=None,
-            raw_response={
-                "orderId": order_id,
-                "orderStatus": "TRADED",
-                "mock": True,
-                "superOrderModified": True,
-                "payload": payload,
-            },
-        )
-
-    def cancel_super_order_leg(self, *, client_id: str, access_token: str, order_id: str, leg_name: str) -> DhanOrderResult:
-        logger.info("[MOCK] cancel_super_order_leg order_id=%s leg=%s", order_id, leg_name)
-        return DhanOrderResult(
-            success=True,
-            order_id=order_id,
-            status="CANCELLED",
-            avg_price=None,
-            raw_response={
-                "orderId": order_id,
-                "orderStatus": "CANCELLED",
-                "legName": leg_name,
-                "mock": True,
-            },
-        )
-
-    def poll_order_status(
-        self,
-        *,
-        client_id: str,
-        access_token: str,
-        order_id: str,
-        max_polls: int = 4,
-        poll_delay: float = 1.5,
-    ) -> DhanOrderStatusResult:
-        """Mock always returns TRADED immediately."""
-        return DhanOrderStatusResult(
-            success=True,
-            order_id=order_id,
-            order_status="TRADED",
-            is_terminal=True,
-            is_filled=True,
-            avg_price=None,
-            raw_response={"orderId": order_id, "orderStatus": "TRADED", "mock": True},
-        )
-
-    def validate_token(self, *, client_id: str, access_token: str) -> DhanValidationResult:
-        return DhanValidationResult(success=True, message="MOCK Dhan mode is active.")
-
-    def get_positions(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
-        return []
-
-    def get_positions_snapshot(self, *, client_id: str, access_token: str) -> DhanListResult:
-        return DhanListResult(success=True, message="MOCK Dhan mode is active.", items=[])
-
-    def get_order_book(self, *, client_id: str, access_token: str) -> DhanListResult:
-        return DhanListResult(success=True, message="MOCK Dhan mode is active.", items=[])
-
-    def get_ltp(
-        self,
-        *,
-        client_id: str,
-        access_token: str,
-        exchange_segment: str,
-        security_id: str,
-    ) -> DhanLtpResult:
-        return DhanLtpResult(
-            success=True,
-            message="MOCK Dhan mode is active.",
-            ltp=100.0,
-            exchange_segment=exchange_segment,
-            security_id=str(security_id),
-            raw_response={"mock": True, "last_price": 100.0},
-        )
-
-    def get_fund_limit(self, *, client_id: str, access_token: str) -> DhanFundsResult:
-        return DhanFundsResult(success=True, message="MOCK Dhan mode is active.", client_id=client_id)
-
-
 class RealDhanClient:
     def _client(self, *, timeout: float) -> httpx.Client:
         # Dhan static-IP whitelisting is configured for the server's IPv4.
         # Bind outbound Dhan calls to IPv4 so dual-stack DNS cannot choose IPv6.
         transport = httpx.HTTPTransport(local_address="0.0.0.0")
-        return httpx.Client(timeout=timeout, transport=transport)
+        return httpx.Client(
+            timeout=timeout,
+            transport=transport,
+            event_hooks={
+                "request": [before_dhan_request],
+                "response": [after_dhan_response],
+            },
+        )
 
     def _headers(self, client_id: str, access_token: str) -> dict[str, str]:
         """
@@ -1328,3 +1214,19 @@ class RealDhanClient:
         except Exception:
             logger.exception("Dhan fund limit error")
             return DhanFundsResult(success=False, message="Dhan fund limit request failed.")
+
+
+def get_broker_client(engine_mode: str | None = None) -> Any:
+    """Return the order-routing client for the selected runtime mode."""
+    if engine_mode is None:
+        from app.services.state_store import get_engine_mode
+
+        engine_mode = get_engine_mode(legacy_fallback=False)
+    mode = str(engine_mode or "").strip().lower()
+    if mode == "paper":
+        from app.services.paper_broker import PaperBroker
+
+        return PaperBroker()
+    if mode == "live":
+        return RealDhanClient()
+    raise ValueError("engine_mode not set; cannot select broker client")

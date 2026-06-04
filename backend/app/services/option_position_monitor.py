@@ -5,11 +5,12 @@ import threading
 import time
 from typing import Any
 
-from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE, settings
+from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
+from app.services.chat_event_publisher import publish_active_trade_from_sync, publish_tick_pnl_from_sync
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret
-from app.services.dhan_client import MockDhanClient, RealDhanClient
+from app.services.dhan_client import get_broker_client
 from app.services.dhan_marketfeed_ws import (
     clear_marketfeed_subscription,
     ensure_marketfeed_subscription,
@@ -17,7 +18,7 @@ from app.services.dhan_marketfeed_ws import (
     marketfeed_ws_status,
     stop_marketfeed_ws,
 )
-from app.services.state_store import get_open_position, get_runtime_settings, set_open_position, utc_now
+from app.services.state_store import get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
 
 
 logger = logging.getLogger("option_position_monitor")
@@ -64,11 +65,7 @@ def _runtime_bool(runtime: dict[str, Any], key: str, default: bool) -> bool:
 
 
 def _monitor_should_run(runtime: dict[str, Any]) -> bool:
-    if not _runtime_bool(runtime, "server_side_exit_enabled", True):
-        return False
-    if settings.DHAN_MODE.upper() != "REAL":
-        return False
-    return bool(settings.ENABLE_LIVE_ORDERS)
+    return get_engine_mode() in {"paper", "live"}
 
 
 def _poll_seconds(runtime: dict[str, Any]) -> float:
@@ -114,6 +111,8 @@ def _broker_managed_exit(position: dict[str, Any]) -> bool:
 
 def _display_exit_levels(position: dict[str, Any], entry_price: float, runtime: dict[str, Any]) -> tuple[float, float, float, float]:
     sl_percent, tp_percent, sl_price, tp_price = _exit_levels(entry_price, runtime)
+    if _runtime_bool(runtime, "option_disable_sl", True):
+        sl_price = max(0.10, round(entry_price * 0.01, 2))
     if _broker_managed_exit(position):
         sl_price = _as_float(position.get("broker_sl_price"), sl_price) or sl_price
         tp_price = _as_float(position.get("broker_tp_price"), tp_price) or tp_price
@@ -158,8 +157,8 @@ def _with_live_pnl(position: dict[str, Any], snapshot: dict[str, Any]) -> dict[s
     return set_open_position(updated)
 
 
-def _client() -> RealDhanClient | MockDhanClient:
-    return RealDhanClient() if settings.DHAN_MODE.upper() == "REAL" else MockDhanClient()
+def _client() -> Any:
+    return get_broker_client(get_engine_mode())
 
 
 def _ltp_error_snapshot(*, quote: Any, status: str, ws_status: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -224,7 +223,7 @@ def _entry_price_from_positions(position: dict[str, Any], items: list[dict[str, 
 
 def _broker_entry_price_fallback(
     position: dict[str, Any],
-    client: RealDhanClient | MockDhanClient,
+    client: Any,
     client_id: str,
     access_token: str,
 ) -> tuple[float | None, str | None, str | None]:
@@ -246,7 +245,7 @@ def _broker_entry_price_fallback(
     return None, None, None
 
 
-def _sync_entry_fill_if_needed(position: dict[str, Any], client: RealDhanClient | MockDhanClient, client_id: str, access_token: str) -> dict[str, Any]:
+def _sync_entry_fill_if_needed(position: dict[str, Any], client: Any, client_id: str, access_token: str) -> dict[str, Any]:
     if _as_float(position.get("entry_price")) is not None:
         return position
 
@@ -477,10 +476,13 @@ def monitor_once() -> None:
         return
 
     client = _client()
+    entry_price_before_sync = _as_float(position.get("entry_price"))
     position = _sync_entry_fill_if_needed(position, client, creds.client_id, creds.access_token)
     entry_price = _as_float(position.get("entry_price"))
     if entry_price is None or entry_price <= 0:
         return
+    if entry_price_before_sync is None:
+        publish_active_trade_from_sync(position, get_engine_mode())
 
     source = _ltp_source(runtime)
     quote: Any = None
@@ -558,8 +560,20 @@ def monitor_once() -> None:
         quote_age_seconds=getattr(quote, "age_seconds", None),
     )
     updated = _with_live_pnl(position, snapshot)
+    publish_tick_pnl_from_sync(
+        symbol=str(position.get("trading_symbol") or position.get("symbol") or "NIFTY option"),
+        security_id=security_id,
+        ltp=ltp,
+        pnl=snapshot["unrealized_pnl"],
+        pnl_pct=snapshot["pnl_percent"],
+        mode=get_engine_mode(),
+    )
 
-    if exit_reason and not _broker_managed_exit(updated):
+    if (
+        exit_reason
+        and _runtime_bool(runtime, "server_side_exit_enabled", True)
+        and (get_engine_mode() == "paper" or not _broker_managed_exit(updated))
+    ):
         _route_server_exit(updated, exit_reason, snapshot)
 
 

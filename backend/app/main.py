@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import session as chat_session
+from app.api import ws as chat_ws
 from app.config import settings
 from app.routers import broker, control, dashboard, debug, engine, orders, positions, setup, webhook
 from app.services.audit_logger import log_audit_event
+from app.services.chat_event_publisher import bind_chat_event_loop, clear_chat_event_loop
 from app.services.credential_vault import vault_status
 from app.services.instrument_resolver import start_instrument_cache_warmup
 from app.services.option_position_monitor import start_option_position_monitor, stop_option_position_monitor
-from app.services.state_store import get_app_state, get_runtime_settings, init_runtime_files, sync_runtime_flags_from_env
+from app.services.state_store import get_app_state, get_engine_mode, get_runtime_settings, init_runtime_files, sync_runtime_flags_from_env
 from app.services.startup_reconciler import reconcile_open_position_on_startup
 from app.workers.eod_squareoff import start_eod_squareoff_worker, stop_eod_squareoff_worker
 from app.workers.ghost_position_watcher import start_ghost_position_watcher, stop_ghost_position_watcher
@@ -22,8 +26,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nova_signal_router")
 
 
+def validate_production_configuration() -> None:
+    if settings.APP_ENV.lower() != "production":
+        return
+
+    session_secret = settings.SESSION_TOKEN_SECRET.strip()
+    if session_secret == "change-me-in-production" or len(session_secret) < 32:
+        raise RuntimeError("SESSION_TOKEN_SECRET must be overridden with at least 32 random characters in production.")
+    if settings.DHAN_MODE.upper() != "REAL":
+        raise RuntimeError("Production requires DHAN_MODE=REAL; mock routing is only allowed for local development and tests.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_production_configuration()
+    bind_chat_event_loop(asyncio.get_running_loop())
     init_runtime_files()
     sync_runtime_flags_from_env()
     vault = vault_status()
@@ -34,6 +51,7 @@ async def lifespan(app: FastAPI):
     logger.info("NOVA Signal Router backend starting.")
     logger.info("APP_ENV=%s", settings.APP_ENV)
     logger.info("DHAN_MODE=%s", settings.DHAN_MODE.upper())
+    logger.info("ENGINE_MODE=%s", get_engine_mode(legacy_fallback=False))
     logger.info("ENABLE_LIVE_ORDERS=%s", settings.ENABLE_LIVE_ORDERS)
     logger.info("MARKET_CLOSED_DEBUG=%s", settings.MARKET_CLOSED_DEBUG)
     logger.info("FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED=%s", settings.FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED)
@@ -55,6 +73,7 @@ async def lifespan(app: FastAPI):
         metadata={
             "app_env": settings.APP_ENV,
             "dhan_mode": settings.DHAN_MODE.upper(),
+            "engine_mode": get_engine_mode(legacy_fallback=False),
             "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
             "debug_enabled": settings.DEBUG_ENABLED,
         },
@@ -63,6 +82,7 @@ async def lifespan(app: FastAPI):
     stop_option_position_monitor()
     stop_eod_squareoff_worker()
     stop_ghost_position_watcher()
+    clear_chat_event_loop()
     logger.info("NOVA Signal Router shutting down.")
 
 
@@ -97,6 +117,9 @@ app.include_router(control.router, prefix="/api/control", tags=["Control"])
 app.include_router(broker.router, prefix="/api/broker", tags=["Broker"])
 app.include_router(debug.router, prefix="/api/debug", tags=["Debug"])
 app.include_router(webhook.router, prefix="/webhook", tags=["Webhook"])
+app.include_router(webhook.router, prefix="/api/webhook", tags=["Webhook"])
+app.include_router(chat_session.router)
+app.include_router(chat_ws.router)
 
 
 def _health() -> dict:
@@ -106,6 +129,7 @@ def _health() -> dict:
         "status": "ok",
         "app_env": settings.APP_ENV,
         "dhan_mode": settings.DHAN_MODE.upper(),
+        "engine_mode": get_engine_mode(legacy_fallback=False),
         "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
         "market_closed_debug": settings.MARKET_CLOSED_DEBUG,
         "force_allow_order_when_market_closed": settings.FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED,

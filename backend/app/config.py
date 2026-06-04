@@ -24,12 +24,16 @@ ALLOW_ONLY_INTRADAY = True
 BLOCK_DUPLICATE_SIGNALS = True
 GLOBAL_KILL_SWITCH_BLOCKS_EXITS = False
 DASHBOARD_POLL_SECONDS = 2
+DEFAULT_NIFTY_LOT_SIZE = 65
 
 DEFAULT_RUNTIME_SETTINGS = {
     # H8 — Optimistic-locking counter; incremented on every settings write.
     # Clients pass the version they last read; mismatched writes return 409.
     "_version": 0,
-    "max_qty_per_order": 1,
+    "max_qty_per_order": DEFAULT_NIFTY_LOT_SIZE,
+    "allowed_option_side": "BOTH",
+    "max_trades_per_day": 0,
+    "max_daily_loss": 0.0,
     # SL disable — when True, _broker_exit_levels sets the Super Order SL
     # leg to a floor price (~₹0.10 or 1% of entry) so it effectively never
     # fires. Position is exited by opposite Supertrend reversal, TP, or EOD.
@@ -44,10 +48,13 @@ DEFAULT_RUNTIME_SETTINGS = {
     "option_sl_percent": 10.0,
     "option_tp_percent": 20.0,
     "option_ltp_poll_seconds": 1.0,
+    "eod_squareoff_enabled": True,
     "allow_entry": True,
     "allow_exit": True,
     "emergency_stop": False,
     "global_kill_switch": False,
+    "paper_starting_balance": 100000.0,
+    "paper_slippage_percent": 0.10,
 }
 
 
@@ -61,13 +68,19 @@ class Settings(BaseSettings):
     APP_ENV: str = "local"
 
     BACKEND_HOST: str = "0.0.0.0"
-    BACKEND_PORT: int = 8000
+    BACKEND_PORT: int = 8001
     FRONTEND_ORIGIN: str = "http://localhost:5173"
-    BACKEND_PUBLIC_BASE_URL: str = "http://localhost:8000"
+    BACKEND_PUBLIC_BASE_URL: str = "http://localhost:8001"
+    SESSION_TOKEN_SECRET: str = "change-me-in-production"
+    SESSION_TOKEN_TTL_SECONDS: int = 60 * 60 * 12
 
     WEBHOOK_TRADING_ENABLED: bool = False
+    WEBHOOK_HMAC_REQUIRED: bool = False
+    WEBHOOK_RATE_LIMIT_PER_MINUTE: int = 120
 
     DHAN_MODE: str = "MOCK"
+    DHAN_READ_ONLY_REAL_DATA: bool = True
+    PAPER_MODE_ENABLED: bool = True
     ENABLE_LIVE_ORDERS: bool = False
     MARKET_CLOSED_DEBUG: bool = False
     FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED: bool = False
@@ -93,6 +106,9 @@ class Settings(BaseSettings):
     # The `client-id` header is not documented by Dhan but is sent for compatibility.
     # Set to False to omit it (safe -- dhanClientId is always in the order body).
     DHAN_SEND_CLIENT_ID_HEADER: bool = True
+    DHAN_API_MAX_REQUESTS_PER_SECOND: float = 4.0
+    DHAN_API_BURST: int = 4
+    DHAN_API_MAX_RETRY_AFTER_SECONDS: int = 60
 
     RUNTIME_STATE_DIR: str = "runtime_state"
     RUNTIME_LOG_DIR: str = "runtime_logs"

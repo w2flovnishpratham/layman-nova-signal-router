@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -10,7 +10,8 @@ from app.routers.setup import setup_readiness, setup_status_payload
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import dhan_token_age_metadata
 from app.services.dhan_debugger import get_outgoing_ip
-from app.services.state_store import get_app_state, update_app_state
+from app.services.paper_portfolio import get_paper_portfolio
+from app.services.state_store import get_app_state, get_engine_mode, get_open_position, set_engine_mode, update_app_state
 
 
 router = APIRouter()
@@ -18,6 +19,7 @@ router = APIRouter()
 
 class StartEngineRequest(BaseModel):
     confirm_live_orders: bool = False
+    engine_mode: Literal["paper", "live"] | None = None
 
 
 def _build_engine_readiness_checks(
@@ -31,6 +33,13 @@ def _build_engine_readiness_checks(
     Each check has: name, ok (bool), message (str), severity ("error"|"warning"|"ok").
     """
     checks: list[dict[str, Any]] = []
+    engine_mode = readiness.get("engine_mode")
+    checks.append({
+        "name": "mode_selected",
+        "ok": engine_mode in {"paper", "live"},
+        "message": f"{str(engine_mode).title()} mode selected." if engine_mode else "Select Paper or Live mode.",
+        "severity": "ok" if engine_mode else "error",
+    })
 
     # 1. Dhan connected
     creds_ok = "Dhan credentials are not connected." not in readiness.get("issues", [])
@@ -125,7 +134,7 @@ def _build_engine_readiness_checks(
     })
 
     # 8. Static IP check (warn if outgoing IP unknown; real safety depends on Dhan whitelist)
-    if settings.DHAN_MODE.upper() == "REAL" and settings.ENABLE_LIVE_ORDERS:
+    if engine_mode == "live" and settings.DHAN_MODE.upper() == "REAL" and settings.ENABLE_LIVE_ORDERS:
         if outgoing_ip:
             ip_msg = (
                 f"Backend outgoing IP: {outgoing_ip}. "
@@ -166,7 +175,7 @@ def _build_engine_readiness_checks(
     })
 
     # 10. Live-order gate status
-    if settings.ENABLE_LIVE_ORDERS and settings.DHAN_MODE.upper() == "REAL":
+    if engine_mode == "live" and settings.ENABLE_LIVE_ORDERS and settings.DHAN_MODE.upper() == "REAL":
         checks.append({
             "name": "live_order_gate",
             "ok": True,
@@ -174,12 +183,10 @@ def _build_engine_readiness_checks(
             "severity": "warning",
         })
     else:
-        mode = settings.DHAN_MODE.upper()
-        live = settings.ENABLE_LIVE_ORDERS
         checks.append({
             "name": "live_order_gate",
             "ok": True,
-            "message": f"Dry-run mode active (DHAN_MODE={mode}, ENABLE_LIVE_ORDERS={live}). No real orders will be placed.",
+            "message": "Paper mode active. No real Dhan orders will be placed.",
             "severity": "ok",
         })
 
@@ -189,6 +196,16 @@ def _build_engine_readiness_checks(
 @router.post("/engine/start")
 def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
     body = body or StartEngineRequest()
+    if body.engine_mode == "paper" and not settings.PAPER_MODE_ENABLED:
+        raise HTTPException(status_code=409, detail="Paper mode is disabled on this server.")
+    if body.engine_mode is not None:
+        try:
+            set_engine_mode(body.engine_mode)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    engine_mode = get_engine_mode(legacy_fallback=False)
+    if engine_mode is None:
+        raise HTTPException(status_code=400, detail={"message": "Select Paper or Live mode before starting the engine."})
 
     # Gather token age metadata
     token_meta = dhan_token_age_metadata()
@@ -225,7 +242,7 @@ def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
             },
         )
 
-    if settings.DHAN_MODE.upper() == "REAL" and settings.ENABLE_LIVE_ORDERS and not body.confirm_live_orders:
+    if engine_mode == "live" and not body.confirm_live_orders:
         raise HTTPException(
             status_code=409,
             detail={
@@ -242,12 +259,14 @@ def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
         last_message="Engine started. Waiting for TradingView entry alert.",
         last_signal_id=None,
         last_alert_at=None,
+        engine_mode=engine_mode,
     )
     log_audit_event(
         "ENGINE_STARTED",
         "Webhook trading enabled.",
-        severity="WARNING" if settings.ENABLE_LIVE_ORDERS else "INFO",
+        severity="WARNING" if engine_mode == "live" else "INFO",
         metadata={
+            "engine_mode": engine_mode,
             "dhan_mode": settings.DHAN_MODE.upper(),
             "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
             "outgoing_ip": outgoing_ip,
@@ -261,6 +280,8 @@ def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
         "readiness": readiness,
         "checks": checks,
         "token_age": token_meta,
+        "engine_mode": engine_mode,
+        "paper_portfolio": get_paper_portfolio().__dict__ if engine_mode == "paper" else None,
     }
 
 
@@ -276,6 +297,16 @@ def stop_engine() -> dict[str, Any]:
     return {"success": True, "engine_started": False, "app_state": get_app_state()}
 
 
+@router.post("/engine/reconfigure")
+def prepare_reconfigure() -> dict[str, Any]:
+    if get_open_position().get("has_open_position"):
+        raise HTTPException(status_code=409, detail="Cannot reconfigure with an open position. Stop and square off first.")
+    stop_engine()
+    log_audit_event("ENGINE_RECONFIGURE_READY", "Flat engine stopped and ready for mode selection.")
+    set_engine_mode(None)
+    return {"success": True, "engine_started": False, "engine_mode": None, "app_state": get_app_state()}
+
+
 @router.get("/engine/status")
 def engine_status() -> dict[str, Any]:
     app_state = get_app_state()
@@ -286,4 +317,5 @@ def engine_status() -> dict[str, Any]:
         "app_state": app_state,
         "token_age": token_meta,
         "setup": setup_status_payload(include_outgoing_ip=False),
+        "engine_mode": get_engine_mode(legacy_fallback=False),
     }

@@ -12,6 +12,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from app.config import DEFAULT_RUNTIME_SETTINGS, RUNTIME_LOG_DIR, RUNTIME_STATE_DIR, settings
 
@@ -21,6 +22,8 @@ _LOCK = threading.RLock()
 
 APP_STATE_FILE = RUNTIME_STATE_DIR / "app_state.json"
 OPEN_POSITION_FILE = RUNTIME_STATE_DIR / "open_position.json"
+PAPER_POSITION_FILE = RUNTIME_STATE_DIR / "paper_position.json"
+PAPER_PORTFOLIO_FILE = RUNTIME_STATE_DIR / "paper_portfolio.json"
 EXTERNAL_POSITIONS_FILE = RUNTIME_STATE_DIR / "external_positions.json"
 SEEN_SIGNALS_FILE = RUNTIME_STATE_DIR / "seen_signals.json"
 SETTINGS_FILE = RUNTIME_STATE_DIR / "settings.json"
@@ -30,6 +33,7 @@ LOG_FILES = {
     "order": RUNTIME_LOG_DIR / "order_events.jsonl",
     "audit": RUNTIME_LOG_DIR / "audit_events.jsonl",
     "error": RUNTIME_LOG_DIR / "errors.jsonl",
+    "paper_orders": RUNTIME_LOG_DIR / "paper_orders.jsonl",
 }
 
 
@@ -43,10 +47,11 @@ def default_app_state() -> dict[str, Any]:
         "last_signal_id": None,
         "last_alert_at": None,
         "last_message": "Waiting for TradingView entry alert",
-        "engine_started": settings.WEBHOOK_TRADING_ENABLED,
-        "webhook_trading_enabled": settings.WEBHOOK_TRADING_ENABLED,
+        "engine_started": False,
+        "webhook_trading_enabled": False,
         "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
         "dhan_mode": settings.DHAN_MODE.upper(),
+        "engine_mode": None,
         "emergency_stop": DEFAULT_RUNTIME_SETTINGS["emergency_stop"],
         "global_kill_switch": DEFAULT_RUNTIME_SETTINGS["global_kill_switch"],
         "wallet": default_wallet_snapshot(),
@@ -105,6 +110,19 @@ def default_seen_signals() -> dict[str, Any]:
     return {"signal_ids": [], "added_at_by_id": {}}
 
 
+def default_daily_risk() -> dict[str, Any]:
+    return {
+        "date_ist": datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat(),
+        "entry_count": 0,
+        "last_entry_signal_id": None,
+        "updated_at": utc_now(),
+    }
+
+
+def _daily_risk_file() -> Path:
+    return APP_STATE_FILE.parent / "daily_risk.json"
+
+
 def default_settings() -> dict[str, Any]:
     return dict(DEFAULT_RUNTIME_SETTINGS)
 
@@ -136,9 +154,11 @@ def _state_defaults() -> dict[Path, Callable[[], dict[str, Any]]]:
     return {
         APP_STATE_FILE: default_app_state,
         OPEN_POSITION_FILE: default_open_position,
+        PAPER_POSITION_FILE: default_open_position,
         EXTERNAL_POSITIONS_FILE: default_external_positions,
         SEEN_SIGNALS_FILE: default_seen_signals,
         SETTINGS_FILE: default_settings,
+        _daily_risk_file(): default_daily_risk,
     }
 
 
@@ -242,15 +262,70 @@ def update_app_state(**changes: Any) -> dict[str, Any]:
 
 
 def get_open_position() -> dict[str, Any]:
+    """Return the tracked position for the currently selected engine mode."""
+    if get_engine_mode() == "paper":
+        return get_paper_position()
+    return get_live_open_position()
+
+
+def get_live_open_position() -> dict[str, Any]:
     return _read_json(OPEN_POSITION_FILE, default_open_position)
 
 
 def set_open_position(data: dict[str, Any]) -> dict[str, Any]:
+    """Persist the tracked position for the currently selected engine mode."""
+    if get_engine_mode() == "paper":
+        return set_paper_position(data)
+    return set_live_open_position(data)
+
+
+def set_live_open_position(data: dict[str, Any]) -> dict[str, Any]:
     return _write_json(OPEN_POSITION_FILE, data)
 
 
 def clear_open_position() -> dict[str, Any]:
-    return set_open_position(default_open_position())
+    if get_engine_mode() == "paper":
+        return clear_paper_position()
+    return clear_live_open_position()
+
+
+def clear_live_open_position() -> dict[str, Any]:
+    return set_live_open_position(default_open_position())
+
+
+def get_paper_position() -> dict[str, Any]:
+    return _read_json(PAPER_POSITION_FILE, default_open_position)
+
+
+def set_paper_position(data: dict[str, Any]) -> dict[str, Any]:
+    return _write_json(PAPER_POSITION_FILE, data)
+
+
+def clear_paper_position() -> dict[str, Any]:
+    return set_paper_position(default_open_position())
+
+
+def get_engine_mode(*, legacy_fallback: bool = True) -> str | None:
+    mode = str(get_app_state().get("engine_mode") or "").strip().lower()
+    if mode in {"paper", "live"}:
+        return mode
+    if legacy_fallback:
+        return "live" if settings.DHAN_MODE.upper() == "REAL" else "paper"
+    return None
+
+
+def set_engine_mode(mode: str | None) -> dict[str, Any]:
+    normalized = str(mode or "").strip().lower() or None
+    if normalized not in {None, "paper", "live"}:
+        raise ValueError("engine_mode must be paper, live, or null.")
+
+    current_mode = get_engine_mode(legacy_fallback=False)
+    if current_mode != normalized:
+        if get_live_open_position().get("has_open_position") or get_paper_position().get("has_open_position"):
+            raise ValueError("Cannot switch engine mode while a position is open.")
+        if bool(get_app_state().get("webhook_trading_enabled")):
+            raise ValueError("Stop the engine before switching mode.")
+    return update_app_state(engine_mode=normalized)
 
 
 def get_external_positions() -> dict[str, Any]:
@@ -354,6 +429,24 @@ def add_seen_signal(signal_id: str) -> dict[str, Any]:
 
 def clear_seen_signals() -> dict[str, Any]:
     return set_seen_signals(default_seen_signals())
+
+
+def get_daily_risk() -> dict[str, Any]:
+    path = _daily_risk_file()
+    data = _read_json(path, default_daily_risk)
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
+    if data.get("date_ist") != today:
+        data = default_daily_risk()
+        _write_json(path, data)
+    return data
+
+
+def record_entry_trade(signal_id: str) -> dict[str, Any]:
+    data = get_daily_risk()
+    data["entry_count"] = int(data.get("entry_count") or 0) + 1
+    data["last_entry_signal_id"] = signal_id
+    data["updated_at"] = utc_now()
+    return _write_json(_daily_risk_file(), data)
 
 
 def get_runtime_settings() -> dict[str, Any]:
@@ -472,6 +565,10 @@ def reset_to_waiting_entry(message: str = "Waiting for TradingView entry alert")
 
 
 def get_wallet_snapshot() -> dict[str, Any]:
+    if get_engine_mode(legacy_fallback=False) == "paper":
+        from app.services.paper_portfolio import paper_wallet_snapshot
+
+        return paper_wallet_snapshot()
     return deepcopy(get_app_state().get("wallet") or default_wallet_snapshot())
 
 
@@ -489,10 +586,15 @@ def clear_runtime_logs() -> None:
 
 
 def fresh_runtime_start(*, clear_logs: bool = True) -> None:
+    from app.services.paper_portfolio import reset_paper_portfolio
+
     set_app_state(default_app_state())
-    clear_open_position()
+    clear_live_open_position()
+    clear_paper_position()
+    reset_paper_portfolio()
     clear_external_positions()
     clear_seen_signals()
+    _write_json(_daily_risk_file(), default_daily_risk())
     if clear_logs:
         clear_runtime_logs()
     sync_runtime_flags_from_env()

@@ -282,6 +282,12 @@ def test_monitor_syncs_entry_price_from_positions_when_order_status_is_empty(tmp
         "get_dhan_credentials",
         lambda: DhanCredentials(client_id="1000000001", access_token="token"),
     )
+    published_active_trades = []
+    monkeypatch.setattr(
+        option_position_monitor,
+        "publish_active_trade_from_sync",
+        lambda position, mode: published_active_trades.append((position, mode)),
+    )
 
     state_store.update_runtime_settings(
         server_side_exit_enabled=True,
@@ -320,3 +326,5 @@ def test_monitor_syncs_entry_price_from_positions_when_order_status_is_empty(tmp
     assert position["entry_fill_source"] == "dhan_positions"
     assert position["live_pnl"]["ltp"] == 105.0
     assert position["live_pnl"]["status"] == "tracking"
+    assert len(published_active_trades) == 1
+    assert published_active_trades[0][0]["entry_price"] == 100.0

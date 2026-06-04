@@ -20,6 +20,7 @@ from app.services.state_store import (
     default_external_positions,
     default_open_position,
     get_app_state,
+    get_engine_mode,
     get_external_positions,
     get_open_position,
     set_external_positions,
@@ -355,6 +356,17 @@ def _unknown_snapshot(message: str, *, checked_at: str, failures: list[str]) -> 
 
 def sync_ghost_positions_once(*, reason: str = "worker") -> dict[str, Any]:
     checked_at = utc_now()
+
+    if get_engine_mode() == "paper":
+        snapshot = default_external_positions()
+        snapshot.update(
+            {
+                "status": "skipped",
+                "message": "Broker ghost-position sync is not applicable in Paper mode.",
+                "last_checked_at": checked_at,
+            }
+        )
+        return set_external_positions(snapshot)
 
     if settings.DHAN_MODE.upper() != "REAL":
         snapshot = default_external_positions()

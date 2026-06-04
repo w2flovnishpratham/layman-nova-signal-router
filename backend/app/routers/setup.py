@@ -3,17 +3,21 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 import csv
+from datetime import date, datetime
+import ipaddress
 import json
 from pathlib import Path
 import threading
 import time
 from typing import Any
+from urllib.parse import urlparse
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
+from typing import Literal
 
-from app.config import BACKEND_DIR, RUNTIME_STATE_DIR, settings
+from app.config import BACKEND_DIR, DEFAULT_NIFTY_LOT_SIZE, RUNTIME_STATE_DIR, settings
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import (
     VaultError,
@@ -32,16 +36,19 @@ from app.services.credential_vault import (
     webhook_secret_strength_error,
     webhook_secret_metadata,
 )
-from app.services.dhan_client import DhanFundsResult, MockDhanClient, RealDhanClient
+from app.services.dhan_client import DhanFundsResult, RealDhanClient
+from app.services.paper_portfolio import paper_wallet_snapshot, reset_paper_portfolio
 from app.services.dhan_debugger import get_outgoing_ip
 from app.services.dhan_error_interpreter import interpret_dhan_error
 from app.services.state_store import (
     SettingsVersionMismatch,
     default_wallet_snapshot,
     get_app_state,
+    get_engine_mode,
     get_runtime_settings,
     get_wallet_snapshot,
     set_wallet_snapshot,
+    set_engine_mode,
     update_app_state,
     update_runtime_settings,
     update_runtime_settings_if_version,
@@ -83,14 +90,15 @@ def _scrip_master_candidates() -> list[Path]:
 
 
 def _current_nifty_lot_size_from_scrip_master() -> int | None:
+    today = date.today()
     candidates = [path for path in _scrip_master_candidates() if path.exists()]
-    cache_key = tuple((str(path), path.stat().st_mtime_ns, path.stat().st_size) for path in candidates)
+    cache_key = (today.isoformat(), tuple((str(path), path.stat().st_mtime_ns, path.stat().st_size) for path in candidates))
     if _NIFTY_LOT_SIZE_CACHE.get("key") == cache_key:
         return _NIFTY_LOT_SIZE_CACHE.get("lot_size")
 
     lot_size: int | None = None
     for path in candidates:
-        counts: Counter[int] = Counter()
+        counts_by_expiry: dict[date, Counter[int]] = {}
         try:
             with path.open("r", encoding="utf-8-sig", newline="") as handle:
                 for row in csv.DictReader(handle):
@@ -102,15 +110,19 @@ def _current_nifty_lot_size_from_scrip_master() -> int | None:
                         continue
                     if "OPT" not in instrument and option_type not in {"CE", "PE"}:
                         continue
+                    expiry = _scrip_expiry_date(row)
+                    if expiry is None or expiry < today:
+                        continue
                     raw_lot = row.get("LOT_SIZE") or row.get("SEM_LOT_UNITS") or row.get("LOT_UNITS")
                     try:
                         parsed_lot = int(float(str(raw_lot or "").strip()))
                     except (TypeError, ValueError):
                         continue
                     if parsed_lot > 0:
-                        counts[parsed_lot] += 1
-            if counts:
-                lot_size = counts.most_common(1)[0][0]
+                        counts_by_expiry.setdefault(expiry, Counter())[parsed_lot] += 1
+            if counts_by_expiry:
+                nearest_expiry = min(counts_by_expiry)
+                lot_size = counts_by_expiry[nearest_expiry].most_common(1)[0][0]
                 break
         except OSError:
             continue
@@ -119,10 +131,24 @@ def _current_nifty_lot_size_from_scrip_master() -> int | None:
     return lot_size
 
 
+def _scrip_expiry_date(row: dict[str, Any]) -> date | None:
+    raw = str(row.get("SM_EXPIRY_DATE") or row.get("SEM_EXPIRY_DATE") or row.get("EXPIRY_DATE") or "").strip()
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d %b %Y", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(raw[:11], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def current_nifty_lot_size() -> int:
+    return _current_nifty_lot_size_from_scrip_master() or DEFAULT_NIFTY_LOT_SIZE
+
+
 def _minimum_real_nifty_order_qty() -> int | None:
     if settings.DHAN_MODE.upper() != "REAL":
         return None
-    return _current_nifty_lot_size_from_scrip_master()
+    return current_nifty_lot_size()
 
 
 def _validate_max_qty_per_order(value: int | None) -> int | None:
@@ -146,8 +172,16 @@ class WebhookSecretRequest(BaseModel):
     webhook_secret: str = Field(..., min_length=WEBHOOK_SECRET_MIN_LENGTH)
 
 
+class EngineModeRequest(BaseModel):
+    engine_mode: Literal["paper", "live"]
+    paper_starting_balance: float = Field(default=100000.0, ge=10000.0, le=1000000.0)
+
+
 class RiskSetupRequest(BaseModel):
-    max_qty_per_order: int = Field(default=1, ge=1)
+    max_qty_per_order: int = Field(default=DEFAULT_NIFTY_LOT_SIZE, ge=1)
+    allowed_option_side: str = "BOTH"
+    max_trades_per_day: int = Field(default=0, ge=0)
+    max_daily_loss: float = Field(default=0.0, ge=0)
     option_disable_sl: bool = True
     server_side_exit_enabled: bool = True
     marketfeed_ws_enabled: bool = True
@@ -159,6 +193,7 @@ class RiskSetupRequest(BaseModel):
     option_sl_percent: float = Field(default=10.0, gt=0)
     option_tp_percent: float = Field(default=20.0, gt=0)
     option_ltp_poll_seconds: float = Field(default=1.0, ge=1.0)
+    eod_squareoff_enabled: bool = True
     allow_entry: bool = True
     allow_exit: bool = True
     # H8 — Optional optimistic-locking version. If supplied, save fails with
@@ -174,6 +209,9 @@ class RiskSetupRequest(BaseModel):
 
 class RiskSettingsPatchRequest(BaseModel):
     max_qty_per_order: int | None = Field(default=None, ge=1)
+    allowed_option_side: str | None = None
+    max_trades_per_day: int | None = Field(default=None, ge=0)
+    max_daily_loss: float | None = Field(default=None, ge=0)
     option_disable_sl: bool | None = None
     server_side_exit_enabled: bool | None = None
     marketfeed_ws_enabled: bool | None = None
@@ -185,6 +223,7 @@ class RiskSettingsPatchRequest(BaseModel):
     option_sl_percent: float | None = Field(default=None, gt=0)
     option_tp_percent: float | None = Field(default=None, gt=0)
     option_ltp_poll_seconds: float | None = Field(default=None, ge=1.0)
+    eod_squareoff_enabled: bool | None = None
     allow_entry: bool | None = None
     allow_exit: bool | None = None
     # H8 — See RiskSetupRequest.expected_version.
@@ -197,6 +236,32 @@ class RiskSettingsPatchRequest(BaseModel):
 
 def public_base_url() -> str:
     return settings.BACKEND_PUBLIC_BASE_URL.rstrip("/")
+
+
+def _public_base_url_issue(base_url: str) -> str | None:
+    if not base_url:
+        return "BACKEND_PUBLIC_BASE_URL is not set."
+    if "yourdomain.com" in base_url:
+        return "BACKEND_PUBLIC_BASE_URL still uses the placeholder domain."
+
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return "BACKEND_PUBLIC_BASE_URL must be a valid HTTP or HTTPS URL."
+    if settings.APP_ENV.lower() != "production":
+        return None
+    if parsed.scheme != "https":
+        return "BACKEND_PUBLIC_BASE_URL must use HTTPS in production."
+
+    hostname = parsed.hostname.lower()
+    if hostname == "localhost":
+        return "BACKEND_PUBLIC_BASE_URL must be publicly reachable in production."
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return None
+    if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved or address.is_unspecified:
+        return "BACKEND_PUBLIC_BASE_URL must be publicly reachable in production."
+    return None
 
 
 def tradingview_webhook_url() -> str:
@@ -271,6 +336,8 @@ def _normalize_risk_changes(changes: dict[str, Any]) -> dict[str, Any]:
         normalized["option_ltp_source"] = str(normalized["option_ltp_source"]).upper()
     if "option_exit_mode" in normalized:
         normalized["option_exit_mode"] = str(normalized["option_exit_mode"]).upper()
+    if "allowed_option_side" in normalized:
+        normalized["allowed_option_side"] = str(normalized["allowed_option_side"]).upper()
     return normalized
 
 
@@ -332,7 +399,7 @@ def _connection_failure_kind(message: str, status_code: int | None, raw_response
 
 
 def validate_dhan_credentials(client_id: str, access_token: str) -> tuple[bool, str, DhanFundsResult | None, dict[str, Any]]:
-    if settings.DHAN_MODE.upper() == "REAL":
+    if get_engine_mode(legacy_fallback=False) in {"paper", "live"} or settings.DHAN_MODE.upper() == "REAL" or settings.DHAN_READ_ONLY_REAL_DATA:
         validation = RealDhanClient().validate_token(client_id=client_id, access_token=access_token)
         if not validation.success:
             kind = _connection_failure_kind(validation.message, validation.status_code, validation.raw_response)
@@ -348,11 +415,12 @@ def validate_dhan_credentials(client_id: str, access_token: str) -> tuple[bool, 
                 },
             )
         funds = RealDhanClient().get_fund_limit(client_id=client_id, access_token=access_token)
-        return True, "Dhan connected successfully.", funds, {"status_code": validation.status_code}
+        return True, "Dhan connected successfully.", funds, {
+            "status_code": validation.status_code,
+            "read_only_real_data": settings.DHAN_MODE.upper() != "REAL",
+        }
 
-    validation = MockDhanClient().validate_token(client_id=client_id, access_token="")
-    funds = MockDhanClient().get_fund_limit(client_id=client_id, access_token="")
-    return validation.success, "Dhan connected successfully.", funds, {"mock": True}
+    return True, "Legacy local setup accepted.", None, {"legacy_local": True}
 
 
 def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, list[str]]:
@@ -360,7 +428,8 @@ def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, li
     issues: list[str] = []
     if int(runtime.get("max_qty_per_order") or 0) <= 0:
         issues.append("Max quantity per order must be greater than zero.")
-        issues.append("Daily loss limit must be greater than zero.")
+    if str(runtime.get("allowed_option_side") or "BOTH").upper() not in {"CE", "PE", "BOTH"}:
+        issues.append("Allowed option side must be CE, PE, or BOTH.")
     if float(runtime.get("option_sl_percent") or 0) <= 0:
         issues.append("Option SL percent must be greater than zero.")
     elif float(runtime.get("option_sl_percent") or 0) >= RISK_OPTION_SL_MAX_PERCENT:
@@ -395,7 +464,12 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
     base_url = public_base_url()
     issues: list[str] = []
     warnings: list[str] = []
+    engine_mode = get_engine_mode(legacy_fallback=False)
 
+    if engine_mode is None:
+        issues.append("Engine mode is not selected.")
+    elif engine_mode == "paper" and not settings.PAPER_MODE_ENABLED:
+        issues.append("Paper mode is disabled on this server.")
     if not creds:
         issues.append("Dhan credentials are not connected.")
     if not webhook_secret:
@@ -404,10 +478,9 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
         secret_strength_error = webhook_secret_strength_error(webhook_secret)
         if secret_strength_error:
             issues.append(secret_strength_error)
-    if not base_url:
-        issues.append("BACKEND_PUBLIC_BASE_URL is not set.")
-    elif "yourdomain.com" in base_url:
-        issues.append("BACKEND_PUBLIC_BASE_URL still uses the placeholder domain.")
+    public_url_issue = _public_base_url_issue(base_url)
+    if public_url_issue:
+        issues.append(public_url_issue)
     if bool(runtime.get("emergency_stop")):
         issues.append("Emergency stop is active.")
     if bool(runtime.get("global_kill_switch")):
@@ -421,9 +494,13 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
         if not ok:
             issues.append(message)
 
-    if settings.DHAN_MODE.upper() == "REAL" and not settings.ENABLE_LIVE_ORDERS:
+    if engine_mode == "live" and settings.DHAN_MODE.upper() == "REAL" and not settings.ENABLE_LIVE_ORDERS:
         warnings.append("REAL mode is configured, but ENABLE_LIVE_ORDERS=false. Alerts will be parsed and blocked before Dhan order placement.")
-    if settings.DHAN_MODE.upper() == "REAL" and settings.ENABLE_LIVE_ORDERS:
+    if engine_mode == "live" and settings.DHAN_MODE.upper() != "REAL":
+        issues.append("Live mode requires DHAN_MODE=REAL.")
+    if engine_mode == "live" and not settings.ENABLE_LIVE_ORDERS:
+        issues.append("Live mode requires ENABLE_LIVE_ORDERS=true.")
+    if engine_mode == "live" and settings.DHAN_MODE.upper() == "REAL" and settings.ENABLE_LIVE_ORDERS:
         warnings.append("LIVE ORDERS ENABLED - real money orders can be placed after risk checks.")
 
     return {
@@ -432,6 +509,7 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
         "warnings": warnings,
         "dhan_ping": dhan_ping,
         "risk_configured": risk_ok,
+        "engine_mode": engine_mode,
     }
 
 
@@ -454,6 +532,8 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
         "webhook_secret_masked": webhook_meta["masked"],
         "risk_configured": bool(readiness["risk_configured"]),
         "engine_started": bool(app_state.get("webhook_trading_enabled")),
+        "engine_mode": get_engine_mode(legacy_fallback=False),
+        "paper_portfolio": paper_wallet_snapshot() if get_engine_mode(legacy_fallback=False) == "paper" else None,
         "wallet": wallet,
         "backend_public_base_url": public_base_url(),
         "webhook_url": tradingview_webhook_url(),
@@ -468,6 +548,9 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
         "settings": {
             "_version": runtime.get("_version"),
             "max_qty_per_order": runtime.get("max_qty_per_order"),
+            "allowed_option_side": runtime.get("allowed_option_side"),
+            "max_trades_per_day": runtime.get("max_trades_per_day"),
+            "max_daily_loss": runtime.get("max_daily_loss"),
             "option_disable_sl": runtime.get("option_disable_sl"),
             "server_side_exit_enabled": runtime.get("server_side_exit_enabled"),
             "marketfeed_ws_enabled": runtime.get("marketfeed_ws_enabled"),
@@ -479,6 +562,7 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
             "option_sl_percent": runtime.get("option_sl_percent"),
             "option_tp_percent": runtime.get("option_tp_percent"),
             "option_ltp_poll_seconds": runtime.get("option_ltp_poll_seconds"),
+            "eod_squareoff_enabled": runtime.get("eod_squareoff_enabled"),
             "allow_entry": runtime.get("allow_entry"),
             "allow_exit": runtime.get("allow_exit"),
             "emergency_stop": bool(runtime.get("emergency_stop")),
@@ -495,6 +579,34 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
 @router.get("/setup/status")
 def setup_status() -> dict[str, Any]:
     return setup_status_payload()
+
+
+@router.post("/setup/mode")
+def configure_engine_mode(body: EngineModeRequest) -> dict[str, Any]:
+    if body.engine_mode == "paper" and not settings.PAPER_MODE_ENABLED:
+        raise HTTPException(status_code=409, detail="Paper mode is disabled on this server.")
+    try:
+        state = set_engine_mode(body.engine_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    portfolio = None
+    if body.engine_mode == "paper":
+        update_runtime_settings(paper_starting_balance=body.paper_starting_balance)
+        portfolio = paper_wallet_snapshot()
+        if abs(float(portfolio["sod_limit"]) - body.paper_starting_balance) > 0.001:
+            portfolio = paper_wallet_snapshot() if portfolio.get("utilized_amount") else reset_paper_portfolio(body.paper_starting_balance).__dict__
+    log_audit_event("ENGINE_MODE_SELECTED", f"{body.engine_mode.title()} mode selected.", metadata={"engine_mode": body.engine_mode})
+    return {"success": True, "engine_mode": body.engine_mode, "app_state": state, "paper_portfolio": portfolio}
+
+
+@router.post("/setup/paper-portfolio/reset")
+def reset_paper_portfolio_endpoint() -> dict[str, Any]:
+    if get_engine_mode(legacy_fallback=False) != "paper":
+        raise HTTPException(status_code=409, detail="Paper portfolio can only be reset in Paper mode.")
+    if get_app_state().get("webhook_trading_enabled"):
+        raise HTTPException(status_code=409, detail="Stop the engine before resetting the Paper portfolio.")
+    portfolio = reset_paper_portfolio()
+    return {"success": True, "paper_portfolio": paper_wallet_snapshot(), "portfolio": portfolio.__dict__}
 
 
 @router.post("/setup/dhan/connect")

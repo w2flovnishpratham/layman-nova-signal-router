@@ -12,7 +12,13 @@ from app.config import (
     settings,
 )
 from app.schemas.signal import NormalizedSignal
-from app.services.state_store import get_app_state, get_open_position, get_runtime_settings
+from app.services.state_store import (
+    get_app_state,
+    get_daily_risk,
+    get_open_position,
+    get_runtime_settings,
+    get_wallet_snapshot,
+)
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -70,6 +76,33 @@ def _common_signal_checks(payload: NormalizedSignal) -> RiskDecision | None:
     return None
 
 
+def option_side_is_allowed(payload: NormalizedSignal, runtime: dict) -> bool:
+    allowed = str(runtime.get("allowed_option_side") or "BOTH").upper()
+    return allowed == "BOTH" or not payload.option_side or payload.option_side == allowed
+
+
+def _entry_limit_checks(payload: NormalizedSignal, runtime: dict) -> RiskDecision | None:
+    if not option_side_is_allowed(payload, runtime):
+        return RiskDecision(
+            False,
+            f"Trade blocked: {payload.option_side} entries are disabled by the configured side filter.",
+        )
+
+    max_trades = _setting_int(runtime, "max_trades_per_day", 0)
+    if max_trades > 0 and int(get_daily_risk().get("entry_count") or 0) >= max_trades:
+        return RiskDecision(False, "Trade blocked: maximum entries for the day reached.")
+
+    try:
+        max_daily_loss = float(runtime.get("max_daily_loss") or 0)
+    except (TypeError, ValueError):
+        max_daily_loss = 0
+    session_pnl = get_wallet_snapshot().get("session_pnl")
+    if max_daily_loss > 0 and isinstance(session_pnl, (int, float)) and float(session_pnl) <= -max_daily_loss:
+        return RiskDecision(False, "Trade blocked: maximum daily loss reached.")
+
+    return None
+
+
 def evaluate_entry(payload: NormalizedSignal, runtime: dict | None = None) -> RiskDecision:
     # C11 — Use the caller's snapshot if provided; otherwise read live.
     if runtime is None:
@@ -89,6 +122,10 @@ def evaluate_entry(payload: NormalizedSignal, runtime: dict | None = None) -> Ri
 
     if not _setting_bool(runtime, "allow_entry", True):
         return RiskDecision(False, "Trade blocked: ALLOW_ENTRY=false.")
+
+    entry_limits = _entry_limit_checks(payload, runtime)
+    if entry_limits:
+        return entry_limits
 
     open_position = get_open_position()
     if open_position.get("has_open_position"):
@@ -134,6 +171,10 @@ def evaluate_reversal_entry(payload: NormalizedSignal, runtime: dict | None = No
 
     if not _setting_bool(runtime, "allow_exit", True):
         return RiskDecision(False, "Reversal blocked: ALLOW_EXIT=false.")
+
+    entry_limits = _entry_limit_checks(payload, runtime)
+    if entry_limits:
+        return entry_limits
 
     open_position = get_open_position()
     if not open_position.get("has_open_position"):

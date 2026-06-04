@@ -72,6 +72,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
     monkeypatch.setattr(settings, "APP_ENV", "local")
     monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False)
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False)
     monkeypatch.setattr(settings, "WEBHOOK_TRADING_ENABLED", True)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
@@ -720,6 +721,7 @@ class TestLiveOrderGating:
             lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
         )
         monkeypatch.setattr("app.services.execution_router.refresh_wallet_snapshot", lambda **kwargs: {})
+        monkeypatch.setattr("app.services.execution_router.get_engine_mode", lambda **kwargs: "live")
         state_store.update_runtime_settings(allow_entry=True, allow_exit=True)
         state_store.set_open_position(
             {
@@ -967,6 +969,87 @@ class TestLiveOrderGating:
         assert body["accepted"] is False
         assert "Dhan already has open order" in body.get("message", "")
         assert real_called["called"] is False
+
+    def test_exit_uses_tracked_open_position_contract(self, monkeypatch):
+        """EXIT alerts must close NOVA's tracked position, not a stale alert contract."""
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
+        monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", False)
+        monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "")
+        monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
+        monkeypatch.setattr(
+            "app.services.execution_router.get_dhan_credentials",
+            lambda: credential_vault.DhanCredentials(client_id="1000000001", access_token="token"),
+        )
+        monkeypatch.setattr("app.services.execution_router.refresh_wallet_snapshot", lambda **kwargs: {})
+        monkeypatch.setattr("app.services.execution_router.get_engine_mode", lambda **kwargs: "live")
+        state_store.update_runtime_settings(allow_entry=True, allow_exit=True)
+        state_store.set_open_position(
+            {
+                "has_open_position": True,
+                "strategy_code": "TRADINGVIEW_NIFTY_V1",
+                "symbol": "NIFTY",
+                "instrument_type": "OPTIDX",
+                "exchange_segment": "NSE_FNO",
+                "security_id": "OPEN123",
+                "trading_symbol": "NIFTY 2026-06-09 23300 CE",
+                "option_side": "CE",
+                "strike": 23300.0,
+                "expiry": "2026-06-09",
+                "qty": 65,
+                "entry_order_id": "ENTRY-OPEN123",
+                "entry_price": 100.0,
+                "exit_management": "SERVER",
+                "opened_at": state_store.utc_now(),
+            }
+        )
+        calls: list[dict] = []
+
+        class FakeRealDhanClient:
+            def place_order(self, *, client_id, access_token, payload):
+                calls.append(payload)
+                return DhanOrderResult(
+                    success=True,
+                    order_id="EXIT-OPEN123",
+                    status="TRADED",
+                    avg_price=95.0,
+                    raw_response={"orderId": "EXIT-OPEN123", "orderStatus": "TRADED", "avgPrice": 95.0},
+                )
+
+            def poll_order_status(self, *, client_id, access_token, order_id, max_polls=4, poll_delay=1.5):
+                return DhanOrderStatusResult(
+                    success=True,
+                    order_id=order_id,
+                    order_status="TRADED",
+                    is_terminal=True,
+                    is_filled=True,
+                    avg_price=95.0,
+                    raw_response={"orderId": order_id, "orderStatus": "TRADED", "avgPrice": 95.0},
+                    filled_qty=65,
+                    remaining_qty=0,
+                )
+
+        monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
+
+        stale_exit_signal = make_signal(security_id="STALE999", action="EXIT", side="SELL").model_copy(
+            update={
+                "signal_id": "eod-exit-alert-001",
+                "source": "tradingview_eod",
+                "option_side": "PE",
+                "strike": 23000.0,
+                "expiry": "2026-06-16",
+                "trading_symbol": "NIFTY 2026-06-16 23000 PE",
+                "raw_payload": {"exit_reason": "EOD_FLATTEN"},
+            }
+        )
+        result = route_exit_signal(stale_exit_signal)
+
+        assert result["success"] is True
+        assert calls[0]["transactionType"] == "SELL"
+        assert calls[0]["securityId"] == "OPEN123"
+        assert calls[0]["quantity"] == 65
+        assert state_store.get_open_position()["has_open_position"] is False
 
     def test_emergency_stop_blocks_entry(self, client):
         """EMERGENCY_STOP=true must block all entry signals."""
@@ -1320,6 +1403,7 @@ class TestEngineStartReadiness:
         from app.main import app
         with TestClient(app) as c:
             # Set webhook secret but NOT Dhan credentials
+            state_store.set_engine_mode("paper")
             c.post("/api/setup/webhook-secret", json={"webhook_secret": TEST_WEBHOOK_SECRET})
             c.post("/api/setup/risk", json={
                 "max_qty_per_order": 1,
@@ -1355,11 +1439,18 @@ class TestEngineStartReadiness:
         monkeypatch.setattr(settings, "APP_ENV", "local")
         monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
         monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
+        monkeypatch.setattr(
+            setup_router,
+            "validate_dhan_credentials",
+            lambda *_args, **_kwargs: (True, "Dhan connected successfully.", None, {}),
+        )
+        monkeypatch.setattr(setup_router, "_minimum_real_nifty_order_qty", lambda: None)
 
         from app.main import app
         with TestClient(app) as c:
             # Dhan connected (mock), but no webhook secret
             c.post("/api/setup/dhan/connect", json={"client_id": "1000000001", "access_token": "testtoken"})
+            state_store.set_engine_mode("paper")
             c.post("/api/setup/risk", json={
                 "max_qty_per_order": 1,
                 "allow_entry": True, "allow_exit": True,
@@ -1404,6 +1495,7 @@ class TestEngineStartReadiness:
 
         from app.main import app
         with TestClient(app) as c:
+            state_store.set_engine_mode("paper")
             c.post("/api/setup/risk", json={
                 "max_qty_per_order": 1,
                 "allow_entry": True, "allow_exit": True,
@@ -1414,17 +1506,23 @@ class TestEngineStartReadiness:
         msg = str(detail.get("message", "")).lower()
         assert "expired" in msg or "token" in msg
 
-    def test_engine_start_passes_dry_run(self, client):
-        """Engine start must succeed in MOCK mode with live orders disabled."""
-        # Connect mock Dhan credentials so readiness check passes in MOCK mode.
+    def test_engine_start_passes_dry_run(self, client, monkeypatch):
+        """Engine start must succeed in Paper mode without enabling live orders."""
+        monkeypatch.setattr(
+            setup_router,
+            "validate_dhan_credentials",
+            lambda *_args, **_kwargs: (True, "Dhan connected successfully.", None, {}),
+        )
+        monkeypatch.setattr(setup_router, "_minimum_real_nifty_order_qty", lambda: None)
+        # Connect credentials before selecting Paper so the legacy local setup
+        # fixture does not make a network request.
         client.post("/api/setup/dhan/connect", json={"client_id": "MOCK123", "access_token": "mock-token"})
+        client.post("/api/engine/stop")
+        state_store.set_engine_mode("paper")
         response = client.post("/api/engine/start", json={})
-        # May succeed (200) or return 409 if confirm_live_orders required
-        # but must not return 400 (setup incomplete)
-        assert response.status_code in (200, 409)
-        if response.status_code == 200:
-            body = response.json()
-            assert body.get("success") is True or body.get("engine_started") is True
+        assert response.status_code == 200, response.json()
+        body = response.json()
+        assert body.get("success") is True or body.get("engine_started") is True
 
     def test_engine_start_response_includes_checks(self, client):
         """Engine start response must include structured per-check list."""

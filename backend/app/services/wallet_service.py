@@ -7,8 +7,9 @@ from typing import Any
 from app.config import settings
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import get_dhan_credentials, mask_client_id
-from app.services.dhan_client import DhanFundsResult, MockDhanClient, RealDhanClient
-from app.services.state_store import default_wallet_snapshot, get_wallet_snapshot, set_wallet_snapshot, utc_now
+from app.services.dhan_client import DhanFundsResult, RealDhanClient
+from app.services.paper_portfolio import paper_wallet_snapshot
+from app.services.state_store import default_wallet_snapshot, get_engine_mode, get_wallet_snapshot, set_wallet_snapshot, utc_now
 
 
 STALE_AFTER_SECONDS = 30
@@ -88,6 +89,12 @@ def wallet_is_stale(snapshot: dict[str, Any]) -> bool:
 
 
 def refresh_wallet_snapshot(*, force: bool = False, log_event: bool = False) -> dict[str, Any]:
+    if get_engine_mode(legacy_fallback=False) == "paper":
+        snapshot = paper_wallet_snapshot()
+        if log_event:
+            log_audit_event("PAPER_WALLET_UPDATED", snapshot["message"], metadata=snapshot)
+        return snapshot
+
     current = get_wallet_snapshot()
     if not force and not wallet_is_stale(current):
         return current
@@ -104,13 +111,10 @@ def refresh_wallet_snapshot(*, force: bool = False, log_event: bool = False) -> 
         )
         return set_wallet_snapshot(snapshot)
 
-    if settings.DHAN_MODE.upper() == "REAL":
-        result = RealDhanClient().get_fund_limit(
-            client_id=creds.client_id,
-            access_token=creds.access_token,
-        )
-    else:
-        result = MockDhanClient().get_fund_limit(client_id=creds.client_id or "MOCK_CLIENT", access_token="")
+    result = RealDhanClient().get_fund_limit(
+        client_id=creds.client_id,
+        access_token=creds.access_token,
+    )
 
     snapshot = set_wallet_snapshot(_snapshot_from_result(result, current))
     if log_event:

@@ -10,6 +10,7 @@ from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STA
 from app.services.state_store import (
     default_open_position,
     get_app_state,
+    get_engine_mode,
     get_open_position,
     set_open_position,
     update_app_state,
@@ -146,6 +147,8 @@ def _sync_metadata(
 def get_reconciled_open_position(*, force: bool = False, reason: str = "positions") -> dict[str, Any]:
     position = get_open_position()
     if not position.get("has_open_position"):
+        return position
+    if get_engine_mode() == "paper":
         return position
 
     if settings.DHAN_MODE.upper() != "REAL":

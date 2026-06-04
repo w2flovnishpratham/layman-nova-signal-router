@@ -33,6 +33,7 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "APP_ENV", "local")
     monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False)
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False)
     monkeypatch.setattr(settings, "WEBHOOK_TRADING_ENABLED", True)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")

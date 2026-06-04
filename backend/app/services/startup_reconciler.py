@@ -6,7 +6,7 @@ from app.config import settings
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.credential_vault import get_dhan_credentials
 from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, RealDhanClient
-from app.services.state_store import default_open_position, get_open_position, set_open_position, update_app_state, utc_now
+from app.services.state_store import default_open_position, get_engine_mode, get_open_position, set_open_position, update_app_state, utc_now
 
 
 def _pick(row: dict[str, Any], *keys: str) -> Any:
@@ -88,6 +88,8 @@ def _active_waiting_message(position: dict[str, Any], sync: dict[str, Any]) -> s
 
 def reconcile_open_position_on_startup() -> dict[str, Any]:
     checked_at = utc_now()
+    if get_engine_mode() == "paper":
+        return {"status": "skipped", "reason": "paper_mode", "checked_at": checked_at}
     position = get_open_position()
     if not position.get("has_open_position"):
         return {"status": "skipped", "reason": "no_local_open_position", "checked_at": checked_at}

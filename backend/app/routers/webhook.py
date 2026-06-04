@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import secrets
 import threading
+import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -13,7 +17,7 @@ from app.services.credential_vault import get_webhook_secret, webhook_secret_str
 from app.services.execution_router import route_signal
 from app.services.signal_parser import PayloadParseError, UnsupportedPayloadFormatError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
-from app.services.state_store import add_seen_signal, has_seen_signal, update_app_state, utc_now
+from app.services.state_store import add_seen_signal, get_app_state, get_engine_mode, has_seen_signal, update_app_state, utc_now
 
 
 router = APIRouter()
@@ -21,6 +25,16 @@ _PROCESSING_SIGNAL_IDS: set[str] = set()
 _PROCESSING_LOCK = threading.RLock()
 _STRATEGY_LOCKS: dict[str, threading.Lock] = {}
 _STRATEGY_LOCKS_GUARD = threading.RLock()
+_CLIENT_REQUESTS: dict[str, list[float]] = {}
+_CLIENT_REQUESTS_LOCK = threading.RLock()
+_SENSITIVE_WEBHOOK_KEYS = {
+    "access_token",
+    "access-token",
+    "authorization",
+    "secret",
+    "token",
+    "webhook_secret",
+}
 
 
 def _response(status_code: int, payload: WebhookResponse) -> JSONResponse:
@@ -53,6 +67,47 @@ def _get_strategy_lock(strategy_code: str | None) -> tuple[str, threading.Lock]:
             lock = threading.Lock()
             _STRATEGY_LOCKS[key] = lock
         return key, lock
+
+
+def _webhook_rate_limited(client_host: str) -> bool:
+    limit = max(int(settings.WEBHOOK_RATE_LIMIT_PER_MINUTE), 1)
+    now = time.monotonic()
+    cutoff = now - 60.0
+    with _CLIENT_REQUESTS_LOCK:
+        attempts = [item for item in _CLIENT_REQUESTS.get(client_host, []) if item >= cutoff]
+        if len(attempts) >= limit:
+            _CLIENT_REQUESTS[client_host] = attempts
+            return True
+        attempts.append(now)
+        _CLIENT_REQUESTS[client_host] = attempts
+        return False
+
+
+def _safe_raw_body_for_log(raw_body: str) -> str:
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        encoded = raw_body.encode("utf-8", errors="replace")
+        digest = hashlib.sha256(encoded).hexdigest()
+        return f"[invalid JSON omitted; bytes={len(encoded)}; sha256={digest}]"
+
+    def redact(value):
+        if isinstance(value, dict):
+            return {
+                key: "[REDACTED]" if str(key).strip().lower() in _SENSITIVE_WEBHOOK_KEYS else redact(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [redact(item) for item in value]
+        return value
+
+    return json.dumps(redact(payload), separators=(",", ":"), ensure_ascii=True)
+
+
+def _valid_webhook_signature(raw_body: str, secret: str, signature: str) -> bool:
+    expected = hmac.new(secret.encode("utf-8"), raw_body.encode("utf-8"), hashlib.sha256).hexdigest()
+    supplied = signature.removeprefix("sha256=").strip()
+    return secrets.compare_digest(expected, supplied)
 
 
 def _route_payload(payload: NormalizedSignal, client_host: str) -> tuple[dict | None, JSONResponse | None]:
@@ -127,12 +182,39 @@ def _route_payload(payload: NormalizedSignal, client_host: str) -> tuple[dict | 
 async def tradingview_webhook(request: Request) -> JSONResponse:
     raw_body = (await request.body()).decode("utf-8", errors="replace")
     client_host = request.client.host if request.client else "unknown"
+    engine_mode = get_engine_mode(legacy_fallback=False)
+    if engine_mode is None and not bool(get_app_state().get("engine_started")):
+        return _response(
+            422,
+            WebhookResponse(
+                accepted=False,
+                status="ENGINE_MODE_NOT_SET",
+                message="Webhook rejected: select Paper or Live mode before routing signals.",
+            ),
+        )
+    engine_mode = engine_mode or get_engine_mode()
+
+    if _webhook_rate_limited(client_host):
+        log_audit_event(
+            "WEBHOOK_RATE_LIMITED",
+            "TradingView webhook request rate limit exceeded.",
+            severity="WARNING",
+            metadata={"client_host": client_host},
+        )
+        return _response(
+            429,
+            WebhookResponse(
+                accepted=False,
+                status="RATE_LIMITED",
+                message="Webhook rate limit exceeded. Retry after one minute.",
+            ),
+        )
 
     log_webhook_event(
         {
             "event_type": "WEBHOOK_RAW_REQUEST",
             "client_host": client_host,
-            "raw_body": raw_body,
+            "raw_body": _safe_raw_body_for_log(raw_body),
         }
     )
 
@@ -252,6 +334,31 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 message=secret_strength_error,
             ),
         )
+
+    signature = request.headers.get("x-nova-signature")
+    if signature or settings.WEBHOOK_HMAC_REQUIRED:
+        if not signature or not _valid_webhook_signature(raw_body, expected_secret, signature):
+            log_audit_event(
+                "WEBHOOK_HMAC_AUTH_FAILED",
+                "Invalid or missing webhook HMAC signature.",
+                severity="WARNING",
+                metadata={
+                    "client_host": client_host,
+                    "signal_id": payload.signal_id,
+                    "payload_format": payload.payload_format,
+                },
+            )
+            return _response(
+                403,
+                WebhookResponse(
+                    accepted=False,
+                    signal_id=payload.signal_id,
+                    action=payload.action,
+                    payload_format=payload.payload_format,
+                    status="UNAUTHORIZED",
+                    message="Webhook rejected: invalid or missing HMAC signature.",
+                ),
+            )
 
     if payload.secret != expected_secret:
         log_audit_event(
@@ -416,8 +523,7 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
         message = execution_result.get("reason") or execution_result.get("error") or "Dhan order request failed"
         accepted = False
     else:
-        mode = settings.DHAN_MODE.upper()
-        message = f"{payload.action.title()} order placed in {mode} mode"
+        message = f"{payload.action.title()} order placed in {engine_mode.upper()} mode"
         accepted = True
 
     return _response(
