@@ -1,0 +1,88 @@
+import { BotBubble } from './BotBubble'
+import { EodCard, ExitCard, RejectCard } from './EventCards'
+import { SetupInfoCard } from './SetupInfoCard'
+import { UserBubble } from './UserBubble'
+import type { ReactNode } from 'react'
+import type { RenderableMessage, SetupInfo } from '../../types'
+
+export function MessageRow({ message, inlinePanel = null }: { message: RenderableMessage; inlinePanel?: ReactNode }) {
+  if (message.type === 'system.event') {
+    return <div className="system-chip">{String(message.data.label ?? message.data.kind ?? 'System event')}</div>
+  }
+
+  if (message.type === 'client.summary') {
+    return <div className="summary-chip">{String(message.data.text)}</div>
+  }
+
+  if (message.type === 'client.message') {
+    return <UserBubble text={String(message.data.text ?? '')} />
+  }
+
+  if (message.type === 'setup.info') {
+    return (
+      <BotBubble label="Nova TradingView setup">
+        <SetupInfoCard info={message.data as unknown as SetupInfo} />
+      </BotBubble>
+    )
+  }
+
+  if (message.type === 'signal.received') {
+    return (
+      <BotBubble label={`Nova signal ${message.data.action}`}>
+        <p>{String(message.data.strategy)} signal received: {String(message.data.action)}</p>
+      </BotBubble>
+    )
+  }
+
+  if (message.type === 'order.placed') {
+    return (
+      <BotBubble label="Nova order placed">
+        <p>Order accepted for {String(message.data.instrument)}.</p>
+        <code>{String(message.data.correlationId)}</code>
+      </BotBubble>
+    )
+  }
+
+  if (message.type === 'order.filled') {
+    return null
+  }
+
+  if (message.type === 'order.rejected') {
+    return (
+      <BotBubble label="Nova order rejected" tone="error">
+        <RejectCard message={message} />
+      </BotBubble>
+    )
+  }
+
+  if (message.type === 'session.error') {
+    return (
+      <BotBubble label="Nova error" tone="error">
+        <p>{String(message.data.message)}</p>
+      </BotBubble>
+    )
+  }
+
+  if (message.type === 'trade.exit') {
+    return (
+      <BotBubble label="Nova trade exit">
+        <ExitCard message={message} />
+      </BotBubble>
+    )
+  }
+
+  if (message.type === 'session.eod') {
+    return (
+      <BotBubble label="Nova session ended">
+        <EodCard message={message} />
+      </BotBubble>
+    )
+  }
+
+  return (
+    <BotBubble>
+      <p>{String(message.data.text ?? message.type)}</p>
+      {inlinePanel}
+    </BotBubble>
+  )
+}
