@@ -1,7 +1,8 @@
 import type { SessionBootstrap, SessionSnapshot } from './types'
+import { backendHttpUrl } from './lib/backend'
 
 export async function startSession(): Promise<SessionBootstrap> {
-  const response = await fetch('/api/session/start', { method: 'POST' })
+  const response = await fetch(backendHttpUrl('/api/session/start'), { method: 'POST' })
   if (!response.ok) {
     throw new Error(`Could not start session: ${response.status}`)
   }
@@ -9,7 +10,7 @@ export async function startSession(): Promise<SessionBootstrap> {
 }
 
 export async function getSession(sessionId: string): Promise<SessionSnapshot> {
-  const response = await fetch(`/api/session/${sessionId}`)
+  const response = await fetch(backendHttpUrl(`/api/session/${sessionId}`))
   if (!response.ok) {
     throw new Error(`Could not load session: ${response.status}`)
   }
@@ -17,7 +18,7 @@ export async function getSession(sessionId: string): Promise<SessionSnapshot> {
 }
 
 export async function prepareReconfigure(): Promise<void> {
-  const response = await fetch('/api/engine/reconfigure', { method: 'POST' })
+  const response = await fetch(backendHttpUrl('/api/engine/reconfigure'), { method: 'POST' })
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { detail?: string | { message?: string } } | null
     const detail = body?.detail

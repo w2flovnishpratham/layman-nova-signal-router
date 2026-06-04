@@ -1,4 +1,5 @@
 import type { ClientCommand, ServerEvent, ServerEventType } from './types'
+import { backendHttpUrl, backendWsUrl } from './lib/backend'
 
 type Handler = (event: ServerEvent) => void
 type StatusHandler = (status: 'live' | 'degraded' | 'down') => void
@@ -114,8 +115,7 @@ export class SessionWS {
   }
 
   private buildUrl(): string {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    return `${protocol}//${window.location.host}/ws/session/${this.sessionId}?token=${encodeURIComponent(this.token)}`
+    return backendWsUrl(`/ws/session/${this.sessionId}?token=${encodeURIComponent(this.token)}`)
   }
 
   private emitStatus(status: 'live' | 'degraded' | 'down'): void {
@@ -125,7 +125,7 @@ export class SessionWS {
   private async sessionState(): Promise<'exists' | 'missing' | 'unavailable'> {
     if (this.invalidated) return 'missing'
     try {
-      const response = await fetch(`/api/session/${this.sessionId}`, { cache: 'no-store' })
+      const response = await fetch(backendHttpUrl(`/api/session/${this.sessionId}`), { cache: 'no-store' })
       if (response.status === 404) return 'missing'
       return response.ok ? 'exists' : 'unavailable'
     } catch {
