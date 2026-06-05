@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
-from app.config import settings
+from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.events import event
 from app.domain.state_machine import SetupState, StateTransitionError, validate_command
 from app.routers.control import panic_exit
@@ -179,7 +179,7 @@ async def _apply_production_command(command_type: str, data: dict[str, Any]) -> 
     if command_type == "setup.exits":
         mode = str(data.get("mode") or "flip_only")
         target_pct = float(data.get("targetPct") or 5)
-        stop_loss_pct = float(data.get("stopLossPct") or 10)
+        stop_loss_pct = float(data.get("stopLossPct") or DISABLED_OPTION_SL_PERCENT)
         changes: dict[str, Any] = {
             "option_tp_percent": target_pct,
             "option_sl_percent": stop_loss_pct,
@@ -191,6 +191,7 @@ async def _apply_production_command(command_type: str, data: dict[str, Any]) -> 
                     "option_exit_mode": "SERVER",
                     "server_side_exit_enabled": False,
                     "option_disable_sl": True,
+                    "option_sl_percent": DISABLED_OPTION_SL_PERCENT,
                 }
             )
         elif mode == "flip_tp":
@@ -199,6 +200,7 @@ async def _apply_production_command(command_type: str, data: dict[str, Any]) -> 
                     "option_exit_mode": "DHAN_SUPER",
                     "server_side_exit_enabled": True,
                     "option_disable_sl": True,
+                    "option_sl_percent": DISABLED_OPTION_SL_PERCENT,
                 }
             )
         else:

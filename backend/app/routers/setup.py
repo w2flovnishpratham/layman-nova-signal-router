@@ -14,10 +14,10 @@ from urllib.parse import urlparse
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Literal
 
-from app.config import BACKEND_DIR, DEFAULT_NIFTY_LOT_SIZE, RUNTIME_STATE_DIR, settings
+from app.config import BACKEND_DIR, DEFAULT_NIFTY_LOT_SIZE, DISABLED_OPTION_SL_PERCENT, RUNTIME_STATE_DIR, settings
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import (
     VaultError,
@@ -61,6 +61,7 @@ router = APIRouter()
 DHAN_CONNECT_RATE_LIMIT_MAX_ATTEMPTS = 5
 DHAN_CONNECT_RATE_LIMIT_WINDOW_SECONDS = 5 * 60
 RISK_OPTION_SL_MAX_PERCENT = 80.0
+RISK_OPTION_DISABLED_SL_MAX_PERCENT = 100.0
 RISK_OPTION_TP_MAX_PERCENT = 500.0
 _DHAN_CONNECT_RATE_LIMIT: dict[str, list[float]] = {}
 _DHAN_CONNECT_RATE_LIMIT_LOCK = threading.RLock()
@@ -70,8 +71,10 @@ _NIFTY_LOT_SIZE_CACHE: dict[str, Any] = {"key": None, "lot_size": None}
 def _validate_sl_percent(value: float | None) -> float | None:
     if value is None:
         return value
-    if not 0 < float(value) < RISK_OPTION_SL_MAX_PERCENT:
-        raise ValueError(f"Option SL percent must be greater than 0 and less than {RISK_OPTION_SL_MAX_PERCENT:g}.")
+    if not 0 < float(value) < RISK_OPTION_DISABLED_SL_MAX_PERCENT:
+        raise ValueError(
+            f"Option SL percent must be greater than 0 and less than {RISK_OPTION_DISABLED_SL_MAX_PERCENT:g}."
+        )
     return value
 
 
@@ -190,7 +193,7 @@ class RiskSetupRequest(BaseModel):
     option_ws_stale_seconds: float = Field(default=5.0, ge=1.0)
     option_rest_fallback_enabled: bool = True
     option_rest_fallback_cooldown_seconds: float = Field(default=15.0, ge=1.0)
-    option_sl_percent: float = Field(default=10.0, gt=0)
+    option_sl_percent: float = Field(default=DISABLED_OPTION_SL_PERCENT, gt=0)
     option_tp_percent: float = Field(default=20.0, gt=0)
     option_ltp_poll_seconds: float = Field(default=1.0, ge=1.0)
     eod_squareoff_enabled: bool = True
@@ -205,6 +208,12 @@ class RiskSetupRequest(BaseModel):
     _max_qty_business_rule = field_validator("max_qty_per_order")(_validate_max_qty_per_order)
     _sl_business_rule = field_validator("option_sl_percent")(_validate_sl_percent)
     _tp_business_rule = field_validator("option_tp_percent")(_validate_tp_percent)
+
+    @model_validator(mode="after")
+    def regular_sl_must_stay_under_business_cap(self) -> "RiskSetupRequest":
+        if not self.option_disable_sl and self.option_sl_percent >= RISK_OPTION_SL_MAX_PERCENT:
+            raise ValueError(f"Option SL percent must be less than {RISK_OPTION_SL_MAX_PERCENT:g}.")
+        return self
 
 
 class RiskSettingsPatchRequest(BaseModel):
@@ -232,6 +241,14 @@ class RiskSettingsPatchRequest(BaseModel):
     _max_qty_business_rule = field_validator("max_qty_per_order")(_validate_max_qty_per_order)
     _sl_business_rule = field_validator("option_sl_percent")(_validate_sl_percent)
     _tp_business_rule = field_validator("option_tp_percent")(_validate_tp_percent)
+
+    @model_validator(mode="after")
+    def regular_sl_patch_must_stay_under_business_cap(self) -> "RiskSettingsPatchRequest":
+        if self.option_sl_percent is None:
+            return self
+        if self.option_disable_sl is not True and self.option_sl_percent >= RISK_OPTION_SL_MAX_PERCENT:
+            raise ValueError(f"Option SL percent must be less than {RISK_OPTION_SL_MAX_PERCENT:g}.")
+        return self
 
 
 def public_base_url() -> str:
@@ -430,9 +447,13 @@ def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, li
         issues.append("Max quantity per order must be greater than zero.")
     if str(runtime.get("allowed_option_side") or "BOTH").upper() not in {"CE", "PE", "BOTH"}:
         issues.append("Allowed option side must be CE, PE, or BOTH.")
-    if float(runtime.get("option_sl_percent") or 0) <= 0:
+    option_sl_percent = float(runtime.get("option_sl_percent") or 0)
+    option_disable_sl = bool(runtime.get("option_disable_sl", True))
+    if option_sl_percent <= 0:
         issues.append("Option SL percent must be greater than zero.")
-    elif float(runtime.get("option_sl_percent") or 0) >= RISK_OPTION_SL_MAX_PERCENT:
+    elif option_disable_sl and option_sl_percent >= RISK_OPTION_DISABLED_SL_MAX_PERCENT:
+        issues.append(f"Disabled option SL percent must be less than {RISK_OPTION_DISABLED_SL_MAX_PERCENT:g}.")
+    elif not option_disable_sl and option_sl_percent >= RISK_OPTION_SL_MAX_PERCENT:
         issues.append(f"Option SL percent must be less than {RISK_OPTION_SL_MAX_PERCENT:g}.")
     if float(runtime.get("option_tp_percent") or 0) <= 0:
         issues.append("Option TP percent must be greater than zero.")

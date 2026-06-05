@@ -14,6 +14,8 @@ DEFAULT_ORDER_TYPE = "MARKET"
 DEFAULT_EXCHANGE_SEGMENT = "NSE_FNO"
 DEFAULT_INSTRUMENT_TYPE = "OPTIDX"
 QTY_MODE = "ABSOLUTE"
+DISABLED_OPTION_SL_PERCENT = 99.9
+DISABLED_OPTION_SL_PRICE_FRACTION = (100.0 - DISABLED_OPTION_SL_PERCENT) / 100.0
 
 PINE_PRODUCT_I_MAPS_TO = "INTRADAY"
 PINE_ORDER_MKT_MAPS_TO = "MARKET"
@@ -35,7 +37,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "max_trades_per_day": 0,
     "max_daily_loss": 0.0,
     # SL disable — when True, _broker_exit_levels sets the Super Order SL
-    # leg to a floor price (~₹0.10 or 1% of entry) so it effectively never
+    # leg to a floor price (~Rs.0.10 or 0.1% of entry) so it effectively never
     # fires. Position is exited by opposite Supertrend reversal, TP, or EOD.
     "option_disable_sl": True,
     "server_side_exit_enabled": True,
@@ -45,7 +47,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "option_ws_stale_seconds": 5.0,
     "option_rest_fallback_enabled": True,
     "option_rest_fallback_cooldown_seconds": 15.0,
-    "option_sl_percent": 10.0,
+    "option_sl_percent": DISABLED_OPTION_SL_PERCENT,
     "option_tp_percent": 20.0,
     "option_ltp_poll_seconds": 1.0,
     "eod_squareoff_enabled": True,

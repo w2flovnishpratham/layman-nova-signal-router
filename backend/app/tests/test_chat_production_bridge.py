@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.ws import _apply_production_command
-from app.config import settings
+from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.state_machine import SetupState, validate_command
 from app.routers import setup as setup_router
 from app.routers.webhook import _safe_raw_body_for_log, _valid_webhook_signature
@@ -16,7 +16,7 @@ from app.schemas.signal import NormalizedSignal
 from app.services import audit_logger, credential_vault, state_store
 from app.services.chat_event_publisher import publish_chat_result
 from app.services.dhan_client import RealDhanClient
-from app.services.execution_router import route_entry_signal
+from app.services.execution_router import _broker_exit_levels, route_entry_signal
 from app.store.redis_session import session_store
 
 
@@ -258,6 +258,37 @@ def test_chat_custom_exit_rules_configure_dhan_super_order_sl_and_tp(tmp_path, m
     assert runtime["option_disable_sl"] is False
     assert runtime["option_sl_percent"] == 12
     assert runtime["option_tp_percent"] == 35
+
+
+def test_chat_tp_only_exit_rules_use_disabled_sl_percent(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    data = {
+        "mode": "flip_tp",
+        "targetProfit": 3500,
+        "targetPct": 35,
+        "stopLossPct": DISABLED_OPTION_SL_PERCENT,
+    }
+
+    state, patch = validate_command(SetupState.RISK_CONFIGURED, "setup.exits", data)
+    asyncio.run(_apply_production_command("setup.exits", data))
+    runtime = state_store.get_runtime_settings()
+
+    assert state == SetupState.EXITS_CONFIGURED
+    assert patch["exits"]["stopLossPct"] == DISABLED_OPTION_SL_PERCENT
+    assert runtime["option_exit_mode"] == "DHAN_SUPER"
+    assert runtime["option_disable_sl"] is True
+    assert runtime["option_sl_percent"] == DISABLED_OPTION_SL_PERCENT
+    assert runtime["option_tp_percent"] == 35
+
+
+def test_disabled_sl_level_ignores_stale_regular_sl_percent():
+    sl_percent, _tp_percent, stop_loss_price, _target_price = _broker_exit_levels(
+        500.0,
+        {"option_disable_sl": True, "option_sl_percent": 10.0, "option_tp_percent": 35.0},
+    )
+
+    assert sl_percent == DISABLED_OPTION_SL_PERCENT
+    assert stop_loss_price == 0.5
 
 
 def test_chat_risk_command_uses_current_scrip_master_lot_size(tmp_path, monkeypatch):

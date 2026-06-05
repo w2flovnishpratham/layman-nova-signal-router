@@ -5,6 +5,9 @@ import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
 import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
 
+const DISABLED_STOP_LOSS_PCT = 99.9
+const DEFAULT_CUSTOM_STOP_LOSS_PCT = 10
+
 interface Props {
   state: SetupState
   flowStep: SetupFlowStep
@@ -231,13 +234,24 @@ function ExitRulesStep({
   const [stopLossPct, setStopLossPct] = useState(draft.stopLossPct)
   const boundedTargetPct = clampPercent(targetPct)
   const boundedStopLossPct = clampStopLossPercent(stopLossPct)
+  const effectiveStopLossPct = exitMode === 'custom' ? boundedStopLossPct : DISABLED_STOP_LOSS_PCT
+
+  function selectExitMode(nextMode: ExitRules['mode']) {
+    setExitMode(nextMode)
+    if (nextMode === 'custom' && stopLossPct >= 80) {
+      setStopLossPct(DEFAULT_CUSTOM_STOP_LOSS_PCT)
+    }
+    if (nextMode !== 'custom') {
+      setStopLossPct(DISABLED_STOP_LOSS_PCT)
+    }
+  }
 
   return (
     <article className="setup-card">
       <div className="choice-grid three">
-        <button className={exitMode === 'flip_only' ? 'selected' : ''} type="button" onClick={() => setExitMode('flip_only')}>Flips Only</button>
-        <button className={exitMode === 'flip_tp' ? 'selected' : ''} type="button" onClick={() => setExitMode('flip_tp')}>Target Profit</button>
-        <button className={exitMode === 'custom' ? 'selected' : ''} type="button" onClick={() => setExitMode('custom')}>Custom SL & TP</button>
+        <button className={exitMode === 'flip_only' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_only')}>Flips Only</button>
+        <button className={exitMode === 'flip_tp' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_tp')}>Target Profit</button>
+        <button className={exitMode === 'custom' ? 'selected' : ''} type="button" onClick={() => selectExitMode('custom')}>Custom SL & TP</button>
       </div>
       {exitMode !== 'flip_only' ? (
         <div className="tp-control">
@@ -279,7 +293,7 @@ function ExitRulesStep({
       ) : null}
       <button
         type="button"
-        onClick={() => onSubmit({ exitMode, targetPct: boundedTargetPct, stopLossPct: boundedStopLossPct })}
+        onClick={() => onSubmit({ exitMode, targetPct: boundedTargetPct, stopLossPct: effectiveStopLossPct })}
       >
         Confirm Exits Rules -&gt;
       </button>
@@ -324,7 +338,7 @@ function DailyLimitsStep({
 }
 
 function exitReply(mode: ExitRules['mode'], targetPct: number, stopLossPct: number): string {
-  if (mode === 'flip_tp') return `Exit rule: Target Profit only at ${targetPct}%`
+  if (mode === 'flip_tp') return `Exit rule: Target Profit ${targetPct}% with SL disabled at ${DISABLED_STOP_LOSS_PCT}%`
   if (mode === 'custom') return `Exit rule: Custom SL ${stopLossPct}% & TP ${targetPct}%`
   return 'Exit rule: Flips Only'
 }

@@ -5,7 +5,7 @@ import threading
 import time
 from typing import Any
 
-from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE
+from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE, DISABLED_OPTION_SL_PRICE_FRACTION
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.chat_event_publisher import publish_active_trade_from_sync, publish_tick_pnl_from_sync
@@ -112,7 +112,7 @@ def _broker_managed_exit(position: dict[str, Any]) -> bool:
 def _display_exit_levels(position: dict[str, Any], entry_price: float, runtime: dict[str, Any]) -> tuple[float, float, float, float]:
     sl_percent, tp_percent, sl_price, tp_price = _exit_levels(entry_price, runtime)
     if _runtime_bool(runtime, "option_disable_sl", True):
-        sl_price = max(0.10, round(entry_price * 0.01, 2))
+        sl_price = max(0.10, round(entry_price * DISABLED_OPTION_SL_PRICE_FRACTION, 2))
     if _broker_managed_exit(position):
         sl_price = _as_float(position.get("broker_sl_price"), sl_price) or sl_price
         tp_price = _as_float(position.get("broker_tp_price"), tp_price) or tp_price

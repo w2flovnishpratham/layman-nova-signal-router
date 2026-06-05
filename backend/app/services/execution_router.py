@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE, settings
+from app.config import (
+    DEFAULT_EXCHANGE_SEGMENT,
+    DEFAULT_ORDER_TYPE,
+    DEFAULT_PRODUCT_TYPE,
+    DISABLED_OPTION_SL_PERCENT,
+    DISABLED_OPTION_SL_PRICE_FRACTION,
+    settings,
+)
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.chat_event_publisher import publish_chat_result_from_sync
@@ -125,11 +132,12 @@ def _broker_exit_levels(reference_price: float, runtime: dict[str, Any]) -> tupl
 
     # SL disable — Dhan Super Order schema requires a stopLossPrice, so we
     # plant a floor that normal intraday price action will never touch
-    # (max of ₹0.10 and 1% of entry). The position is then exited by the
+    # (max of Rs.0.10 and 0.1% of entry). The position is then exited by the
     # opposite Supertrend reversal, the TP leg, or the 15:15 IST EOD task.
     disable_sl = bool(runtime.get("option_disable_sl", True))
     if disable_sl:
-        stop_loss_price = _round_option_tick(max(0.10, reference_price * 0.01))
+        sl_percent = DISABLED_OPTION_SL_PERCENT
+        stop_loss_price = _round_option_tick(max(0.10, reference_price * DISABLED_OPTION_SL_PRICE_FRACTION))
         # Recompute the implied sl_percent so audit logs reflect the floor.
         if reference_price > 0:
             sl_percent = round((reference_price - stop_loss_price) / reference_price * 100, 2)

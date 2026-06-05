@@ -4,7 +4,7 @@ import secrets
 
 from fastapi import APIRouter, HTTPException
 
-from app.config import settings
+from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.events import event
 from app.domain.state_machine import SetupState
 from app.routers.setup import current_nifty_lot_size
@@ -94,12 +94,13 @@ def _production_chat_snapshot() -> tuple[SetupState, dict[str, object]]:
     lot_size = current_nifty_lot_size()
     max_qty = max(int(runtime.get("max_qty_per_order") or lot_size), 1)
     target_pct = float(runtime.get("option_tp_percent") or 20)
-    stop_loss_pct = float(runtime.get("option_sl_percent") or 10)
+    stop_loss_pct = float(runtime.get("option_sl_percent") or DISABLED_OPTION_SL_PERCENT)
     exit_mode = str(runtime.get("option_exit_mode") or "DHAN_SUPER").upper()
     if exit_mode == "SERVER":
         chat_exit_mode = "flip_only"
     elif bool(runtime.get("option_disable_sl", True)):
         chat_exit_mode = "flip_tp"
+        stop_loss_pct = DISABLED_OPTION_SL_PERCENT
     else:
         chat_exit_mode = "custom"
 

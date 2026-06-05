@@ -3,7 +3,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+
+from app.config import DISABLED_OPTION_SL_PERCENT
 
 
 class SetupState(StrEnum):
@@ -44,7 +46,7 @@ class ExitRulesPayload(BaseModel):
     mode: Literal["flip_only", "flip_tp", "custom"] = "flip_only"
     targetProfit: int | None = Field(default=None, ge=100)
     targetPct: float = Field(default=5, gt=0, le=100)
-    stopLossPct: float = Field(default=10, gt=0, lt=80)
+    stopLossPct: float = Field(default=DISABLED_OPTION_SL_PERCENT, gt=0, lt=100)
 
     @field_validator("targetProfit")
     @classmethod
@@ -52,6 +54,12 @@ class ExitRulesPayload(BaseModel):
         if info.data.get("mode") == "flip_tp" and value is None:
             raise ValueError("targetProfit is required when mode is flip_tp")
         return value
+
+    @model_validator(mode="after")
+    def custom_stop_loss_must_be_regular(self) -> "ExitRulesPayload":
+        if self.mode == "custom" and self.stopLossPct >= 80:
+            raise ValueError("stopLossPct must be less than 80 when custom SL is enabled")
+        return self
 
 
 class PatchRiskPayload(BaseModel):
