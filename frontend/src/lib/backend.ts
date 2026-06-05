@@ -1,5 +1,6 @@
-const configuredBackendUrl = import.meta.env.VITE_BACKEND_URL?.trim().replace(/\/+$/, '')
-const backendUrl = configuredBackendUrl || (import.meta.env.PROD ? 'https://layman-api.manyacare.com' : '')
+const defaultBackendUrl = import.meta.env.PROD ? 'https://layman-api.manyacare.com' : ''
+const configuredBackendUrl = import.meta.env.VITE_BACKEND_URL?.trim().replace(/[;/\s]+$/, '')
+const backendUrl = configuredBackendUrl || defaultBackendUrl
 
 export function backendHttpUrl(path: `/${string}`): string {
   return backendUrl ? `${backendUrl}${path}` : path
