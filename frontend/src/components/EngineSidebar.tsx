@@ -35,7 +35,12 @@ export function EngineSidebar({ session, state, wallet, marginUtilized, realized
           <span>Current Active Position</span>
         </div>
         {activeTrade ? (
-          <ActiveTradeCard trade={{ ...activeTrade, mode: engineMode ?? undefined }} lotSize={lotSize} compact />
+          <ActiveTradeCard
+            trade={{ ...activeTrade, mode: engineMode ?? undefined }}
+            lotSize={lotSize}
+            compact
+            onApplySrSuggestion={() => onSend({ type: 'session.apply_sr_suggestion', data: {} })}
+          />
         ) : (
           <div className="empty-position">
             <CheckCircle2 size={20} />

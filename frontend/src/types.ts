@@ -102,6 +102,23 @@ export interface SessionSnapshot {
   events: ServerEvent[]
 }
 
+export interface SrSuggestion {
+  available: boolean
+  accepted?: boolean
+  source?: string
+  stopLossPrice?: number
+  targetPrice?: number
+  message?: string
+  basis?: Record<string, unknown>
+}
+
+export interface ActiveExitLevels {
+  source?: string
+  stopLossPrice?: number
+  targetPrice?: number
+  acceptedAt?: string
+}
+
 export interface ActiveTrade {
   mode?: EngineMode
   symbol: string
@@ -121,6 +138,9 @@ export interface ActiveTrade {
   exchOrderId?: string
   sourceLtp?: number
   simulatedCharges?: number
+  slippagePercent?: number
+  srSuggestion?: SrSuggestion
+  activeExitLevels?: ActiveExitLevels | null
   correlationId: string
   status: 'OPEN' | 'CLOSED'
 }

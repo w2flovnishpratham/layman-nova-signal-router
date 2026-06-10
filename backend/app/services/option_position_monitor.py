@@ -105,12 +105,37 @@ def _exit_levels(entry_price: float, runtime: dict[str, Any]) -> tuple[float, fl
     return sl_percent, tp_percent, sl_price, tp_price
 
 
+def _level_value(levels: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = _as_float(levels.get(key))
+        if value is not None and value > 0:
+            return value
+    return None
+
+
+def _active_exit_levels(position: dict[str, Any]) -> tuple[float, float] | None:
+    levels = position.get("active_exit_levels")
+    if not isinstance(levels, dict):
+        return None
+    sl_price = _level_value(levels, "stopLossPrice", "stop_loss_price", "sl")
+    tp_price = _level_value(levels, "targetPrice", "target_price", "tp")
+    if sl_price is None or tp_price is None:
+        return None
+    return sl_price, tp_price
+
+
 def _broker_managed_exit(position: dict[str, Any]) -> bool:
     return str(position.get("exit_management") or "").upper() == "DHAN_SUPER"
 
 
 def _display_exit_levels(position: dict[str, Any], entry_price: float, runtime: dict[str, Any]) -> tuple[float, float, float, float]:
     sl_percent, tp_percent, sl_price, tp_price = _exit_levels(entry_price, runtime)
+    active_levels = _active_exit_levels(position)
+    if active_levels is not None:
+        sl_price, tp_price = active_levels
+        sl_percent = max(round(((entry_price - sl_price) / entry_price) * 100, 2), 0.0)
+        tp_percent = max(round(((tp_price - entry_price) / entry_price) * 100, 2), 0.0)
+        return sl_percent, tp_percent, sl_price, tp_price
     if _runtime_bool(runtime, "option_disable_sl", True):
         sl_price = max(0.10, round(entry_price * DISABLED_OPTION_SL_PRICE_FRACTION, 2))
     if _broker_managed_exit(position):
@@ -569,9 +594,10 @@ def monitor_once() -> None:
         mode=get_engine_mode(),
     )
 
+    accepted_position_levels = _active_exit_levels(updated) is not None
     if (
         exit_reason
-        and _runtime_bool(runtime, "server_side_exit_enabled", True)
+        and (_runtime_bool(runtime, "server_side_exit_enabled", True) or accepted_position_levels)
         and (get_engine_mode() == "paper" or not _broker_managed_exit(updated))
     ):
         _route_server_exit(updated, exit_reason, snapshot)

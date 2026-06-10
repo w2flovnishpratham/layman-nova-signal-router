@@ -1,0 +1,491 @@
+//@version=6
+indicator("NOVA SuperTrend + S/R [v3]", overlay=true, max_bars_back=501)
+
+// =============================================================
+// 1. INPUTS - Alert / Webhook
+// =============================================================
+secretKey       = input.string("REPLACE_WITH_WEBHOOK_SECRET", "Webhook Secret",           group="Alert Settings")
+expiryMode      = input.string("Next Weekly", "Expiry Mode",                               group="Alert Settings", options=["Next Weekly","Same Day","Manual"])
+weeklyExpiryDay = input.string("Tuesday",     "Weekly Expiry Day",                         group="Alert Settings", options=["Monday","Tuesday","Wednesday","Thursday","Friday"])
+manualExpiry    = input.string("2026-06-09",  "Manual Expiry Date",                        group="Alert Settings")
+qty             = input.int(65,               "Dhan Quantity", minval=1,                   group="Alert Settings")
+
+// =============================================================
+// 2. INPUTS - EOD
+// =============================================================
+enableEodExit = input.bool(true, "Send EOD Exit Alert?",                                   group="EOD Settings")
+eodExitHour   = input.int(15,    "EOD Exit Hour IST",   minval=0, maxval=23,               group="EOD Settings")
+eodExitMinute = input.int(15,    "EOD Exit Minute IST", minval=0, maxval=59,               group="EOD Settings")
+eodExitAlways = input.bool(true, "Send EOD Exit Even If No Local Entry?",                  group="EOD Settings")
+
+// =============================================================
+// 3. INPUTS - Supertrend
+// =============================================================
+resetTrendDaily = input.bool(true,  "Reset Supertrend Each IST Day?",                      group="Supertrend")
+dailyOpenEntry  = input.bool(true,  "Send Fresh Entry After Daily Reset?",                 group="Supertrend")
+atrPeriod       = input.int(10,     "ATR Period",                                          group="Supertrend")
+stSrc           = input.source(hl2, "Source",                                              group="Supertrend")
+multiplier      = input.float(3.0,  "ATR Multiplier", step=0.1,                           group="Supertrend")
+changeATR       = input.bool(true,  "Change ATR Calculation Method?",                     group="Supertrend")
+buyCEOnBullish  = input.bool(true,  "Buy CE on Supertrend Buy",                           group="Supertrend")
+buyPEOnBearish  = input.bool(true,  "Buy PE on Supertrend Sell",                          group="Supertrend")
+showSignals     = input.bool(true,  "Show CE/PE Signal Labels?",                          group="Supertrend")
+highlighting    = input.bool(true,  "Trend Highlighter?",                                  group="Supertrend")
+
+// =============================================================
+// 4. INPUTS - S/R Channels
+// =============================================================
+prd         = input.int(10,    "Pivot Period",           minval=4,   maxval=30,            group="SR Settings")
+ppsrc       = input.string("High/Low", "Pivot Source",               group="SR Settings",  options=["High/Low","Close/Open"])
+channelW    = input.int(5,     "Max Channel Width %",    minval=1,   maxval=8,             group="SR Settings")
+minstrength = input.int(1,     "Min SR Strength",        minval=1,                         group="SR Settings")
+maxnumsr    = input.int(6,     "Max Number of SR Levels",minval=1,   maxval=10,            group="SR Settings") - 1
+loopback    = input.int(290,   "SR Loopback Period",     minval=100, maxval=400,           group="SR Settings")
+showSRBoxes  = input.bool(true, "Show SR Channel Boxes?",                                  group="SR Settings")
+showPivots   = input.bool(false,"Show Pivot Points?",                                      group="SR Settings")
+res_col      = input.color(color.new(color.red,  75), "Resistance Color",                  group="SR Settings")
+sup_col      = input.color(color.new(color.lime, 75), "Support Color",                     group="SR Settings")
+inch_col     = input.color(color.new(color.gray, 75), "In-Channel Color",                  group="SR Settings")
+minBandWidth = input.float(5.0, "Min Band Width for SL/TP (pts)",  step=0.5,               group="SR Settings",
+ tooltip="Bands thinner than this are retest/pause points only — ignored for SL/TP alert values. Still shown on chart.")
+
+// =============================================================
+// 5. INPUTS - Info Table
+// =============================================================
+showTable  = input.bool(true, "Show Info Table?", group="Display")
+
+// =============================================================
+// 6. TIME / EXPIRY HELPERS
+// =============================================================
+indiaTz = "Asia/Kolkata"
+msInDay = 24 * 60 * 60 * 1000
+
+expiryDowFromInput(_day) =>
+    (_day == "Monday"    ? dayofweek.monday    :
+     _day == "Tuesday"   ? dayofweek.tuesday   :
+     _day == "Wednesday" ? dayofweek.wednesday :
+     _day == "Thursday"  ? dayofweek.thursday  : dayofweek.friday)
+
+daysUntilExpiry(_targetDow) =>
+    currentDow = dayofweek(timenow, indiaTz)
+    rawDiff    = _targetDow - currentDow
+    (rawDiff < 0 ? rawDiff + 7 : rawDiff)
+
+currentDateIst = str.format_time(timenow, "yyyy-MM-dd", indiaTz)
+weeklyExpiry   = str.format_time((timenow + daysUntilExpiry(expiryDowFromInput(weeklyExpiryDay)) * msInDay), "yyyy-MM-dd", indiaTz)
+expiryDate     = (expiryMode == "Manual" ? manualExpiry : (expiryMode == "Same Day" ? currentDateIst : weeklyExpiry))
+
+barYearIst  = year(time, indiaTz)
+barMonthIst = month(time, indiaTz)
+barDayIst   = dayofmonth(time, indiaTz)
+
+isNewTradingDay = (resetTrendDaily and not na(time[1]) and
+ (barYearIst  != year(time[1], indiaTz) or
+  barMonthIst != month(time[1], indiaTz) or
+  barDayIst   != dayofmonth(time[1], indiaTz)))
+
+// =============================================================
+// 7. SUPERTREND
+// =============================================================
+atr2 = ta.sma(ta.tr(true), atrPeriod)
+atr  = (changeATR ? ta.atr(atrPeriod) : atr2)
+
+up  = stSrc - multiplier * atr
+up1 = nz(up[1], up)
+up := (isNewTradingDay ? up : (close[1] > up1 ? math.max(up, up1) : up))
+
+dn  = stSrc + multiplier * atr
+dn1 = nz(dn[1], dn)
+dn := (isNewTradingDay ? dn : (close[1] < dn1 ? math.min(dn, dn1) : dn))
+
+var int trend = 1
+prevTrend     = nz(trend[1], trend)
+freshDayTrend = (close >= stSrc ? 1 : -1)
+trend        := (isNewTradingDay ? freshDayTrend : prevTrend)
+trend        := (isNewTradingDay ? trend : (trend == -1 and close > dn1 ? 1 : (trend == 1 and close < up1 ? -1 : trend)))
+
+ceSignal = ((isNewTradingDay ? (dailyOpenEntry and trend == 1)  : (trend == 1  and prevTrend == -1)) and buyCEOnBullish)
+peSignal = ((isNewTradingDay ? (dailyOpenEntry and trend == -1) : (trend == -1 and prevTrend == 1))  and buyPEOnBearish)
+
+atmStrike = math.round(close / 50) * 50
+
+// =============================================================
+// 8. S/R CHANNEL CALCULATION
+// =============================================================
+float srSrc1 = (ppsrc == "High/Low" ? high : math.max(close, open))
+float srSrc2 = (ppsrc == "High/Low" ? low  : math.min(close, open))
+float ph     = ta.pivothigh(srSrc1, prd, prd)
+float pl     = ta.pivotlow(srSrc2,  prd, prd)
+
+plotshape((bool(ph) and showPivots), text="H", style=shape.labeldown, color=na, textcolor=color.new(color.red,  0), location=location.abovebar, offset=-prd)
+plotshape((bool(pl) and showPivots), text="L", style=shape.labelup,   color=na, textcolor=color.new(color.lime, 0), location=location.belowbar, offset=-prd)
+
+prdhighest = ta.highest(300)
+prdlowest  = ta.lowest(300)
+cwidth     = ((prdhighest - prdlowest) * channelW / 100)
+
+var pivotvals = array.new_float(0)
+var pivotlocs = array.new_float(0)
+if (bool(ph) or bool(pl))
+    array.unshift(pivotvals, (bool(ph) ? ph : pl))
+    array.unshift(pivotlocs, bar_index)
+    for x = array.size(pivotvals) - 1 to 0 by 1
+        if (bar_index - array.get(pivotlocs, x) > loopback)
+            array.pop(pivotvals)
+            array.pop(pivotlocs)
+            continue
+        break
+
+get_sr_vals(ind) =>
+    float lo    = array.get(pivotvals, ind)
+    float hi    = lo
+    int   numpp = 0
+    for y = 0 to array.size(pivotvals) - 1 by 1
+        float cpp  = array.get(pivotvals, y)
+        float wdth = (cpp <= hi ? hi - cpp : cpp - lo)
+        if (wdth <= cwidth)
+            if (cpp <= hi)
+                lo := math.min(lo, cpp)
+            else
+                hi := math.max(hi, cpp)
+            numpp := numpp + 20
+    [hi, lo, numpp]
+
+var suportresistance = array.new_float(20, 0)
+
+changeit(x, y) =>
+    tmp = array.get(suportresistance, y * 2)
+    array.set(suportresistance, y * 2,     array.get(suportresistance, x * 2))
+    array.set(suportresistance, x * 2,     tmp)
+    tmp := array.get(suportresistance, y * 2 + 1)
+    array.set(suportresistance, y * 2 + 1, array.get(suportresistance, x * 2 + 1))
+    array.set(suportresistance, x * 2 + 1, tmp)
+
+if (bool(ph) or bool(pl))
+    supres = array.new_float(0)
+    stren  = array.new_float(10, 0)
+    for x = 0 to array.size(pivotvals) - 1 by 1
+        [hi, lo, strength] = get_sr_vals(x)
+        array.push(supres, strength)
+        array.push(supres, hi)
+        array.push(supres, lo)
+    for x = 0 to array.size(pivotvals) - 1 by 1
+        h = array.get(supres, x * 3 + 1)
+        l = array.get(supres, x * 3 + 2)
+        s = 0
+        for y = 0 to loopback by 1
+            if ((high[y] <= h and high[y] >= l) or (low[y] <= h and low[y] >= l))
+                s := s + 1
+        array.set(supres, x * 3, array.get(supres, x * 3) + s)
+    array.fill(suportresistance, 0)
+    srCount = 0
+    for x = 0 to array.size(pivotvals) - 1 by 1
+        stv = -1.
+        stl = -1
+        for y = 0 to array.size(pivotvals) - 1 by 1
+            if (array.get(supres, y * 3) > stv and array.get(supres, y * 3) >= minstrength * 20)
+                stv := array.get(supres, y * 3)
+                stl := y
+        if (stl >= 0)
+            hh = array.get(supres, stl * 3 + 1)
+            ll = array.get(supres, stl * 3 + 2)
+            array.set(suportresistance, srCount * 2,     hh)
+            array.set(suportresistance, srCount * 2 + 1, ll)
+            array.set(stren, srCount, array.get(supres, stl * 3))
+            for y = 0 to array.size(pivotvals) - 1 by 1
+                if ((array.get(supres, y * 3 + 1) <= hh and array.get(supres, y * 3 + 1) >= ll) or
+                    (array.get(supres, y * 3 + 2) <= hh and array.get(supres, y * 3 + 2) >= ll))
+                    array.set(supres, y * 3, -1)
+            srCount := srCount + 1
+            if (srCount >= 10)
+                break
+    for x = 0 to 8 by 1
+        for y = x + 1 to 9 by 1
+            if (array.get(stren, y) > array.get(stren, x))
+                tmp = array.get(stren, y)
+                array.set(stren, y, array.get(stren, x))
+                array.set(stren, x, tmp)
+                changeit(x, y)
+
+get_level(ind) =>
+    float ret = na
+    if (ind < array.size(suportresistance))
+        v = array.get(suportresistance, ind)
+        if (v != 0)
+            ret := v
+    ret
+
+get_color(ind) =>
+    color ret = na
+    if (ind < array.size(suportresistance))
+        v = array.get(suportresistance, ind)
+        if (v != 0)
+            hi  = array.get(suportresistance, ind)
+            lo  = array.get(suportresistance, ind + 1)
+            ret := (hi > close and lo > close ? res_col : (hi < close and lo < close ? sup_col : inch_col))
+    ret
+
+var srchannels = array.new_box(10)
+for x = 0 to math.min(9, maxnumsr) by 1
+    box.delete(array.get(srchannels, x))
+    if showSRBoxes
+        srcol = get_color(x * 2)
+        if not na(srcol)
+            array.set(srchannels, x, box.new(
+             left=bar_index, top=get_level(x * 2), right=bar_index + 1,
+             bottom=get_level(x * 2 + 1), border_color=srcol, border_width=1,
+             extend=extend.both, bgcolor=srcol))
+
+// =============================================================
+// 9. S/R LEVEL EXTRACTION
+// tp_level = loVal of nearest resistance band (lowest limit = first boundary hit)
+// sl_level = loVal of nearest support band   (lowest limit = max room before stop)
+// Also collects all band hi/lo pairs for display in the info table.
+// =============================================================
+float tpLevel          = na
+float slLevel          = na
+float nearestSupBandHi = na
+bool  inChannel        = false
+
+// Storage for table display — up to 4 resistance and 4 support bands
+float r1hi = na, float r1lo = na
+float r2hi = na, float r2lo = na
+float r3hi = na, float r3lo = na
+float r4hi = na, float r4lo = na
+float s1hi = na, float s1lo = na
+float s2hi = na, float s2lo = na
+float s3hi = na, float s3lo = na
+float s4hi = na, float s4lo = na
+int rCount = 0
+int sCount = 0
+
+for i = 0 to math.min(9, maxnumsr) by 1
+    hiVal = array.get(suportresistance, i * 2)
+    loVal = array.get(suportresistance, i * 2 + 1)
+    if (hiVal != 0 and loVal != 0)
+        isRes    = (hiVal > close and loVal > close)
+        isSup    = (hiVal < close and loVal < close)
+        isInChan = (hiVal >= close and loVal <= close)
+        bandWidth = hiVal - loVal
+        isThick   = (bandWidth >= minBandWidth)   // only thick bands used for SL/TP alert
+        if isInChan
+            inChannel := true
+        else if isRes
+            // TP = loVal of nearest THICK resistance band (thin bands skipped)
+            if (isThick and (na(tpLevel) or loVal < tpLevel))
+                tpLevel := loVal
+            // Store ALL bands for table display (thick and thin)
+            if (rCount == 0 or (na(r1lo) or loVal < r1lo))
+                r4hi := r3hi, r4lo := r3lo
+                r3hi := r2hi, r3lo := r2lo
+                r2hi := r1hi, r2lo := r1lo
+                r1hi := hiVal, r1lo := loVal
+            else if (rCount == 1 or (na(r2lo) or loVal < r2lo))
+                r4hi := r3hi, r4lo := r3lo
+                r3hi := r2hi, r3lo := r2lo
+                r2hi := hiVal, r2lo := loVal
+            else if (rCount == 2 or (na(r3lo) or loVal < r3lo))
+                r4hi := r3hi, r4lo := r3lo
+                r3hi := hiVal, r3lo := loVal
+            else
+                r4hi := hiVal, r4lo := loVal
+            rCount := rCount + 1
+        else if isSup
+            // SL = loVal of nearest THICK support band (thin bands skipped)
+            if (isThick and (na(nearestSupBandHi) or hiVal > nearestSupBandHi))
+                nearestSupBandHi := hiVal
+                slLevel          := loVal
+            // Store ALL bands for table display (thick and thin)
+
+            if (sCount == 0 or (na(s1hi) or hiVal > s1hi))
+                s4hi := s3hi, s4lo := s3lo
+                s3hi := s2hi, s3lo := s2lo
+                s2hi := s1hi, s2lo := s1lo
+                s1hi := hiVal, s1lo := loVal
+            else if (sCount == 1 or (na(s2hi) or hiVal > s2hi))
+                s4hi := s3hi, s4lo := s3lo
+                s3hi := s2hi, s3lo := s2lo
+                s2hi := hiVal, s2lo := loVal
+            else if (sCount == 2 or (na(s3hi) or hiVal > s3hi))
+                s4hi := s3hi, s4lo := s3lo
+                s3hi := hiVal, s3lo := loVal
+            else
+                s4hi := hiVal, s4lo := loVal
+            sCount := sCount + 1
+
+// =============================================================
+// 10. TRADE STATE
+// =============================================================
+var bool   hasLocalTrade    = false
+var float  activeStrike     = na
+var string activeOptionSide = ""
+var string activeExpiry     = ""
+var string lastEodExitDate  = ""
+
+if isNewTradingDay
+    hasLocalTrade    := false
+    activeStrike     := na
+    activeOptionSide := ""
+    activeExpiry     := ""
+
+// =============================================================
+// 11. JSON BUILDERS
+// sl_level  = loVal nearest support band
+// tp_level  = loVal nearest resistance band
+// nifty_price = Nifty at signal bar
+// delta     = 0.5
+// Backend: suggested_tp = fill_ltp + (abs(tp_level - nifty_at_fill) * 0.5)
+// =============================================================
+makeEntryJSON(_strike, _optionSide, _sl, _tp) =>
+    signalId = "TV-" + str.tostring(time) + "-" + syminfo.ticker + "-" + _optionSide
+    slStr    = (na(_sl) ? "null" : str.tostring(math.round(_sl)))
+    tpStr    = (na(_tp) ? "null" : str.tostring(math.round(_tp)))
+    niftyStr = str.tostring(math.round(close * 100) / 100)
+    ('{"secret":"' + secretKey + '",' +
+     '"signal_id":"' + signalId + '",' +
+     '"strategy_code":"TRADINGVIEW_NIFTY_V3",' +
+     '"action":"ENTRY","side":"BUY","symbol":"NIFTY",' +
+     '"instrument_type":"OPTIDX","exchange_segment":"NSE_FNO",' +
+     '"option_side":"' + _optionSide + '",' +
+     '"strike":' + str.tostring(_strike) + ',' +
+     '"expiry":"' + expiryDate + '",' +
+     '"qty":' + str.tostring(qty) + ',' +
+     '"order_type":"MARKET","product_type":"INTRADAY",' +
+     '"sl_level":' + slStr + ',' +
+     '"tp_level":' + tpStr + ',' +
+     '"nifty_price":' + niftyStr + ',' +
+     '"delta":0.5,' +
+     '"source":"tradingview"}')
+
+makeExitJSON(_reason) =>
+    signalId   = "TV-" + str.tostring(time_close) + "-" + syminfo.ticker + "-EOD-EXIT"
+    exitStrike = (na(activeStrike)       ? atmStrike : activeStrike)
+    exitSide   = (activeOptionSide == "" ? "CE"       : activeOptionSide)
+    exitExpiry = (activeExpiry == ""     ? expiryDate : activeExpiry)
+    ('{"secret":"' + secretKey + '",' +
+     '"signal_id":"' + signalId + '",' +
+     '"strategy_code":"TRADINGVIEW_NIFTY_V3",' +
+     '"action":"EXIT","side":"SELL","symbol":"NIFTY",' +
+     '"instrument_type":"OPTIDX","exchange_segment":"NSE_FNO",' +
+     '"option_side":"' + exitSide + '",' +
+     '"strike":' + str.tostring(exitStrike) + ',' +
+     '"expiry":"' + exitExpiry + '",' +
+     '"qty":' + str.tostring(qty) + ',' +
+     '"order_type":"MARKET","product_type":"INTRADAY",' +
+     '"source":"tradingview_eod",' +
+     '"exit_reason":"' + _reason + '"}')
+
+// =============================================================
+// 12. EOD
+// =============================================================
+barCloseHourIst   = hour(time_close,   indiaTz)
+barCloseMinuteIst = minute(time_close, indiaTz)
+barCloseDateIst   = str.format_time(time_close, "yyyy-MM-dd", indiaTz)
+isEodExitBar      = (enableEodExit and barCloseHourIst == eodExitHour and barCloseMinuteIst == eodExitMinute)
+
+// =============================================================
+// 13. ALERT FIRING
+// =============================================================
+if (barstate.isrealtime and barstate.isconfirmed)
+    if ceSignal
+        alert(makeEntryJSON(atmStrike, "CE", slLevel, tpLevel), alert.freq_once_per_bar_close)
+        hasLocalTrade    := true
+        activeStrike     := atmStrike
+        activeOptionSide := "CE"
+        activeExpiry     := expiryDate
+    if peSignal
+        alert(makeEntryJSON(atmStrike, "PE", tpLevel, slLevel), alert.freq_once_per_bar_close)
+        hasLocalTrade    := true
+        activeStrike     := atmStrike
+        activeOptionSide := "PE"
+        activeExpiry     := expiryDate
+    if (isEodExitBar and lastEodExitDate != barCloseDateIst and (hasLocalTrade or eodExitAlways))
+        alert(makeExitJSON("EOD_FLATTEN"), alert.freq_once_per_bar_close)
+        hasLocalTrade    := false
+        activeStrike     := na
+        activeOptionSide := ""
+        activeExpiry     := ""
+        lastEodExitDate  := barCloseDateIst
+
+// =============================================================
+// 14. ALERT CONDITIONS
+// =============================================================
+alertcondition(ceSignal, title="CE Entry Signal", message="CE Entry Signal")
+alertcondition(peSignal, title="PE Entry Signal", message="PE Entry Signal")
+
+// =============================================================
+// 15. PLOTS
+// =============================================================
+upPlot = plot((trend == 1  ? up : na), "Up Trend",   color=color.green, linewidth=2, style=plot.style_linebr)
+dnPlot = plot((trend == -1 ? dn : na), "Down Trend", color=color.red,   linewidth=2, style=plot.style_linebr)
+
+plotshape((ceSignal and showSignals ? up : na), title="Buy CE", text="CE", location=location.absolute, style=shape.labelup,   size=size.tiny, color=color.green, textcolor=color.white)
+plotshape((peSignal and showSignals ? dn : na), title="Buy PE", text="PE", location=location.absolute, style=shape.labeldown, size=size.tiny, color=color.red,   textcolor=color.white)
+
+mPlot = plot(ohlc4, title="", style=plot.style_circles, linewidth=1, color=color.new(color.white, 100))
+fill(mPlot, upPlot, color=(highlighting and trend == 1  ? color.new(color.green, 85) : na))
+fill(mPlot, dnPlot, color=(highlighting and trend == -1 ? color.new(color.red,   85) : na))
+
+// =============================================================
+// 16. INFO TABLE
+// Shows all active S/R band hi-lo values, sorted nearest to price first.
+// Red = resistance above | Green = support below
+// SL / TP = loVal of nearest band (values sent in alert)
+// =============================================================
+// Thin bands (< minBandWidth) shown with ~ prefix — retest only, not used for SL/TP
+bandStr(h, l) =>
+    if na(h)
+        "---"
+    else
+        prefix = ((h - l) < minBandWidth ? "~ " : "")
+        (prefix + str.tostring(math.round(l)) + " - " + str.tostring(math.round(h)))
+
+var table tbl = table.new(position.top_right, 2, 19, bgcolor=color.new(color.black, 75), border_color=color.new(color.gray, 50), border_width=1)
+
+if (barstate.islast and showTable)
+    // Header
+    table.cell(tbl, 0, 0, "NOVA v3",     text_color=color.white,              text_size=size.small, bgcolor=color.new(color.blue,   55))
+    table.cell(tbl, 1, 0, "",            text_color=color.white,              text_size=size.small, bgcolor=color.new(color.blue,   55))
+    // Trend / ATM / Channel
+    table.cell(tbl, 0, 1, "Trend",       text_color=color.new(color.gray, 0), text_size=size.tiny)
+    table.cell(tbl, 1, 1, (trend==1 ? "BULL" : "BEAR"), text_color=(trend==1 ? color.lime : color.red), text_size=size.tiny)
+    table.cell(tbl, 0, 2, "ATM Strike",  text_color=color.new(color.gray, 0), text_size=size.tiny)
+    table.cell(tbl, 1, 2, str.tostring(atmStrike),      text_color=color.white,  text_size=size.tiny)
+    table.cell(tbl, 0, 3, "In Channel",  text_color=color.new(color.gray, 0), text_size=size.tiny)
+    table.cell(tbl, 1, 3, (inChannel ? "YES" : "NO"),   text_color=(inChannel ? color.orange : color.lime), text_size=size.tiny)
+    // Resistance bands header
+    table.cell(tbl, 0, 4, "RESISTANCE",  text_color=color.white,              text_size=size.tiny,  bgcolor=color.new(color.red,    55))
+    table.cell(tbl, 1, 4, "lo  -  hi",  text_color=color.white,              text_size=size.tiny,  bgcolor=color.new(color.red,    55))
+    // Resistance bands (nearest first = lowest loVal first)
+    table.cell(tbl, 0, 5,  "R1", text_color=color.new(color.gray,0), text_size=size.tiny)
+    table.cell(tbl, 1, 5,  bandStr(r1hi, r1lo), text_color=(na(r1hi) ? color.new(color.gray,50) : color.red),  text_size=size.tiny)
+    table.cell(tbl, 0, 6,  "R2", text_color=color.new(color.gray,0), text_size=size.tiny)
+    table.cell(tbl, 1, 6,  bandStr(r2hi, r2lo), text_color=(na(r2hi) ? color.new(color.gray,50) : color.red),  text_size=size.tiny)
+    table.cell(tbl, 0, 7,  "R3", text_color=color.new(color.gray,0), text_size=size.tiny)
+    table.cell(tbl, 1, 7,  bandStr(r3hi, r3lo), text_color=(na(r3hi) ? color.new(color.gray,50) : color.red),  text_size=size.tiny)
+    table.cell(tbl, 0, 8,  "R4", text_color=color.new(color.gray,0), text_size=size.tiny)
+    table.cell(tbl, 1, 8,  bandStr(r4hi, r4lo), text_color=(na(r4hi) ? color.new(color.gray,50) : color.red),  text_size=size.tiny)
+    // Support bands header
+    table.cell(tbl, 0, 9,  "SUPPORT",    text_color=color.white,              text_size=size.tiny,  bgcolor=color.new(color.green,  55))
+    table.cell(tbl, 1, 9,  "lo  -  hi",  text_color=color.white,              text_size=size.tiny,  bgcolor=color.new(color.green,  55))
+    // Support bands (nearest first = highest hiVal first)
+    table.cell(tbl, 0, 10, "S1", text_color=color.new(color.gray,0), text_size=size.tiny)
+    table.cell(tbl, 1, 10, bandStr(s1hi, s1lo), text_color=(na(s1hi) ? color.new(color.gray,50) : color.lime), text_size=size.tiny)
+    table.cell(tbl, 0, 11, "S2", text_color=color.new(color.gray,0), text_size=size.tiny)
+    table.cell(tbl, 1, 11, bandStr(s2hi, s2lo), text_color=(na(s2hi) ? color.new(color.gray,50) : color.lime), text_size=size.tiny)
+    table.cell(tbl, 0, 12, "S3", text_color=color.new(color.gray,0), text_size=size.tiny)
+    table.cell(tbl, 1, 12, bandStr(s3hi, s3lo), text_color=(na(s3hi) ? color.new(color.gray,50) : color.lime), text_size=size.tiny)
+    table.cell(tbl, 0, 13, "S4", text_color=color.new(color.gray,0), text_size=size.tiny)
+    table.cell(tbl, 1, 13, bandStr(s4hi, s4lo), text_color=(na(s4hi) ? color.new(color.gray,50) : color.lime), text_size=size.tiny)
+    // Separator
+    table.cell(tbl, 0, 14, "",           text_color=color.white,              text_size=size.tiny,  bgcolor=color.new(color.gray,   70))
+    table.cell(tbl, 1, 14, "",           text_color=color.white,              text_size=size.tiny,  bgcolor=color.new(color.gray,   70))
+    // Alert values
+    table.cell(tbl, 0, 15, "SL (alert)", text_color=color.new(color.gray, 0), text_size=size.tiny)
+    table.cell(tbl, 1, 15, (na(slLevel) ? "N/A" : str.tostring(math.round(slLevel))), text_color=color.red,   text_size=size.tiny)
+    table.cell(tbl, 0, 16, "TP (alert)", text_color=color.new(color.gray, 0), text_size=size.tiny)
+    table.cell(tbl, 1, 16, (na(tpLevel) ? "N/A" : str.tostring(math.round(tpLevel))), text_color=color.lime,  text_size=size.tiny)
+    table.cell(tbl, 0, 17, "Nifty",      text_color=color.new(color.gray, 0), text_size=size.tiny)
+    table.cell(tbl, 1, 17, str.tostring(math.round(close)),                            text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 0, 18, "Expiry",     text_color=color.new(color.gray, 0), text_size=size.tiny)
+    table.cell(tbl, 1, 18, expiryDate,                                                 text_color=color.white, text_size=size.tiny)

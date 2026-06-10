@@ -25,6 +25,7 @@ def _isolate_runtime(tmp_path, monkeypatch) -> None:
     log_dir = tmp_path / "runtime_logs"
     monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
     monkeypatch.setattr(state_store, "OPEN_POSITION_FILE", state_dir / "open_position.json")
+    monkeypatch.setattr(state_store, "PAPER_POSITION_FILE", state_dir / "paper_position.json")
     monkeypatch.setattr(state_store, "EXTERNAL_POSITIONS_FILE", state_dir / "external_positions.json")
     monkeypatch.setattr(state_store, "SEEN_SIGNALS_FILE", state_dir / "seen_signals.json")
     monkeypatch.setattr(state_store, "SETTINGS_FILE", state_dir / "settings.json")
@@ -309,6 +310,145 @@ def test_session_exit_open_routes_exit_without_stopping_engine(tmp_path, monkeyp
     assert patch == {}
     assert called["panic_exit"] is True
     assert state_store.get_app_state()["webhook_trading_enabled"] is True
+
+
+def test_v3_entry_stores_tradingview_sr_suggestion(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
+    state_store.update_runtime_settings(
+        allow_entry=True,
+        allow_exit=True,
+        allowed_option_side="BOTH",
+        max_qty_per_order=65,
+        option_exit_mode="SERVER",
+        server_side_exit_enabled=False,
+    )
+
+    def fake_place_order(signal, qty, action, **_kwargs):
+        assert action == "ENTRY"
+        return {
+            "success": True,
+            "status": "TRADED",
+            "order_id": "PAPER-ENTRY",
+            "avg_price": 200.0,
+            "requested_qty": qty,
+            "filled_qty": qty,
+            "exit_management": "SERVER",
+            "security_id": signal.security_id,
+            "trading_symbol": signal.trading_symbol,
+            "raw_response": {},
+        }
+
+    monkeypatch.setattr("app.services.execution_router._place_order", fake_place_order)
+    monkeypatch.setattr("app.services.execution_router.refresh_wallet_snapshot", lambda **_kwargs: {})
+    signal = NormalizedSignal(
+        payload_format="NOVA",
+        secret="unused",
+        signal_id="v3-entry",
+        strategy_code="TRADINGVIEW_NIFTY_V3",
+        action="ENTRY",
+        side="BUY",
+        symbol="NIFTY",
+        instrument_type="OPTIDX",
+        exchange_segment="NSE_FNO",
+        security_id="MOCK-CE",
+        trading_symbol="NIFTY CE",
+        option_side="CE",
+        strike=25000,
+        expiry="2026-06-16",
+        qty=65,
+        order_type="MARKET",
+        product_type="INTRADAY",
+        raw_payload={
+            "nifty_price": 23500,
+            "sl_level": 23450,
+            "tp_level": 23600,
+            "delta": 0.5,
+        },
+    )
+
+    result = route_entry_signal(signal)
+    position = state_store.get_open_position()
+
+    assert result["success"] is True
+    assert result["sr_suggestion"]["available"] is True
+    assert result["sr_suggestion"]["stopLossPrice"] == 185.0
+    assert result["sr_suggestion"]["targetPrice"] == 240.0
+    assert position["sr_suggestion"] == result["sr_suggestion"]
+    assert position["active_exit_levels"] is None
+
+
+def test_apply_sr_suggestion_arms_paper_position_levels(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "strategy_code": "TRADINGVIEW_NIFTY_V3",
+            "symbol": "NIFTY",
+            "instrument_type": "OPTIDX",
+            "exchange_segment": "NSE_FNO",
+            "security_id": "PAPER-CE",
+            "trading_symbol": "NIFTY CE",
+            "option_side": "CE",
+            "strike": 25000,
+            "expiry": "2026-06-16",
+            "qty": 65,
+            "entry_order_id": "PAPER-ENTRY",
+            "entry_price": 200.0,
+            "exit_management": "SERVER",
+            "order_type": "MARKET",
+            "product_type": "INTRADAY",
+            "sr_suggestion": {
+                "available": True,
+                "accepted": False,
+                "stopLossPrice": 185.0,
+                "targetPrice": 240.0,
+            },
+            "live_pnl": {"entry_price": 200.0},
+        }
+    )
+
+    state, patch = validate_command(SetupState.LIVE, "session.apply_sr_suggestion", {})
+    asyncio.run(_apply_production_command("session.apply_sr_suggestion", {}))
+    position = state_store.get_open_position()
+
+    assert state == SetupState.LIVE
+    assert patch == {}
+    assert position["sr_suggestion"]["accepted"] is True
+    assert position["active_exit_levels"]["source"] == "sr_suggestion"
+    assert position["active_exit_levels"]["stopLossPrice"] == 185.0
+    assert position["active_exit_levels"]["targetPrice"] == 240.0
+    assert position["live_pnl"]["sl_price"] == 185.0
+    assert position["live_pnl"]["tp_price"] == 240.0
+
+
+def test_apply_sr_suggestion_rejects_live_mode(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("live")
+    state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "strategy_code": "TRADINGVIEW_NIFTY_V3",
+            "security_id": "LIVE-CE",
+            "trading_symbol": "NIFTY CE",
+            "option_side": "CE",
+            "qty": 65,
+            "entry_order_id": "LIVE-ENTRY",
+            "entry_price": 200.0,
+            "sr_suggestion": {
+                "available": True,
+                "stopLossPrice": 185.0,
+                "targetPrice": 240.0,
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="paper testing only"):
+        asyncio.run(_apply_production_command("session.apply_sr_suggestion", {}))
 
 
 def test_real_dhan_client_applies_global_request_and_response_hooks():

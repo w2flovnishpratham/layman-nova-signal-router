@@ -12,7 +12,8 @@ from app.routers.control import panic_exit
 from app.routers.engine import StartEngineRequest, start_engine, stop_engine
 from app.routers.setup import EngineModeRequest, configure_engine_mode, current_nifty_lot_size, validate_dhan_credentials
 from app.services.credential_vault import save_dhan_credentials
-from app.services.state_store import get_engine_mode, get_open_position, get_wallet_snapshot, update_runtime_settings
+from app.services.chat_event_publisher import active_trade_from_position
+from app.services.state_store import get_engine_mode, get_open_position, get_wallet_snapshot, set_open_position, update_runtime_settings, utc_now
 from app.services.wallet_service import refresh_wallet_snapshot
 from app.store.redis_session import session_store
 from app.store.session_token import SessionTokenError, verify_session_token
@@ -123,6 +124,21 @@ async def _receive_commands(websocket: WebSocket, session_id: str) -> None:
             await session_store.append_event(
                 session_id,
                 event("system.event", kind="listening", label="Listening for TradingView signals"),
+            )
+        elif command_type == "session.apply_sr_suggestion":
+            position = await asyncio.to_thread(get_open_position)
+            active_trade = active_trade_from_position(position, get_engine_mode())
+            await session_store.update_active_trade(session_id, active_trade)
+            if active_trade:
+                await session_store.append_event(session_id, event("tick.pnl", **active_trade))
+            await session_store.append_event(
+                session_id,
+                event(
+                    "system.event",
+                    kind="sr_suggestion_applied",
+                    label="Suggested SL/TP applied",
+                    message="Suggested SL/TP applied to the paper position.",
+                ),
             )
         elif command_type == "session.kill":
             await session_store.update_active_trade(session_id, None)
@@ -242,6 +258,10 @@ async def _apply_production_command(command_type: str, data: dict[str, Any]) -> 
             raise ValueError(execution.get("reason") or execution.get("error") or "Tracked position exit failed.")
         return
 
+    if command_type == "session.apply_sr_suggestion":
+        await asyncio.to_thread(_apply_sr_suggestion)
+        return
+
     if command_type == "session.patch_risk":
         changes: dict[str, Any] = {}
         if data.get("side") is not None:
@@ -260,6 +280,60 @@ async def _apply_production_command(command_type: str, data: dict[str, Any]) -> 
             if isinstance(execution, dict) and execution.get("success") is False:
                 raise ValueError(execution.get("reason") or execution.get("error") or "Tracked position exit failed.")
         await asyncio.to_thread(stop_engine)
+
+
+def _suggestion_level(suggestion: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = _optional_number(suggestion.get(key))
+        if value is not None and value > 0:
+            return value
+    return None
+
+
+def _apply_sr_suggestion() -> dict[str, Any]:
+    if get_engine_mode() != "paper":
+        raise ValueError("Suggested S/R SL/TP apply is enabled for paper testing only.")
+
+    position = get_open_position()
+    if not position.get("has_open_position"):
+        raise ValueError("No tracked open position exists.")
+
+    suggestion = position.get("sr_suggestion")
+    if not isinstance(suggestion, dict) or not suggestion.get("available"):
+        raise ValueError("No valid TradingView S/R suggestion exists for the active position.")
+
+    stop_loss_price = _suggestion_level(suggestion, "stopLossPrice", "stop_loss_price", "sl")
+    target_price = _suggestion_level(suggestion, "targetPrice", "target_price", "tp")
+    entry_price = _optional_number(position.get("entry_price"))
+    if stop_loss_price is None or target_price is None:
+        raise ValueError("Suggested S/R SL/TP prices are incomplete.")
+    if entry_price and (stop_loss_price >= entry_price or target_price <= entry_price):
+        raise ValueError("Suggested S/R SL/TP prices are invalid for the active option entry.")
+
+    accepted_at = utc_now()
+    updated = dict(position)
+    accepted = dict(suggestion)
+    accepted["accepted"] = True
+    accepted["acceptedAt"] = accepted_at
+    updated["sr_suggestion"] = accepted
+    updated["active_exit_levels"] = {
+        "source": "sr_suggestion",
+        "stopLossPrice": stop_loss_price,
+        "targetPrice": target_price,
+        "acceptedAt": accepted_at,
+    }
+    live_pnl = dict(updated.get("live_pnl") or {})
+    live_pnl.update(
+        {
+            "sl_price": stop_loss_price,
+            "tp_price": target_price,
+            "exit_management": "SERVER",
+            "message": "Paper S/R suggested SL/TP is armed.",
+            "last_checked_at": accepted_at,
+        }
+    )
+    updated["live_pnl"] = live_pnl
+    return set_open_position(updated)
 
 
 async def _error(session_id: str, message: str) -> None:

@@ -166,3 +166,72 @@ def test_monitor_emits_tick_when_server_side_exits_are_disabled(tmp_path, monkey
     assert tick["ltp"] == 125.0
     assert tick["pnl"] == 250.0
     assert tick["mode"] == "paper"
+
+
+def test_accepted_sr_levels_trigger_paper_exit_when_global_server_exit_disabled(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    state_store.update_runtime_settings(
+        server_side_exit_enabled=False,
+        marketfeed_ws_enabled=True,
+        option_ltp_source="WEBSOCKET",
+        option_rest_fallback_enabled=False,
+        option_disable_sl=True,
+        option_sl_percent=99.9,
+        option_tp_percent=20.0,
+    )
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "strategy_code": "TRADINGVIEW_NIFTY_V3",
+            "symbol": "NIFTY",
+            "instrument_type": "OPTIDX",
+            "exchange_segment": "NSE_FNO",
+            "security_id": "49081",
+            "trading_symbol": "NIFTY TEST CE",
+            "option_side": "CE",
+            "strike": 22500.0,
+            "expiry": "2026-06-25",
+            "qty": 10,
+            "entry_order_id": "PAPER-ENTRY",
+            "entry_price": 100.0,
+            "order_type": "MARKET",
+            "product_type": "INTRADAY",
+            "active_exit_levels": {
+                "source": "sr_suggestion",
+                "stopLossPrice": 92.0,
+                "targetPrice": 110.0,
+            },
+            "opened_at": state_store.utc_now(),
+        }
+    )
+    exits: list[tuple[str, dict[str, Any]]] = []
+
+    monkeypatch.setattr(option_position_monitor, "_client", lambda: _FakeClient())
+    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        option_position_monitor,
+        "get_marketfeed_ltp",
+        lambda **kwargs: MarketFeedLtpResult(
+            success=True,
+            message="ok",
+            ltp=111.0,
+            exchange_segment=kwargs["exchange_segment"],
+            security_id=kwargs["security_id"],
+            source="test_marketfeed",
+        ),
+    )
+    monkeypatch.setattr(
+        option_position_monitor,
+        "get_dhan_credentials",
+        lambda: DhanCredentials(client_id="1000000001", access_token="token"),
+    )
+    monkeypatch.setattr(option_position_monitor, "_route_server_exit", lambda position, reason, snapshot: exits.append((reason, snapshot)))
+
+    option_position_monitor.monitor_once()
+
+    assert len(exits) == 1
+    reason, snapshot = exits[0]
+    assert reason == "TP"
+    assert snapshot["tp_price"] == 110.0
+    assert snapshot["sl_price"] == 92.0

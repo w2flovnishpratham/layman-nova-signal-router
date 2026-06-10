@@ -236,6 +236,8 @@ def active_trade_from_position(position: dict[str, Any], mode: str | None) -> di
         "exchOrderId": position.get("exchange_order_id"),
         "sourceLtp": position.get("source_ltp"),
         "simulatedCharges": position.get("simulated_charges"),
+        "srSuggestion": position.get("sr_suggestion"),
+        "activeExitLevels": position.get("active_exit_levels"),
         "correlationId": "",
         "status": "OPEN",
     }
@@ -285,6 +287,9 @@ def _active_trade_from_fill(
         "exchOrderId": _pick(fill, "exchangeOrderId", "exchange_order_id"),
         "sourceLtp": fill.get("sourceLtp"),
         "simulatedCharges": fill.get("simulatedCharges"),
+        "slippagePercent": fill.get("slippagePercent"),
+        "srSuggestion": execution_result.get("sr_suggestion"),
+        "activeExitLevels": execution_result.get("active_exit_levels"),
         "correlationId": "",
         "status": "OPEN",
     }

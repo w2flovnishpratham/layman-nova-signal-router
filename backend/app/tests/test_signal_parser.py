@@ -60,6 +60,27 @@ def test_nova_entry_payload_parses_to_entry_buy():
     assert signal.side == "BUY"
 
 
+def test_nova_v3_sr_fields_are_preserved_for_exit_suggestion():
+    payload = nova_payload("ENTRY", "BUY", "nova-v3-entry")
+    payload.update(
+        {
+            "strategy_code": "TRADINGVIEW_NIFTY_V3",
+            "sl_level": 23450,
+            "tp_level": 23600,
+            "nifty_price": 23500,
+            "delta": 0.5,
+        }
+    )
+
+    signal = parse_webhook_payload(payload)
+
+    assert signal.strategy_code == "TRADINGVIEW_NIFTY_V3"
+    assert signal.raw_payload["sl_level"] == 23450
+    assert signal.raw_payload["tp_level"] == 23600
+    assert signal.raw_payload["nifty_price"] == 23500
+    assert signal.raw_payload["delta"] == 0.5
+
+
 def test_nova_exit_payload_parses_to_exit_sell():
     signal = parse_webhook_payload(nova_payload("EXIT", "SELL", "nova-exit-001"))
 

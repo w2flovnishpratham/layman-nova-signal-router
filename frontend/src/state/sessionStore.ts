@@ -178,15 +178,20 @@ export function motionConfigMode(): 'always' | 'never' | 'user' {
 
 function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<SessionStore> {
   if (event.type === 'setup.state') {
-    const data = event.data as { state?: SetupState; config?: TradeConfig }
+    const data = event.data as { state?: SetupState; config?: TradeConfig; lotSize?: number }
     const nextState = isSetupState(data.state) ? data.state : state.setupState
     const nextConfig = isTradeConfig(data.config) ? data.config : state.config
+    const lotSize = Number(data.lotSize)
+    const nextSession = state.session && Number.isFinite(lotSize) && lotSize > 0
+      ? { ...state.session, lotSize }
+      : state.session
     return {
       setupState: nextState,
       config: nextConfig,
       engineMode: nextConfig.engineMode ?? state.engineMode,
       setupFlowStep: nextFlowStep(state.setupFlowStep, nextState),
       lastSetupError: '',
+      session: nextSession,
     }
   }
 
@@ -213,6 +218,7 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       typing: false,
       activeTrade: trade,
       tradesToday: state.tradesToday + 1,
+      messages: appendMessage(state.messages, event),
     }
   }
 
@@ -312,6 +318,11 @@ function normalizeTrade(data: Partial<ActiveTrade>, config: TradeConfig, lotSize
     ltpDirection: 'flat',
     orderId: data.orderId ?? 'pending',
     exchOrderId: data.exchOrderId,
+    sourceLtp: optionalNumber(data.sourceLtp, null) ?? undefined,
+    simulatedCharges: optionalNumber(data.simulatedCharges, null) ?? undefined,
+    slippagePercent: optionalNumber(data.slippagePercent, null) ?? undefined,
+    srSuggestion: normalizeSrSuggestion(data.srSuggestion),
+    activeExitLevels: normalizeActiveExitLevels(data.activeExitLevels),
     correlationId: data.correlationId ?? '',
     status: data.status ?? 'OPEN',
   }
@@ -355,6 +366,35 @@ function optionalNumber(value: unknown, fallback: number | null): number | null 
   if (value === null || value === undefined || value === '') return fallback
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeSrSuggestion(value: unknown): ActiveTrade['srSuggestion'] {
+  if (!isRecord(value)) return undefined
+  const stopLossPrice = optionalNumber(value.stopLossPrice ?? value.stop_loss_price ?? value.sl, null) ?? undefined
+  const targetPrice = optionalNumber(value.targetPrice ?? value.target_price ?? value.tp, null) ?? undefined
+  return {
+    available: Boolean(value.available),
+    accepted: Boolean(value.accepted),
+    source: typeof value.source === 'string' ? value.source : undefined,
+    stopLossPrice,
+    targetPrice,
+    message: typeof value.message === 'string' ? value.message : undefined,
+    basis: isRecord(value.basis) ? value.basis : undefined,
+  }
+}
+
+function normalizeActiveExitLevels(value: unknown): ActiveTrade['activeExitLevels'] {
+  if (!isRecord(value)) return undefined
+  return {
+    source: typeof value.source === 'string' ? value.source : undefined,
+    stopLossPrice: optionalNumber(value.stopLossPrice ?? value.stop_loss_price ?? value.sl, null) ?? undefined,
+    targetPrice: optionalNumber(value.targetPrice ?? value.target_price ?? value.tp, null) ?? undefined,
+    acceptedAt: typeof value.acceptedAt === 'string' ? value.acceptedAt : undefined,
+  }
 }
 
 function appendMessage(messages: RenderableMessage[], message: RenderableMessage): RenderableMessage[] {

@@ -473,6 +473,85 @@ def _int_value(value: Any) -> int | None:
         return None
 
 
+def _payload_number(signal: NormalizedSignal, key: str) -> float | None:
+    raw_payload = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
+    return _number(raw_payload.get(key))
+
+
+def _round_sr_option_price(price: float) -> float:
+    return round(max(round(price * 2) / 2, 0.5), 2)
+
+
+def _sr_exit_suggestion(signal: NormalizedSignal, order_result: dict[str, Any]) -> dict[str, Any]:
+    entry_price = _number(order_result.get("avg_price"))
+    nifty_price = _payload_number(signal, "nifty_price")
+    stop_level = _payload_number(signal, "sl_level")
+    target_level = _payload_number(signal, "tp_level")
+    delta = _payload_number(signal, "delta") or 0.5
+    option_side = str(signal.option_side or "").upper()
+    basis = {
+        "source": "tradingview_sr",
+        "strategyCode": signal.strategy_code,
+        "optionSide": option_side,
+        "entryPrice": entry_price,
+        "niftyPrice": nifty_price,
+        "niftyStopLevel": stop_level,
+        "niftyTargetLevel": target_level,
+        "delta": delta,
+        "thetaBuffer": 10.0,
+    }
+    unavailable = {
+        "available": False,
+        "accepted": False,
+        "source": "tradingview_sr",
+        "basis": basis,
+    }
+    if entry_price is None or entry_price <= 0:
+        return {**unavailable, "message": "Suggested SL/TP unavailable until entry fill price is known."}
+    if nifty_price is None or stop_level is None or target_level is None:
+        return {**unavailable, "message": "TradingView S/R levels were not present on this alert."}
+    if delta <= 0:
+        return {**unavailable, "message": "TradingView delta must be positive to estimate option SL/TP."}
+
+    if option_side == "PE":
+        nifty_dist_tp = nifty_price - target_level
+        nifty_dist_sl = stop_level - nifty_price
+    else:
+        nifty_dist_tp = target_level - nifty_price
+        nifty_dist_sl = nifty_price - stop_level
+    basis.update(
+        {
+            "niftyDistanceToTarget": nifty_dist_tp,
+            "niftyDistanceToStop": nifty_dist_sl,
+        }
+    )
+    if nifty_dist_tp <= 0 or nifty_dist_sl <= 0:
+        return {**unavailable, "basis": basis, "message": "TradingView S/R levels are not on the expected side of NIFTY."}
+
+    raw_target = entry_price + (nifty_dist_tp * delta) - 10.0
+    raw_stop = entry_price - (nifty_dist_sl * delta) + 10.0
+    target_price = _round_sr_option_price(raw_target)
+    stop_price = _round_sr_option_price(max(raw_stop, entry_price * 0.15))
+    basis.update(
+        {
+            "rawTargetPrice": round(raw_target, 2),
+            "rawStopLossPrice": round(raw_stop, 2),
+        }
+    )
+    if target_price <= entry_price or stop_price >= entry_price:
+        return {**unavailable, "basis": basis, "message": "Suggested S/R levels did not produce valid option SL/TP prices."}
+
+    return {
+        "available": True,
+        "accepted": False,
+        "source": "tradingview_sr",
+        "stopLossPrice": stop_price,
+        "targetPrice": target_price,
+        "basis": basis,
+        "message": "TradingView S/R suggested SL/TP is ready for paper validation.",
+    }
+
+
 def _filled_qty_from_raw(data: dict[str, Any] | None) -> int | None:
     if not isinstance(data, dict):
         return None
@@ -1003,6 +1082,7 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
     broker_sl_price = order_result.get("broker_sl_price")
     broker_tp_price = order_result.get("broker_tp_price")
     partial_fill = bool(order_result.get("partial_fill"))
+    sr_suggestion = _sr_exit_suggestion(signal, order_result)
     if entry_price is None:
         message = "Waiting for Dhan to confirm entry fill price."
     elif partial_fill:
@@ -1037,6 +1117,8 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
         "broker_tp_price": broker_tp_price,
         "broker_entry_reference_price": order_result.get("broker_entry_reference_price"),
         "broker_exit_levels": order_result.get("broker_exit_levels"),
+        "sr_suggestion": sr_suggestion,
+        "active_exit_levels": None,
         "super_order_post_fill_update": order_result.get("super_order_post_fill_update"),
         "order_type": order_result.get("order_type") or signal.order_type or DEFAULT_ORDER_TYPE,
         "product_type": signal.product_type or DEFAULT_PRODUCT_TYPE,
@@ -1294,7 +1376,10 @@ def route_reversal_signal(
 
     if entry_result.get("success"):
         refresh_wallet_snapshot(force=True, log_event=True)
-        set_open_position(_entry_position(signal, entry_result, _entry_filled_qty(entry_result, reversal_decision.final_qty)))
+        position = _entry_position(signal, entry_result, _entry_filled_qty(entry_result, reversal_decision.final_qty))
+        entry_result["sr_suggestion"] = position.get("sr_suggestion")
+        entry_result["active_exit_levels"] = position.get("active_exit_levels")
+        set_open_position(position)
         record_entry_trade(signal.signal_id)
         update_app_state(
             state="WAITING_EXIT",
@@ -1428,7 +1513,10 @@ def route_entry_signal(
 
     if order_result.get("success"):
         refresh_wallet_snapshot(force=True, log_event=True)
-        set_open_position(_entry_position(signal, order_result, _entry_filled_qty(order_result, decision.final_qty)))
+        position = _entry_position(signal, order_result, _entry_filled_qty(order_result, decision.final_qty))
+        order_result["sr_suggestion"] = position.get("sr_suggestion")
+        order_result["active_exit_levels"] = position.get("active_exit_levels")
+        set_open_position(position)
         record_entry_trade(signal.signal_id)
         update_app_state(
             state="WAITING_EXIT",

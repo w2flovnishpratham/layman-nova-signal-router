@@ -599,6 +599,69 @@ code {
   animation-fill-mode: both;
 }
 
+.sr-suggestion-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  border: 0.5px solid color-mix(in srgb, var(--accent-paper) 38%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-paper) 9%, var(--bg-2));
+  padding: 10px;
+}
+
+.sr-suggestion-panel > div {
+  min-width: 0;
+}
+
+.sr-suggestion-panel span {
+  display: block;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.sr-suggestion-panel strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sr-suggestion-panel button,
+.sr-suggestion-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: 30px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.sr-suggestion-panel button {
+  gap: 6px;
+  border-color: color-mix(in srgb, var(--accent-paper) 48%, transparent);
+  background: color-mix(in srgb, var(--accent-paper) 18%, transparent);
+  color: var(--accent-paper);
+  padding: 0 10px;
+}
+
+.sr-suggestion-status {
+  border: 0.5px solid color-mix(in srgb, var(--success) 40%, transparent);
+  background: color-mix(in srgb, var(--success) 11%, transparent);
+  color: var(--success);
+  padding: 0 9px;
+}
+
+.sr-suggestion-armed {
+  border-color: color-mix(in srgb, var(--success) 38%, transparent);
+  background: color-mix(in srgb, var(--success) 8%, var(--bg-2));
+}
+
 .nv-ltp-flash-up {
   animation-name: ltp-flash-up;
 }

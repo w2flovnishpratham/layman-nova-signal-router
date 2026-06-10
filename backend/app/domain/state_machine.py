@@ -135,6 +135,11 @@ def validate_command(state: SetupState, command_type: str, data: dict[str, Any])
                 raise StateTransitionError("Open-position exit is only available while the engine is running or paused.")
             return state, {}
 
+        if command_type == "session.apply_sr_suggestion":
+            if state not in {SetupState.LIVE, SetupState.PAUSED}:
+                raise StateTransitionError("Suggested SL/TP can only be applied while the engine is running or paused.")
+            return state, {}
+
         if command_type == "session.kill":
             if state not in {SetupState.LIVE, SetupState.PAUSED, SetupState.READY_TO_LAUNCH}:
                 raise StateTransitionError("There is no live session to stop.")
