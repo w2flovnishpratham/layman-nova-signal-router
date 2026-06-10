@@ -176,8 +176,9 @@ function App() {
 export default App
 
 function commandMessage(command: ClientCommand): string {
-  if (command.type === 'session.pause') return 'pause'
-  if (command.type === 'session.resume') return 'resume entries'
+  if (command.type === 'session.pause') return 'block entry requests'
+  if (command.type === 'session.resume') return 'allow entry requests'
+  if (command.type === 'session.exit_open') return 'exit open position'
   if (command.type === 'session.patch_risk') {
     const side = (command.data as { side?: string }).side
     return `automated entry side: ${side ?? 'unchanged'}`

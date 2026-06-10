@@ -130,6 +130,11 @@ def validate_command(state: SetupState, command_type: str, data: dict[str, Any])
             _require_state(state, SetupState.PAUSED, command_type)
             return SetupState.LIVE, {}
 
+        if command_type == "session.exit_open":
+            if state not in {SetupState.LIVE, SetupState.PAUSED}:
+                raise StateTransitionError("Open-position exit is only available while the engine is running or paused.")
+            return state, {}
+
         if command_type == "session.kill":
             if state not in {SetupState.LIVE, SetupState.PAUSED, SetupState.READY_TO_LAUNCH}:
                 raise StateTransitionError("There is no live session to stop.")

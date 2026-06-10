@@ -1,4 +1,4 @@
-import { CheckCircle2, Pause, Play } from 'lucide-react'
+import { Ban, CheckCircle2, LogOut, Play } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ActiveTradeCard } from './ActiveTradeCard'
 import { TickingNumber } from './TickingNumber'
@@ -20,6 +20,7 @@ interface Props {
 
 export function EngineSidebar({ session, state, wallet, marginUtilized, realizedPnl, activeTrade, lotSize, side, engineMode, onSend }: Props) {
   const paper = engineMode === 'paper'
+  const entriesBlocked = state === 'PAUSED'
   return (
     <aside className="engine-sidebar" aria-label={`${paper ? 'Paper' : 'Live'} account data`}>
       <section className="sidebar-card account-card">
@@ -49,11 +50,21 @@ export function EngineSidebar({ session, state, wallet, marginUtilized, realized
         </div>
         <button
           type="button"
-          className="engine-toggle"
-          onClick={() => onSend({ type: state === 'PAUSED' ? 'session.resume' : 'session.pause', data: {} })}
+          className={`engine-toggle entry-block-toggle ${entriesBlocked ? 'blocked' : ''}`}
+          aria-pressed={entriesBlocked}
+          onClick={() => onSend({ type: entriesBlocked ? 'session.resume' : 'session.pause', data: {} })}
         >
-          {state === 'PAUSED' ? <Play size={14} /> : <Pause size={14} />}
-          {state === 'PAUSED' ? 'Activate Automated Entry Signals' : 'Pause Automated Entry Signals'}
+          {entriesBlocked ? <Play size={14} /> : <Ban size={14} />}
+          {entriesBlocked ? 'Allow Entry Requests' : 'Block Entry Requests'}
+        </button>
+        <button
+          type="button"
+          className="exit-open-button"
+          disabled={!activeTrade}
+          onClick={() => onSend({ type: 'session.exit_open', data: {} })}
+        >
+          <LogOut size={14} />
+          Exit Open Position
         </button>
         <div className="side-filter-control">
           <span>Automated entry side</span>

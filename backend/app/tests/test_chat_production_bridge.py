@@ -216,6 +216,101 @@ def test_side_filter_closes_opposite_position_without_opening_disallowed_side(tm
     assert state_store.get_open_position()["has_open_position"] is False
 
 
+@pytest.mark.parametrize("engine_mode", ["paper", "live"])
+def test_block_entry_requests_rejects_entries_before_order_routing(tmp_path, monkeypatch, engine_mode):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode(engine_mode)
+    state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
+    state_store.update_runtime_settings(
+        max_qty_per_order=65,
+        allowed_option_side="BOTH",
+        allow_entry=False,
+        allow_exit=True,
+    )
+
+    def forbidden_reconcile(_signal):
+        raise AssertionError("Blocked entry request should not reconcile or query broker exposure.")
+
+    def forbidden_order(*_args, **_kwargs):
+        raise AssertionError("Blocked entry request should not place an order.")
+
+    monkeypatch.setattr("app.services.execution_router._reconcile_tracked_position_before_entry", forbidden_reconcile)
+    monkeypatch.setattr("app.services.execution_router._place_order", forbidden_order)
+
+    signal = NormalizedSignal(
+        payload_format="NOVA",
+        secret="unused",
+        signal_id=f"entry-block-{engine_mode}",
+        strategy_code="TRADINGVIEW_NIFTY_V1",
+        action="ENTRY",
+        side="BUY",
+        symbol="NIFTY",
+        instrument_type="OPTIDX",
+        exchange_segment="NSE_FNO",
+        security_id="MOCK-CE",
+        trading_symbol="NIFTY CE",
+        option_side="CE",
+        strike=25000,
+        expiry="2026-06-04",
+        qty=65,
+        order_type="MARKET",
+        product_type="INTRADAY",
+        raw_payload={},
+    )
+
+    result = route_entry_signal(signal)
+
+    assert result["blocked"] is True
+    assert result["success"] is False
+    assert result["status"] == "ENTRY_REQUEST_BLOCKED"
+    assert result["block_code"] == "ENTRY_REQUEST_BLOCKED"
+
+
+def test_session_exit_open_routes_exit_without_stopping_engine(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("live")
+    state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "strategy_code": "TRADINGVIEW_NIFTY_V1",
+            "symbol": "NIFTY",
+            "instrument_type": "OPTIDX",
+            "exchange_segment": "NSE_FNO",
+            "security_id": "LIVE-CE",
+            "trading_symbol": "NIFTY CE",
+            "option_side": "CE",
+            "strike": 25000,
+            "expiry": "2026-06-04",
+            "qty": 65,
+            "entry_order_id": "LIVE-ENTRY",
+            "entry_price": 100,
+            "exit_management": "SERVER",
+            "order_type": "MARKET",
+            "product_type": "INTRADAY",
+        }
+    )
+    called = {"panic_exit": False}
+
+    def fake_panic_exit():
+        called["panic_exit"] = True
+        return {"ok": True, "execution_result": {"success": True, "status": "TRADED"}}
+
+    def forbidden_stop_engine():
+        raise AssertionError("session.exit_open must not stop the engine.")
+
+    monkeypatch.setattr("app.api.ws.panic_exit", fake_panic_exit)
+    monkeypatch.setattr("app.api.ws.stop_engine", forbidden_stop_engine)
+
+    state, patch = validate_command(SetupState.LIVE, "session.exit_open", {})
+    asyncio.run(_apply_production_command("session.exit_open", {}))
+
+    assert state == SetupState.LIVE
+    assert patch == {}
+    assert called["panic_exit"] is True
+    assert state_store.get_app_state()["webhook_trading_enabled"] is True
+
+
 def test_real_dhan_client_applies_global_request_and_response_hooks():
     client = RealDhanClient()._client(timeout=1)
     try:

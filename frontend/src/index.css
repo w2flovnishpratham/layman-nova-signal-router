@@ -1577,7 +1577,7 @@ code {
 }
 
 .route-card {
-  grid-template-rows: auto auto auto auto;
+  grid-template-rows: auto auto auto auto auto auto;
 }
 
 .sidebar-title {
@@ -1620,6 +1620,28 @@ code {
   border-radius: 8px;
   background: #46454c;
   color: var(--text-1);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.entry-block-toggle {
+  border: 1px solid color-mix(in srgb, var(--warning) 34%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, #232129);
+  color: var(--warning);
+}
+
+.entry-block-toggle.blocked {
+  border-color: color-mix(in srgb, var(--success) 34%, transparent);
+  background: color-mix(in srgb, var(--success) 11%, #232129);
+  color: var(--success);
+}
+
+.exit-open-button {
+  min-height: 38px;
+  border-color: color-mix(in srgb, var(--danger) 38%, transparent);
+  background: var(--danger-bg);
+  color: var(--danger);
   font-size: 11px;
   font-weight: 900;
   text-transform: uppercase;

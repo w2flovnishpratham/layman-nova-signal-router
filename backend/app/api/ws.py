@@ -230,6 +230,18 @@ async def _apply_production_command(command_type: str, data: dict[str, Any]) -> 
         await asyncio.to_thread(update_runtime_settings, allow_entry=True)
         return
 
+    if command_type == "session.exit_open":
+        position = await asyncio.to_thread(get_open_position)
+        if not position.get("has_open_position"):
+            raise ValueError("No tracked open position exists to exit.")
+        result = await asyncio.to_thread(panic_exit)
+        if isinstance(result, dict) and result.get("ok") is False:
+            raise ValueError(str(result.get("message") or "Tracked position exit failed."))
+        execution = result.get("execution_result") if isinstance(result, dict) else None
+        if isinstance(execution, dict) and execution.get("success") is False:
+            raise ValueError(execution.get("reason") or execution.get("error") or "Tracked position exit failed.")
+        return
+
     if command_type == "session.patch_risk":
         changes: dict[str, Any] = {}
         if data.get("side") is not None:

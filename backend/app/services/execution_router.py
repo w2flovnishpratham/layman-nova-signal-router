@@ -1368,6 +1368,21 @@ def _route_side_filter_exit_only(signal: NormalizedSignal, runtime: dict[str, An
     }
 
 
+def _entry_request_block(signal: NormalizedSignal, runtime: dict[str, Any]) -> dict[str, Any] | None:
+    if bool(runtime.get("allow_entry", True)):
+        return None
+    return _blocked(
+        "ENTRY_REQUEST_BLOCKED",
+        "Entry request ignored: Block Entry Requests is ON.",
+        signal,
+        audit_event="ENTRY_REQUEST_BLOCKED",
+        result_extra={
+            "success": False,
+            "block_code": "ENTRY_REQUEST_BLOCKED",
+        },
+    )
+
+
 def route_entry_signal(
     signal: NormalizedSignal,
     runtime: dict[str, Any] | None = None,
@@ -1384,6 +1399,10 @@ def route_entry_signal(
         last_alert_at=utc_now(),
         last_message=f"Entry alert received for {signal.trading_symbol or signal.symbol}",
     )
+    entry_block = _entry_request_block(signal, runtime)
+    if entry_block:
+        return entry_block
+
     broker_reconcile = _reconcile_tracked_position_before_entry(signal)
     if broker_reconcile and not broker_reconcile.allowed:
         if _is_opposite_option_entry(signal):

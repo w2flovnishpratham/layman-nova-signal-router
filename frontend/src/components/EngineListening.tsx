@@ -28,10 +28,10 @@ export function EngineListening({ paused, activeTrade, side, engineMode }: Props
 function listeningStatus(paused: boolean, activeTrade: ActiveTrade | null, side: SideFilter): { title: string; detail: string } {
   if (paused) {
     return {
-      title: 'Engine paused for new entries',
+      title: 'Entry requests blocked',
       detail: activeTrade
-        ? `Waiting for the configured exit rule for active ${activeTrade.optType}.`
-        : 'Resume the engine to accept new TradingView signals.',
+        ? `Backend will reject new entries; exits remain enabled for active ${activeTrade.optType}.`
+        : 'Backend will reject ENTRY webhooks until entry requests are allowed.',
     }
   }
 
