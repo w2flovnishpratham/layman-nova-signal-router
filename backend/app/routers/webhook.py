@@ -18,6 +18,8 @@ from app.services.execution_router import route_signal
 from app.services.signal_parser import PayloadParseError, UnsupportedPayloadFormatError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
 from app.services.state_store import add_seen_signal, get_app_state, get_engine_mode, has_seen_signal, update_app_state, utc_now
+from app.services.user_connections import find_user_id_by_webhook_secret
+from app.services.user_context import set_current_user_id
 
 
 router = APIRouter()
@@ -104,6 +106,21 @@ def _safe_raw_body_for_log(raw_body: str) -> str:
     return json.dumps(redact(payload), separators=(",", ":"), ensure_ascii=True)
 
 
+def _bind_webhook_runtime_scope(raw_body: str) -> None:
+    try:
+        data = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(data, dict):
+        return
+    secret = str(data.get("secret") or "").strip()
+    if not secret:
+        return
+    user_id = find_user_id_by_webhook_secret(secret)
+    if user_id:
+        set_current_user_id(user_id)
+
+
 def _valid_webhook_signature(raw_body: str, secret: str, signature: str) -> bool:
     expected = hmac.new(secret.encode("utf-8"), raw_body.encode("utf-8"), hashlib.sha256).hexdigest()
     supplied = signature.removeprefix("sha256=").strip()
@@ -182,6 +199,7 @@ def _route_payload(payload: NormalizedSignal, client_host: str) -> tuple[dict | 
 async def tradingview_webhook(request: Request) -> JSONResponse:
     raw_body = (await request.body()).decode("utf-8", errors="replace")
     client_host = request.client.host if request.client else "unknown"
+    _bind_webhook_runtime_scope(raw_body)
     engine_mode = get_engine_mode(legacy_fallback=False)
     if engine_mode is None and not bool(get_app_state().get("engine_started")):
         return _response(

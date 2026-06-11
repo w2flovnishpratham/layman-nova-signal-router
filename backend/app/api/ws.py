@@ -15,6 +15,8 @@ from app.routers.setup import EngineModeRequest, configure_engine_mode, current_
 from app.services.credential_vault import save_dhan_credentials
 from app.services.chat_event_publisher import active_trade_from_position
 from app.services.state_store import get_engine_mode, get_open_position, get_wallet_snapshot, set_open_position, update_runtime_settings, utc_now
+from app.services.user_context import reset_current_user_id, set_current_user_id
+from app.services.user_connections import active_user_id, upsert_dhan_account_metadata
 from app.services.wallet_service import refresh_wallet_snapshot
 from app.store.redis_session import session_store
 from app.store.session_token import SessionTokenError, verify_session_token
@@ -39,21 +41,25 @@ async def session_websocket(websocket: WebSocket, session_id: str, token: str = 
         await websocket.close(code=4401, reason="Session token does not match this user")
         return
 
-    await websocket.accept()
-    for item in session.events[-200:]:
-        await websocket.send_json(item.model_dump(mode="json"))
+    runtime_token = set_current_user_id(session.user_id if auth_enabled() else None)
+    try:
+        await websocket.accept()
+        for item in session.events[-200:]:
+            await websocket.send_json(item.model_dump(mode="json"))
 
-    queue = await session_store.subscribe(session_id)
-    sender = asyncio.create_task(_send_events(websocket, queue))
-    receiver = asyncio.create_task(_receive_commands(websocket, session_id))
+        queue = await session_store.subscribe(session_id)
+        sender = asyncio.create_task(_send_events(websocket, queue))
+        receiver = asyncio.create_task(_receive_commands(websocket, session_id))
 
-    done, pending = await asyncio.wait({sender, receiver}, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
-    for task in done:
-        if not task.cancelled():
-            task.result()
-    await session_store.unsubscribe(session_id, queue)
+        done, pending = await asyncio.wait({sender, receiver}, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        for task in done:
+            if not task.cancelled():
+                task.result()
+        await session_store.unsubscribe(session_id, queue)
+    finally:
+        reset_current_user_id(runtime_token)
 
 
 async def _send_events(websocket: WebSocket, queue: asyncio.Queue[Any]) -> None:
@@ -181,6 +187,15 @@ async def _apply_production_command(command_type: str, data: dict[str, Any]) -> 
         if not ok:
             raise ValueError(f"{message} {details}".strip())
         await asyncio.to_thread(save_dhan_credentials, client_id, access_token)
+        user_id = active_user_id()
+        if user_id:
+            await asyncio.to_thread(
+                upsert_dhan_account_metadata,
+                user_id,
+                client_id=client_id,
+                access_token_present=True,
+                validated=True,
+            )
         await asyncio.to_thread(refresh_wallet_snapshot, force=True, log_event=True)
         return
 

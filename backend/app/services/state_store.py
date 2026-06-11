@@ -15,6 +15,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from app.config import DEFAULT_RUNTIME_SETTINGS, RUNTIME_LOG_DIR, RUNTIME_STATE_DIR, settings
+from app.services.user_context import scoped_file
 
 
 _LOCK = threading.RLock()
@@ -35,6 +36,42 @@ LOG_FILES = {
     "error": RUNTIME_LOG_DIR / "errors.jsonl",
     "paper_orders": RUNTIME_LOG_DIR / "paper_orders.jsonl",
 }
+
+
+def scoped_runtime_file(path: Path) -> Path:
+    return scoped_file(path)
+
+
+def scoped_log_file(path: Path) -> Path:
+    return scoped_file(path)
+
+
+def active_log_files() -> dict[str, Path]:
+    return {name: scoped_log_file(path) for name, path in LOG_FILES.items()}
+
+
+def _app_state_file() -> Path:
+    return scoped_runtime_file(APP_STATE_FILE)
+
+
+def _live_open_position_file() -> Path:
+    return scoped_runtime_file(OPEN_POSITION_FILE)
+
+
+def _paper_position_file() -> Path:
+    return scoped_runtime_file(PAPER_POSITION_FILE)
+
+
+def _external_positions_file() -> Path:
+    return scoped_runtime_file(EXTERNAL_POSITIONS_FILE)
+
+
+def _seen_signals_file() -> Path:
+    return scoped_runtime_file(SEEN_SIGNALS_FILE)
+
+
+def _settings_file() -> Path:
+    return scoped_runtime_file(SETTINGS_FILE)
 
 
 def utc_now() -> str:
@@ -120,7 +157,7 @@ def default_daily_risk() -> dict[str, Any]:
 
 
 def _daily_risk_file() -> Path:
-    return APP_STATE_FILE.parent / "daily_risk.json"
+    return _app_state_file().parent / "daily_risk.json"
 
 
 def default_settings() -> dict[str, Any]:
@@ -152,12 +189,12 @@ def default_wallet_snapshot() -> dict[str, Any]:
 
 def _state_defaults() -> dict[Path, Callable[[], dict[str, Any]]]:
     return {
-        APP_STATE_FILE: default_app_state,
-        OPEN_POSITION_FILE: default_open_position,
-        PAPER_POSITION_FILE: default_open_position,
-        EXTERNAL_POSITIONS_FILE: default_external_positions,
-        SEEN_SIGNALS_FILE: default_seen_signals,
-        SETTINGS_FILE: default_settings,
+        _app_state_file(): default_app_state,
+        _live_open_position_file(): default_open_position,
+        _paper_position_file(): default_open_position,
+        _external_positions_file(): default_external_positions,
+        _seen_signals_file(): default_seen_signals,
+        _settings_file(): default_settings,
         _daily_risk_file(): default_daily_risk,
     }
 
@@ -196,7 +233,7 @@ def init_runtime_files() -> None:
     for path, default_factory in _state_defaults().items():
         if not path.exists():
             _atomic_write_json(path, default_factory())
-    for path in LOG_FILES.values():
+    for path in active_log_files().values():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(exist_ok=True)
     sync_runtime_flags_from_env()
@@ -230,7 +267,7 @@ def sync_runtime_flags_from_env() -> None:
 
 
 def get_app_state() -> dict[str, Any]:
-    data = _read_json(APP_STATE_FILE, default_app_state)
+    data = _read_json(_app_state_file(), default_app_state)
     defaults = default_app_state()
     changed = False
     for key, value in defaults.items():
@@ -252,7 +289,7 @@ def get_app_state() -> dict[str, Any]:
 
 
 def set_app_state(data: dict[str, Any]) -> dict[str, Any]:
-    return _write_json(APP_STATE_FILE, data)
+    return _write_json(_app_state_file(), data)
 
 
 def update_app_state(**changes: Any) -> dict[str, Any]:
@@ -269,7 +306,7 @@ def get_open_position() -> dict[str, Any]:
 
 
 def get_live_open_position() -> dict[str, Any]:
-    return _read_json(OPEN_POSITION_FILE, default_open_position)
+    return _read_json(_live_open_position_file(), default_open_position)
 
 
 def set_open_position(data: dict[str, Any]) -> dict[str, Any]:
@@ -280,7 +317,7 @@ def set_open_position(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def set_live_open_position(data: dict[str, Any]) -> dict[str, Any]:
-    return _write_json(OPEN_POSITION_FILE, data)
+    return _write_json(_live_open_position_file(), data)
 
 
 def clear_open_position() -> dict[str, Any]:
@@ -294,11 +331,11 @@ def clear_live_open_position() -> dict[str, Any]:
 
 
 def get_paper_position() -> dict[str, Any]:
-    return _read_json(PAPER_POSITION_FILE, default_open_position)
+    return _read_json(_paper_position_file(), default_open_position)
 
 
 def set_paper_position(data: dict[str, Any]) -> dict[str, Any]:
-    return _write_json(PAPER_POSITION_FILE, data)
+    return _write_json(_paper_position_file(), data)
 
 
 def clear_paper_position() -> dict[str, Any]:
@@ -329,7 +366,7 @@ def set_engine_mode(mode: str | None) -> dict[str, Any]:
 
 
 def get_external_positions() -> dict[str, Any]:
-    data = _read_json(EXTERNAL_POSITIONS_FILE, default_external_positions)
+    data = _read_json(_external_positions_file(), default_external_positions)
     defaults = default_external_positions()
     changed = False
     for key, value in defaults.items():
@@ -348,7 +385,7 @@ def get_external_positions() -> dict[str, Any]:
 
 
 def set_external_positions(data: dict[str, Any]) -> dict[str, Any]:
-    return _write_json(EXTERNAL_POSITIONS_FILE, data)
+    return _write_json(_external_positions_file(), data)
 
 
 def clear_external_positions() -> dict[str, Any]:
@@ -396,7 +433,7 @@ def _prune_expired_seen_signals(data: dict[str, Any]) -> tuple[dict[str, Any], i
 
 
 def get_seen_signals() -> dict[str, Any]:
-    data = _read_json(SEEN_SIGNALS_FILE, default_seen_signals)
+    data = _read_json(_seen_signals_file(), default_seen_signals)
     if "signal_ids" not in data or not isinstance(data["signal_ids"], list):
         data = default_seen_signals()
         set_seen_signals(data)
@@ -410,7 +447,7 @@ def get_seen_signals() -> dict[str, Any]:
 
 
 def set_seen_signals(data: dict[str, Any]) -> dict[str, Any]:
-    return _write_json(SEEN_SIGNALS_FILE, data)
+    return _write_json(_seen_signals_file(), data)
 
 
 def has_seen_signal(signal_id: str) -> bool:
@@ -450,7 +487,7 @@ def record_entry_trade(signal_id: str) -> dict[str, Any]:
 
 
 def get_runtime_settings() -> dict[str, Any]:
-    data = _read_json(SETTINGS_FILE, default_settings)
+    data = _read_json(_settings_file(), default_settings)
     defaults = default_settings()
     changed = False
     allowed_keys = set(defaults)
@@ -485,14 +522,14 @@ def set_runtime_settings(data: dict[str, Any]) -> dict[str, Any]:
     value (not from `data._version`) so the version is owned by the store,
     never by the caller."""
     with _LOCK:
-        existing = _read_json(SETTINGS_FILE, default_settings)
+        existing = _read_json(_settings_file(), default_settings)
         try:
             current_version = int(existing.get("_version", 0))
         except (TypeError, ValueError):
             current_version = 0
         data = dict(data)
         data["_version"] = current_version + 1
-        return _write_json(SETTINGS_FILE, data)
+        return _write_json(_settings_file(), data)
 
 
 def set_runtime_settings_if_version(
@@ -503,7 +540,7 @@ def set_runtime_settings_if_version(
     `expected_version` matches the current on-disk version. Raises
     `SettingsVersionMismatch` otherwise."""
     with _LOCK:
-        existing = _read_json(SETTINGS_FILE, default_settings)
+        existing = _read_json(_settings_file(), default_settings)
         try:
             current_version = int(existing.get("_version", 0))
         except (TypeError, ValueError):
@@ -516,7 +553,7 @@ def set_runtime_settings_if_version(
             )
         data = dict(data)
         data["_version"] = current_version + 1
-        return _write_json(SETTINGS_FILE, data)
+        return _write_json(_settings_file(), data)
 
 
 def update_runtime_settings_if_version(
@@ -580,7 +617,7 @@ def set_wallet_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def clear_runtime_logs() -> None:
-    for path in LOG_FILES.values():
+    for path in active_log_files().values():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("", encoding="utf-8")
 

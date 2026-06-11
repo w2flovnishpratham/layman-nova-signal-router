@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     SESSION_TOKEN_TTL_SECONDS: int = 60 * 60 * 12
 
     AUTH_REQUIRED: bool = False
+    DATABASE_URL: str = ""
     AUTH_DATABASE_URL: str = ""
     ADMIN_EMAILS: str = ""
     GOOGLE_CLIENT_ID: str = ""
@@ -95,6 +96,8 @@ class Settings(BaseSettings):
     DHAN_READ_ONLY_REAL_DATA: bool = True
     PAPER_MODE_ENABLED: bool = True
     ENABLE_LIVE_ORDERS: bool = False
+    UNIQUE_EGRESS_PER_USER_REQUIRED: bool = True
+    EXECUTION_NODE_ROUTING_ENABLED: bool = False
     MARKET_CLOSED_DEBUG: bool = False
     FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED: bool = False
     TOKEN_ENCRYPTION_KEY: str = ""

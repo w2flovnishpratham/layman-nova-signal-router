@@ -14,7 +14,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from app.services.state_store import LOG_FILES, get_engine_mode, utc_now
+from app.services.state_store import LOG_FILES, get_engine_mode, scoped_log_file, utc_now
 
 
 logger = logging.getLogger("audit")
@@ -68,11 +68,11 @@ def _append_jsonl(path: Path, event: dict[str, Any]) -> dict[str, Any]:
 
 
 def log_webhook_event(event: dict[str, Any]) -> dict[str, Any]:
-    return _append_jsonl(LOG_FILES["webhook"], event)
+    return _append_jsonl(scoped_log_file(LOG_FILES["webhook"]), event)
 
 
 def log_order_event(event: dict[str, Any]) -> dict[str, Any]:
-    return _append_jsonl(LOG_FILES["order"], event)
+    return _append_jsonl(scoped_log_file(LOG_FILES["order"]), event)
 
 
 def log_audit_event(
@@ -83,7 +83,7 @@ def log_audit_event(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record = _append_jsonl(
-        LOG_FILES["audit"],
+        scoped_log_file(LOG_FILES["audit"]),
         {
             "event_type": event_type,
             "severity": severity,
@@ -101,7 +101,7 @@ def log_audit_event(
 def log_error_event(event_type: str, message: str, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     logger.error("%s: %s", event_type, message)
     return _append_jsonl(
-        LOG_FILES["error"],
+        scoped_log_file(LOG_FILES["error"]),
         {
             "event_type": event_type,
             "severity": "ERROR",
@@ -112,7 +112,7 @@ def log_error_event(event_type: str, message: str, *, metadata: dict[str, Any] |
 
 
 def read_jsonl(log_name: str, limit: int = 100) -> list[dict[str, Any]]:
-    path = LOG_FILES[log_name]
+    path = scoped_log_file(LOG_FILES[log_name])
     if not path.exists():
         return []
     with _LOG_LOCK:

@@ -9,10 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import session as chat_session
 from app.api import ws as chat_ws
-from app.auth.db import init_auth_db
+from app.auth.db import init_database
 from app.auth import router as auth_router
 from app.config import settings
-from app.routers import broker, control, dashboard, debug, engine, orders, positions, setup, webhook
+from app.middleware.user_scope import UserRuntimeScopeMiddleware
+from app.routers import broker, connections, control, dashboard, debug, engine, orders, positions, setup, webhook
 from app.services.audit_logger import log_audit_event
 from app.services.chat_event_publisher import bind_chat_event_loop, clear_chat_event_loop
 from app.services.credential_vault import vault_status
@@ -37,12 +38,16 @@ def validate_production_configuration() -> None:
         raise RuntimeError("SESSION_TOKEN_SECRET must be overridden with at least 32 random characters in production.")
     if settings.DHAN_MODE.upper() != "REAL":
         raise RuntimeError("Production requires DHAN_MODE=REAL; mock routing is only allowed for local development and tests.")
+    if settings.ENABLE_LIVE_ORDERS and settings.UNIQUE_EGRESS_PER_USER_REQUIRED and not settings.EXECUTION_NODE_ROUTING_ENABLED:
+        raise RuntimeError(
+            "Production live orders require EXECUTION_NODE_ROUTING_ENABLED=true when UNIQUE_EGRESS_PER_USER_REQUIRED=true."
+        )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_production_configuration()
-    init_auth_db()
+    init_database()
     bind_chat_event_loop(asyncio.get_running_loop())
     init_runtime_files()
     sync_runtime_flags_from_env()
@@ -91,7 +96,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NOVA Signal Router",
-    description="TradingView webhook to Dhan signal router with server-side credentials and file-backed MVP runtime state.",
+    description="TradingView webhook to Dhan signal router with user-scoped credentials and runtime state.",
     version="1.0.0-mvp",
     lifespan=lifespan,
     docs_url="/api/docs",
@@ -103,6 +108,7 @@ if settings.APP_ENV.lower() != "production":
     cors_origins.extend(["http://localhost:5173", "http://127.0.0.1:5173"])
 cors_origins = [origin for origin in dict.fromkeys(cors_origins) if origin]
 
+app.add_middleware(UserRuntimeScopeMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -113,6 +119,7 @@ app.add_middleware(
 
 app.include_router(auth_router.router)
 app.include_router(setup.router, prefix="/api", tags=["Setup"])
+app.include_router(connections.router, prefix="/api", tags=["Connections"])
 app.include_router(engine.router, prefix="/api", tags=["Engine"])
 app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
 app.include_router(orders.router, prefix="/api", tags=["Orders"])

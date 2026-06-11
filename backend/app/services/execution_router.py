@@ -34,6 +34,12 @@ from app.services.state_store import (
     update_app_state,
     utc_now,
 )
+from app.services.user_connections import (
+    NoEgressNodeAvailable,
+    active_user_id,
+    record_order_route_audit,
+    require_live_egress_assignment,
+)
 from app.services.wallet_service import refresh_wallet_snapshot
 
 
@@ -408,6 +414,36 @@ def _blocked(
     return result
 
 
+def _record_order_route_audit_safe(
+    signal: NormalizedSignal,
+    *,
+    status: str,
+    route_kind: str,
+    order_id: str | None = None,
+    message: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    user_id = active_user_id()
+    if not user_id:
+        return
+    try:
+        record_order_route_audit(
+            user_id=user_id,
+            status=status,
+            route_kind=route_kind,
+            signal_id=signal.signal_id,
+            order_id=order_id,
+            message=message,
+            metadata=metadata or {},
+        )
+    except Exception as exc:  # pragma: no cover - audit failure must not alter order behavior.
+        log_error_event(
+            "ORDER_ROUTE_AUDIT_FAILED",
+            str(exc),
+            metadata={"signal_id": signal.signal_id, "status": status},
+        )
+
+
 def _dhan_token_signal_preflight(signal: NormalizedSignal) -> dict[str, Any] | None:
     if get_engine_mode() not in {"paper", "live"}:
         return None
@@ -780,6 +816,38 @@ def _place_order(
                 security_id=request_payload.get("securityId"),
                 trading_symbol=request_payload.get("tradingSymbol"),
             )
+        if settings.UNIQUE_EGRESS_PER_USER_REQUIRED and (
+            settings.AUTH_REQUIRED or settings.APP_ENV.lower() == "production"
+        ):
+            user_id = active_user_id()
+            try:
+                connection = require_live_egress_assignment(user_id)
+            except NoEgressNodeAvailable as exc:
+                return _blocked(
+                    "BLOCKED",
+                    f"REAL mode blocked: {exc}",
+                    signal,
+                    security_id_resolution=security_id_resolution,
+                    security_id=request_payload.get("securityId"),
+                    trading_symbol=request_payload.get("tradingSymbol"),
+                    result_extra={"block_code": "UNIQUE_EGRESS_NOT_ASSIGNED"},
+                )
+            if not settings.EXECUTION_NODE_ROUTING_ENABLED:
+                assigned_ip = None
+                if isinstance(connection, dict):
+                    assigned_ip = (connection.get("egressNode") or {}).get("publicIp")
+                return _blocked(
+                    "BLOCKED",
+                    "REAL mode blocked: execution-node routing is not enabled yet, so the control-plane backend will not place live orders from its own IP.",
+                    signal,
+                    security_id_resolution=security_id_resolution,
+                    security_id=request_payload.get("securityId"),
+                    trading_symbol=request_payload.get("tradingSymbol"),
+                    result_extra={
+                        "block_code": "EXECUTION_NODE_ROUTING_DISABLED",
+                        "assigned_execution_ip": assigned_ip,
+                    },
+                )
         if not creds:
             return _blocked(
                 "BLOCKED",
@@ -954,6 +1022,20 @@ def _place_order(
             **_normalized_log_fields(signal),
         }
     )
+    if engine_mode == "live":
+        _record_order_route_audit_safe(
+            signal,
+            status="placed" if result.success else "failed",
+            route_kind=place_method,
+            order_id=result.order_id,
+            message=result.error or result.status,
+            metadata={
+                "action": action,
+                "place_method": place_method,
+                "security_id": request_payload.get("securityId"),
+                "trading_symbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
+            },
+        )
 
     # --- Post-order status polling (MVP: poll a few times for final status) ---
     order_status_poll: dict[str, Any] | None = None
