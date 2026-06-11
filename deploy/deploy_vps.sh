@@ -4,6 +4,11 @@ set -euo pipefail
 repo_dir="${LAYMAN_REPO_DIR:-/root/layman-nova-signal-router}"
 
 cd "$repo_dir"
+
+if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+  git stash push --include-untracked -m "pre-deploy dirty worktree $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
+
 git pull --ff-only origin main
 
 backend/.venv/bin/pip install -r backend/requirements.txt
