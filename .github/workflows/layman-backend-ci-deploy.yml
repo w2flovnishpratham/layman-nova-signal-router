@@ -11,7 +11,7 @@ on:
 
 concurrency:
   group: layman-nova-vps-deploy-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -44,15 +44,10 @@ jobs:
           install -d -m 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          for attempt in 1 2 3 4 5; do
-            if ssh-keyscan -T 20 -H -p 22 187.127.153.128 >> ~/.ssh/known_hosts; then
-              break
-            fi
-            if [ "$attempt" = "5" ]; then
-              exit 1
-            fi
-            sleep 5
-          done
-          printf 'Host layman-vps\n  HostName 187.127.153.128\n  Port 22\n  User root\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n  BatchMode yes\n  ConnectTimeout 20\n' >> ~/.ssh/config
+          printf '%s\n' \
+            'layman-vps ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM2zwz7xaJZ46kG6w+BEOFilMdNcEiveSZWxzbaU5OBy' \
+            '187.127.153.128 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM2zwz7xaJZ46kG6w+BEOFilMdNcEiveSZWxzbaU5OBy' \
+            >> ~/.ssh/known_hosts
+          printf 'Host layman-vps\n  HostName 187.127.153.128\n  Port 22\n  User root\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 20\n' >> ~/.ssh/config
       - name: Deploy isolated Layman backend
         run: ssh layman-vps 'bash /root/layman-nova-signal-router/deploy/deploy_vps.sh'
