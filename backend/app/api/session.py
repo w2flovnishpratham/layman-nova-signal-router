@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
+from app.auth.security import auth_enabled, require_user_if_auth_enabled
 from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.events import event
 from app.domain.state_machine import SetupState
@@ -19,19 +20,32 @@ router = APIRouter(prefix="/api/session", tags=["session"])
 
 
 @router.post("/start")
-async def start_session() -> dict[str, object]:
+async def start_session_endpoint(request: Request) -> dict[str, object]:
+    return await start_session(request)
+
+
+async def start_session(request: Request | None = None) -> dict[str, object]:
+    if auth_enabled() and request is None:
+        raise HTTPException(status_code=401, detail="Login required.")
+    user = require_user_if_auth_enabled(request) if request is not None else None
     webhook_secret = get_webhook_secret()
     if not webhook_secret:
         webhook_secret = secrets.token_urlsafe(32)
         save_webhook_secret(webhook_secret)
 
     state, config = _production_chat_snapshot()
-    session = await session_store.create(webhook_secret=webhook_secret, state=state, config=config)
+    session = await session_store.create(
+        webhook_secret=webhook_secret,
+        user_id=user.id if user else None,
+        state=state,
+        config=config,
+    )
     await _hydrate_production_session(session.id)
-    token = issue_session_token(session.id)
+    token = issue_session_token(session.id, user_id=user.id if user else None)
     webhook_url = f"{settings.BACKEND_PUBLIC_BASE_URL.rstrip('/')}/webhook/tradingview"
     return {
         "sessionId": session.id,
+        "userId": session.user_id,
         "sessionToken": token,
         "webhookSecret": webhook_secret,
         "webhookUrl": webhook_url,
@@ -75,9 +89,12 @@ async def _hydrate_production_session(session_id: str) -> None:
 
 
 @router.get("/{session_id}")
-async def get_session(session_id: str) -> dict[str, object]:
+async def get_session(session_id: str, request: Request) -> dict[str, object]:
+    user = require_user_if_auth_enabled(request)
     session = await session_store.get(session_id)
     if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if auth_enabled() and session.user_id != (user.id if user else None):
         raise HTTPException(status_code=404, detail="Session not found")
     return session.public_dict()
 

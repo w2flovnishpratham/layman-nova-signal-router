@@ -19,6 +19,15 @@ set_env() {
   fi
 }
 
+ensure_env() {
+  local key="$1"
+  local value="$2"
+
+  if ! grep -q "^${key}=" "$env_file"; then
+    printf '%s=%s\n' "$key" "$value" >> "$env_file"
+  fi
+}
+
 set_env APP_ENV production
 set_env BACKEND_HOST 127.0.0.1
 set_env BACKEND_PORT 8002
@@ -32,6 +41,11 @@ set_env REQUIRE_MARKET_HOURS true
 set_env DEBUG_ENABLED false
 set_env MARKET_CLOSED_DEBUG false
 set_env FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED false
+
+ensure_env AUTH_REQUIRED false
+ensure_env AUTH_DATABASE_URL sqlite:///runtime_state/auth.sqlite3
+ensure_env ADMIN_EMAILS w2f.lovnish@gmail.com
+ensure_env GOOGLE_REDIRECT_URI https://layman-api.manyacare.com/api/auth/google/callback
 
 if ! grep -Eq '^SESSION_TOKEN_SECRET=.{32,}$' "$env_file"; then
   set_env SESSION_TOKEN_SECRET "$(openssl rand -hex 32)"

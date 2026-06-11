@@ -76,6 +76,17 @@ class Settings(BaseSettings):
     SESSION_TOKEN_SECRET: str = "change-me-in-production"
     SESSION_TOKEN_TTL_SECONDS: int = 60 * 60 * 12
 
+    AUTH_REQUIRED: bool = False
+    AUTH_DATABASE_URL: str = ""
+    ADMIN_EMAILS: str = ""
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = ""
+    AUTH_COOKIE_NAME: str = "layman_auth"
+    AUTH_COOKIE_TTL_SECONDS: int = 60 * 60 * 24 * 7
+    OAUTH_STATE_COOKIE_NAME: str = "layman_oauth_state"
+    OAUTH_STATE_TTL_SECONDS: int = 10 * 60
+
     WEBHOOK_TRADING_ENABLED: bool = False
     WEBHOOK_HMAC_REQUIRED: bool = False
     WEBHOOK_RATE_LIMIT_PER_MINUTE: int = 120

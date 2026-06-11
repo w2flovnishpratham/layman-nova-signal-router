@@ -1,4 +1,4 @@
-import { FlaskConical, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
+import { FlaskConical, LogOut, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { modeBadgeText } from '../lib/mode'
 import type { EngineMode, SetupState, WsStatus } from '../types'
@@ -9,8 +9,10 @@ interface Props {
   engineLive: boolean
   engineMode: EngineMode | null
   setupState: SetupState
+  userEmail?: string
   onKill: () => void
   onReconfigure: () => void
+  onLogout?: () => void
 }
 
 export function Header({
@@ -19,8 +21,10 @@ export function Header({
   engineLive,
   engineMode,
   setupState,
+  userEmail,
   onKill,
   onReconfigure,
+  onLogout,
 }: Props) {
   const [killDialogOpen, setKillDialogOpen] = useState(false)
   const holdTimer = useRef<number | null>(null)
@@ -63,6 +67,7 @@ export function Header({
           {clientId ? (
             <div className="client-badge">CLIENT: {maskClientId(clientId)}</div>
           ) : null}
+          {userEmail ? <div className="client-badge">{userEmail}</div> : null}
           {engineLive ? (
             <>
               <button className="kill-button" type="button" onClick={() => setKillDialogOpen(true)}>
@@ -74,6 +79,12 @@ export function Header({
                 Re-Configure
               </button>
             </>
+          ) : null}
+          {onLogout ? (
+            <button className="secondary-button" type="button" onClick={onLogout}>
+              <LogOut size={14} />
+              Logout
+            </button>
           ) : null}
         </div>
       </header>

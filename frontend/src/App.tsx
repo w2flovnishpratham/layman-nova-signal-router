@@ -1,18 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
+import { AuthLanding } from './components/AuthLanding'
 import { EngineListening } from './components/EngineListening'
 import { EngineSidebar } from './components/EngineSidebar'
 import { Header } from './components/Header'
 import { ChatLog } from './components/messages/ChatLog'
 import { SetupPanel } from './components/setup/SetupPanel'
-import { getSession, prepareReconfigure, startSession } from './api'
+import { getAuthStatus, getSession, logout, prepareReconfigure, startSession } from './api'
 import { DEFAULT_NIFTY_LOT_SIZE } from './lib/trading'
 import { useSessionStore } from './state/sessionStore'
 import { SessionWS } from './ws'
-import type { ClientCommand } from './types'
+import type { AuthStatus, ClientCommand } from './types'
 
 function App() {
   const wsRef = useRef<SessionWS | null>(null)
   const [bootNonce, setBootNonce] = useState(0)
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
+  const [authError, setAuthError] = useState('')
   const session = useSessionStore((state) => state.session)
   const setupFlowStep = useSessionStore((state) => state.setupFlowStep)
   const setupDraft = useSessionStore((state) => state.setupDraft)
@@ -40,6 +43,26 @@ function App() {
   const setSetupFlowStep = useSessionStore((state) => state.setSetupFlowStep)
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const oauthError = params.get('oauth_error')
+    if (oauthError) {
+      setAuthError(authErrorMessage(oauthError))
+      window.history.replaceState(null, '', window.location.pathname)
+    } else if (params.get('login') === 'ok') {
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+
+    getAuthStatus()
+      .then(setAuthStatus)
+      .catch((error: unknown) => {
+        setBootError(error instanceof Error ? error.message : 'Could not load authentication status')
+      })
+  }, [setBootError])
+
+  useEffect(() => {
+    if (!authStatus) return
+    if (authStatus.authRequired && !authStatus.authenticated) return
+
     let mounted = true
 
     startSession()
@@ -71,7 +94,7 @@ function App() {
       mounted = false
       wsRef.current?.close()
     }
-  }, [applyServerEvent, bootNonce, loadBootstrap, loadSnapshot, resetSession, setBootError, setWsStatus])
+  }, [applyServerEvent, authStatus, bootNonce, loadBootstrap, loadSnapshot, resetSession, setBootError, setWsStatus])
 
   useEffect(() => {
     document.documentElement.dataset.mode = engineMode ?? 'unset'
@@ -99,6 +122,23 @@ function App() {
     }
   }
 
+  async function signOut() {
+    await logout()
+    wsRef.current?.close()
+    resetSession()
+    setAuthStatus(null)
+    const nextStatus = await getAuthStatus()
+    setAuthStatus(nextStatus)
+  }
+
+  if (!authStatus && !bootError) {
+    return <main className="nova-app"><div className="system-chip">Checking access</div></main>
+  }
+
+  if (authStatus?.authRequired && !authStatus.authenticated) {
+    return <AuthLanding googleConfigured={authStatus.googleConfigured} error={authError} />
+  }
+
   const engineLive = setupState === 'LIVE' || setupState === 'PAUSED'
   const setupPanel = (
     <SetupPanel
@@ -123,8 +163,10 @@ function App() {
         engineLive={engineLive}
         engineMode={engineMode}
         setupState={setupState}
+        userEmail={authStatus?.user?.email}
         onKill={() => send({ type: 'session.kill', data: {} })}
         onReconfigure={reconfigure}
+        onLogout={authStatus?.authRequired ? signOut : undefined}
       />
 
       <section className={engineLive ? 'engine-shell' : 'chat-shell'} aria-label="Nova trading session">
@@ -174,6 +216,14 @@ function App() {
 }
 
 export default App
+
+function authErrorMessage(code: string): string {
+  if (code === 'not_allowed') return 'This Google account is not approved for the beta.'
+  if (code === 'invalid_state') return 'Login expired. Try again.'
+  if (code === 'email_not_verified') return 'Google has not verified this email address.'
+  if (code === 'missing_google_profile') return 'Google did not return the required profile data.'
+  return 'Google login failed. Try again.'
+}
 
 function commandMessage(command: ClientCommand): string {
   if (command.type === 'session.pause') return 'block entry requests'

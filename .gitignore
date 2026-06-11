@@ -26,6 +26,7 @@ coverage.xml
 # Root-level env files
 .env
 .env.*
+client_secret*.json
 
 
 # Backend env files — the backend/.gitignore also covers these

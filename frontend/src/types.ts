@@ -43,6 +43,7 @@ export interface ServerEvent<TData = Record<string, unknown>> {
 
 export interface SessionBootstrap {
   sessionId: string
+  userId?: string | null
   sessionToken: string
   webhookSecret: string
   webhookUrl: string
@@ -96,10 +97,27 @@ export interface SetupDraft {
 
 export interface SessionSnapshot {
   sessionId: string
+  userId?: string | null
   state: SetupState
   config: TradeConfig
   activeTrade: ActiveTrade | null
   events: ServerEvent[]
+}
+
+export interface AuthUser {
+  id: string
+  email: string
+  name?: string | null
+  avatarUrl?: string | null
+  planTier?: string
+}
+
+export interface AuthStatus {
+  authRequired: boolean
+  googleConfigured: boolean
+  authenticated: boolean
+  loginUrl: string
+  user: AuthUser | null
 }
 
 export interface SrSuggestion {

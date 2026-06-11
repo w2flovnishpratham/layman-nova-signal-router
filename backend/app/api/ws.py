@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
+from app.auth.security import auth_enabled
 from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.events import event
 from app.domain.state_machine import SetupState, StateTransitionError, validate_command
@@ -30,9 +31,12 @@ async def session_websocket(websocket: WebSocket, session_id: str, token: str = 
         return
 
     try:
-        verify_session_token(token, session_id)
+        token_payload = verify_session_token(token, session_id)
     except SessionTokenError as exc:
         await websocket.close(code=4401, reason=str(exc))
+        return
+    if auth_enabled() and session.user_id != token_payload.get("uid"):
+        await websocket.close(code=4401, reason="Session token does not match this user")
         return
 
     await websocket.accept()

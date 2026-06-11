@@ -15,6 +15,7 @@ from app.domain.state_machine import SetupState, next_prompt_for
 class SessionDocument:
     id: str
     webhook_secret: str
+    user_id: str | None = None
     state: SetupState = SetupState.IDLE
     config: dict[str, Any] = field(default_factory=dict)
     events: list[ServerEvent] = field(default_factory=list)
@@ -23,6 +24,7 @@ class SessionDocument:
     def public_dict(self, *, limit: int = 200) -> dict[str, Any]:
         return {
             "sessionId": self.id,
+            "userId": self.user_id,
             "state": self.state.value,
             "config": deepcopy(self.config),
             "activeTrade": deepcopy(self.active_trade),
@@ -43,12 +45,14 @@ class InMemorySessionStore:
         self,
         *,
         webhook_secret: str | None = None,
+        user_id: str | None = None,
         state: SetupState = SetupState.IDLE,
         config: dict[str, Any] | None = None,
     ) -> SessionDocument:
         session = SessionDocument(
             id=uuid4().hex[:12],
             webhook_secret=webhook_secret or secrets.token_urlsafe(24),
+            user_id=user_id,
             state=state,
             config=deepcopy(config or {}),
         )

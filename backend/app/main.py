@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import session as chat_session
 from app.api import ws as chat_ws
+from app.auth.db import init_auth_db
+from app.auth import router as auth_router
 from app.config import settings
 from app.routers import broker, control, dashboard, debug, engine, orders, positions, setup, webhook
 from app.services.audit_logger import log_audit_event
@@ -40,6 +42,7 @@ def validate_production_configuration() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_production_configuration()
+    init_auth_db()
     bind_chat_event_loop(asyncio.get_running_loop())
     init_runtime_files()
     sync_runtime_flags_from_env()
@@ -103,11 +106,12 @@ cors_origins = [origin for origin in dict.fromkeys(cors_origins) if origin]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(auth_router.router)
 app.include_router(setup.router, prefix="/api", tags=["Setup"])
 app.include_router(engine.router, prefix="/api", tags=["Engine"])
 app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
