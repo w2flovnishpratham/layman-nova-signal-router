@@ -20,6 +20,7 @@ ln -sfn /etc/nginx/sites-available/layman-api.manyacare.com /etc/nginx/sites-ena
 
 systemctl daemon-reload
 systemctl enable layman-nova-signal-router.service
+# Restart on every deploy so pulled code and dependency changes take effect.
 systemctl restart layman-nova-signal-router.service
 
 nginx -t
