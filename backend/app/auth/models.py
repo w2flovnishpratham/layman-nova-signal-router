@@ -32,6 +32,10 @@ class AuthSession(SQLModel, table=True):
     user_id: str = Field(index=True, foreign_key="users.id")
     created_at: datetime = Field(default_factory=utc_now_dt)
     expires_at: datetime
+    revoked_at: datetime | None = None
+    last_used_at: datetime | None = None
+    client_ip: str | None = None
+    user_agent: str | None = None
 
 
 class UserRuntimeProfile(SQLModel, table=True):

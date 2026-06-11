@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     SESSION_TOKEN_SECRET: str = "change-me-in-production"
     SESSION_TOKEN_TTL_SECONDS: int = 60 * 60 * 12
 
-    AUTH_REQUIRED: bool = False
+    AUTH_REQUIRED: bool = True
     DATABASE_URL: str = ""
     AUTH_DATABASE_URL: str = ""
     ADMIN_EMAILS: str = ""
@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     OAUTH_STATE_TTL_SECONDS: int = 10 * 60
 
     WEBHOOK_TRADING_ENABLED: bool = False
-    WEBHOOK_HMAC_REQUIRED: bool = False
+    WEBHOOK_HMAC_REQUIRED: bool = True
     WEBHOOK_RATE_LIMIT_PER_MINUTE: int = 120
 
     DHAN_MODE: str = "MOCK"

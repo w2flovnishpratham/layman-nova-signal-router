@@ -75,6 +75,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False)
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False)
     monkeypatch.setattr(settings, "WEBHOOK_TRADING_ENABLED", True)
+    monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False)
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
     monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
     setup_router._DHAN_CONNECT_RATE_LIMIT.clear()
@@ -151,6 +153,8 @@ class TestWebhookSecretFlow:
         monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
         monkeypatch.setattr(settings, "APP_ENV", "local")
         monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
+        monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
+        monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False)
         monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
 
         from app.main import app
@@ -972,6 +976,8 @@ class TestLiveOrderGating:
 
     def test_exit_uses_tracked_open_position_contract(self, monkeypatch):
         """EXIT alerts must close NOVA's tracked position, not a stale alert contract."""
+        monkeypatch.setattr(settings, "APP_ENV", "local")
+        monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
         monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
         monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
         monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)

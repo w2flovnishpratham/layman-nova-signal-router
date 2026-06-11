@@ -9,10 +9,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.auth.db import session_scope
+from app.auth.models import AuthSession, utc_now_dt
 from app.auth.security import cookie_secure, current_user_from_request
 from app.auth.service import create_auth_session, email_allowed, upsert_google_user
 from app.config import settings
-from app.store.session_token import issue_auth_token
+from app.store.session_token import SessionTokenError, issue_auth_token, verify_auth_token
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -85,13 +86,16 @@ async def google_callback(request: Request, code: str | None = None, state: str 
         return _frontend_redirect("oauth_error", "not_allowed")
 
     with session_scope() as session:
-        user = upsert_google_user(
-            session,
-            email=email,
-            google_sub=google_sub,
-            name=_optional_str(profile.get("name")),
-            avatar_url=_optional_str(profile.get("picture")),
-        )
+        try:
+            user = upsert_google_user(
+                session,
+                email=email,
+                google_sub=google_sub,
+                name=_optional_str(profile.get("name")),
+                avatar_url=_optional_str(profile.get("picture")),
+            )
+        except ValueError:
+            return _frontend_redirect("oauth_error", "not_allowed")
         auth_session = create_auth_session(session, user)
 
     response = _frontend_redirect("login", "ok")
@@ -109,7 +113,21 @@ async def google_callback(request: Request, code: str | None = None, state: str 
 
 
 @router.post("/logout")
-def logout() -> JSONResponse:
+def logout(request: Request) -> JSONResponse:
+    token = request.cookies.get(settings.AUTH_COOKIE_NAME)
+    if token:
+        try:
+            payload = verify_auth_token(token)
+        except SessionTokenError:
+            payload = {}
+        auth_session_id = str(payload.get("asid") or "")
+        user_id = str(payload.get("uid") or "")
+        if auth_session_id:
+            with session_scope() as session:
+                auth_session = session.get(AuthSession, auth_session_id)
+                if auth_session and auth_session.user_id == user_id and auth_session.revoked_at is None:
+                    auth_session.revoked_at = utc_now_dt()
+                    session.commit()
     response = JSONResponse({"success": True})
     response.delete_cookie(settings.AUTH_COOKIE_NAME, path="/")
     return response

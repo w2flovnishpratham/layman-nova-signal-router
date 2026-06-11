@@ -36,6 +36,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False)
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False)
     monkeypatch.setattr(settings, "WEBHOOK_TRADING_ENABLED", True)
+    monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False)
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
     monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
 

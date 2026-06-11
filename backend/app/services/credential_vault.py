@@ -105,7 +105,7 @@ def vault_status() -> dict[str, Any]:
 
 
 def local_mock_without_key_allowed() -> bool:
-    return settings.APP_ENV.lower() != "production" and settings.DHAN_MODE.upper() == "MOCK"
+    return settings.APP_ENV.lower() == "local" and settings.DHAN_MODE.upper() == "MOCK"
 
 
 def generate_fernet_key() -> str:

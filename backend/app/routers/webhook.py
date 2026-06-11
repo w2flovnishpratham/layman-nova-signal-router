@@ -106,19 +106,16 @@ def _safe_raw_body_for_log(raw_body: str) -> str:
     return json.dumps(redact(payload), separators=(",", ":"), ensure_ascii=True)
 
 
-def _bind_webhook_runtime_scope(raw_body: str) -> None:
-    try:
-        data = json.loads(raw_body)
-    except json.JSONDecodeError:
-        return
+def _bind_webhook_runtime_scope(data: dict) -> str | None:
     if not isinstance(data, dict):
-        return
+        return None
     secret = str(data.get("secret") or "").strip()
     if not secret:
-        return
+        return None
     user_id = find_user_id_by_webhook_secret(secret)
     if user_id:
         set_current_user_id(user_id)
+    return user_id
 
 
 def _valid_webhook_signature(raw_body: str, secret: str, signature: str) -> bool:
@@ -199,19 +196,6 @@ def _route_payload(payload: NormalizedSignal, client_host: str) -> tuple[dict | 
 async def tradingview_webhook(request: Request) -> JSONResponse:
     raw_body = (await request.body()).decode("utf-8", errors="replace")
     client_host = request.client.host if request.client else "unknown"
-    _bind_webhook_runtime_scope(raw_body)
-    engine_mode = get_engine_mode(legacy_fallback=False)
-    if engine_mode is None and not bool(get_app_state().get("engine_started")):
-        return _response(
-            422,
-            WebhookResponse(
-                accepted=False,
-                status="ENGINE_MODE_NOT_SET",
-                message="Webhook rejected: select Paper or Live mode before routing signals.",
-            ),
-        )
-    engine_mode = engine_mode or get_engine_mode()
-
     if _webhook_rate_limited(client_host):
         log_audit_event(
             "WEBHOOK_RATE_LIMITED",
@@ -247,6 +231,35 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
         message = "Invalid JSON payload: top-level value must be an object."
         log_error_event("WEBHOOK_INVALID_JSON", message, metadata={"client_host": client_host})
         return _response(400, WebhookResponse(accepted=False, status="INVALID_JSON", message=message))
+
+    bound_user_id = _bind_webhook_runtime_scope(data)
+    if (settings.AUTH_REQUIRED or settings.APP_ENV.lower() == "production") and bound_user_id is None:
+        log_audit_event(
+            "WEBHOOK_UNKNOWN_SECRET",
+            "Webhook rejected because the supplied secret does not map to a user.",
+            severity="WARNING",
+            metadata={"client_host": client_host},
+        )
+        return _response(
+            403,
+            WebhookResponse(
+                accepted=False,
+                status="UNAUTHORIZED",
+                message="Webhook rejected: unknown secret.",
+            ),
+        )
+
+    engine_mode = get_engine_mode(legacy_fallback=False)
+    if engine_mode is None and not bool(get_app_state().get("engine_started")):
+        return _response(
+            422,
+            WebhookResponse(
+                accepted=False,
+                status="ENGINE_MODE_NOT_SET",
+                message="Webhook rejected: select Paper or Live mode before routing signals.",
+            ),
+        )
+    engine_mode = engine_mode or get_engine_mode()
 
     try:
         payload = parse_webhook_payload(data)

@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.services import audit_logger, credential_vault, paper_broker, paper_portfolio, state_store
+from app.config import settings
 from app.services.dhan_client import DhanLtpResult, RealDhanClient, get_broker_client
 from app.services.paper_broker import PaperBroker, _simulated_charges
 
@@ -28,6 +29,10 @@ def _isolate_paper_runtime(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(state_store, "LOG_FILES", log_files)
     monkeypatch.setattr(paper_broker, "LOG_FILES", log_files)
     monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
+    monkeypatch.setattr(settings, "APP_ENV", "local")
+    monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
+    monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False)
     credential_vault._LOCAL_MEMORY_PAYLOAD.clear()
     credential_vault._LOCAL_MEMORY_PAYLOAD.update({"version": 1, "dhan": None, "webhook_secret": None})
 

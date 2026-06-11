@@ -42,6 +42,8 @@ def _isolate_runtime(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False)
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False)
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
+    monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
     monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
     credential_vault._LOCAL_MEMORY_PAYLOAD.clear()
@@ -111,6 +113,10 @@ def test_production_configuration_rejects_mock_routing(monkeypatch):
     monkeypatch.setattr(settings, "APP_ENV", "production")
     monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
     monkeypatch.setattr(settings, "SESSION_TOKEN_SECRET", "s" * 32)
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", True)
+    monkeypatch.setattr(settings, "ADMIN_EMAILS", "ops@example.test")
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql+psycopg://u:p@localhost/db")
+    monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", True)
 
     with pytest.raises(RuntimeError, match="DHAN_MODE=REAL"):
         validate_production_configuration()

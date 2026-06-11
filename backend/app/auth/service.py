@@ -27,7 +27,7 @@ def admin_emails() -> set[str]:
 
 def email_allowed(email: str) -> bool:
     allowed = admin_emails()
-    return not allowed or email.strip().lower() in allowed
+    return bool(allowed) and email.strip().lower() in allowed
 
 
 def find_user_by_id(session: Session, user_id: str) -> User | None:
@@ -45,7 +45,9 @@ def upsert_google_user(
     normalized_email = email.strip().lower()
     user = session.exec(select(User).where(User.google_sub == google_sub)).first()
     if user is None:
-        user = session.exec(select(User).where(User.email == normalized_email)).first()
+        existing_email = session.exec(select(User).where(User.email == normalized_email)).first()
+        if existing_email is not None:
+            raise ValueError("Email is already linked to another Google identity.")
 
     now = utc_now_dt()
     if user is None:
@@ -90,4 +92,3 @@ def _new_unique_user_id(session: Session) -> str:
         if session.get(User, candidate) is None:
             return candidate
     raise RuntimeError("Could not allocate a unique user id.")
-

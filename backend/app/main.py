@@ -11,6 +11,7 @@ from app.api import session as chat_session
 from app.api import ws as chat_ws
 from app.auth.db import init_database
 from app.auth import router as auth_router
+from app.auth.service import admin_emails
 from app.config import settings
 from app.middleware.user_scope import UserRuntimeScopeMiddleware
 from app.routers import broker, connections, control, dashboard, debug, engine, orders, positions, setup, webhook
@@ -36,6 +37,17 @@ def validate_production_configuration() -> None:
     session_secret = settings.SESSION_TOKEN_SECRET.strip()
     if session_secret == "change-me-in-production" or len(session_secret) < 32:
         raise RuntimeError("SESSION_TOKEN_SECRET must be overridden with at least 32 random characters in production.")
+    if not settings.AUTH_REQUIRED:
+        raise RuntimeError("AUTH_REQUIRED must be true in production.")
+    if not admin_emails():
+        raise RuntimeError("ADMIN_EMAILS must contain at least one allowed login email in production.")
+    database_url = settings.DATABASE_URL.strip() or settings.AUTH_DATABASE_URL.strip()
+    if not database_url:
+        raise RuntimeError("DATABASE_URL or AUTH_DATABASE_URL is required in production.")
+    if database_url.startswith("sqlite"):
+        raise RuntimeError("PostgreSQL DATABASE_URL is required in production; SQLite is not allowed.")
+    if not settings.WEBHOOK_HMAC_REQUIRED:
+        raise RuntimeError("WEBHOOK_HMAC_REQUIRED must be true in production.")
     if settings.DHAN_MODE.upper() != "REAL":
         raise RuntimeError("Production requires DHAN_MODE=REAL; mock routing is only allowed for local development and tests.")
     if settings.ENABLE_LIVE_ORDERS and settings.UNIQUE_EGRESS_PER_USER_REQUIRED and not settings.EXECUTION_NODE_ROUTING_ENABLED:

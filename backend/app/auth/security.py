@@ -12,6 +12,8 @@ from app.store.session_token import SessionTokenError, verify_auth_token
 
 
 def auth_enabled() -> bool:
+    if not settings.AUTH_REQUIRED and settings.APP_ENV.lower() == "production":
+        raise RuntimeError("AUTH_REQUIRED cannot be false in production.")
     return bool(settings.AUTH_REQUIRED)
 
 
@@ -34,8 +36,11 @@ def current_user_from_request(request: Request) -> User | None:
     with session_scope() as session:
         if auth_session_id:
             auth_session = session.get(AuthSession, auth_session_id)
-            if auth_session is None or auth_session.user_id != user_id or _is_expired(auth_session):
+            if auth_session is None or auth_session.user_id != user_id or auth_session.revoked_at is not None or _is_expired(auth_session):
                 return None
+            auth_session.last_used_at = utc_now_dt()
+            session.add(auth_session)
+            session.commit()
         user = find_user_by_id(session, user_id)
         if user is None or user.status != "active":
             return None
