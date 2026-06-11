@@ -19,7 +19,8 @@ install -m 644 deploy/nginx/layman-api.manyacare.com.conf /etc/nginx/sites-avail
 ln -sfn /etc/nginx/sites-available/layman-api.manyacare.com /etc/nginx/sites-enabled/layman-api.manyacare.com
 
 systemctl daemon-reload
-systemctl enable --now layman-nova-signal-router.service
+systemctl enable layman-nova-signal-router.service
+systemctl restart layman-nova-signal-router.service
 
 nginx -t
 systemctl reload nginx
