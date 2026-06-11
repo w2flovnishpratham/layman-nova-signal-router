@@ -125,6 +125,33 @@ def test_paper_portfolio_rebases_session_pnl_on_new_day(tmp_path, monkeypatch):
     assert rebased.session_pnl == 0
 
 
+def test_configuring_paper_mode_starts_fresh_portfolio(tmp_path, monkeypatch):
+    _isolate_paper_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    state_store.update_runtime_settings(paper_starting_balance=100000)
+    portfolio = paper_portfolio.reset_paper_portfolio(100000)
+    portfolio.available_balance = 87654
+    portfolio.utilized_amount = 1200
+    portfolio.realized_pnl = -1146
+    portfolio.session_pnl = -1146
+    portfolio.closed_trades = [{"symbol": "NIFTY TEST CE", "realized_pnl": -1146}]
+    paper_portfolio._write(portfolio)
+    state_store.set_paper_position({"has_open_position": True, "trading_symbol": "NIFTY TEST CE"})
+
+    from app.routers.setup import EngineModeRequest, configure_engine_mode
+
+    result = configure_engine_mode(EngineModeRequest(engine_mode="paper", paper_starting_balance=100000))
+    refreshed = paper_portfolio.get_paper_portfolio()
+
+    assert result["paper_portfolio"]["available_balance"] == 100000
+    assert refreshed.available_balance == 100000
+    assert refreshed.utilized_amount == 0
+    assert refreshed.realized_pnl == 0
+    assert refreshed.session_pnl == 0
+    assert refreshed.closed_trades == []
+    assert state_store.get_paper_position()["has_open_position"] is False
+
+
 def test_mode_switch_is_blocked_with_open_position_or_running_engine(tmp_path, monkeypatch):
     _isolate_paper_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("paper")

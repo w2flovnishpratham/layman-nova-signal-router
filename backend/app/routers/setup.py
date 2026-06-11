@@ -42,6 +42,7 @@ from app.services.dhan_debugger import get_outgoing_ip
 from app.services.dhan_error_interpreter import interpret_dhan_error
 from app.services.state_store import (
     SettingsVersionMismatch,
+    clear_paper_position,
     default_wallet_snapshot,
     get_app_state,
     get_engine_mode,
@@ -613,9 +614,8 @@ def configure_engine_mode(body: EngineModeRequest) -> dict[str, Any]:
     portfolio = None
     if body.engine_mode == "paper":
         update_runtime_settings(paper_starting_balance=body.paper_starting_balance)
-        portfolio = paper_wallet_snapshot()
-        if abs(float(portfolio["sod_limit"]) - body.paper_starting_balance) > 0.001:
-            portfolio = paper_wallet_snapshot() if portfolio.get("utilized_amount") else reset_paper_portfolio(body.paper_starting_balance).__dict__
+        clear_paper_position()
+        portfolio = reset_paper_portfolio(body.paper_starting_balance).__dict__
     log_audit_event("ENGINE_MODE_SELECTED", f"{body.engine_mode.title()} mode selected.", metadata={"engine_mode": body.engine_mode})
     return {"success": True, "engine_mode": body.engine_mode, "app_state": state, "paper_portfolio": portfolio}
 
