@@ -104,6 +104,7 @@ def test_duplicate_signal_logic_works_for_nova_signal_id(client):
 
 def test_duplicate_signal_logic_works_for_generated_pine_signal_id(client):
     payload = pine_payload("B")
+    payload["timestamp"] = "2026-06-13T09:15:00Z"
 
     first = client.post("/webhook/tradingview", json=payload)
     second = client.post("/webhook/tradingview", json=payload)

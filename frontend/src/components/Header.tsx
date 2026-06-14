@@ -1,5 +1,6 @@
-import { FlaskConical, LogOut, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { FlaskConical, LogOut, RotateCcw, ShieldAlert, Zap } from 'lucide-react'
+import { useState } from 'react'
+import { ConfirmationDialog } from './ConfirmationDialog'
 import { modeBadgeText } from '../lib/mode'
 import type { EngineMode, SetupState, WsStatus } from '../types'
 
@@ -13,6 +14,10 @@ interface Props {
   onKill: () => void
   onReconfigure: () => void
   onLogout?: () => void
+  killPending: boolean
+  reconfigurePending: boolean
+  logoutPending: boolean
+  actionError?: string
 }
 
 export function Header({
@@ -25,30 +30,12 @@ export function Header({
   onKill,
   onReconfigure,
   onLogout,
+  killPending,
+  reconfigurePending,
+  logoutPending,
+  actionError,
 }: Props) {
-  const [killDialogOpen, setKillDialogOpen] = useState(false)
-  const holdTimer = useRef<number | null>(null)
-
-  function cancelHold() {
-    if (holdTimer.current !== null) {
-      window.clearTimeout(holdTimer.current)
-      holdTimer.current = null
-    }
-  }
-
-  function startHold() {
-    cancelHold()
-    holdTimer.current = window.setTimeout(() => {
-      holdTimer.current = null
-      setKillDialogOpen(false)
-      onKill()
-    }, 800)
-  }
-
-  function closeDialog() {
-    cancelHold()
-    setKillDialogOpen(false)
-  }
+  const [dialog, setDialog] = useState<'kill' | 'reset' | null>(null)
 
   return (
     <>
@@ -70,56 +57,51 @@ export function Header({
           {userEmail ? <div className="client-badge">{userEmail}</div> : null}
           {engineLive ? (
             <>
-              <button className="kill-button" type="button" onClick={() => setKillDialogOpen(true)}>
+              <button className="kill-button" type="button" disabled={killPending} onClick={() => setDialog('kill')}>
                 <ShieldAlert size={14} />
-                Stop & Square Off
+                {killPending ? 'Stopping...' : 'Stop & Square Off'}
               </button>
-              <button className="secondary-button" type="button" onClick={onReconfigure}>
+              <button className="secondary-button" type="button" disabled={reconfigurePending} onClick={() => setDialog('reset')}>
                 <RotateCcw size={14} />
-                Re-Configure
+                {reconfigurePending ? 'Resetting...' : 'Re-Configure'}
               </button>
             </>
           ) : null}
           {onLogout ? (
-            <button className="secondary-button" type="button" onClick={onLogout}>
+            <button className="secondary-button" type="button" onClick={onLogout} disabled={logoutPending}>
               <LogOut size={14} />
-              Logout
+              {logoutPending ? 'Signing out...' : 'Logout'}
             </button>
           ) : null}
         </div>
       </header>
 
-      {killDialogOpen ? (
-        <div className="modal-backdrop" role="presentation" onPointerDown={(event) => {
-          if (event.currentTarget === event.target) closeDialog()
-        }}>
-          <section className="kill-dialog" role="dialog" aria-modal="true" aria-labelledby="kill-dialog-title">
-            <button className="icon-button" type="button" aria-label="Close stop and square-off confirmation" onClick={closeDialog}>
-              <X size={16} />
-            </button>
-            <ShieldAlert size={24} />
-            <h2 id="kill-dialog-title">Stop routing and square off?</h2>
-            <p>This stops new entries and exits NOVA's tracked open position.</p>
-            <button
-              className="hold-confirm"
-              type="button"
-              onPointerDown={startHold}
-              onPointerUp={cancelHold}
-              onPointerLeave={cancelHold}
-              onPointerCancel={cancelHold}
-              onKeyDown={(event) => {
-                if ((event.key === 'Enter' || event.key === ' ') && !event.repeat) startHold()
-              }}
-              onKeyUp={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') cancelHold()
-              }}
-            >
-              Hold to Stop & Square Off
-            </button>
-            <button className="secondary-button" type="button" onClick={closeDialog}>Cancel</button>
-          </section>
-        </div>
-      ) : null}
+      <ConfirmationDialog
+        open={dialog === 'kill'}
+        title="Stop routing and square off?"
+        consequence="This stops new entries and exits NOVA's tracked open position."
+        confirmLabel="Stop and Square Off"
+        confirmPhrase="PANIC EXIT"
+        mode={engineMode}
+        affectsRealOrders={engineMode === 'live'}
+        pending={killPending}
+        error={actionError}
+        onClose={() => setDialog(null)}
+        onConfirm={onKill}
+      />
+      <ConfirmationDialog
+        open={dialog === 'reset'}
+        title="Reset and reconfigure this session?"
+        consequence="This stops the current engine session and clears the active setup flow before starting again."
+        confirmLabel="Reset Session"
+        confirmPhrase="RESET"
+        mode={engineMode}
+        affectsRealOrders={engineMode === 'live' && engineLive}
+        pending={reconfigurePending}
+        error={actionError}
+        onClose={() => setDialog(null)}
+        onConfirm={onReconfigure}
+      />
     </>
   )
 }

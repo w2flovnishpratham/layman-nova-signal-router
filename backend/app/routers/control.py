@@ -1,6 +1,7 @@
 from pydantic import BaseModel
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.auth.security import require_user_if_auth_enabled
 from app.config import settings
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import get_webhook_secret
@@ -17,7 +18,7 @@ from app.schemas.signal import NormalizedSignal
 import time
 
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user_if_auth_enabled)])
 
 
 class ToggleRequest(BaseModel):

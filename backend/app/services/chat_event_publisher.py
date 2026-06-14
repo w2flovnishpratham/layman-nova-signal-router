@@ -89,6 +89,27 @@ def publish_active_trade_from_sync(position: dict[str, Any], mode: str | None) -
         asyncio.run_coroutine_threadsafe(coroutine, loop)
 
 
+def publish_strategy_job_from_sync(user_id: str, data: dict[str, Any]) -> None:
+    publish_user_event_from_sync(user_id, "strategy.job", data)
+
+
+def publish_user_event_from_sync(user_id: str, event_type: str, data: dict[str, Any]) -> None:
+    loop = _MAIN_LOOP
+    if loop is None or loop.is_closed():
+        return
+
+    coroutine = publish_user_event(user_id, event_type, data)
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+
+    if running_loop is loop:
+        loop.create_task(coroutine)
+    else:
+        asyncio.run_coroutine_threadsafe(coroutine, loop)
+
+
 async def publish_tick_pnl(
     *,
     symbol: str,
@@ -120,6 +141,15 @@ async def publish_active_trade(position: dict[str, Any], mode: str | None) -> No
     for session_id in await session_store.active_session_ids():
         await session_store.update_active_trade(session_id, active_trade)
         await session_store.append_event(session_id, event("order.filled", **active_trade))
+
+
+async def publish_strategy_job(user_id: str, data: dict[str, Any]) -> None:
+    await publish_user_event(user_id, "strategy.job", data)
+
+
+async def publish_user_event(user_id: str, event_type: str, data: dict[str, Any]) -> None:
+    for session_id in await session_store.active_session_ids_for_user(user_id):
+        await session_store.append_event(session_id, event(event_type, **data))
 
 
 async def publish_chat_result(payload: NormalizedSignal, execution_result: dict[str, Any]) -> None:

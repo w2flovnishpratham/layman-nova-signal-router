@@ -10,10 +10,11 @@ interface Props {
   trade: ActiveTrade
   lotSize: number
   compact?: boolean
+  actionPending?: boolean
   onApplySrSuggestion?: () => void
 }
 
-export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSuggestion }: Props) {
+export function ActiveTradeCard({ trade, lotSize, compact = false, actionPending = false, onApplySrSuggestion }: Props) {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const tone = trade.pnl > 0 ? 'up' : trade.pnl < 0 ? 'down' : 'flat'
   const pnlPct = trade.pnlPct ?? 0
@@ -63,9 +64,9 @@ export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSugg
             {srAccepted ? (
               <span className="sr-suggestion-status">Armed</span>
             ) : (
-              <button type="button" onClick={onApplySrSuggestion} disabled={!onApplySrSuggestion}>
+              <button type="button" onClick={onApplySrSuggestion} disabled={!onApplySrSuggestion || actionPending}>
                 <Target size={14} />
-                Use Suggested SL/TP
+                {actionPending ? 'Applying...' : 'Use Suggested SL/TP'}
               </button>
             )}
           </div>

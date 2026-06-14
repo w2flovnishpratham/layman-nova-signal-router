@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { ClientCommand } from '../../types'
 
-export function BrokerForm({ onSend }: { onSend: (command: ClientCommand) => void }) {
+export function BrokerForm({ pending, onSend }: { pending: boolean; onSend: (command: ClientCommand) => boolean }) {
   const [clientId, setClientId] = useState('')
   const [accessToken, setAccessToken] = useState('')
 
@@ -16,7 +16,7 @@ export function BrokerForm({ onSend }: { onSend: (command: ClientCommand) => voi
       <span className="eyebrow">Broker</span>
       <label>
         Client ID
-        <input value={clientId} onChange={(event) => setClientId(event.target.value)} required minLength={3} autoComplete="off" />
+        <input value={clientId} onChange={(event) => setClientId(event.target.value)} required minLength={3} autoComplete="off" disabled={pending} />
       </label>
       <label>
         Access Token
@@ -27,9 +27,10 @@ export function BrokerForm({ onSend }: { onSend: (command: ClientCommand) => voi
           minLength={12}
           type="password"
           autoComplete="off"
+          disabled={pending}
         />
       </label>
-      <button type="submit">Securely connect</button>
+      <button type="submit" disabled={pending}>{pending ? 'Connecting...' : 'Securely connect'}</button>
     </form>
   )
 }

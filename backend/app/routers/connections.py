@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.auth.security import auth_enabled, require_user_if_auth_enabled
@@ -15,7 +15,7 @@ from app.services.user_connections import (
 )
 
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user_if_auth_enabled)])
 
 
 class RegisterEgressNodeRequest(BaseModel):

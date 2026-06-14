@@ -50,7 +50,9 @@ def current_user_from_request(request: Request) -> User | None:
 def require_user_if_auth_enabled(request: Request) -> User | None:
     if not auth_enabled():
         return None
-    user = current_user_from_request(request)
+    user = getattr(request.state, "auth_user", None)
+    if user is None:
+        user = current_user_from_request(request)
     if user is None:
         raise HTTPException(status_code=401, detail="Login required.")
     return user

@@ -2,10 +2,58 @@
 
 ## Endpoint
 
-```
-POST http://your-domain/webhook/tradingview
+```text
+POST https://your-domain/webhook/tradingview
 Content-Type: application/json
+X-Nova-Timestamp: <unix epoch seconds>
+X-Nova-Signature: sha256=<hex hmac>
+X-Nova-Nonce: <optional random value>
 ```
+
+Production and live-mode requests require timestamped HMAC authentication.
+The HMAC-SHA256 input is:
+
+```text
+<timestamp>.<exact raw request body>
+```
+
+The timestamp in the signing input must exactly match `X-Nova-Timestamp`.
+The default accepted clock window is 60 seconds. Modified bodies, stale or
+future timestamps, reused signal IDs, and reused nonces are rejected.
+
+`X-Nova-Nonce` is optional because TradingView alerts cannot reliably generate
+a fresh random header. When supplied, it must be 8-128 characters and can be
+used only once per user.
+
+TradingView's native webhook sender cannot calculate an HMAC or attach these
+custom headers. Production alerts therefore require a trusted signing relay
+that receives the TradingView alert, adds the timestamp/signature headers, and
+forwards the unchanged body to NOVA. Direct unsigned TradingView delivery is
+not accepted in production.
+
+## Signing Example
+
+```python
+import hashlib
+import hmac
+import time
+
+timestamp = str(int(time.time()))
+signing_input = f"{timestamp}.{raw_body}".encode("utf-8")
+signature = hmac.new(
+    webhook_secret.encode("utf-8"),
+    signing_input,
+    hashlib.sha256,
+).hexdigest()
+
+headers = {
+    "X-Nova-Timestamp": timestamp,
+    "X-Nova-Signature": f"sha256={signature}",
+}
+```
+
+The relay must sign the exact bytes it forwards. Reformatting JSON after
+calculating the signature invalidates the request.
 
 ## Entry Alert JSON
 
@@ -20,11 +68,11 @@ Content-Type: application/json
   "instrument_type": "OPTIDX",
   "exchange_segment": "NSE_FNO",
   "security_id": "123456",
-  "trading_symbol": "NIFTY 28 MAY 22500 CALL",
+  "trading_symbol": "NIFTY 31 DEC 23000 CE",
   "option_side": "CE",
-  "strike": 22500,
-  "expiry": "2026-05-28",
-  "qty": 75,
+  "strike": 23000,
+  "expiry": "2026-12-31",
+  "qty": 65,
   "order_type": "MARKET",
   "product_type": "INTRADAY",
   "source": "tradingview"
@@ -44,76 +92,48 @@ Content-Type: application/json
   "instrument_type": "OPTIDX",
   "exchange_segment": "NSE_FNO",
   "security_id": "123456",
-  "trading_symbol": "NIFTY 28 MAY 22500 CALL",
-  "qty": 75,
+  "trading_symbol": "NIFTY 31 DEC 23000 CE",
+  "option_side": "CE",
+  "strike": 23000,
+  "expiry": "2026-12-31",
+  "qty": 65,
   "order_type": "MARKET",
   "product_type": "INTRADAY",
   "source": "tradingview"
 }
 ```
 
-## Required Fields
-
-| Field           | Required | Description                          |
-|-----------------|----------|--------------------------------------|
-| secret          | YES      | Must match the webhook secret saved in setup UI |
-| signal_id       | YES      | Unique ID per alert (use {{timenow}})|
-| strategy_code   | YES      | Must match a known strategy          |
-| action          | YES      | ENTRY or EXIT                        |
-| side            | YES      | BUY or SELL                          |
-| security_id     | YES      | Dhan instrument security ID          |
-| trading_symbol  | YES      | Human-readable symbol                |
-| qty             | YES      | Number of lots/units                 |
-
 ## Validation Rules
 
-1. `secret` must match the server-side webhook secret saved during setup
-2. `action` must be `ENTRY` or `EXIT`
-3. `side` must be `BUY` or `SELL`
-4. `signal_id` must be unique — duplicate IDs are silently ignored
-5. `strategy_code` must exist in the database
-6. `qty` must be > 0
+1. `secret` must match the secret stored for the user.
+2. `signal_id` must be unique per user.
+3. Live mode requires an explicitly supplied `signal_id`.
+4. Reusing a signal ID with different order fields is treated as suspicious.
+5. `strategy_code` must be recognized.
+6. Only supported NIFTY option contracts may enter the live route.
+7. `security_id` must match symbol, expiry, strike, and CE/PE when the Dhan
+   scrip master is available.
+8. Quantity must be positive and a multiple of the Dhan lot size.
+9. Live requests must pass timestamped HMAC verification.
 
-## TradingView Pine Script Setup
+## TradingView Setup
 
-In TradingView → Alert → Webhook:
+1. Configure the TradingView alert message with the JSON template.
+2. Send the TradingView webhook to a trusted signing relay.
+3. Configure the relay to forward to NOVA's `/webhook/tradingview` endpoint.
+4. Keep the forwarded body byte-for-byte unchanged after signing.
+5. Store the webhook secret only in NOVA and the signing relay.
 
-1. Set URL to `https://your-domain/webhook/tradingview`
-2. Set Message to the JSON template above
-3. Use `{{timenow}}-{{ticker}}-ENTRY` as `signal_id` for uniqueness
-4. Use the same `secret` saved from the frontend setup screen
+## Nonce Decision
 
-## Entry-Only Pine With Server-Side Option SL/TP
+Nonce is optional. Timestamped HMAC plus atomic per-user `signal_id`
+deduplication is mandatory for live mode. A nonce adds another replay barrier
+for clients that can generate a unique value, but it is not required for
+TradingView-compatible signing relays.
 
-For option premium SL/TP, use `backend/tradingview_entry_only_server_exit.pine`.
+## Server-Side Exit Workers
 
-The flow is:
-
-1. Pine watches the NIFTY chart and sends only an `ENTRY` alert.
-2. Backend places the Dhan CE/PE market buy order.
-3. Backend polls Dhan order status and stores the actual option fill price.
-4. Backend subscribes to Dhan Market Feed WebSocket ticker data for the option `securityId`.
-5. Backend sends a Dhan market sell when the real option premium reaches SL or TP.
-
-Runtime defaults:
-
-| Setting | Default |
-|---------|---------|
-| `server_side_exit_enabled` | `true` |
-| `marketfeed_ws_enabled` | `true` |
-| `option_ltp_source` | `WEBSOCKET` |
-| `option_ws_stale_seconds` | `5.0` |
-| `option_rest_fallback_enabled` | `false` |
-| `option_sl_percent` | `10.0` |
-| `option_tp_percent` | `20.0` |
-| `option_ltp_poll_seconds` | `1.0` |
-
-The monitor only sends automatic exits when `DHAN_MODE=REAL` and `ENABLE_LIVE_ORDERS=true`.
-
-The WebSocket connection uses Dhan's documented endpoint:
-
-```text
-wss://api-feed.dhan.co?version=2&token=<token>&clientId=<clientId>&authType=2
-```
-
-The backend subscribes with request code `15` for ticker packets. Dhan sends binary little-endian packets; the backend parses the ticker packet LTP from the documented float32 LTP field. REST `/marketfeed/ltp` is available only if explicitly enabled as a fallback.
+Authenticated multi-user trading workers remain disabled. The web role never
+starts EOD square-off, ghost-position, or option-monitor threads. A future
+worker release must use DB-backed trading state, explicit per-user iteration,
+and a verified distributed leader lock.

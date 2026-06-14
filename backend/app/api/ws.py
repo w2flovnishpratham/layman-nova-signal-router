@@ -12,7 +12,7 @@ from app.domain.state_machine import SetupState, StateTransitionError, validate_
 from app.routers.control import panic_exit
 from app.routers.engine import StartEngineRequest, start_engine, stop_engine
 from app.routers.setup import EngineModeRequest, configure_engine_mode, current_nifty_lot_size, validate_dhan_credentials
-from app.services.credential_vault import save_dhan_credentials
+from app.services.credential_vault import save_dhan_credentials, webhook_secret_metadata
 from app.services.chat_event_publisher import active_trade_from_position
 from app.services.state_store import get_engine_mode, get_open_position, get_wallet_snapshot, set_open_position, update_runtime_settings, utc_now
 from app.services.user_context import reset_current_user_id, set_current_user_id
@@ -110,6 +110,7 @@ async def _receive_commands(websocket: WebSocket, session_id: str) -> None:
             )
         elif command_type == "setup.broker_creds":
             wallet = await asyncio.to_thread(get_wallet_snapshot)
+            webhook_meta = await asyncio.to_thread(webhook_secret_metadata)
             await session_store.append_event(
                 session_id,
                 event(
@@ -127,7 +128,9 @@ async def _receive_commands(websocket: WebSocket, session_id: str) -> None:
                     "setup.info",
                     sessionId=session.id,
                     webhookUrl=f"{settings.BACKEND_PUBLIC_BASE_URL.rstrip('/')}/webhook/tradingview",
-                    webhookSecret=session.webhook_secret,
+                    webhookSecret=None,
+                    webhookSecretMasked=webhook_meta.get("masked"),
+                    webhookSecretAvailableOnce=False,
                 ),
             )
         elif command_type == "setup.confirm_live":

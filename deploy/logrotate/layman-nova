@@ -1,0 +1,10 @@
+/var/lib/layman/logs/*.jsonl /var/log/layman/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    su layman layman
+    create 0600 layman layman
+}

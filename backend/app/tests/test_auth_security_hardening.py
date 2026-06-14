@@ -80,7 +80,11 @@ def test_logout_revokes_auth_session(monkeypatch) -> None:
     stolen_cookie = issue_auth_token(user_id, auth_session_id=auth_session_id)
     with TestClient(app) as client:
         client.cookies.set(settings.AUTH_COOKIE_NAME, stolen_cookie)
-        response = client.post("/api/auth/logout")
+        client.cookies.set(settings.CSRF_COOKIE_NAME, "logout-csrf")
+        response = client.post(
+            "/api/auth/logout",
+            headers={settings.CSRF_HEADER_NAME: "logout-csrf"},
+        )
         assert response.status_code == 200
 
         client.cookies.set(settings.AUTH_COOKIE_NAME, stolen_cookie)
@@ -118,10 +122,12 @@ def test_auth_enabled_webhook_rejects_legacy_global_secret(tmp_path, monkeypatch
     monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
     monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
-    credential_vault._LOCAL_MEMORY_PAYLOAD.clear()
-    credential_vault._LOCAL_MEMORY_PAYLOAD.update({"version": 1, "dhan": None, "webhook_secret": None})
     legacy_secret = "R9vQ4nT2sL8xA6mP3zW7cY5kD1hF0bJ"
-    credential_vault.save_webhook_secret(legacy_secret)
+    credential_vault._LOCAL_MEMORY_PAYLOADS["__global__"] = {
+        "version": 1,
+        "dhan": None,
+        "webhook_secret": legacy_secret,
+    }
 
     from app.main import app
 

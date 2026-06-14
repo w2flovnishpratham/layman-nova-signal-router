@@ -1,5 +1,10 @@
 # DhanHQ v2 Compliance & Production-Readiness Audit
 
+> Historical audit: this document predates Stages 0-4. The current deployment
+> is approved only for an authenticated multi-user Paper beta.
+> `ENABLE_LIVE_ORDERS=false` must remain enforced. Use
+> `PRODUCTION_RUNBOOK.md` for current operations.
+
 **Project:** NOVA Signal Router  
 **Date:** 2026-05-25  
 **Scope:** Full DhanHQ v2 API compliance, safety, deployment readiness for TradingView → Dhan order execution.
@@ -283,7 +288,7 @@ Once implemented, set `QUOTE_REQUIRED_BEFORE_ORDER=true` for production.
 - [ ] Generate a unique `TOKEN_ENCRYPTION_KEY` (Fernet key): `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 - [ ] Set `APP_ENV=production`
 - [ ] Set `DHAN_MODE=REAL`
-- [ ] Set `ENABLE_LIVE_ORDERS=false` (enable ONLY after dry-run passes)
+- [ ] Set `ENABLE_LIVE_ORDERS=false` and keep it disabled
 - [ ] Set `BACKEND_PUBLIC_BASE_URL=https://api.yourdomain.com`
 - [ ] Set `FRONTEND_ORIGIN=https://your-vercel-domain.vercel.app`
 - [ ] Set `REQUIRE_MARKET_HOURS=true`
@@ -296,10 +301,9 @@ Once implemented, set `QUOTE_REQUIRED_BEFORE_ORDER=true` for production.
 - [ ] Verify security ID: `GET /api/setup/security-id/resolve?symbol=NIFTY&expiry=...&strike=...&option_side=CE`
 - [ ] Connect Dhan credentials via UI (NOT via env)
 - [ ] Configure webhook secret via UI (NOT via env)
-- [ ] Set max_qty_per_order=1, max_trades_per_day=1 for first live test
+- [ ] Set conservative Paper risk limits
 - [ ] Complete dry-run (ENABLE_LIVE_ORDERS=false): send real TradingView alert, verify BLOCKED response
-- [ ] Set `ENABLE_LIVE_ORDERS=true` and place first test order with qty=1
-- [ ] Monitor order status in dashboard and Dhan portal
+- [ ] Confirm the Live checklist remains blocked
 
 ### VPS Backend `.env` (production example)
 

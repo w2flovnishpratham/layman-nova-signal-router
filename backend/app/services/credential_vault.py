@@ -12,7 +12,7 @@ from typing import Any
 
 from app.config import RUNTIME_STATE_DIR, settings
 from app.services.state_store import scoped_runtime_file, utc_now
-from app.services.user_context import current_user_id
+from app.services.user_context import RuntimeScopeError, current_user_id, require_runtime_user_id
 
 try:
     from cryptography.fernet import Fernet, InvalidToken
@@ -23,9 +23,7 @@ except Exception:  # pragma: no cover - exercised only when dependency is absent
 
 CREDENTIALS_FILE = RUNTIME_STATE_DIR / "credentials.enc.json"
 _LOCK = threading.RLock()
-_LOCAL_MEMORY_PAYLOADS: dict[str, dict[str, Any]] = {
-    "__global__": {"version": 1, "dhan": None, "webhook_secret": None}
-}
+_LOCAL_MEMORY_PAYLOADS: dict[str, dict[str, Any]] = {}
 WEBHOOK_SECRET_MIN_LENGTH = 16
 WEBHOOK_SECRET_MIN_ENTROPY_BITS = 60.0
 WEBHOOK_SECRET_STRENGTH_MESSAGE = (
@@ -94,18 +92,21 @@ def vault_status() -> dict[str, Any]:
     except VaultError as exc:
         ready = False
         error = str(exc)
-    path = _credentials_file()
+    try:
+        path = _credentials_file()
+    except RuntimeScopeError:
+        path = None
     return {
         "ready": ready,
         "local_mock_allowed": local_mock_without_key_allowed(),
-        "file_exists": path.exists(),
-        "path": str(path),
+        "file_exists": bool(path and path.exists()),
+        "path": str(path) if path else None,
         "error": error,
     }
 
 
 def local_mock_without_key_allowed() -> bool:
-    return settings.APP_ENV.lower() == "local" and settings.DHAN_MODE.upper() == "MOCK"
+    return settings.APP_ENV.lower() in {"local", "test"} and settings.DHAN_MODE.upper() == "MOCK"
 
 
 def generate_fernet_key() -> str:
@@ -123,7 +124,7 @@ def _credentials_file() -> Path:
 
 
 def _memory_key() -> str:
-    return current_user_id() or "__global__"
+    return require_runtime_user_id(current_user_id()) or "__global__"
 
 
 class _CurrentMemoryPayload(MutableMapping[str, Any]):

@@ -135,7 +135,8 @@ class RealDhanClient:
     def _client(self, *, timeout: float) -> httpx.Client:
         # Dhan static-IP whitelisting is configured for the server's IPv4.
         # Bind outbound Dhan calls to IPv4 so dual-stack DNS cannot choose IPv6.
-        transport = httpx.HTTPTransport(local_address="0.0.0.0")
+        # Intentional outbound IPv4 wildcard source address, not a listening socket.
+        transport = httpx.HTTPTransport(local_address="0.0.0.0")  # nosec B104
         return httpx.Client(
             timeout=timeout,
             transport=transport,

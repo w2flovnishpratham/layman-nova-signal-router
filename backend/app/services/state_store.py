@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from app.config import DEFAULT_RUNTIME_SETTINGS, RUNTIME_LOG_DIR, RUNTIME_STATE_DIR, settings
+from app.config import DEFAULT_RUNTIME_SETTINGS, RUNTIME_LOG_DIR, RUNTIME_STATE_DIR, ensure_runtime_directories, settings
 from app.services.user_context import scoped_file
 
 
@@ -228,8 +228,9 @@ def _write_json(path: Path, data: dict[str, Any]) -> dict[str, Any]:
 
 
 def init_runtime_files() -> None:
-    RUNTIME_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    RUNTIME_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_runtime_directories()
+    if settings.AUTH_REQUIRED:
+        return
     for path, default_factory in _state_defaults().items():
         if not path.exists():
             _atomic_write_json(path, default_factory())

@@ -1,0 +1,14 @@
+.git/
+.github/
+.env
+.env.*
+client_secret*.json
+frontend/node_modules/
+frontend/dist/
+backend/.venv/
+backend/runtime_state/
+backend/runtime_logs/
+*.sqlite3
+*.db
+__pycache__/
+.pytest_cache/

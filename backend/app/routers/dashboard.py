@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.auth.security import require_user_if_auth_enabled
 from app.config import settings
 from app.routers.setup import tradingview_webhook_url
 from app.services.audit_logger import read_jsonl
@@ -14,7 +15,7 @@ from app.services.state_store import get_app_state, get_external_positions, get_
 from app.services.wallet_service import refresh_wallet_snapshot
 
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user_if_auth_enabled)])
 
 CHAT_FEED_EVENT_LIMIT = 100
 CHAT_FEED_ORDER_EVENT_LIMIT = 1000
@@ -53,6 +54,7 @@ def _latest(log_name: str) -> dict | None:
 
 
 @router.get("/dashboard/summary")
+@router.get("/dashboard", include_in_schema=False)
 def dashboard_summary() -> dict:
     open_position = get_reconciled_open_position(reason="dashboard_summary")
     app_state = get_app_state()

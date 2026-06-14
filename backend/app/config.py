@@ -1,9 +1,15 @@
+import os
+import stat
+import json
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = BACKEND_DIR.parent
+PRODUCTION_ENV_FILE = Path("/etc/layman/layman.env")
+SETTINGS_ENV_FILE = Path(os.environ.get("LAYMAN_ENV_FILE") or BACKEND_DIR / ".env")
 
 SUPPORT_NOVA_PAYLOAD = True
 SUPPORT_PINE_MULTI_LEG_PAYLOAD = True
@@ -62,14 +68,14 @@ DEFAULT_RUNTIME_SETTINGS = {
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(BACKEND_DIR / ".env"),
+        env_file=str(SETTINGS_ENV_FILE),
         case_sensitive=True,
         extra="ignore",
     )
 
     APP_ENV: str = "local"
 
-    BACKEND_HOST: str = "0.0.0.0"
+    BACKEND_HOST: str = "127.0.0.1"
     BACKEND_PORT: int = 8001
     FRONTEND_ORIGIN: str = "http://localhost:5173"
     BACKEND_PUBLIC_BASE_URL: str = "http://localhost:8001"
@@ -85,12 +91,33 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = ""
     AUTH_COOKIE_NAME: str = "layman_auth"
     AUTH_COOKIE_TTL_SECONDS: int = 60 * 60 * 24 * 7
+    CSRF_COOKIE_NAME: str = "layman_csrf"
+    CSRF_HEADER_NAME: str = "X-CSRF-Token"
     OAUTH_STATE_COOKIE_NAME: str = "layman_oauth_state"
     OAUTH_STATE_TTL_SECONDS: int = 10 * 60
 
     WEBHOOK_TRADING_ENABLED: bool = False
     WEBHOOK_HMAC_REQUIRED: bool = True
+    WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: int = 60
+    WEBHOOK_ALLOW_LEGACY_AUTH_LOCAL: bool = False
+    REQUIRE_SIGNAL_ID_LIVE: bool = True
     WEBHOOK_RATE_LIMIT_PER_MINUTE: int = 120
+    FREE_MAX_ACTIVE_PAPER_STRATEGIES: int = 1
+    RELAY_SHARED_SECRET: str = ""
+    RELAY_ALLOWED_STRATEGIES: str = "SUPERTREND_FLIP"
+    RELAY_ENABLED: bool = False
+    LIVE_PILOT_ENABLED: bool = False
+    LIVE_PILOT_ALLOWED_STRATEGIES: str = "SUPERTREND_FLIP"
+    LIVE_ORDER_DRY_RUN_ONLY: bool = True
+    EXECUTOR_SHARED_SECRETS_JSON: str = "{}"
+    EXECUTOR_REQUEST_TIMEOUT_SECONDS: float = 10.0
+    EXECUTOR_TIMESTAMP_TOLERANCE_SECONDS: int = 60
+    EXECUTOR_CODE: str = ""
+    EXECUTOR_RESERVED_IP: str = ""
+    EXECUTOR_SHARED_SECRET: str = ""
+    EXECUTOR_EGRESS_CHECK_URL: str = "https://api.ipify.org?format=json"
+    EXECUTOR_REAL_ORDERS_ENABLED: bool = False
+    ENABLE_LIVE_PILOT_WORKERS: bool = False
 
     DHAN_MODE: str = "MOCK"
     DHAN_READ_ONLY_REAL_DATA: bool = True
@@ -98,6 +125,16 @@ class Settings(BaseSettings):
     ENABLE_LIVE_ORDERS: bool = False
     UNIQUE_EGRESS_PER_USER_REQUIRED: bool = True
     EXECUTION_NODE_ROUTING_ENABLED: bool = False
+    WORKER_ROLE: str = "web"
+    ENABLE_PAPER_WORKERS: bool = False
+    PAPER_WORKER_CONCURRENCY: int = 1
+    WORKER_JOB_LOCK_SECONDS: int = 60
+    WORKER_POLL_INTERVAL_SECONDS: float = 2.0
+    WORKER_HEARTBEAT_SECONDS: float = 10.0
+    WORKER_RETRY_BASE_SECONDS: int = 2
+    PAPER_QUEUE_INLINE_LOCAL: bool = False
+    ENABLE_TRADING_WORKERS: bool = False
+    TRADING_WORKER_DISTRIBUTED_LOCK_ENABLED: bool = False
     MARKET_CLOSED_DEBUG: bool = False
     FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED: bool = False
     TOKEN_ENCRYPTION_KEY: str = ""
@@ -105,6 +142,8 @@ class Settings(BaseSettings):
     DEFAULT_SECURITY_ID: str = ""
     DHAN_SCRIP_MASTER_PATH: str = "data/dhan_scrip_master.csv"
     AUTO_RESOLVE_SECURITY_ID: bool = True
+    REQUIRE_INSTRUMENT_MASTER_VALIDATION_LIVE: bool = True
+    REQUIRE_FRESH_EXPIRY_LIVE: bool = True
 
     REQUIRE_MARKET_HOURS: bool = False
 
@@ -135,6 +174,24 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+def csv_setting(value: str) -> set[str]:
+    return {item.strip().upper() for item in value.split(",") if item.strip()}
+
+
+def executor_shared_secrets() -> dict[str, str]:
+    try:
+        parsed = json.loads(settings.EXECUTOR_SHARED_SECRETS_JSON or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("EXECUTOR_SHARED_SECRETS_JSON must be valid JSON.") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError("EXECUTOR_SHARED_SECRETS_JSON must be a JSON object.")
+    return {
+        str(code).strip().upper(): str(secret).strip()
+        for code, secret in parsed.items()
+        if str(code).strip() and str(secret).strip()
+    }
+
+
 def _resolve_backend_path(value: str) -> Path:
     path = Path(value)
     if path.is_absolute():
@@ -144,3 +201,51 @@ def _resolve_backend_path(value: str) -> Path:
 
 RUNTIME_STATE_DIR = _resolve_backend_path(settings.RUNTIME_STATE_DIR)
 RUNTIME_LOG_DIR = _resolve_backend_path(settings.RUNTIME_LOG_DIR)
+
+
+def validate_production_runtime_paths() -> None:
+    if settings.APP_ENV.lower() != "production":
+        return
+
+    repo_root = REPO_ROOT.resolve()
+    state_dir = RUNTIME_STATE_DIR.resolve()
+    log_dir = RUNTIME_LOG_DIR.resolve()
+    if state_dir == log_dir:
+        raise RuntimeError("RUNTIME_STATE_DIR and RUNTIME_LOG_DIR must be different production directories.")
+
+    for name, path in (("RUNTIME_STATE_DIR", state_dir), ("RUNTIME_LOG_DIR", log_dir)):
+        if path == Path(path.anchor):
+            raise RuntimeError(f"{name} cannot point to a filesystem root.")
+        if path == repo_root or repo_root in path.parents:
+            raise RuntimeError(f"{name} must point outside the repository in production.")
+
+
+def validate_production_environment_file(env_file: Path | None = None) -> None:
+    if settings.APP_ENV.lower() != "production":
+        return
+
+    configured_path = (env_file or SETTINGS_ENV_FILE).expanduser()
+    if not configured_path.is_absolute():
+        raise RuntimeError("Production environment file must use an absolute path outside the repository.")
+
+    resolved_path = configured_path.resolve()
+    repo_root = REPO_ROOT.resolve()
+    if resolved_path == Path(resolved_path.anchor):
+        raise RuntimeError("Production environment file cannot point to a filesystem root.")
+    if resolved_path == repo_root or repo_root in resolved_path.parents:
+        raise RuntimeError("Production environment file must be outside the repository.")
+    if os.name != "nt" and resolved_path != PRODUCTION_ENV_FILE:
+        raise RuntimeError(f"Production environment file must be {PRODUCTION_ENV_FILE}.")
+    if not resolved_path.is_file():
+        raise RuntimeError("Production environment file is missing.")
+    if os.name != "nt":
+        permissions = stat.S_IMODE(resolved_path.stat().st_mode)
+        if permissions != 0o600:
+            raise RuntimeError("Production environment file permissions must be 0600.")
+
+
+def ensure_runtime_directories() -> None:
+    for path in (RUNTIME_STATE_DIR, RUNTIME_LOG_DIR):
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != "nt":
+            path.chmod(0o700)

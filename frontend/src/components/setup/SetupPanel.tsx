@@ -1,9 +1,10 @@
 import { FlaskConical, Zap } from 'lucide-react'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
+import { ConfirmationDialog } from '../ConfirmationDialog'
 import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
-import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
+import type { ClientCommand, EngineMode, ExitRules, SafetyStatus, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
 
 const DISABLED_STOP_LOSS_PCT = 99.9
 const DEFAULT_CUSTOM_STOP_LOSS_PCT = 10
@@ -14,8 +15,11 @@ interface Props {
   draft: SetupDraft
   lastError: string
   verifyPending: boolean
+  pendingActions: ReadonlySet<string>
+  safetyStatus: SafetyStatus | null
+  connected: boolean
   lotSize: number
-  onSend: (command: ClientCommand) => void
+  onSend: (command: ClientCommand) => boolean
   onUserReply: (text: string) => void
   onDraft: (patch: Partial<SetupDraft>) => void
   onStep: (step: SetupFlowStep) => void
@@ -27,6 +31,9 @@ export function SetupPanel({
   draft,
   lastError,
   verifyPending,
+  pendingActions,
+  safetyStatus,
+  connected,
   lotSize,
   onSend,
   onUserReply,
@@ -34,30 +41,30 @@ export function SetupPanel({
   onStep,
 }: Props) {
   if (state === 'LIVE' || state === 'PAUSED' || state === 'ENDED' || flowStep === 'complete') return null
-  if (flowStep === 'mode') return <ModeStep draft={draft} onSelect={(engineMode, paperStartingBalance) => {
+  if (flowStep === 'mode') return <ModeStep draft={draft} pending={pendingActions.has('setup.mode')} connected={connected} onSelect={(engineMode, paperStartingBalance) => {
+    if (!onSend({ type: 'setup.mode', data: { engineMode, paperStartingBalance } })) return
     onDraft({ engineMode, paperStartingBalance })
     onUserReply(engineMode === 'paper' ? `Paper mode with ${formatCurrency(paperStartingBalance)} virtual balance` : 'Live mode - real money routing')
-    onSend({ type: 'setup.mode', data: { engineMode, paperStartingBalance } })
   }} />
-  if (flowStep === 'strategy') return <StrategyStep onSelect={() => {
+  if (flowStep === 'strategy') return <StrategyStep pending={pendingActions.has('setup.select_strategy')} onSelect={() => {
+    if (!onSend({ type: 'setup.select_strategy', data: { strategy: 'supertrend' } })) return
     onUserReply('Supertrend Strategy (NSE Options)')
-    onSend({ type: 'setup.select_strategy', data: { strategy: 'supertrend' } })
   }} />
-  if (flowStep === 'broker') return <BrokerStep draft={draft} mode={draft.engineMode} error={lastError} pending={verifyPending} onDraft={onDraft} onSubmit={(clientId, accessToken) => {
+  if (flowStep === 'broker') return <BrokerStep draft={draft} mode={draft.engineMode} error={lastError} pending={verifyPending || pendingActions.has('setup.broker_creds')} onDraft={onDraft} onSubmit={(clientId, accessToken) => {
+    if (!onSend({ type: 'setup.broker_creds', data: { clientId, accessToken } })) return
     onUserReply(`Dhan credentials submitted for CLIENT: ${maskClientId(clientId)}`)
-    onSend({ type: 'setup.broker_creds', data: { clientId, accessToken } })
   }} />
-  if (flowStep === 'side') return <SideStep value={draft.side} onSelect={(side) => {
+  if (flowStep === 'side') return <SideStep value={draft.side} pending={pendingActions.size > 0} onSelect={(side) => {
     onDraft({ side })
     onUserReply(`Trade side: ${sideLabel(side)}`)
     onStep('lots')
   }} />
-  if (flowStep === 'lots') return <LotsStep value={draft.lots} lotSize={lotSize} onSelect={(lots) => {
+  if (flowStep === 'lots') return <LotsStep value={draft.lots} lotSize={lotSize} pending={pendingActions.size > 0} onSelect={(lots) => {
     onDraft({ lots })
     onUserReply(`Lot size: ${lots} lot (${contractsForLots(lots, lotSize)} contracts)`)
     onStep('exits')
   }} />
-  if (flowStep === 'exits') return <ExitRulesStep draft={draft} onSubmit={(patch) => {
+  if (flowStep === 'exits') return <ExitRulesStep draft={draft} pending={pendingActions.size > 0} onSubmit={(patch) => {
     onDraft(patch)
     onUserReply(exitReply(
       patch.exitMode ?? draft.exitMode,
@@ -66,11 +73,9 @@ export function SetupPanel({
     ))
     onStep('limits')
   }} />
-  if (flowStep === 'limits') return <DailyLimitsStep draft={draft} onSubmit={(patch) => {
+  if (flowStep === 'limits') return <DailyLimitsStep draft={draft} pending={pendingActions.has('setup.risk') || pendingActions.has('setup.exits')} onSubmit={(patch) => {
     const finalDraft = { ...draft, ...patch }
-    onDraft(patch)
-    onUserReply(limitsReply(finalDraft.maxTrades, finalDraft.maxLoss))
-    onSend({
+    const riskSent = onSend({
       type: 'setup.risk',
       data: {
         maxTrades: finalDraft.maxTrades === 0 ? null : finalDraft.maxTrades,
@@ -79,6 +84,7 @@ export function SetupPanel({
         side: finalDraft.side,
       },
     })
+    if (!riskSent) return
     onSend({
       type: 'setup.exits',
       data: {
@@ -88,15 +94,17 @@ export function SetupPanel({
         stopLossPct: finalDraft.stopLossPct,
       },
     })
+    onDraft(patch)
+    onUserReply(limitsReply(finalDraft.maxTrades, finalDraft.maxLoss))
   }} />
-  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} onDeploy={() => {
+  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} safetyStatus={safetyStatus} pending={pendingActions.has('setup.confirm_live')} error={lastError} onDeploy={() => {
+    if (!onSend({ type: 'setup.confirm_live', data: {} })) return
     onUserReply(draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Deploy Live Strategy & Start Listening')
-    onSend({ type: 'setup.confirm_live', data: {} })
   }} />
   return null
 }
 
-function ModeStep({ draft, onSelect }: { draft: SetupDraft; onSelect: (mode: EngineMode, balance: number) => void }) {
+function ModeStep({ draft, pending, connected, onSelect }: { draft: SetupDraft; pending: boolean; connected: boolean; onSelect: (mode: EngineMode, balance: number) => void }) {
   const [paperBalance, setPaperBalance] = useState(draft.paperStartingBalance)
   return (
     <article className="setup-card mode-step">
@@ -113,25 +121,30 @@ function ModeStep({ draft, onSelect }: { draft: SetupDraft; onSelect: (mode: Eng
               step={10000}
               value={paperBalance}
               onChange={(event) => setPaperBalance(Math.min(1000000, Math.max(10000, Number(event.target.value) || 10000)))}
+              disabled={pending}
             />
           </label>
-          <button type="button" onClick={() => onSelect('paper', paperBalance)}>Start in Paper</button>
+          <button type="button" disabled={pending || !connected} onClick={() => onSelect('paper', paperBalance)}>
+            {pending ? 'Working...' : 'Start in Paper'}
+          </button>
         </section>
         <section className="mode-choice live-choice">
           <div><Zap size={18} /><strong>Live</strong></div>
           <p>Routes real orders to Dhan. Real money is at risk and static IP is required.</p>
-          <button type="button" onClick={() => onSelect('live', paperBalance)}>Configure Live</button>
+          <button type="button" disabled={pending || !connected} onClick={() => onSelect('live', paperBalance)}>
+            {pending ? 'Working...' : 'Review Live Setup'}
+          </button>
         </section>
       </div>
     </article>
   )
 }
 
-function StrategyStep({ onSelect }: { onSelect: () => void }) {
+function StrategyStep({ pending, onSelect }: { pending: boolean; onSelect: () => void }) {
   return (
     <article className="setup-card strategy-panel">
       <div className="strategy-chip-row" aria-label="Strategy choices">
-        <button type="button" onClick={onSelect}>Supertrend</button>
+        <button type="button" disabled={pending} onClick={onSelect}>{pending ? 'Working...' : 'Supertrend'}</button>
         <button type="button" className="disabled-option" disabled>ORB</button>
         <button type="button" className="disabled-option" disabled>VWAP</button>
         <button type="button" className="disabled-option" disabled>RSI</button>
@@ -193,12 +206,12 @@ function BrokerStep({
   )
 }
 
-function SideStep({ value, onSelect }: { value: SideFilter; onSelect: (side: SideFilter) => void }) {
+function SideStep({ value, pending, onSelect }: { value: SideFilter; pending: boolean; onSelect: (side: SideFilter) => void }) {
   return (
     <article className="setup-card">
       <div className="choice-grid">
         {(['CE', 'PE', 'BOTH'] as SideFilter[]).map((side) => (
-          <button key={side} className={value === side ? 'selected' : ''} type="button" onClick={() => onSelect(side)}>
+          <button key={side} className={value === side ? 'selected' : ''} type="button" disabled={pending} onClick={() => onSelect(side)}>
             {sideLabel(side)}
           </button>
         ))}
@@ -207,26 +220,28 @@ function SideStep({ value, onSelect }: { value: SideFilter; onSelect: (side: Sid
   )
 }
 
-function LotsStep({ value, lotSize, onSelect }: { value: number; lotSize: number; onSelect: (lots: number) => void }) {
+function LotsStep({ value, lotSize, pending, onSelect }: { value: number; lotSize: number; pending: boolean; onSelect: (lots: number) => void }) {
   const [lots, setLots] = useState(value)
   return (
     <article className="setup-card">
       <div className="counter-row large-counter">
-        <button type="button" onClick={() => setLots((current) => Math.max(1, current - 1))}>-</button>
+        <button type="button" disabled={pending} onClick={() => setLots((current) => Math.max(1, current - 1))}>-</button>
         <strong>{lots}</strong>
-        <button type="button" onClick={() => setLots((current) => current + 1)}>+</button>
+        <button type="button" disabled={pending} onClick={() => setLots((current) => current + 1)}>+</button>
         <small>{contractsForLots(lots, lotSize)} contracts</small>
       </div>
-      <button type="button" onClick={() => onSelect(lots)}>Use {lots} lot</button>
+      <button type="button" disabled={pending} onClick={() => onSelect(lots)}>Use {lots} lot</button>
     </article>
   )
 }
 
 function ExitRulesStep({
   draft,
+  pending,
   onSubmit,
 }: {
   draft: SetupDraft
+  pending: boolean
   onSubmit: (patch: Partial<SetupDraft>) => void
 }) {
   const [exitMode, setExitMode] = useState<ExitRules['mode']>(draft.exitMode)
@@ -249,9 +264,9 @@ function ExitRulesStep({
   return (
     <article className="setup-card">
       <div className="choice-grid three">
-        <button className={exitMode === 'flip_only' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_only')}>Flips Only</button>
-        <button className={exitMode === 'flip_tp' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_tp')}>Target Profit</button>
-        <button className={exitMode === 'custom' ? 'selected' : ''} type="button" onClick={() => selectExitMode('custom')}>Custom SL & TP</button>
+        <button className={exitMode === 'flip_only' ? 'selected' : ''} type="button" disabled={pending} onClick={() => selectExitMode('flip_only')}>Flips Only</button>
+        <button className={exitMode === 'flip_tp' ? 'selected' : ''} type="button" disabled={pending} onClick={() => selectExitMode('flip_tp')}>Target Profit</button>
+        <button className={exitMode === 'custom' ? 'selected' : ''} type="button" disabled={pending} onClick={() => selectExitMode('custom')}>Custom SL & TP</button>
       </div>
       {exitMode !== 'flip_only' ? (
         <div className="tp-control">
@@ -264,12 +279,13 @@ function ExitRulesStep({
                 max={100}
                 step={1}
                 value={boundedTargetPct}
+                disabled={pending}
                 onChange={(event) => setTargetPct(clampPercent(Number(event.target.value)))}
               />
               <span>%</span>
             </span>
           </label>
-          <input type="range" min={1} max={100} value={boundedTargetPct} onChange={(event) => setTargetPct(Number(event.target.value))} />
+          <input type="range" min={1} max={100} value={boundedTargetPct} disabled={pending} onChange={(event) => setTargetPct(Number(event.target.value))} />
         </div>
       ) : null}
       {exitMode === 'custom' ? (
@@ -283,16 +299,18 @@ function ExitRulesStep({
                 max={79}
                 step={1}
                 value={boundedStopLossPct}
+                disabled={pending}
                 onChange={(event) => setStopLossPct(clampStopLossPercent(Number(event.target.value)))}
               />
               <span>%</span>
             </span>
           </label>
-          <input type="range" min={1} max={79} value={boundedStopLossPct} onChange={(event) => setStopLossPct(Number(event.target.value))} />
+          <input type="range" min={1} max={79} value={boundedStopLossPct} disabled={pending} onChange={(event) => setStopLossPct(Number(event.target.value))} />
         </div>
       ) : null}
       <button
         type="button"
+        disabled={pending}
         onClick={() => onSubmit({ exitMode, targetPct: boundedTargetPct, stopLossPct: effectiveStopLossPct })}
       >
         Confirm Exits Rules -&gt;
@@ -303,9 +321,11 @@ function ExitRulesStep({
 
 function DailyLimitsStep({
   draft,
+  pending,
   onSubmit,
 }: {
   draft: SetupDraft
+  pending: boolean
   onSubmit: (patch: Pick<SetupDraft, 'maxTrades' | 'maxLoss'>) => void
 }) {
   const [maxTrades, setMaxTrades] = useState(draft.maxTrades)
@@ -320,11 +340,11 @@ function DailyLimitsStep({
     <form className="setup-card form-card launch-card" onSubmit={submit}>
       <label>
         Max trades per day
-        <input type="number" min={0} max={50} value={maxTrades} onChange={(event) => setMaxTrades(Number(event.target.value))} />
+        <input type="number" min={0} max={50} value={maxTrades} disabled={pending} onChange={(event) => setMaxTrades(Number(event.target.value))} />
       </label>
       <label>
         Max daily loss in INR
-        <input type="number" min={0} step={100} value={maxLoss} onChange={(event) => setMaxLoss(Number(event.target.value))} />
+        <input type="number" min={0} step={100} value={maxLoss} disabled={pending} onChange={(event) => setMaxLoss(Number(event.target.value))} />
       </label>
       <p className="form-hint">Use 0 for no limit.</p>
       <div className="trust-grid">
@@ -332,7 +352,10 @@ function DailyLimitsStep({
         <div><span>Margin check</span><strong>{draft.engineMode === 'paper' ? 'Virtual balance before fill' : 'Dhan margin API before order'}</strong></div>
         <div><span>Charges</span><strong>{draft.engineMode === 'paper' ? 'Simulated Dhan charge formula' : 'From real Dhan fills/reporting'}</strong></div>
       </div>
-      <button className="live-confirm" type="submit">Save Limits & Finish</button>
+      <button className="live-confirm" type="submit" disabled={pending}>
+        {pending ? <span className="button-spinner" aria-hidden="true" /> : null}
+        {pending ? 'Saving...' : 'Save Limits & Finish'}
+      </button>
     </form>
   )
 }
@@ -349,44 +372,98 @@ function limitsReply(maxTrades: number, maxLoss: number): string {
   return `Daily limits: ${trades} / ${loss}`
 }
 
-function DeploymentSummary({ draft, lotSize, onDeploy }: { draft: SetupDraft; lotSize: number; onDeploy: () => void }) {
+function DeploymentSummary({
+  draft,
+  lotSize,
+  safetyStatus,
+  pending,
+  error,
+  onDeploy,
+}: {
+  draft: SetupDraft
+  lotSize: number
+  safetyStatus: SafetyStatus | null
+  pending: boolean
+  error: string
+  onDeploy: () => void
+}) {
+  const [liveDialogOpen, setLiveDialogOpen] = useState(false)
+  const isLive = draft.engineMode === 'live'
+  const liveAllowed = Boolean(safetyStatus?.single_operator_live_allowed)
   return (
-    <article className="setup-card deployment-summary">
-      <h3>Deployment Configuration Summary</h3>
-      <div className={`deployment-mode ${draft.engineMode ?? 'unset'}`}>
-        <strong>{draft.engineMode === 'paper' ? 'Paper simulation' : 'Live trading'}</strong>
-        <span>{draft.engineMode === 'paper' ? `${formatCurrency(draft.paperStartingBalance)} virtual balance` : 'Real money will be at risk'}</span>
-      </div>
-      <div className="summary-grid">
-        <div>
-          <span>Dhan Connected</span>
-          <strong>ID: {maskClientId(draft.clientId || 'pending')}</strong>
+    <>
+      <article className="setup-card deployment-summary">
+        <h3>Deployment Configuration Summary</h3>
+        <div className={`deployment-mode ${draft.engineMode ?? 'unset'}`}>
+          <strong>{draft.engineMode === 'paper' ? 'Paper simulation' : 'Live trading'}</strong>
+          <span>{draft.engineMode === 'paper' ? `${formatCurrency(draft.paperStartingBalance)} virtual balance` : 'Real money will be at risk'}</span>
         </div>
-        <div>
-          <span>Strategy Route</span>
-          <strong>Supertrend Options</strong>
+        <div className="summary-grid">
+          <div>
+            <span>Dhan Connected</span>
+            <strong>ID: {safetyStatus?.broker.client_id_masked ?? maskClientId(draft.clientId || 'pending')}</strong>
+          </div>
+          <div>
+            <span>Strategy Route</span>
+            <strong>Supertrend Options</strong>
+          </div>
+          <div>
+            <span>Trade Volume</span>
+            <strong>{draft.lots} Lot ({contractsForLots(draft.lots, lotSize)} contracts)</strong>
+          </div>
+          <div>
+            <span>Allowed Sides</span>
+            <strong>{allowedSideSummary(draft.side)}</strong>
+          </div>
+          <div>
+            <span>Exit Rules</span>
+            <strong>{exitReply(draft.exitMode, draft.targetPct, draft.stopLossPct).replace('Exit rule: ', '')}</strong>
+          </div>
+          <div>
+            <span>Safety Limits</span>
+            <strong>{draft.maxTrades ? `${draft.maxTrades} trades` : 'None'} | {draft.maxLoss ? formatCurrency(draft.maxLoss) : 'None'}</strong>
+          </div>
         </div>
-        <div>
-          <span>Trade Volume</span>
-          <strong>{draft.lots} Lot ({contractsForLots(draft.lots, lotSize)} contracts)</strong>
-        </div>
-        <div>
-          <span>Allowed Sides</span>
-          <strong>{allowedSideSummary(draft.side)}</strong>
-        </div>
-        <div>
-          <span>Exit Rules</span>
-          <strong>{exitReply(draft.exitMode, draft.targetPct, draft.stopLossPct).replace('Exit rule: ', '')}</strong>
-        </div>
-        <div>
-          <span>Safety Limits</span>
-          <strong>{draft.maxTrades ? `${draft.maxTrades} trades` : 'None'} | {draft.maxLoss ? formatCurrency(draft.maxLoss) : 'None'}</strong>
-        </div>
-      </div>
-      <button className="live-confirm" type="button" onClick={onDeploy}>
-        {draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Trade Real Money - Confirm'}
-      </button>
-    </article>
+        {isLive && !liveAllowed ? (
+          <div className="launch-blocked-message">
+            <strong>Live trading is blocked</strong>
+            <span>{safetyStatus?.reasons_live_blocked[0] ?? 'Safety status is unavailable. Do not start Live.'}</span>
+          </div>
+        ) : null}
+        <button
+          className="live-confirm"
+          type="button"
+          disabled={pending || (isLive && !liveAllowed)}
+          onClick={() => isLive ? setLiveDialogOpen(true) : onDeploy()}
+        >
+          {pending ? <span className="button-spinner" aria-hidden="true" /> : null}
+          {pending ? 'Starting...' : isLive ? 'Review Live Money Launch' : 'Start Paper Simulation'}
+        </button>
+      </article>
+      <ConfirmationDialog
+        open={liveDialogOpen}
+        title="Start Live trading with real money?"
+        consequence="NOVA may route real broker orders after backend risk checks. Verify every account and safety item before continuing."
+        confirmLabel="Start Live Trading"
+        confirmPhrase="START LIVE WITH REAL MONEY"
+        mode={draft.engineMode}
+        affectsRealOrders
+        pending={pending}
+        error={error}
+        onClose={() => setLiveDialogOpen(false)}
+        onConfirm={onDeploy}
+        details={(
+          <dl className="live-confirm-details">
+            <div><dt>Broker account</dt><dd>{safetyStatus?.broker.client_id_masked ?? 'Not verified'}</dd></div>
+            <div><dt>Strategy</dt><dd>Supertrend Options</dd></div>
+            <div><dt>Quantity</dt><dd>{contractsForLots(draft.lots, lotSize)} contracts</dd></div>
+            <div><dt>Max daily loss</dt><dd>{draft.maxLoss ? formatCurrency(draft.maxLoss) : 'No limit configured'}</dd></div>
+            <div><dt>Webhook signing</dt><dd>{safetyStatus?.signing_relay_configured ? 'Relay configured' : 'Relay not configured'}</dd></div>
+            <div><dt>Executor egress</dt><dd>{safetyStatus?.executor_egress_verified ? 'Verified' : 'Not verified'}</dd></div>
+          </dl>
+        )}
+      />
+    </>
   )
 }
 

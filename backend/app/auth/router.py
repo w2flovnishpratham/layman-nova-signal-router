@@ -8,10 +8,16 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from app.auth.csrf import (
+    csrf_token_from_request,
+    delete_csrf_cookie,
+    new_csrf_token,
+    set_csrf_cookie,
+)
 from app.auth.db import session_scope
 from app.auth.models import AuthSession, utc_now_dt
 from app.auth.security import cookie_secure, current_user_from_request
-from app.auth.service import create_auth_session, email_allowed, upsert_google_user
+from app.auth.service import admin_emails, create_auth_session, email_allowed, upsert_google_user
 from app.config import settings
 from app.store.session_token import SessionTokenError, issue_auth_token, verify_auth_token
 
@@ -24,18 +30,31 @@ GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
 
 @router.get("/status")
-def auth_status(request: Request) -> dict[str, Any]:
+def auth_status(request: Request) -> JSONResponse:
     user = current_user_from_request(request)
-    return {
-        "authRequired": settings.AUTH_REQUIRED,
-        "googleConfigured": google_configured(),
-        "authenticated": user is not None,
-        "loginUrl": "/api/auth/google",
-        "user": public_user(user) if user else None,
-    }
+    csrf_token = csrf_token_from_request(request) if user else None
+    if user and not csrf_token:
+        csrf_token = new_csrf_token()
+    response = JSONResponse(
+        {
+            "authRequired": settings.AUTH_REQUIRED,
+            "googleConfigured": google_configured(),
+            "authenticated": user is not None,
+            "isAdmin": bool(user and user.email.strip().lower() in admin_emails()),
+            "loginUrl": "/api/auth/google",
+            "user": public_user(user) if user else None,
+            "csrfToken": csrf_token,
+        }
+    )
+    if csrf_token:
+        set_csrf_cookie(response, csrf_token)
+    elif not user:
+        delete_csrf_cookie(response)
+    return response
 
 
 @router.get("/google")
+@router.get("/google/login", include_in_schema=False)
 def google_login() -> RedirectResponse:
     if not google_configured():
         raise HTTPException(status_code=503, detail="Google OAuth is not configured.")
@@ -106,9 +125,10 @@ async def google_callback(request: Request, code: str | None = None, state: str 
         max_age=settings.AUTH_COOKIE_TTL_SECONDS,
         httponly=True,
         secure=cookie_secure(),
-        samesite="lax",
+        samesite="strict",
         path="/",
     )
+    set_csrf_cookie(response, new_csrf_token())
     return response
 
 
@@ -130,6 +150,7 @@ def logout(request: Request) -> JSONResponse:
                     session.commit()
     response = JSONResponse({"success": True})
     response.delete_cookie(settings.AUTH_COOKIE_NAME, path="/")
+    delete_csrf_cookie(response)
     return response
 
 

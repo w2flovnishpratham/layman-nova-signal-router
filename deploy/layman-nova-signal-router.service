@@ -5,13 +5,48 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/root/layman-nova-signal-router/backend
-Environment="PATH=/root/layman-nova-signal-router/backend/.venv/bin"
+User=layman
+Group=layman
+WorkingDirectory=/opt/layman-nova-signal-router/backend
+EnvironmentFile=/etc/layman/layman.env
+Environment="LAYMAN_ENV_FILE=/etc/layman/layman.env"
+Environment="PATH=/opt/layman-nova-signal-router/backend/.venv/bin"
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/root/layman-nova-signal-router/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8002
-Restart=always
+Environment="PYTHONDONTWRITEBYTECODE=1"
+UMask=0077
+ExecStart=/opt/layman-nova-signal-router/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8002 --workers 1
+Restart=on-failure
 RestartSec=3
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+RuntimeDirectory=layman
+RuntimeDirectoryMode=0700
+StateDirectory=layman
+StateDirectoryMode=0700
+LogsDirectory=layman
+LogsDirectoryMode=0700
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/layman /var/log/layman /run/layman
 
 [Install]
 WantedBy=multi-user.target

@@ -26,8 +26,10 @@ export function ChatLog({ messages, typing, children, panelKey, inlinePanel }: P
 
   useEffect(() => {
     const scrollToBottom = () => {
-      bottomRef.current?.scrollIntoView({
-        block: 'end',
+      const container = scrollRef.current
+      if (!container) return
+      container.scrollTo({
+        top: container.scrollHeight,
         behavior: reduceMotion ? 'auto' : 'smooth',
       })
     }

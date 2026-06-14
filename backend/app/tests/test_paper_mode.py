@@ -188,10 +188,12 @@ def test_broker_factory_requires_explicit_mode(tmp_path, monkeypatch):
 
 def test_webhook_rejects_when_mode_is_not_selected(tmp_path, monkeypatch):
     _isolate_paper_runtime(tmp_path, monkeypatch)
+    secret = "paper-mode-webhook-secret-value-123456"
+    credential_vault._LOCAL_MEMORY_PAYLOAD["webhook_secret"] = secret
     from app.main import app
 
     with TestClient(app) as client:
-        response = client.post("/webhook/tradingview", json={"secret": "unused"})
+        response = client.post("/webhook/tradingview", json={"secret": secret})
 
     assert response.status_code == 422
     assert response.json()["status"] == "ENGINE_MODE_NOT_SET"

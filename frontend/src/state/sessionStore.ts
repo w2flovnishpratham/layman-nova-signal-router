@@ -190,7 +190,11 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       config: nextConfig,
       engineMode: nextConfig.engineMode ?? state.engineMode,
       setupFlowStep: nextFlowStep(state.setupFlowStep, nextState),
+      setupDraft: nextState === 'BROKER_CONNECTED'
+        ? { ...state.setupDraft, accessToken: '' }
+        : state.setupDraft,
       lastSetupError: '',
+      typing: false,
       session: nextSession,
     }
   }

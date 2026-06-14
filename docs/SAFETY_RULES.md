@@ -9,7 +9,11 @@
 - The product default kill-switch setting can also block exits if changed in code.
 - Runtime max quantity per order rejects oversized alerts.
 - Runtime max trades per day rejects additional entries after the daily limit.
-- Duplicate signal protection rejects duplicate signal IDs.
+- SQL-backed duplicate protection atomically rejects duplicate signal IDs across web workers.
+- Timestamped webhook HMAC rejects stale or modified signed requests.
+- Optional webhook nonces are single-use per user.
+- Live orders are claimed by a durable correlation record before the Dhan order call.
+- Emergency stop, kill switch, live enablement, and current risk flags are re-checked immediately before the broker order method.
 - `REQUIRE_MARKET_HOURS=true` rejects alerts outside market hours.
 
 ## Credential Safety
@@ -29,3 +33,5 @@ For first production verification:
 - Keep `ENABLE_LIVE_ORDERS=false` in backend env.
 - Set max quantity per order to `1` in the setup UI.
 - Set max trades per day to `1` in the setup UI.
+- Keep `WORKER_ROLE=web` and `ENABLE_TRADING_WORKERS=false`.
+- Use a trusted webhook signing relay; direct unsigned TradingView delivery is not production-safe.

@@ -13,10 +13,11 @@ from typing import Any
 from urllib.parse import urlparse
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Literal
 
+from app.auth.security import require_user_if_auth_enabled
 from app.config import BACKEND_DIR, DEFAULT_NIFTY_LOT_SIZE, DISABLED_OPTION_SL_PERCENT, RUNTIME_STATE_DIR, settings
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import (
@@ -63,7 +64,7 @@ from app.services.user_connections import (
 )
 
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user_if_auth_enabled)])
 
 DHAN_CONNECT_RATE_LIMIT_MAX_ATTEMPTS = 5
 DHAN_CONNECT_RATE_LIMIT_WINDOW_SECONDS = 5 * 60

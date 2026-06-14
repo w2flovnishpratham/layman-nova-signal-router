@@ -4,10 +4,11 @@ import type { ClientCommand, ExitRules } from '../../types'
 
 interface Props {
   initial: ExitRules
-  onSend: (command: ClientCommand) => void
+  pending: boolean
+  onSend: (command: ClientCommand) => boolean
 }
 
-export function ExitRulesForm({ initial, onSend }: Props) {
+export function ExitRulesForm({ initial, pending, onSend }: Props) {
   const [exits, setExits] = useState<ExitRules>(initial)
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -28,6 +29,7 @@ export function ExitRulesForm({ initial, onSend }: Props) {
             key={mode}
             className={exits.mode === mode ? 'selected' : ''}
             type="button"
+            disabled={pending}
             onClick={() => setExits({ mode: mode as ExitRules['mode'], targetProfit: mode === 'flip_tp' ? 3000 : null })}
           >
             {label}
@@ -41,11 +43,12 @@ export function ExitRulesForm({ initial, onSend }: Props) {
             type="number"
             value={exits.targetProfit ?? 3000}
             min={100}
+            disabled={pending}
             onChange={(event) => setExits((current) => ({ ...current, targetProfit: Number(event.target.value) }))}
           />
         </label>
       ) : null}
-      <button type="submit">Lock exits</button>
+      <button type="submit" disabled={pending}>{pending ? 'Saving...' : 'Lock exits'}</button>
     </form>
   )
 }

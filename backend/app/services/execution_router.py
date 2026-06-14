@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from app.config import (
@@ -8,6 +9,7 @@ from app.config import (
     DEFAULT_PRODUCT_TYPE,
     DISABLED_OPTION_SL_PERCENT,
     DISABLED_OPTION_SL_PRICE_FRACTION,
+    GLOBAL_KILL_SWITCH_BLOCKS_EXITS,
     settings,
 )
 from app.schemas.signal import NormalizedSignal
@@ -26,9 +28,12 @@ from app.services.risk_manager import (
 from app.services.security_id_resolver import resolve_security_id
 from app.services.state_store import (
     clear_open_position,
+    get_app_state,
+    get_daily_risk,
     get_engine_mode,
     get_open_position,
     get_runtime_settings,
+    get_wallet_snapshot,
     record_entry_trade,
     set_open_position,
     update_app_state,
@@ -39,6 +44,12 @@ from app.services.user_connections import (
     active_user_id,
     record_order_route_audit,
     require_live_egress_assignment,
+)
+from app.services.trading_security import (
+    claim_order_route_attempt,
+    complete_order_route_attempt,
+    order_attempt_payload_hash,
+    request_principal_id,
 )
 from app.services.wallet_service import refresh_wallet_snapshot
 
@@ -68,8 +79,136 @@ def _build_correlation_id(signal: NormalizedSignal, action: str) -> str:
     Max 20 chars recommended; Dhan uses it as a client reference tag.
     """
     import hashlib
-    raw = f"{signal.signal_id}-{action}"
+    user_id = request_principal_id(active_user_id())
+    instrument_identity = "|".join(
+        str(value or "")
+        for value in (
+            signal.security_id,
+            signal.trading_symbol,
+            signal.symbol,
+            signal.expiry,
+            signal.strike,
+            signal.option_side,
+        )
+    )
+    raw = "|".join(
+        (
+            user_id,
+            signal.signal_id,
+            signal.strategy_code,
+            action,
+            instrument_identity,
+        )
+    )
     return hashlib.sha256(raw.encode()).hexdigest()[:20]
+
+
+def _instrument_identity(signal: NormalizedSignal, request_payload: dict[str, Any]) -> str:
+    return "|".join(
+        str(value or "")
+        for value in (
+            request_payload.get("exchangeSegment"),
+            request_payload.get("securityId"),
+            request_payload.get("tradingSymbol"),
+            signal.symbol,
+            signal.expiry,
+            signal.strike,
+            signal.option_side,
+        )
+    )
+
+
+def _parse_expiry_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _live_instrument_guard(
+    signal: NormalizedSignal,
+    *,
+    qty: int,
+    request_payload: dict[str, Any],
+    security_id_resolution: dict[str, Any],
+) -> str | None:
+    if qty <= 0:
+        return "REAL mode blocked: quantity must be positive."
+    if str(request_payload.get("exchangeSegment") or "").upper() != "NSE_FNO":
+        return "REAL mode blocked: unsupported exchange segment."
+    if str(request_payload.get("productType") or "").upper() != "INTRADAY":
+        return "REAL mode blocked: unsupported product type."
+    if str(signal.instrument_type or "").upper() not in {"OPT", "OPTIDX"}:
+        return "REAL mode blocked: only NIFTY index option instruments are supported."
+    if str(signal.symbol or "").upper() != "NIFTY":
+        return "REAL mode blocked: only NIFTY instruments are supported."
+    if str(signal.option_side or "").upper() not in {"CE", "PE"}:
+        return "REAL mode blocked: CE/PE option side is required."
+    expiry = _parse_expiry_date(signal.expiry)
+    if expiry is None:
+        return "REAL mode blocked: a valid ISO option expiry is required."
+    if settings.REQUIRE_FRESH_EXPIRY_LIVE and expiry < date.today():
+        return "REAL mode blocked: stale option expiry."
+    if not security_id_resolution.get("ok") or not request_payload.get("securityId"):
+        return security_id_resolution.get("reason") or "REAL mode blocked: securityId missing."
+    if (
+        settings.REQUIRE_INSTRUMENT_MASTER_VALIDATION_LIVE
+        and not security_id_resolution.get("source_path")
+    ):
+        return "REAL mode blocked: securityId was not verified against the configured Dhan scrip master."
+    return None
+
+
+def _final_live_order_guard(signal: NormalizedSignal, qty: int, action: str) -> str | None:
+    if get_engine_mode() != "live":
+        return "Live order blocked: engine mode changed before broker call."
+    if not settings.ENABLE_LIVE_ORDERS:
+        return "Live order blocked: ENABLE_LIVE_ORDERS=false before broker call."
+    if action == "ENTRY" and not bool(get_app_state().get("webhook_trading_enabled")):
+        return "Live order blocked: webhook trading was disabled before broker call."
+
+    current_runtime = get_runtime_settings()
+    if bool(current_runtime.get("emergency_stop")):
+        return "Live order blocked: emergency stop is active."
+    if bool(current_runtime.get("global_kill_switch")) and (
+        action == "ENTRY" or GLOBAL_KILL_SWITCH_BLOCKS_EXITS
+    ):
+        return "Live order blocked: global kill switch is active."
+    if action == "ENTRY" and not bool(current_runtime.get("allow_entry", True)):
+        return "Live order blocked: entry requests are disabled."
+    if action == "EXIT" and not bool(current_runtime.get("allow_exit", True)):
+        return "Live order blocked: exit requests are disabled."
+    try:
+        max_qty = int(current_runtime.get("max_qty_per_order") or 0)
+    except (TypeError, ValueError):
+        max_qty = 0
+    if action == "ENTRY" and max_qty > 0 and qty > max_qty:
+        return "Live order blocked: quantity exceeds the current per-order limit."
+    if action == "ENTRY" and not option_side_is_allowed(signal, current_runtime):
+        return "Live order blocked: the current option-side filter rejects this entry."
+    if action == "ENTRY":
+        try:
+            max_trades = int(current_runtime.get("max_trades_per_day") or 0)
+        except (TypeError, ValueError):
+            max_trades = 0
+        if max_trades > 0 and int(get_daily_risk().get("entry_count") or 0) >= max_trades:
+            return "Live order blocked: maximum entries for the day was reached before broker call."
+        try:
+            max_daily_loss = float(current_runtime.get("max_daily_loss") or 0)
+        except (TypeError, ValueError):
+            max_daily_loss = 0
+        session_pnl = get_wallet_snapshot().get("session_pnl")
+        if (
+            max_daily_loss > 0
+            and isinstance(session_pnl, (int, float))
+            and float(session_pnl) <= -max_daily_loss
+        ):
+            return "Live order blocked: maximum daily loss was reached before broker call."
+    if settings.REQUIRE_MARKET_HOURS and not _market_is_open():
+        return "Live order blocked: market-hours check failed before broker call."
+    return None
 
 
 def _build_dhan_payload_and_resolution(signal: NormalizedSignal, qty: int, action: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -419,6 +558,7 @@ def _record_order_route_audit_safe(
     *,
     status: str,
     route_kind: str,
+    request_id: str | None = None,
     order_id: str | None = None,
     message: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -432,6 +572,7 @@ def _record_order_route_audit_safe(
             status=status,
             route_kind=route_kind,
             signal_id=signal.signal_id,
+            request_id=request_id,
             order_id=order_id,
             message=message,
             metadata=metadata or {},
@@ -857,6 +998,22 @@ def _place_order(
                 security_id=request_payload.get("securityId"),
                 trading_symbol=request_payload.get("tradingSymbol"),
             )
+        instrument_error = _live_instrument_guard(
+            signal,
+            qty=qty,
+            request_payload=request_payload,
+            security_id_resolution=security_id_resolution,
+        )
+        if instrument_error:
+            return _blocked(
+                "LIVE_INSTRUMENT_BLOCKED",
+                instrument_error,
+                signal,
+                security_id_resolution=security_id_resolution,
+                security_id=request_payload.get("securityId"),
+                trading_symbol=request_payload.get("tradingSymbol"),
+                audit_event="LIVE_INSTRUMENT_BLOCKED",
+            )
         if not security_id_resolution.get("ok") or not request_payload.get("securityId"):
             return _blocked(
                 "BLOCKED",
@@ -989,10 +1146,82 @@ def _place_order(
         }
     )
 
-    if use_super_order:
-        result = client.place_super_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
-    else:
-        result = client.place_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
+    route_attempt_id: int | None = None
+    correlation_id = str(order_request_payload.get("correlationId") or "")
+    if engine_mode == "live":
+        attempt_claim = claim_order_route_attempt(
+            user_id=request_principal_id(active_user_id()),
+            correlation_id=correlation_id,
+            signal=signal,
+            instrument_identity=_instrument_identity(signal, request_payload),
+            payload_hash=order_attempt_payload_hash(_public_order_request(order_request_payload)),
+        )
+        route_attempt_id = attempt_claim.record_id
+        if not attempt_claim.claimed:
+            reason = (
+                "Live order blocked: correlation id was reused with different order data."
+                if attempt_claim.suspicious
+                else "Live order blocked: this signal already has a durable route attempt."
+            )
+            _record_order_route_audit_safe(
+                signal,
+                status="suspicious_duplicate" if attempt_claim.suspicious else "duplicate",
+                route_kind=place_method,
+                request_id=correlation_id,
+                message=reason,
+            )
+            return _blocked(
+                "LIVE_ORDER_DUPLICATE",
+                reason,
+                signal,
+                security_id_resolution=security_id_resolution,
+                security_id=request_payload.get("securityId"),
+                trading_symbol=request_payload.get("tradingSymbol"),
+                audit_event="LIVE_ORDER_DUPLICATE",
+                result_extra={"correlation_id": correlation_id},
+            )
+
+        final_guard_error = _final_live_order_guard(signal, qty, action)
+        if final_guard_error:
+            complete_order_route_attempt(route_attempt_id, status="blocked", message=final_guard_error)
+            _record_order_route_audit_safe(
+                signal,
+                status="blocked",
+                route_kind=place_method,
+                request_id=correlation_id,
+                message=final_guard_error,
+            )
+            return _blocked(
+                "FINAL_LIVE_GUARD_BLOCKED",
+                final_guard_error,
+                signal,
+                security_id_resolution=security_id_resolution,
+                security_id=request_payload.get("securityId"),
+                trading_symbol=request_payload.get("tradingSymbol"),
+                audit_event="FINAL_LIVE_GUARD_BLOCKED",
+                result_extra={"correlation_id": correlation_id},
+            )
+
+    try:
+        if use_super_order:
+            result = client.place_super_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
+        else:
+            result = client.place_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
+    except Exception:
+        if engine_mode == "live":
+            complete_order_route_attempt(
+                route_attempt_id,
+                status="broker_exception",
+                message="Broker order call raised an exception.",
+            )
+            _record_order_route_audit_safe(
+                signal,
+                status="broker_exception",
+                route_kind=place_method,
+                request_id=correlation_id,
+                message="Broker order call raised an exception.",
+            )
+        raise
 
     log_order_event(
         {
@@ -1027,6 +1256,7 @@ def _place_order(
             signal,
             status="placed" if result.success else "failed",
             route_kind=place_method,
+            request_id=correlation_id,
             order_id=result.order_id,
             message=result.error or result.status,
             metadata={
@@ -1120,10 +1350,19 @@ def _place_order(
             current_levels=super_order_levels,
         )
 
+    if engine_mode == "live":
+        complete_order_route_attempt(
+            route_attempt_id,
+            status="placed" if final_success else "failed",
+            order_id=result.order_id,
+            message=result.error or final_status,
+        )
+
     return {
         "blocked": False,
         "success": final_success,
         "order_id": result.order_id,
+        "correlation_id": correlation_id,
         "status": final_status,
         "broker_status": final_status,
         "avg_price": final_avg_price,

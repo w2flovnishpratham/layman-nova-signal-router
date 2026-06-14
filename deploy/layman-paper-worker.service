@@ -1,0 +1,56 @@
+[Unit]
+Description=Layman NOVA Paper Queue Worker
+After=network-online.target layman-nova-signal-router.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=layman
+Group=layman
+WorkingDirectory=/opt/layman-nova-signal-router/backend
+EnvironmentFile=/etc/layman/layman.env
+Environment="LAYMAN_ENV_FILE=/etc/layman/layman.env"
+Environment="PATH=/opt/layman-nova-signal-router/backend/.venv/bin"
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="WORKER_ROLE=paper-worker"
+Environment="ENABLE_PAPER_WORKERS=true"
+Environment="ENABLE_LIVE_ORDERS=false"
+Environment="PAPER_QUEUE_INLINE_LOCAL=false"
+UMask=0077
+ExecStart=/opt/layman-nova-signal-router/backend/.venv/bin/python -m app.services.worker_runtime
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+RuntimeDirectory=layman
+RuntimeDirectoryMode=0700
+StateDirectory=layman
+StateDirectoryMode=0700
+LogsDirectory=layman
+LogsDirectoryMode=0700
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/layman /var/log/layman /run/layman
+
+[Install]
+WantedBy=multi-user.target

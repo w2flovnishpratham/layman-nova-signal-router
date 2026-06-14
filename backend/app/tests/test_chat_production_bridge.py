@@ -60,7 +60,10 @@ def test_chat_session_uses_persistent_production_webhook(tmp_path, monkeypatch):
         second = client.post("/api/session/start").json()
 
     assert first["webhookUrl"].endswith("/webhook/tradingview")
-    assert first["webhookSecret"] == second["webhookSecret"]
+    assert first["webhookSecret"]
+    assert first["webhookSecretAvailableOnce"] is True
+    assert second["webhookSecret"] is None
+    assert second["webhookSecretAvailableOnce"] is False
     assert first["webhookSecret"] == credential_vault.get_webhook_secret()
 
 
@@ -126,9 +129,14 @@ def test_production_readiness_rejects_local_http_webhook_url(tmp_path, monkeypat
     _isolate_runtime(tmp_path, monkeypatch)
     monkeypatch.setattr(settings, "APP_ENV", "production")
     monkeypatch.setattr(settings, "BACKEND_PUBLIC_BASE_URL", "http://127.0.0.1:8001")
-    state_store.set_engine_mode("paper")
+    from app.services.user_context import reset_current_user_id, set_current_user_id
 
-    readiness = setup_router.setup_readiness(check_dhan_ping=False)
+    token = set_current_user_id("u_production_readiness_test")
+    try:
+        state_store.set_engine_mode("paper")
+        readiness = setup_router.setup_readiness(check_dhan_ping=False)
+    finally:
+        reset_current_user_id(token)
 
     assert "BACKEND_PUBLIC_BASE_URL must use HTTPS in production." in readiness["issues"]
 
@@ -469,15 +477,16 @@ def test_real_dhan_client_applies_global_request_and_response_hooks():
 def test_webhook_logging_redacts_secrets_and_hmac_validation_contract():
     secret = "strong-webhook-secret-value-123456"
     raw_body = f'{{"secret":"{secret}","nested":{{"access_token":"daily-token"}},"action":"ENTRY"}}'
-    signature = hmac.new(secret.encode(), raw_body.encode(), hashlib.sha256).hexdigest()
+    timestamp = "1781321400"
+    signature = hmac.new(secret.encode(), f"{timestamp}.{raw_body}".encode(), hashlib.sha256).hexdigest()
 
     logged = _safe_raw_body_for_log(raw_body)
 
     assert secret not in logged
     assert "daily-token" not in logged
     assert logged.count("[REDACTED]") == 2
-    assert _valid_webhook_signature(raw_body, secret, f"sha256={signature}") is True
-    assert _valid_webhook_signature(raw_body, secret, "sha256=wrong") is False
+    assert _valid_webhook_signature(raw_body, secret, f"sha256={signature}", timestamp) is True
+    assert _valid_webhook_signature(raw_body, secret, "sha256=wrong", timestamp) is False
 
 
 def test_chat_custom_exit_rules_configure_dhan_super_order_sl_and_tp(tmp_path, monkeypatch):
