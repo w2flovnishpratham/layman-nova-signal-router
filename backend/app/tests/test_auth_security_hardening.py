@@ -22,10 +22,28 @@ def test_email_allowed_fails_closed_when_admin_emails_empty(monkeypatch) -> None
 
 
 def test_email_allowed_requires_configured_email(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ALLOW_PUBLIC_SIGNUP", False)
     monkeypatch.setattr(settings, "ADMIN_EMAILS", "ops@example.test")
 
     assert email_allowed("ops@example.test") is True
     assert email_allowed("other@example.test") is False
+
+
+def test_public_signup_allows_any_verified_email_when_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ALLOW_PUBLIC_SIGNUP", True)
+    monkeypatch.setattr(settings, "ADMIN_EMAILS", "ops@example.test")
+
+    # Anyone may log in, but a blank email is still rejected.
+    assert email_allowed("anyone@gmail.test") is True
+    assert email_allowed("someone-else@workspace.test") is True
+    assert email_allowed("   ") is False
+
+
+def test_public_signup_disabled_still_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ALLOW_PUBLIC_SIGNUP", False)
+    monkeypatch.setattr(settings, "ADMIN_EMAILS", "")
+
+    assert email_allowed("anyone@gmail.test") is False
 
 
 def test_auth_cannot_be_disabled_in_production(monkeypatch) -> None:

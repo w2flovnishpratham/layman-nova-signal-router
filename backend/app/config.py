@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
     AUTH_DATABASE_URL: str = ""
     ADMIN_EMAILS: str = ""
+    # Open registration. When False (default, fail-closed) only ADMIN_EMAILS may
+    # log in. When True, any Google account with a verified email may log in and
+    # use the service (paper mode). ADMIN_EMAILS still designates admins, and all
+    # live-trading gates (approval, executor assignment, etc.) remain in force.
+    ALLOW_PUBLIC_SIGNUP: bool = False
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = ""

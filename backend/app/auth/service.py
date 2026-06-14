@@ -26,8 +26,16 @@ def admin_emails() -> set[str]:
 
 
 def email_allowed(email: str) -> bool:
+    normalized = email.strip().lower()
+    if not normalized:
+        return False
+    # Open registration is an explicit opt-in. The email is still verified by the
+    # OAuth callback (email_verified) before this is reached.
+    if settings.ALLOW_PUBLIC_SIGNUP:
+        return True
+    # Fail closed: only the configured allowlist may log in.
     allowed = admin_emails()
-    return bool(allowed) and email.strip().lower() in allowed
+    return bool(allowed) and normalized in allowed
 
 
 def find_user_by_id(session: Session, user_id: str) -> User | None:
