@@ -7,6 +7,7 @@ import { Header } from './components/Header'
 import { SafetyBanner } from './components/SafetyBanner'
 import { SafetyReadiness } from './components/SafetyReadiness'
 import { StrategyPlatform } from './components/StrategyPlatform'
+import { TradingAssistantFlow } from './components/TradingAssistantFlow'
 import { ChatLog } from './components/messages/ChatLog'
 import { SetupPanel } from './components/setup/SetupPanel'
 import { getAuthStatus, getSafetyStatus, getSession, logout, prepareReconfigure, startSession } from './api'
@@ -27,6 +28,7 @@ function App() {
   const [reconfigurePending, setReconfigurePending] = useState(false)
   const [logoutPending, setLogoutPending] = useState(false)
   const [strategyRefreshNonce, setStrategyRefreshNonce] = useState(0)
+  const [adminView, setAdminView] = useState(() => window.location.hash === '#admin')
   const pendingActionKeysRef = useRef(new Set<string>())
   const pendingTimeoutsRef = useRef(new Map<string, number>())
   const session = useSessionStore((state) => state.session)
@@ -192,6 +194,12 @@ function App() {
     document.documentElement.dataset.mode = engineMode ?? 'unset'
   }, [engineMode])
 
+  useEffect(() => {
+    const onHash = () => setAdminView(window.location.hash === '#admin')
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
   useEffect(() => () => clearPendingActions(), [clearPendingActions])
 
   function send(command: ClientCommand): boolean {
@@ -300,6 +308,45 @@ function App() {
     />
   )
 
+  const showAdminConsole = authStatus.isAdmin && adminView
+
+  if (!showAdminConsole) {
+    return (
+      <main className="nova-app">
+        <Header
+          status={wsStatus}
+          clientId={config.broker?.clientId}
+          engineLive={engineLive}
+          engineMode={engineMode}
+          setupState={setupState}
+          userEmail={authStatus?.user?.email}
+          onKill={() => send({ type: 'session.kill', data: {} })}
+          onReconfigure={reconfigure}
+          onLogout={authStatus?.authRequired ? signOut : undefined}
+          killPending={pendingActions.has('session.kill')}
+          reconfigurePending={reconfigurePending}
+          logoutPending={logoutPending}
+          actionError={actionError}
+        />
+
+        <SafetyBanner
+          engineMode={engineMode}
+          safety={safetyStatus}
+          wsStatus={wsStatus}
+          error={safetyError}
+        />
+
+        <TradingAssistantFlow
+          refreshNonce={strategyRefreshNonce}
+          safety={safetyStatus}
+          onOpenOperatorConsole={authStatus.isAdmin ? () => { window.location.hash = 'admin' } : undefined}
+        />
+
+        <footer className="app-footer">(c) 2026 Layman Signal Route. Paper beta; live trading remains policy-gated.</footer>
+      </main>
+    )
+  }
+
   return (
     <main className="nova-app">
       <Header
@@ -324,6 +371,11 @@ function App() {
         wsStatus={wsStatus}
         error={safetyError}
       />
+
+      <div className="operator-console-bar">
+        <span>Operator console (admin)</span>
+        <button type="button" className="assistant-link" onClick={() => { window.location.hash = '' }}>← Back to assistant</button>
+      </div>
 
       <div className="safety-overview-shell">
         <SafetyReadiness
