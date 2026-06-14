@@ -112,6 +112,59 @@ def test_google_user_upsert_rejects_email_collision(monkeypatch) -> None:
             upsert_google_user(session, email=email, google_sub=f"sub-b-{suffix}", name=None, avatar_url=None)
 
 
+def test_google_callback_sets_cookie_without_detached_instance(monkeypatch) -> None:
+    # Regression: google_callback must capture scalar IDs while the SQLAlchemy
+    # session is open. Reading user.id / auth_session.id after the session closed
+    # raised sqlalchemy.orm.exc.DetachedInstanceError (HTTP 500). A successful 302
+    # with an auth cookie proves the detached access no longer happens.
+    monkeypatch.setattr(settings, "APP_ENV", "local")
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", True)
+    monkeypatch.setattr(settings, "SESSION_TOKEN_SECRET", "s" * 32)
+    init_auth_db()
+
+    suffix = secrets.token_hex(8)
+    email = f"oauth-{suffix}@example.test"
+    monkeypatch.setattr(settings, "ADMIN_EMAILS", email)
+
+    async def fake_exchange(_code: str) -> dict:
+        return {"access_token": "fake-google-access-token"}
+
+    async def fake_userinfo(_access_token: str) -> dict:
+        return {
+            "email": email,
+            "sub": f"google-sub-{suffix}",
+            "email_verified": True,
+            "name": "OAuth Tester",
+            "picture": None,
+        }
+
+    monkeypatch.setattr("app.auth.router._exchange_code", fake_exchange)
+    monkeypatch.setattr("app.auth.router._fetch_userinfo", fake_userinfo)
+
+    from app.main import app
+    from app.store.session_token import verify_auth_token
+
+    state = f"state-{secrets.token_hex(8)}"
+    with TestClient(app) as client:
+        client.cookies.set(settings.OAUTH_STATE_COOKIE_NAME, state)
+        response = client.get(
+            f"/api/auth/google/callback?code=auth-code&state={state}",
+            follow_redirects=False,
+        )
+
+    # 302 (not 500) means no DetachedInstanceError was raised.
+    assert response.status_code == 302
+    set_cookies = "\n".join(response.headers.get_list("set-cookie"))
+    assert f"{settings.AUTH_COOKIE_NAME}=" in set_cookies
+
+    # The cookie carries a valid token built from the captured scalar IDs.
+    auth_cookie = client.cookies.get(settings.AUTH_COOKIE_NAME)
+    assert auth_cookie
+    payload = verify_auth_token(auth_cookie)
+    assert payload.get("uid")
+    assert payload.get("asid")
+
+
 def test_auth_enabled_webhook_rejects_legacy_global_secret(tmp_path, monkeypatch) -> None:
     state_dir = tmp_path / "runtime_state"
     monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")

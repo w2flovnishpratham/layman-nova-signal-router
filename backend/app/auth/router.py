@@ -116,12 +116,17 @@ async def google_callback(request: Request, code: str | None = None, state: str 
         except ValueError:
             return _frontend_redirect("oauth_error", "not_allowed")
         auth_session = create_auth_session(session, user)
+        # Capture scalar IDs while the ORM instances are still attached to the
+        # live session. Reading them after the session closes would raise
+        # DetachedInstanceError (instances expire on commit).
+        user_id = user.id
+        auth_session_id = auth_session.id
 
     response = _frontend_redirect("login", "ok")
     response.delete_cookie(settings.OAUTH_STATE_COOKIE_NAME, path="/")
     response.set_cookie(
         settings.AUTH_COOKIE_NAME,
-        issue_auth_token(user.id, auth_session_id=auth_session.id),
+        issue_auth_token(user_id, auth_session_id=auth_session_id),
         max_age=settings.AUTH_COOKIE_TTL_SECONDS,
         httponly=True,
         secure=cookie_secure(),

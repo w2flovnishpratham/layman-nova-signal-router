@@ -64,4 +64,8 @@ When `DHAN_MODE=REAL` and `ENABLE_LIVE_ORDERS=false`, alerts can be parsed and l
 - [Production checklist](docs/PRODUCTION_CHECKLIST.md)
 - [API contract](docs/API_CONTRACT.md)
 - [TradingView webhook format](docs/TRADINGVIEW_WEBHOOK_FORMAT.md)
+
+Production/live webhooks require `X-Nova-Timestamp` and an HMAC-SHA256
+`X-Nova-Signature` over `<timestamp>.<raw_body>`. TradingView cannot generate
+these headers directly, so production alerts require a trusted signing relay.
 - [Safety rules](docs/SAFETY_RULES.md)
