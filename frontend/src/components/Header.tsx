@@ -1,5 +1,6 @@
-import { FlaskConical, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
+import { FlaskConical, LogOut, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
 import { useRef, useState } from 'react'
+import type { AuthUser } from '../api'
 import { modeBadgeText } from '../lib/mode'
 import type { EngineMode, SetupState, WsStatus } from '../types'
 
@@ -9,8 +10,10 @@ interface Props {
   engineLive: boolean
   engineMode: EngineMode | null
   setupState: SetupState
+  user: AuthUser
   onKill: () => void
   onReconfigure: () => void
+  onLogout: () => void
 }
 
 export function Header({
@@ -19,8 +22,10 @@ export function Header({
   engineLive,
   engineMode,
   setupState,
+  user,
   onKill,
   onReconfigure,
+  onLogout,
 }: Props) {
   const [killDialogOpen, setKillDialogOpen] = useState(false)
   const holdTimer = useRef<number | null>(null)
@@ -63,6 +68,10 @@ export function Header({
           {clientId ? (
             <div className="client-badge">CLIENT: {maskClientId(clientId)}</div>
           ) : null}
+          <div className="user-badge" title={user.email}>
+            {user.picture_url ? <img src={user.picture_url} alt="" referrerPolicy="no-referrer" /> : null}
+            <span>{user.name || user.email}</span>
+          </div>
           {engineLive ? (
             <>
               <button className="kill-button" type="button" onClick={() => setKillDialogOpen(true)}>
@@ -75,6 +84,9 @@ export function Header({
               </button>
             </>
           ) : null}
+          <button className="icon-button" type="button" aria-label="Log out" title="Log out" onClick={onLogout}>
+            <LogOut size={15} />
+          </button>
         </div>
       </header>
 

@@ -376,6 +376,101 @@ code {
   justify-content: flex-end;
 }
 
+.user-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 190px;
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.user-badge img {
+  width: 25px;
+  height: 25px;
+  border: 1px solid var(--border-hi);
+  border-radius: 999px;
+}
+
+.user-badge span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(460px, 100%);
+  border: 1px solid rgba(168, 85, 247, 0.28);
+  border-radius: 18px;
+  background: rgba(9, 7, 14, 0.92);
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.52), 0 0 42px rgba(126, 34, 206, 0.12);
+  padding: 34px;
+  text-align: center;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #f4d7ff;
+  font-size: 14px;
+}
+
+.auth-icon {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  margin: 30px 0 18px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-2));
+  color: var(--accent);
+}
+
+.auth-card h1 {
+  margin: 8px 0 0;
+  font-size: 26px;
+}
+
+.auth-copy {
+  margin: 13px 0 22px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.auth-actions {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.google-login-button {
+  width: 100%;
+  min-height: 44px;
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: linear-gradient(90deg, #8b19df, #6d16c5);
+  font-weight: 700;
+}
+
+.auth-footnote {
+  margin: 20px 0 0;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
 .icon-button {
   width: 34px;
   height: 34px;

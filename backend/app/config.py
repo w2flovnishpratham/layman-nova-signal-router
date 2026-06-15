@@ -117,6 +117,69 @@ class Settings(BaseSettings):
 
     DEBUG_ENABLED: bool = False
 
+    # ------------------------------------------------------------------
+    # Multi-user / SaaS layer (additive — paper mode keeps working as-is)
+    # ------------------------------------------------------------------
+    # Neon PostgreSQL connection string. Supplied via environment ONLY.
+    # Example: postgresql://user:pass@host/db?sslmode=require&channel_binding=require
+    # The DB layer normalizes postgresql:// -> postgresql+psycopg:// at runtime.
+    DATABASE_URL: str = ""
+
+    # Auth. When AUTH_REQUIRED=false (local dev) a deterministic anonymous
+    # "dev user" is used so the existing single-user paper flow keeps working.
+    AUTH_REQUIRED: bool = False
+
+    # App-wide signing secret for the session cookie. In production this MUST be
+    # overridden with a long random value (falls back to SESSION_TOKEN_SECRET).
+    APP_SECRET_KEY: str = ""
+
+    # Per-user credential encryption key (Fernet). Falls back to the legacy
+    # TOKEN_ENCRYPTION_KEY when unset so existing deployments keep working.
+    CREDENTIAL_ENCRYPTION_KEY: str = ""
+
+    # Where the encrypted credential vault lives: "db" (per-user, Neon) or
+    # "file" (legacy single global vault). Defaults to db for the SaaS build.
+    CREDENTIAL_VAULT_BACKEND: str = "db"
+
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = ""
+    FRONTEND_URL: str = ""
+
+    # Comma-separated admin emails. Only gates /api/admin/* — never blocks login.
+    ADMIN_EMAILS: str = ""
+
+    # Live-mode safety. Real orders require BOTH the global flag and per-user
+    # credentials plus an explicit real_orders execution mode.
+    DHAN_READ_ONLY_REAL_DATA: bool = True
+
+    # Cookie configuration
+    SESSION_COOKIE_NAME: str = "nova_session"
+    SESSION_COOKIE_SECURE: bool = True
+    SESSION_COOKIE_SAMESITE: str = "lax"
+    SESSION_COOKIE_DOMAIN: str = ""
+
+    @property
+    def app_secret(self) -> str:
+        return (self.APP_SECRET_KEY or self.SESSION_TOKEN_SECRET or "").strip()
+
+    @property
+    def credential_encryption_key(self) -> str:
+        return (self.CREDENTIAL_ENCRYPTION_KEY or self.TOKEN_ENCRYPTION_KEY or "").strip()
+
+    @property
+    def admin_emails(self) -> set[str]:
+        return {
+            item.strip().lower()
+            for item in (self.ADMIN_EMAILS or "").split(",")
+            if item.strip()
+        }
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV.strip().lower() == "production"
+
 
 settings = Settings()
 

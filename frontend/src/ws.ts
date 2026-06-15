@@ -125,7 +125,10 @@ export class SessionWS {
   private async sessionState(): Promise<'exists' | 'missing' | 'unavailable'> {
     if (this.invalidated) return 'missing'
     try {
-      const response = await fetch(backendHttpUrl(`/api/session/${this.sessionId}`), { cache: 'no-store' })
+      const response = await fetch(backendHttpUrl(`/api/session/${this.sessionId}`), {
+        cache: 'no-store',
+        credentials: 'include',
+      })
       if (response.status === 404) return 'missing'
       return response.ok ? 'exists' : 'unavailable'
     } catch {

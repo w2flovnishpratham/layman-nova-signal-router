@@ -10,6 +10,7 @@
 !.env.example
 !.env.local.example
 !.env.live.example
+!.env.production.example
 
 # ── Runtime state & logs (generated at runtime) ─────────────
 runtime_state/

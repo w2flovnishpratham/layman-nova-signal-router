@@ -689,8 +689,9 @@ def test_new_session_hydrates_open_trade_without_legacy_poller(tmp_path, monkeyp
 
     async def scenario():
         from app.api.session import start_session
+        from app.services.user_context import dev_user
 
-        bootstrap = await start_session()
+        bootstrap = await start_session(dev_user())
         session = await session_store.get(str(bootstrap["sessionId"]))
         assert session is not None
         await session_store.update_state(session.id, SetupState.ENDED, {})

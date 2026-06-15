@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 
+from app.auth.dependencies import get_current_websocket_user
 from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.events import event
 from app.domain.state_machine import SetupState, StateTransitionError, validate_command
@@ -17,15 +18,21 @@ from app.services.state_store import get_engine_mode, get_open_position, get_wal
 from app.services.wallet_service import refresh_wallet_snapshot
 from app.store.redis_session import session_store
 from app.store.session_token import SessionTokenError, verify_session_token
+from app.services.user_context import CurrentUser
 
 
 router = APIRouter(tags=["websocket"])
 
 
 @router.websocket("/ws/session/{session_id}")
-async def session_websocket(websocket: WebSocket, session_id: str, token: str = Query(default="")) -> None:
+async def session_websocket(
+    websocket: WebSocket,
+    session_id: str,
+    token: str = Query(default=""),
+    user: CurrentUser = Depends(get_current_websocket_user),
+) -> None:
     session = await session_store.get(session_id)
-    if session is None:
+    if session is None or session.user_id != user.id_str:
         await websocket.close(code=4404, reason="Session not found")
         return
 

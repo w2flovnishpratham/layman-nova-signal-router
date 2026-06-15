@@ -4,13 +4,21 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import session as chat_session
 from app.api import ws as chat_ws
+from app.auth.dependencies import get_current_user
 from app.config import settings
 from app.routers import broker, control, dashboard, debug, engine, orders, positions, setup, webhook
+from app.routers import admin as admin_router
+from app.routers import live as live_router
+from app.routers import user_credentials as user_credentials_router
+from app.routers import user_webhook as user_webhook_router
+from app.auth import google as google_auth
+from app.db.engine import database_configured, init_db
+from app.services.user_credential_vault import vault_ready as user_vault_ready
 from app.services.audit_logger import log_audit_event
 from app.services.chat_event_publisher import bind_chat_event_loop, clear_chat_event_loop
 from app.services.credential_vault import vault_status
@@ -36,6 +44,24 @@ def validate_production_configuration() -> None:
     if settings.DHAN_MODE.upper() != "REAL":
         raise RuntimeError("Production requires DHAN_MODE=REAL; mock routing is only allowed for local development and tests.")
 
+    # Multi-user SaaS layer requirements in production.
+    if len(settings.app_secret) < 32:
+        raise RuntimeError("APP_SECRET_KEY must be set to at least 32 random characters in production.")
+    if not settings.credential_encryption_key:
+        raise RuntimeError(
+            "CREDENTIAL_ENCRYPTION_KEY (or TOKEN_ENCRYPTION_KEY) must be set in production; refusing to start."
+        )
+    if not database_configured():
+        raise RuntimeError("DATABASE_URL must be set in production (Neon PostgreSQL).")
+    if settings.AUTH_REQUIRED:
+        for name, value in (
+            ("GOOGLE_CLIENT_ID", settings.GOOGLE_CLIENT_ID),
+            ("GOOGLE_CLIENT_SECRET", settings.GOOGLE_CLIENT_SECRET),
+            ("GOOGLE_REDIRECT_URI", settings.GOOGLE_REDIRECT_URI),
+        ):
+            if not (value or "").strip():
+                raise RuntimeError(f"AUTH_REQUIRED=true but {name} is not configured.")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -46,6 +72,19 @@ async def lifespan(app: FastAPI):
     vault = vault_status()
     if settings.APP_ENV.lower() == "production" and not vault["ready"]:
         raise RuntimeError(f"Encrypted credential vault unavailable: {vault['error']}")
+    # Multi-user layer: ensure Neon schema exists (additive; paper mode unaffected).
+    if database_configured():
+        try:
+            init_db()
+            logger.info("Neon database schema ensured.")
+        except Exception as exc:  # pragma: no cover
+            if settings.is_production:
+                raise
+            logger.warning("Database init skipped (dev): %s", exc)
+    elif settings.is_production:
+        raise RuntimeError("DATABASE_URL must be configured in production.")
+    if settings.is_production and not user_vault_ready():
+        raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY is missing or invalid; refusing to start in production.")
     start_instrument_cache_warmup()
     runtime_settings = get_runtime_settings()
     logger.info("NOVA Signal Router backend starting.")
@@ -95,31 +134,42 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
-cors_origins = [settings.FRONTEND_ORIGIN]
+cors_origins = [settings.FRONTEND_ORIGIN, settings.FRONTEND_URL]
 if settings.APP_ENV.lower() != "production":
     cors_origins.extend(["http://localhost:5173", "http://127.0.0.1:5173"])
-cors_origins = [origin for origin in dict.fromkeys(cors_origins) if origin]
+cors_origins = [origin.rstrip("/") for origin in dict.fromkeys(cors_origins) if origin]
 
+# allow_credentials=True is required so the auth session cookie is sent on
+# cross-origin API calls. Origins must therefore be explicit (never "*").
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(setup.router, prefix="/api", tags=["Setup"])
-app.include_router(engine.router, prefix="/api", tags=["Engine"])
-app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
-app.include_router(orders.router, prefix="/api", tags=["Orders"])
-app.include_router(positions.router, prefix="/api", tags=["Positions"])
-app.include_router(control.router, prefix="/api/control", tags=["Control"])
-app.include_router(broker.router, prefix="/api/broker", tags=["Broker"])
-app.include_router(debug.router, prefix="/api/debug", tags=["Debug"])
+authenticated = [Depends(get_current_user)]
+
+app.include_router(setup.router, prefix="/api", tags=["Setup"], dependencies=authenticated)
+app.include_router(engine.router, prefix="/api", tags=["Engine"], dependencies=authenticated)
+app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"], dependencies=authenticated)
+app.include_router(orders.router, prefix="/api", tags=["Orders"], dependencies=authenticated)
+app.include_router(positions.router, prefix="/api", tags=["Positions"], dependencies=authenticated)
+app.include_router(control.router, prefix="/api/control", tags=["Control"], dependencies=authenticated)
+app.include_router(broker.router, prefix="/api/broker", tags=["Broker"], dependencies=authenticated)
+app.include_router(debug.router, prefix="/api/debug", tags=["Debug"], dependencies=authenticated)
 app.include_router(webhook.router, prefix="/webhook", tags=["Webhook"])
 app.include_router(webhook.router, prefix="/api/webhook", tags=["Webhook"])
 app.include_router(chat_session.router)
 app.include_router(chat_ws.router)
+
+# Multi-user SaaS layer (additive — does not alter existing paper-mode routes).
+app.include_router(google_auth.router)
+app.include_router(user_credentials_router.router)
+app.include_router(live_router.router)
+app.include_router(user_webhook_router.router)
+app.include_router(admin_router.router)
 
 
 def _health() -> dict:

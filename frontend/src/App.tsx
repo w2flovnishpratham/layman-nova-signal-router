@@ -1,10 +1,19 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AuthScreen } from './components/AuthScreen'
 import { EngineListening } from './components/EngineListening'
 import { EngineSidebar } from './components/EngineSidebar'
 import { Header } from './components/Header'
 import { ChatLog } from './components/messages/ChatLog'
 import { SetupPanel } from './components/setup/SetupPanel'
-import { getSession, prepareReconfigure, startSession } from './api'
+import {
+  getCurrentUser,
+  getSession,
+  googleLoginUrl,
+  logout,
+  prepareReconfigure,
+  startSession,
+} from './api'
+import type { AuthUser } from './api'
 import { DEFAULT_NIFTY_LOT_SIZE } from './lib/trading'
 import { useSessionStore } from './state/sessionStore'
 import { SessionWS } from './ws'
@@ -13,6 +22,9 @@ import type { ClientCommand } from './types'
 function App() {
   const wsRef = useRef<SessionWS | null>(null)
   const [bootNonce, setBootNonce] = useState(0)
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authError, setAuthError] = useState('')
   const session = useSessionStore((state) => state.session)
   const setupFlowStep = useSessionStore((state) => state.setupFlowStep)
   const setupDraft = useSessionStore((state) => state.setupDraft)
@@ -39,7 +51,39 @@ function App() {
   const updateSetupDraft = useSessionStore((state) => state.updateSetupDraft)
   const setSetupFlowStep = useSessionStore((state) => state.setSetupFlowStep)
 
+  const verifyLogin = useCallback(() => {
+    setAuthLoading(true)
+    setAuthError('')
+    getCurrentUser()
+      .then(setAuthUser)
+      .catch((error: unknown) => {
+        setAuthUser(null)
+        setAuthError(error instanceof Error ? error.message : 'Could not verify login')
+      })
+      .finally(() => setAuthLoading(false))
+  }, [])
+
   useEffect(() => {
+    let mounted = true
+    getCurrentUser()
+      .then((user) => {
+        if (mounted) setAuthUser(user)
+      })
+      .catch((error: unknown) => {
+        if (!mounted) return
+        setAuthUser(null)
+        setAuthError(error instanceof Error ? error.message : 'Could not verify login')
+      })
+      .finally(() => {
+        if (mounted) setAuthLoading(false)
+      })
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!authUser) return
     let mounted = true
 
     startSession()
@@ -71,7 +115,7 @@ function App() {
       mounted = false
       wsRef.current?.close()
     }
-  }, [applyServerEvent, bootNonce, loadBootstrap, loadSnapshot, resetSession, setBootError, setWsStatus])
+  }, [applyServerEvent, authUser, bootNonce, loadBootstrap, loadSnapshot, resetSession, setBootError, setWsStatus])
 
   useEffect(() => {
     document.documentElement.dataset.mode = engineMode ?? 'unset'
@@ -99,6 +143,28 @@ function App() {
     }
   }
 
+  async function handleLogout() {
+    wsRef.current?.close()
+    resetSession()
+    setBootError('')
+    try {
+      await logout()
+    } finally {
+      setAuthUser(null)
+    }
+  }
+
+  if (authLoading || !authUser) {
+    return (
+      <AuthScreen
+        loading={authLoading}
+        error={authError}
+        onLogin={() => window.location.assign(googleLoginUrl())}
+        onRetry={verifyLogin}
+      />
+    )
+  }
+
   const engineLive = setupState === 'LIVE' || setupState === 'PAUSED'
   const setupPanel = (
     <SetupPanel
@@ -123,8 +189,10 @@ function App() {
         engineLive={engineLive}
         engineMode={engineMode}
         setupState={setupState}
+        user={authUser}
         onKill={() => send({ type: 'session.kill', data: {} })}
         onReconfigure={reconfigure}
+        onLogout={handleLogout}
       />
 
       <section className={engineLive ? 'engine-shell' : 'chat-shell'} aria-label="Nova trading session">

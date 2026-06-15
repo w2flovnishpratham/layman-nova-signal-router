@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.auth.dependencies import get_current_user
 from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.events import event
 from app.domain.state_machine import SetupState
@@ -13,20 +14,26 @@ from app.services.chat_event_publisher import active_trade_from_position
 from app.services.state_store import get_app_state, get_daily_risk, get_engine_mode, get_open_position, get_runtime_settings, get_wallet_snapshot
 from app.store.redis_session import session_store
 from app.store.session_token import issue_session_token
+from app.services.user_context import CurrentUser
 
 
 router = APIRouter(prefix="/api/session", tags=["session"])
 
 
 @router.post("/start")
-async def start_session() -> dict[str, object]:
+async def start_session(user: CurrentUser = Depends(get_current_user)) -> dict[str, object]:
     webhook_secret = get_webhook_secret()
     if not webhook_secret:
         webhook_secret = secrets.token_urlsafe(32)
         save_webhook_secret(webhook_secret)
 
     state, config = _production_chat_snapshot()
-    session = await session_store.create(webhook_secret=webhook_secret, state=state, config=config)
+    session = await session_store.create(
+        webhook_secret=webhook_secret,
+        user_id=user.id_str,
+        state=state,
+        config=config,
+    )
     await _hydrate_production_session(session.id)
     token = issue_session_token(session.id)
     webhook_url = f"{settings.BACKEND_PUBLIC_BASE_URL.rstrip('/')}/webhook/tradingview"
@@ -75,9 +82,12 @@ async def _hydrate_production_session(session_id: str) -> None:
 
 
 @router.get("/{session_id}")
-async def get_session(session_id: str) -> dict[str, object]:
+async def get_session(
+    session_id: str,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict[str, object]:
     session = await session_store.get(session_id)
-    if session is None:
+    if session is None or session.user_id != user.id_str:
         raise HTTPException(status_code=404, detail="Session not found")
     return session.public_dict()
 
