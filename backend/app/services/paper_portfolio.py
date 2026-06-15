@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.services.state_store import PAPER_PORTFOLIO_FILE, get_runtime_settings, scoped_runtime_file, utc_now
+from app.services.state_store import PAPER_PORTFOLIO_FILE, get_runtime_settings, utc_now
 
 
 _IST = ZoneInfo("Asia/Kolkata")
@@ -48,14 +48,14 @@ def _write(portfolio: PaperPortfolio) -> PaperPortfolio:
     from app.services.state_store import _atomic_write_json
 
     portfolio.last_checked_at = utc_now()
-    _atomic_write_json(scoped_runtime_file(PAPER_PORTFOLIO_FILE), asdict(portfolio))
+    _atomic_write_json(PAPER_PORTFOLIO_FILE, asdict(portfolio))
     return portfolio
 
 
 def get_paper_portfolio() -> PaperPortfolio:
     from app.services.state_store import _read_json
 
-    data = _read_json(scoped_runtime_file(PAPER_PORTFOLIO_FILE), lambda: asdict(_default()))
+    data = _read_json(PAPER_PORTFOLIO_FILE, lambda: asdict(_default()))
     defaults = asdict(_default())
     defaults.update(data)
     portfolio = PaperPortfolio(**defaults)

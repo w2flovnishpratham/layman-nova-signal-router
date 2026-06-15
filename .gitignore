@@ -27,10 +27,6 @@ coverage.xml
 .env
 .env.*
 client_secret*.json
-*.sqlite3
-*.sqlite3-*
-*.db
-*.db-*
 
 
 # Backend env files — the backend/.gitignore also covers these

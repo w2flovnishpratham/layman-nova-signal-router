@@ -1,22 +1,5 @@
 # API Contract
 
-## Health and readiness
-
-`GET /health` and `GET /api/health` are public liveness probes and return only:
-
-```json
-{"status": "ok"}
-```
-
-`GET /api/readiness` is a public, non-secret production dependency probe. It
-returns HTTP `200` only when database connectivity, Alembic revision, vault,
-runtime directories, authentication policy, disabled-Live policy, worker
-policy, and debug policy are ready. Otherwise it returns HTTP `503`.
-
-The readiness response contains categorical values only. It never returns
-database URLs, environment values, filesystem paths, tokens, cookies, user
-data, or encryption material.
-
 Base URL: `https://api.yourdomain.com`
 
 The frontend does not call Dhan. It calls this backend only.
@@ -94,19 +77,6 @@ Returns current app state and setup status.
 ### POST /webhook/tradingview
 
 Accepts TradingView alerts. Existing Pine `multi_leg_order` and NOVA payloads are supported.
-
-Required production/live headers:
-
-```text
-X-Nova-Timestamp: <unix epoch seconds>
-X-Nova-Signature: sha256=<HMAC-SHA256 of timestamp + "." + raw body>
-X-Nova-Nonce: <optional unique random value>
-```
-
-The default timestamp tolerance is 60 seconds. Signal IDs and optional nonces
-are claimed atomically in SQL before an order can route. Duplicate signal IDs,
-changed payloads under the same ID, stale signatures, and reused nonces are
-rejected.
 
 ### GET /api/dashboard/summary
 

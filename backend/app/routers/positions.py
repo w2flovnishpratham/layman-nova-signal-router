@@ -1,11 +1,10 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from app.auth.security import require_user_if_auth_enabled
 from app.services.position_reconciler import get_reconciled_open_position
 from app.services.state_store import get_external_positions
 
 
-router = APIRouter(dependencies=[Depends(require_user_if_auth_enabled)])
+router = APIRouter()
 
 
 @router.get("/positions")

@@ -1,48 +1,129 @@
-# Authenticated Multi-User Paper Beta Checklist
+# Production Checklist
 
-## Required Before Deploy
+Complete all items in order before setting `ENABLE_LIVE_ORDERS=true`.
 
-- [ ] CI backend security, dependency, migration, and test gates pass.
-- [ ] CI frontend audit, security, lint, and build gates pass.
-- [ ] Deployment-policy checks and shell syntax checks pass.
-- [ ] GitHub `production` environment requires reviewer approval.
-- [ ] Repository is `/opt/layman-nova-signal-router` and clean.
-- [ ] Backend systemd service runs as `layman`, not root.
-- [ ] `/etc/layman/layman.env` is owned by `layman` with mode `0600`.
-- [ ] Runtime state/logs are outside the repository.
-- [ ] PostgreSQL backup timer is enabled.
-- [ ] Nginx TLS, headers, rate limits, and websocket upgrade validate.
+---
 
-## Required Policy
+## VPS / Network
 
-- [ ] `APP_ENV=production`
-- [ ] `AUTH_REQUIRED=true`
-- [ ] `ENABLE_LIVE_ORDERS=false`
-- [ ] `EXECUTION_NODE_ROUTING_ENABLED=false`
-- [ ] `WORKER_ROLE=web`
-- [ ] `ENABLE_TRADING_WORKERS=false`
-- [ ] `DEBUG_ENABLED=false`
-- [ ] `WEBHOOK_HMAC_REQUIRED=true`
-- [ ] `WEBHOOK_ALLOW_LEGACY_AUTH_LOCAL=false`
+- [ ] VPS has a **static public IP** (not dynamic)
+- [ ] `GET /api/setup/status` returns `outgoing_ip` matching the VPS IP
+- [ ] That VPS IP is whitelisted in the [Dhan Developer Portal](https://developer.dhan.co/)
+- [ ] `BACKEND_PUBLIC_BASE_URL` is an HTTPS URL (not ngrok, not localhost)
+- [ ] `FRONTEND_ORIGIN` is the Vercel app HTTPS URL
+- [ ] SSL certificate active on the backend domain (Certbot or equivalent)
 
-## Post-Deploy
+---
 
-- [ ] `/health` returns 200.
-- [ ] `/api/readiness` returns 200 and reports every dependency/policy ready.
-- [ ] Security headers appear in `curl -I`.
-- [ ] Websocket setup flow connects.
-- [ ] Excessive auth/webhook requests return 429 during a controlled test.
-- [ ] Logs contain no access tokens, cookies, database URLs, or webhook secrets.
-- [ ] Manual PostgreSQL backup completes and checksum verifies.
-- [ ] Restore drill has a recorded successful result.
-- [ ] External readiness and backup-failure alerts are active.
+## Environment Config (backend `.env`)
 
-## Launch Decision
+Required variables and their production values:
 
-- Multi-user Paper beta: conditional GO after every item above passes on the
-  real VPS.
-- Single-operator Live: NO-GO.
-- Public Live: NO-GO.
-- 100-user production: NO-GO.
+| Variable | Required value |
+|----------|---------------|
+| `APP_ENV` | `production` |
+| `DHAN_MODE` | `REAL` |
+| `ENABLE_LIVE_ORDERS` | `false` ← start here; only set `true` after dry-run |
+| `TOKEN_ENCRYPTION_KEY` | A Fernet key generated with `Fernet.generate_key()` |
+| `BACKEND_PUBLIC_BASE_URL` | `https://api.yourdomain.com` |
+| `FRONTEND_ORIGIN` | `https://your-vercel-app.vercel.app` |
+| `REQUIRE_MARKET_HOURS` | `true` |
+| `AUTO_RESOLVE_SECURITY_ID` | `true` |
+| `ALLOW_DEFAULT_SECURITY_ID` | `false` |
+| `DEBUG_ENABLED` | `false` |
 
-See [PRODUCTION_RUNBOOK.md](PRODUCTION_RUNBOOK.md).
+Variables that must **not** appear in `.env`:
+
+| Variable | Correct location |
+|----------|-----------------|
+| `DHAN_CLIENT_ID` | Frontend setup page → encrypted vault |
+| `DHAN_ACCESS_TOKEN` | Frontend setup page → encrypted vault |
+| `WEBHOOK_SECRET` | Frontend setup page → encrypted vault |
+
+---
+
+## Credentials (via frontend Setup UI)
+
+- [ ] Dhan Client ID and Access Token entered via the Setup page (NOT via `.env`)
+- [ ] Setup status shows `dhan_connected: true`
+- [ ] Wallet/funds visible after connection (confirms token is valid)
+- [ ] Dhan token age is displayed and well within 24-hour limit
+- [ ] Webhook secret configured via the Setup page (NOT via `.env`)
+- [ ] Setup status shows `webhook_secret_set: true`
+
+---
+
+## Risk Limits
+
+- [ ] `max_qty_per_order = 1` (for first live test)
+- [ ] `max_trades_per_day = 1` (for first live test)
+- [ ] `daily_loss_limit = 500` or stricter
+- [ ] `server_side_exit_enabled = true`
+- [ ] `marketfeed_ws_enabled = true`
+- [ ] `option_ltp_source = WEBSOCKET`
+- [ ] `option_rest_fallback_enabled = false` unless you explicitly want REST backup
+- [ ] `option_sl_percent = 10.0` or stricter
+- [ ] `option_tp_percent = 20.0`
+- [ ] `option_ltp_poll_seconds = 1.0`
+- [ ] `allow_entry = true`
+- [ ] `allow_exit = true`
+- [ ] `emergency_stop = false`
+- [ ] `global_kill_switch = false`
+
+---
+
+## Security ID (scrip master)
+
+- [ ] Scrip master downloaded: `POST /api/setup/scrip-master/refresh`
+- [ ] Security ID resolver verified for target contract:
+  `GET /api/setup/security-id/resolve?symbol=NIFTY&expiry=YYYY-MM-DD&strike=22500&option_side=CE`
+- [ ] Resolver returns `ok: true` with method `SCRIP_MASTER`
+- [ ] `ALLOW_DEFAULT_SECURITY_ID=false` confirmed in `.env`
+
+---
+
+## TradingView Webhook
+
+- [ ] Webhook URL in TradingView: `https://api.yourdomain.com/webhook/tradingview`
+- [ ] Alert message body is **exactly**:
+  ```
+  {{strategy.order.alert_message}}
+  ```
+  (This passes the Pine strategy's alert_message JSON, which the backend parses)
+- [ ] Or for NOVA format, the full JSON payload with `strategy_code` field
+
+---
+
+## Dry-Run Test (ENABLE_LIVE_ORDERS=false)
+
+- [ ] Start Engine via the frontend
+- [ ] Send a real TradingView alert to the webhook URL
+- [ ] Dashboard shows the signal lifecycle: received → parsed → risk checked → `BLOCKED (live orders disabled)`
+- [ ] Order log shows `ENABLE_LIVE_ORDERS=false` block reason
+- [ ] Audit log contains no raw Dhan access token
+- [ ] Webhook log contains no raw access token
+- [ ] Browser localStorage does NOT contain Dhan token or webhook secret
+
+---
+
+## Go Live
+
+After dry-run passes:
+
+- [ ] Set `ENABLE_LIVE_ORDERS=true` in backend `.env`
+- [ ] Restart backend: `sudo systemctl restart nova-signal-router`
+- [ ] Start Engine; confirm frontend shows the live-orders warning
+- [ ] Send one test alert with `qty=1`
+- [ ] Confirm order appears in Dhan portal with correct status
+- [ ] Confirm `order_events.jsonl` shows the order and poll result
+- [ ] Gradually increase limits after first successful order
+
+---
+
+## Safety Checklist (always verify before any session)
+
+- [ ] Emergency stop is **off** before starting
+- [ ] Global kill switch is **off** before starting
+- [ ] Token age < 23 hours (reconnect if close to expiry)
+- [ ] `outgoing_ip` in setup/status still matches whitelisted VPS IP
+- [ ] `ALLOW_DEFAULT_SECURITY_ID=false` in production

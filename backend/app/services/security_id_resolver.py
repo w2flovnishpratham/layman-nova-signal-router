@@ -229,23 +229,6 @@ def _lookup_scrip_master(
     return None
 
 
-def _lookup_security_id_row(
-    security_id: str,
-) -> tuple[bool, dict[str, Any] | None, Path | None]:
-    checked_master = False
-    for path in _candidate_scrip_master_paths():
-        if not path.exists() or path.stat().st_size == 0:
-            continue
-        checked_master = True
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
-            for row in reader:
-                row_security_id = _value(row, "SEM_SMST_SECURITY_ID", "SECURITY_ID")
-                if row_security_id == str(security_id):
-                    return True, row, path
-    return checked_master, None, None
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -334,43 +317,22 @@ def resolve_security_id(signal: NormalizedSignal) -> SecurityIdResolution:
             and signal.option_side
             and settings.AUTO_RESOLVE_SECURITY_ID
         ):
-            checked_master, row, source_path = _lookup_security_id_row(provided_id)
-            if checked_master and row is None:
-                return SecurityIdResolution(
-                    ok=False,
-                    security_id=None,
-                    method="PROVIDED_ID_NOT_FOUND",
-                    reason="Provided securityId was not found in the configured Dhan scrip master.",
-                    trading_symbol=signal.trading_symbol,
-                )
-            if row is not None and not _row_matches_contract(
-                row,
+            match = _lookup_scrip_master(
                 symbol=signal.symbol,
                 expiry=signal.expiry,
                 strike=signal.strike,
                 option_side=signal.option_side,
                 exchange_segment=signal.exchange_segment,
-            ):
-                return SecurityIdResolution(
-                    ok=False,
-                    security_id=None,
-                    method="PROVIDED_ID_CONTRACT_MISMATCH",
-                    reason="Provided securityId does not match the requested symbol, expiry, strike, or option side.",
-                    trading_symbol=signal.trading_symbol,
-                    source_path=str(source_path) if source_path else None,
-                )
-            if row is not None:
+            )
+            if match and str(match.security_id) == provided_id:
                 return SecurityIdResolution(
                     ok=True,
                     security_id=provided_id,
                     method="PROVIDED_IN_SIGNAL",
                     reason="securityId provided by normalized signal and verified against local Dhan scrip master.",
-                    trading_symbol=(
-                        _value(row, "SEM_TRADING_SYMBOL", "DISPLAY_NAME", "SEM_CUSTOM_SYMBOL")
-                        or signal.trading_symbol
-                    ),
-                    lot_size=_parse_lot_size(row),
-                    source_path=str(source_path) if source_path else None,
+                    trading_symbol=match.trading_symbol or signal.trading_symbol,
+                    lot_size=match.lot_size,
+                    source_path=match.source_path,
                 )
         return SecurityIdResolution(
             ok=True,

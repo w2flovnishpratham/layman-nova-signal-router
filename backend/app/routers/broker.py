@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from app.auth.security import require_user_if_auth_enabled
 from app.config import settings
 from app.services.credential_vault import dhan_metadata, get_dhan_credentials
 from app.services.dhan_client import RealDhanClient
@@ -8,7 +7,7 @@ from app.services.state_store import get_engine_mode
 from app.services.wallet_service import refresh_wallet_snapshot
 
 
-router = APIRouter(dependencies=[Depends(require_user_if_auth_enabled)])
+router = APIRouter()
 
 
 @router.get("/dhan/status")

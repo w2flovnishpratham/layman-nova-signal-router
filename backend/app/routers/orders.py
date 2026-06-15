@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 
-from app.auth.security import require_user_if_auth_enabled
 from app.services.audit_logger import read_jsonl
 
 
-router = APIRouter(dependencies=[Depends(require_user_if_auth_enabled)])
+router = APIRouter()
 
 
 @router.get("/orders")

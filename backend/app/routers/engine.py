@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.auth.security import require_user_if_auth_enabled
 from app.config import settings
 from app.routers.setup import setup_readiness, setup_status_payload
 from app.services.audit_logger import log_audit_event
@@ -15,7 +14,7 @@ from app.services.paper_portfolio import get_paper_portfolio
 from app.services.state_store import get_app_state, get_engine_mode, get_open_position, set_engine_mode, update_app_state
 
 
-router = APIRouter(dependencies=[Depends(require_user_if_auth_enabled)])
+router = APIRouter()
 
 
 class StartEngineRequest(BaseModel):

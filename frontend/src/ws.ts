@@ -1,5 +1,5 @@
 import type { ClientCommand, ServerEvent, ServerEventType } from './types'
-import { apiFetch, backendWsUrl } from './lib/backend'
+import { backendHttpUrl, backendWsUrl } from './lib/backend'
 
 type Handler = (event: ServerEvent) => void
 type StatusHandler = (status: 'live' | 'degraded' | 'down') => void
@@ -99,12 +99,10 @@ export class SessionWS {
     this.invalidSessionHandler = handler
   }
 
-  send(command: ClientCommand): boolean {
+  send(command: ClientCommand): void {
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(command))
-      return true
     }
-    return false
   }
 
   close(): void {
@@ -127,7 +125,7 @@ export class SessionWS {
   private async sessionState(): Promise<'exists' | 'missing' | 'unavailable'> {
     if (this.invalidated) return 'missing'
     try {
-      const response = await apiFetch(`/api/session/${this.sessionId}`, { cache: 'no-store' })
+      const response = await fetch(backendHttpUrl(`/api/session/${this.sessionId}`), { cache: 'no-store' })
       if (response.status === 404) return 'missing'
       return response.ok ? 'exists' : 'unavailable'
     } catch {

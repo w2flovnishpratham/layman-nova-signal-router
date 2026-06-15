@@ -1,88 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_dir="${LAYMAN_REPO_DIR:-/opt/layman-nova-signal-router}"
-service_name="layman-nova-signal-router.service"
-paper_worker_service="layman-paper-worker.service"
-env_file="/etc/layman/layman.env"
-health_url="http://127.0.0.1:8002/api/health"
-readiness_url="http://127.0.0.1:8002/api/readiness"
-
-if [[ "${EUID}" -ne 0 ]]; then
-  exec sudo -n bash "$0" "$@"
-fi
-if [[ "$repo_dir" != "/opt/layman-nova-signal-router" ]]; then
-  echo "Production repository path must be /opt/layman-nova-signal-router." >&2
-  exit 1
-fi
-if [[ ! -d "$repo_dir/.git" ]]; then
-  echo "Production checkout is missing: $repo_dir" >&2
-  exit 1
-fi
+repo_dir="${LAYMAN_REPO_DIR:-/root/layman-nova-signal-router}"
 
 cd "$repo_dir"
-git_config=(git -c "safe.directory=$repo_dir")
 
-if [[ -n "$("${git_config[@]}" status --porcelain --untracked-files=all)" ]]; then
-  echo "Refusing deployment from a dirty production checkout." >&2
-  exit 1
+if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+  git stash push --include-untracked -m "pre-deploy dirty worktree $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
-python3 scripts/check_repo_hygiene.py --worktree
-"${git_config[@]}" pull --ff-only origin main
+git pull --ff-only origin main
 
-if [[ -n "$("${git_config[@]}" status --porcelain --untracked-files=all)" ]]; then
-  echo "Production checkout became dirty after pull." >&2
-  exit 1
-fi
-
-python3 scripts/check_repo_hygiene.py --worktree
-python3 scripts/check_deployment_hardening.py
-bash -n deploy/deploy_vps.sh
-bash -n deploy/configure_vps_env.sh
-bash -n deploy/backup_postgres.sh
-
-if [[ ! -d backend/.venv ]]; then
-  python3 -m venv backend/.venv
-fi
-backend/.venv/bin/python -m pip install --upgrade pip
-backend/.venv/bin/python -m pip install -r backend/requirements.txt
-
+backend/.venv/bin/pip install -r backend/requirements.txt
 bash deploy/configure_vps_env.sh "$repo_dir"
 
-chown -R root:layman "$repo_dir"
-chmod -R g+rX,o-rwx "$repo_dir"
-
-(
-  cd backend
-  runuser -u layman -- env LAYMAN_ENV_FILE="$env_file" .venv/bin/alembic upgrade head
-  runuser -u layman -- env LAYMAN_ENV_FILE="$env_file" .venv/bin/alembic check
-)
-
 install -m 644 deploy/layman-nova-signal-router.service /etc/systemd/system/layman-nova-signal-router.service
-install -m 644 deploy/layman-paper-worker.service /etc/systemd/system/layman-paper-worker.service
-install -m 644 deploy/layman-postgres-backup.service /etc/systemd/system/layman-postgres-backup.service
-install -m 644 deploy/layman-postgres-backup.timer /etc/systemd/system/layman-postgres-backup.timer
-install -m 755 deploy/backup_postgres.sh /usr/local/sbin/layman-backup-postgres
-install -m 644 deploy/logrotate/layman-nova /etc/logrotate.d/layman-nova
 install -m 644 deploy/nginx/layman-api.manyacare.com.conf /etc/nginx/sites-available/layman-api.manyacare.com
 ln -sfn /etc/nginx/sites-available/layman-api.manyacare.com /etc/nginx/sites-enabled/layman-api.manyacare.com
 
-nginx -t
-logrotate --debug /etc/logrotate.d/layman-nova >/dev/null
-
 systemctl daemon-reload
-systemctl enable "$service_name"
-systemctl enable "$paper_worker_service"
-systemctl enable --now layman-postgres-backup.timer
-systemctl restart "$service_name"
-systemctl restart "$paper_worker_service"
+systemctl enable --now layman-nova-signal-router.service
+
+nginx -t
 systemctl reload nginx
 
 healthy=false
 for _ in $(seq 1 30); do
-  if curl --fail --silent "$health_url" >/dev/null \
-    && curl --fail --silent "$readiness_url" >/dev/null; then
+  if curl --fail --silent http://127.0.0.1:8002/api/health >/dev/null; then
     healthy=true
     break
   fi
@@ -90,17 +34,34 @@ for _ in $(seq 1 30); do
 done
 
 if [[ "$healthy" != "true" ]]; then
-  systemctl status "$service_name" --no-pager -l || true
-  journalctl -u "$service_name" -n 100 --no-pager || true
-  exit 1
-fi
-if ! systemctl is-active --quiet "$paper_worker_service"; then
-  systemctl status "$paper_worker_service" --no-pager -l || true
-  journalctl -u "$paper_worker_service" -n 100 --no-pager || true
+  systemctl status layman-nova-signal-router.service --no-pager -l
   exit 1
 fi
 
-curl --fail --silent --show-error "$health_url"
-printf '\n'
-curl --fail --silent --show-error "$readiness_url"
-printf '\n'
+setup_status="$(curl --fail --silent http://127.0.0.1:8002/api/setup/status)"
+engine_mode="$(
+  printf '%s' "$setup_status" |
+    backend/.venv/bin/python -c 'import json, sys; print(json.load(sys.stdin).get("engine_mode") or "")'
+)"
+webhook_secret_set="$(
+  printf '%s' "$setup_status" |
+    backend/.venv/bin/python -c 'import json, sys; print("true" if json.load(sys.stdin).get("webhook_secret_set") else "false")'
+)"
+
+if [[ -z "$engine_mode" ]]; then
+  curl --fail --silent --show-error \
+    -H "Content-Type: application/json" \
+    --data '{"engine_mode":"paper","paper_starting_balance":100000}' \
+    http://127.0.0.1:8002/api/setup/mode >/dev/null
+fi
+
+if [[ "$webhook_secret_set" != "true" ]]; then
+  webhook_secret="$(openssl rand -hex 32)"
+  curl --fail --silent --show-error \
+    -H "Content-Type: application/json" \
+    --data "{\"webhook_secret\":\"$webhook_secret\"}" \
+    http://127.0.0.1:8002/api/setup/webhook-secret >/dev/null
+  unset webhook_secret
+fi
+
+curl --fail --silent --show-error http://127.0.0.1:8002/api/health

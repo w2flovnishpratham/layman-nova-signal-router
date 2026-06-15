@@ -15,8 +15,7 @@ export function SetupInfoCard({ info }: { info: SetupInfo }) {
         <dl>
           <div><dt>Session</dt><dd>{info.sessionId}</dd></div>
           <div><dt>Webhook URL</dt><dd><code>{info.webhookUrl}</code></dd></div>
-          <div><dt>Secret</dt><dd><code>{info.webhookSecretMasked ?? 'Configured - value hidden'}</code></dd></div>
-          <div><dt>Signing</dt><dd>HMAC timestamp headers required for production</dd></div>
+          <div><dt>Secret</dt><dd><code>{info.webhookSecret}</code></dd></div>
         </dl>
       ) : null}
     </div>

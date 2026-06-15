@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import logging
 import secrets
 import threading
 import time
@@ -18,19 +17,10 @@ from app.services.credential_vault import get_webhook_secret, webhook_secret_str
 from app.services.execution_router import route_signal
 from app.services.signal_parser import PayloadParseError, UnsupportedPayloadFormatError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
-from app.services.state_store import add_seen_signal, get_app_state, get_engine_mode, update_app_state, utc_now
-from app.services.trading_security import (
-    claim_webhook_nonce,
-    claim_webhook_signal,
-    complete_webhook_signal,
-    request_principal_id,
-)
-from app.services.user_connections import find_user_id_by_webhook_secret
-from app.services.user_context import set_current_user_id
+from app.services.state_store import add_seen_signal, get_app_state, get_engine_mode, has_seen_signal, update_app_state, utc_now
 
 
 router = APIRouter()
-logger = logging.getLogger("webhook")
 _PROCESSING_SIGNAL_IDS: set[str] = set()
 _PROCESSING_LOCK = threading.RLock()
 _STRATEGY_LOCKS: dict[str, threading.Lock] = {}
@@ -114,81 +104,10 @@ def _safe_raw_body_for_log(raw_body: str) -> str:
     return json.dumps(redact(payload), separators=(",", ":"), ensure_ascii=True)
 
 
-def _bind_webhook_runtime_scope(data: dict) -> str | None:
-    if not isinstance(data, dict):
-        return None
-    secret = str(data.get("secret") or "").strip()
-    if not secret:
-        return None
-    user_id = find_user_id_by_webhook_secret(secret)
-    if user_id:
-        set_current_user_id(user_id)
-    return user_id
-
-
-def _valid_webhook_signature(raw_body: str, secret: str, signature: str, timestamp: str) -> bool:
-    signing_value = f"{timestamp}.{raw_body}"
-    expected = hmac.new(secret.encode("utf-8"), signing_value.encode("utf-8"), hashlib.sha256).hexdigest()
-    supplied = signature.removeprefix("sha256=").strip()
-    return secrets.compare_digest(expected, supplied)
-
-
-def _valid_legacy_webhook_signature(raw_body: str, secret: str, signature: str) -> bool:
+def _valid_webhook_signature(raw_body: str, secret: str, signature: str) -> bool:
     expected = hmac.new(secret.encode("utf-8"), raw_body.encode("utf-8"), hashlib.sha256).hexdigest()
     supplied = signature.removeprefix("sha256=").strip()
     return secrets.compare_digest(expected, supplied)
-
-
-def _legacy_webhook_auth_allowed() -> bool:
-    return (
-        settings.APP_ENV.lower() in {"local", "test"}
-        and settings.WEBHOOK_ALLOW_LEGACY_AUTH_LOCAL
-        and not settings.ENABLE_LIVE_ORDERS
-    )
-
-
-def _timestamped_hmac_required() -> bool:
-    return (
-        settings.APP_ENV.lower() == "production"
-        or settings.ENABLE_LIVE_ORDERS
-        or settings.WEBHOOK_HMAC_REQUIRED
-        or not _legacy_webhook_auth_allowed()
-    )
-
-
-def _validate_webhook_authentication(
-    request: Request,
-    *,
-    raw_body: str,
-    secret: str,
-    now_epoch: int | None = None,
-) -> tuple[int | None, str | None]:
-    timestamp_text = str(request.headers.get("x-nova-timestamp") or "").strip()
-    signature = str(request.headers.get("x-nova-signature") or "").strip()
-    required = _timestamped_hmac_required()
-
-    if not timestamp_text and not signature and not required:
-        return None, None
-
-    if not timestamp_text:
-        if not required and signature and _valid_legacy_webhook_signature(raw_body, secret, signature):
-            return None, None
-        return None, "WEBHOOK_AUTH_FAILED"
-    if not signature:
-        return None, "WEBHOOK_AUTH_FAILED"
-
-    try:
-        request_timestamp = int(timestamp_text)
-    except ValueError:
-        return None, "WEBHOOK_AUTH_FAILED"
-
-    now = int(time.time()) if now_epoch is None else int(now_epoch)
-    tolerance = max(int(settings.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS), 1)
-    if request_timestamp < now - tolerance or request_timestamp > now + tolerance:
-        return None, "WEBHOOK_AUTH_FAILED"
-    if not _valid_webhook_signature(raw_body, secret, signature, timestamp_text):
-        return None, "WEBHOOK_AUTH_FAILED"
-    return request_timestamp, None
 
 
 def _route_payload(payload: NormalizedSignal, client_host: str) -> tuple[dict | None, JSONResponse | None]:
@@ -263,72 +182,19 @@ def _route_payload(payload: NormalizedSignal, client_host: str) -> tuple[dict | 
 async def tradingview_webhook(request: Request) -> JSONResponse:
     raw_body = (await request.body()).decode("utf-8", errors="replace")
     client_host = request.client.host if request.client else "unknown"
-
-    try:
-        data = json.loads(raw_body)
-    except json.JSONDecodeError as exc:
-        message = f"Invalid JSON payload: {exc.msg}"
-        logger.warning("WEBHOOK_INVALID_JSON from %s: %s", client_host, message)
-        return _response(400, WebhookResponse(accepted=False, status="INVALID_JSON", message=message))
-
-    if not isinstance(data, dict):
-        message = "Invalid JSON payload: top-level value must be an object."
-        logger.warning("WEBHOOK_INVALID_JSON from %s: %s", client_host, message)
-        return _response(400, WebhookResponse(accepted=False, status="INVALID_JSON", message=message))
-
-    bound_user_id = _bind_webhook_runtime_scope(data)
-    if (settings.AUTH_REQUIRED or settings.APP_ENV.lower() == "production") and bound_user_id is None:
-        logger.warning("WEBHOOK_UNKNOWN_SECRET from %s", client_host)
+    engine_mode = get_engine_mode(legacy_fallback=False)
+    if engine_mode is None and not bool(get_app_state().get("engine_started")):
         return _response(
-            403,
+            422,
             WebhookResponse(
                 accepted=False,
-                status="UNAUTHORIZED",
-                message="Webhook rejected: unknown secret.",
+                status="ENGINE_MODE_NOT_SET",
+                message="Webhook rejected: select Paper or Live mode before routing signals.",
             ),
         )
+    engine_mode = engine_mode or get_engine_mode()
 
-    expected_secret = get_webhook_secret()
-    if not expected_secret:
-        logger.warning("WEBHOOK_SETUP_INCOMPLETE from %s", client_host)
-        return _response(
-            403,
-            WebhookResponse(
-                accepted=False,
-                status="SETUP_INCOMPLETE",
-                message="Webhook authentication failed.",
-            ),
-        )
-
-    secret_strength_error = webhook_secret_strength_error(expected_secret)
-    if secret_strength_error:
-        logger.warning("WEBHOOK_SECRET_WEAK from %s", client_host)
-        return _response(
-            403,
-            WebhookResponse(
-                accepted=False,
-                status="SETUP_INCOMPLETE",
-                message="Webhook authentication failed.",
-            ),
-        )
-
-    request_timestamp, auth_error = _validate_webhook_authentication(
-        request,
-        raw_body=raw_body,
-        secret=expected_secret,
-    )
-    if auth_error:
-        logger.warning("WEBHOOK_AUTH_FAILED from %s", client_host)
-        return _response(
-            403,
-            WebhookResponse(
-                accepted=False,
-                status="UNAUTHORIZED",
-                message="Webhook authentication failed.",
-            ),
-        )
-
-    if _webhook_rate_limited(f"{bound_user_id or 'anon'}|{client_host}"):
+    if _webhook_rate_limited(client_host):
         log_audit_event(
             "WEBHOOK_RATE_LIMITED",
             "TradingView webhook request rate limit exceeded.",
@@ -352,17 +218,17 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
         }
     )
 
-    engine_mode = get_engine_mode(legacy_fallback=False)
-    if engine_mode is None and not bool(get_app_state().get("engine_started")):
-        return _response(
-            422,
-            WebhookResponse(
-                accepted=False,
-                status="ENGINE_MODE_NOT_SET",
-                message="Webhook rejected: select Paper or Live mode before routing signals.",
-            ),
-        )
-    engine_mode = engine_mode or get_engine_mode()
+    try:
+        data = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        message = f"Invalid JSON payload: {exc.msg}"
+        log_error_event("WEBHOOK_INVALID_JSON", message, metadata={"client_host": client_host})
+        return _response(400, WebhookResponse(accepted=False, status="INVALID_JSON", message=message))
+
+    if not isinstance(data, dict):
+        message = "Invalid JSON payload: top-level value must be an object."
+        log_error_event("WEBHOOK_INVALID_JSON", message, metadata={"client_host": client_host})
+        return _response(400, WebhookResponse(accepted=False, status="INVALID_JSON", message=message))
 
     try:
         payload = parse_webhook_payload(data)
@@ -400,33 +266,6 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
             ),
         )
 
-    raw_signal_id = data.get("signal_id")
-    if raw_signal_id in (None, "") and isinstance(data.get("order_legs"), list) and data["order_legs"]:
-        first_leg = data["order_legs"][0]
-        if isinstance(first_leg, dict):
-            raw_signal_id = first_leg.get("signal_id")
-    if (
-        settings.REQUIRE_SIGNAL_ID_LIVE
-        and (settings.ENABLE_LIVE_ORDERS or engine_mode == "live")
-        and raw_signal_id in (None, "")
-    ):
-        log_audit_event(
-            "LIVE_SIGNAL_ID_REQUIRED",
-            "Live webhook blocked because signal_id was not explicitly provided.",
-            severity="WARNING",
-            metadata={"payload_format": payload.payload_format},
-        )
-        return _response(
-            422,
-            WebhookResponse(
-                accepted=False,
-                action=payload.action,
-                payload_format=payload.payload_format,
-                status="SIGNAL_ID_REQUIRED",
-                message="Live webhook requires an explicit signal_id.",
-            ),
-        )
-
     log_webhook_event(
         {
             "event_type": "WEBHOOK_NORMALIZED",
@@ -447,6 +286,79 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
             ),
         }
     )
+
+    expected_secret = get_webhook_secret()
+    if not expected_secret:
+        log_audit_event(
+            "WEBHOOK_SETUP_INCOMPLETE",
+            "Webhook secret is not configured. Complete setup first.",
+            severity="WARNING",
+            metadata={
+                "client_host": client_host,
+                "signal_id": payload.signal_id,
+                "payload_format": payload.payload_format,
+            },
+        )
+        return _response(
+            403,
+            WebhookResponse(
+                accepted=False,
+                signal_id=payload.signal_id,
+                action=payload.action,
+                payload_format=payload.payload_format,
+                status="SETUP_INCOMPLETE",
+                message="Webhook secret is not configured. Complete setup first.",
+            ),
+        )
+
+    secret_strength_error = webhook_secret_strength_error(expected_secret)
+    if secret_strength_error:
+        log_audit_event(
+            "WEBHOOK_SECRET_WEAK",
+            secret_strength_error,
+            severity="WARNING",
+            metadata={
+                "client_host": client_host,
+                "signal_id": payload.signal_id,
+                "payload_format": payload.payload_format,
+            },
+        )
+        return _response(
+            403,
+            WebhookResponse(
+                accepted=False,
+                signal_id=payload.signal_id,
+                action=payload.action,
+                payload_format=payload.payload_format,
+                status="SETUP_INCOMPLETE",
+                message=secret_strength_error,
+            ),
+        )
+
+    signature = request.headers.get("x-nova-signature")
+    if signature or settings.WEBHOOK_HMAC_REQUIRED:
+        if not signature or not _valid_webhook_signature(raw_body, expected_secret, signature):
+            log_audit_event(
+                "WEBHOOK_HMAC_AUTH_FAILED",
+                "Invalid or missing webhook HMAC signature.",
+                severity="WARNING",
+                metadata={
+                    "client_host": client_host,
+                    "signal_id": payload.signal_id,
+                    "payload_format": payload.payload_format,
+                },
+            )
+            return _response(
+                403,
+                WebhookResponse(
+                    accepted=False,
+                    signal_id=payload.signal_id,
+                    action=payload.action,
+                    payload_format=payload.payload_format,
+                    status="UNAUTHORIZED",
+                    message="Webhook rejected: invalid or missing HMAC signature.",
+                ),
+            )
 
     if payload.secret != expected_secret:
         log_audit_event(
@@ -491,51 +403,10 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
             ),
         )
 
-    principal_id = request_principal_id(bound_user_id)
-    nonce = str(request.headers.get("x-nova-nonce") or "").strip()
-    if nonce:
-        if request_timestamp is None or not 8 <= len(nonce) <= 128:
-            return _response(
-                403,
-                WebhookResponse(
-                    accepted=False,
-                    signal_id=payload.signal_id,
-                    action=payload.action,
-                    payload_format=payload.payload_format,
-                    status="UNAUTHORIZED",
-                    message="Webhook authentication failed.",
-                ),
-            )
-        nonce_claim = claim_webhook_nonce(principal_id, nonce, request_timestamp)
-        if not nonce_claim.claimed:
-            log_audit_event(
-                "WEBHOOK_NONCE_REPLAY",
-                "Webhook request blocked because its nonce was already used.",
-                severity="WARNING",
-                metadata={"signal_id": payload.signal_id, "payload_format": payload.payload_format},
-            )
-            return _response(
-                409,
-                WebhookResponse(
-                    accepted=False,
-                    signal_id=payload.signal_id,
-                    action=payload.action,
-                    payload_format=payload.payload_format,
-                    status="REPLAY_BLOCKED",
-                    message="Webhook replay rejected.",
-                ),
-            )
-
-    signal_claim = claim_webhook_signal(principal_id, payload)
-    if not signal_claim.claimed:
-        suspicious = signal_claim.suspicious
-        message = (
-            f"Trade blocked: signal_id {payload.signal_id} was reused with different order data"
-            if suspicious
-            else f"Trade blocked: duplicate signal_id {payload.signal_id}"
-        )
+    if BLOCK_DUPLICATE_SIGNALS and has_seen_signal(payload.signal_id):
+        message = f"Trade blocked: duplicate signal_id {payload.signal_id}"
         log_audit_event(
-            "SUSPICIOUS_DUPLICATE_SIGNAL" if suspicious else "DUPLICATE_SIGNAL",
+            "DUPLICATE_SIGNAL",
             message,
             severity="WARNING",
             metadata={"signal_id": payload.signal_id, "payload_format": payload.payload_format},
@@ -547,7 +418,7 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
             last_message=message,
         )
         return _response(
-            409 if suspicious else 200,
+            200,
             WebhookResponse(
                 accepted=False,
                 signal_id=payload.signal_id,
@@ -584,7 +455,6 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
             last_alert_at=utc_now(),
             last_message=message,
         )
-        complete_webhook_signal(signal_claim.record_id, status="duplicate_in_process", message=message)
         return _response(
             200,
             WebhookResponse(
@@ -628,15 +498,9 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
         strategy_lock.release()
 
     if error_response is not None:
-        complete_webhook_signal(
-            signal_claim.record_id,
-            status="routing_error",
-            message="Webhook routing failed.",
-        )
         return error_response
     if execution_result is None:
         message = "Webhook routing failed without an execution result."
-        complete_webhook_signal(signal_claim.record_id, status="routing_error", message=message)
         return _response(
             500,
             WebhookResponse(
@@ -661,13 +525,6 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
     else:
         message = f"{payload.action.title()} order placed in {engine_mode.upper()} mode"
         accepted = True
-
-    complete_webhook_signal(
-        signal_claim.record_id,
-        status="accepted" if accepted else "blocked" if blocked else "failed",
-        message=message,
-        correlation_id=execution_result.get("correlation_id"),
-    )
 
     return _response(
         200,

@@ -4,7 +4,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.services import audit_logger, credential_vault, paper_broker, paper_portfolio, state_store
-from app.config import settings
 from app.services.dhan_client import DhanLtpResult, RealDhanClient, get_broker_client
 from app.services.paper_broker import PaperBroker, _simulated_charges
 
@@ -29,10 +28,6 @@ def _isolate_paper_runtime(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(state_store, "LOG_FILES", log_files)
     monkeypatch.setattr(paper_broker, "LOG_FILES", log_files)
     monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
-    monkeypatch.setattr(settings, "APP_ENV", "local")
-    monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
-    monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
-    monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False)
     credential_vault._LOCAL_MEMORY_PAYLOAD.clear()
     credential_vault._LOCAL_MEMORY_PAYLOAD.update({"version": 1, "dhan": None, "webhook_secret": None})
 
@@ -188,12 +183,10 @@ def test_broker_factory_requires_explicit_mode(tmp_path, monkeypatch):
 
 def test_webhook_rejects_when_mode_is_not_selected(tmp_path, monkeypatch):
     _isolate_paper_runtime(tmp_path, monkeypatch)
-    secret = "paper-mode-webhook-secret-value-123456"
-    credential_vault._LOCAL_MEMORY_PAYLOAD["webhook_secret"] = secret
     from app.main import app
 
     with TestClient(app) as client:
-        response = client.post("/webhook/tradingview", json={"secret": secret})
+        response = client.post("/webhook/tradingview", json={"secret": "unused"})
 
     assert response.status_code == 422
     assert response.json()["status"] == "ENGINE_MODE_NOT_SET"

@@ -6,11 +6,10 @@ import { contractsForLots, DEFAULT_NIFTY_LOT_SIZE } from '../../lib/trading'
 
 interface Props {
   initial: RiskConfig
-  pending: boolean
-  onSend: (command: ClientCommand) => boolean
+  onSend: (command: ClientCommand) => void
 }
 
-export function RiskForm({ initial, pending, onSend }: Props) {
+export function RiskForm({ initial, onSend }: Props) {
   const [risk, setRisk] = useState<RiskConfig>(initial)
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -27,7 +26,6 @@ export function RiskForm({ initial, pending, onSend }: Props) {
         value={risk.maxTrades}
         format={(value) => (value === null ? 'No limit' : String(value))}
         onChange={(maxTrades) => setRisk((current) => ({ ...current, maxTrades }))}
-        disabled={pending}
       />
       <ChipRow
         label="Max loss"
@@ -35,15 +33,14 @@ export function RiskForm({ initial, pending, onSend }: Props) {
         value={risk.maxLoss}
         format={(value) => (value === null ? 'No limit' : formatCurrency(value))}
         onChange={(maxLoss) => setRisk((current) => ({ ...current, maxLoss }))}
-        disabled={pending}
       />
       <div className="counter-row">
         <span>Lots</span>
-        <button type="button" disabled={pending} onClick={() => setRisk((current) => ({ ...current, lots: Math.max(1, current.lots - 1) }))}>
+        <button type="button" onClick={() => setRisk((current) => ({ ...current, lots: Math.max(1, current.lots - 1) }))}>
           -
         </button>
         <strong>{risk.lots}</strong>
-        <button type="button" disabled={pending} onClick={() => setRisk((current) => ({ ...current, lots: current.lots + 1 }))}>
+        <button type="button" onClick={() => setRisk((current) => ({ ...current, lots: current.lots + 1 }))}>
           +
         </button>
         <small>{contractsForLots(risk.lots, DEFAULT_NIFTY_LOT_SIZE)} qty</small>
@@ -55,14 +52,13 @@ export function RiskForm({ initial, pending, onSend }: Props) {
             key={side}
             className={risk.side === side ? 'selected' : ''}
             type="button"
-            disabled={pending}
             onClick={() => setRisk((current) => ({ ...current, side }))}
           >
             {side === 'BOTH' ? 'Both' : `${side} only`}
           </button>
         ))}
       </div>
-      <button type="submit" disabled={pending}>{pending ? 'Saving...' : 'Lock risk'}</button>
+      <button type="submit">Lock risk</button>
     </form>
   )
 }
@@ -73,14 +69,12 @@ function ChipRow<TValue extends number | null>({
   value,
   format,
   onChange,
-  disabled,
 }: {
   label: string
   options: TValue[]
   value: TValue
   format: (value: TValue) => string
   onChange: (value: TValue) => void
-  disabled: boolean
 }) {
   return (
     <div className="chip-row">
@@ -90,7 +84,6 @@ function ChipRow<TValue extends number | null>({
           key={String(option)}
           className={value === option ? 'selected' : ''}
           type="button"
-          disabled={disabled}
           onClick={() => onChange(option)}
         >
           {format(option)}

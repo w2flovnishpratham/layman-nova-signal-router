@@ -5,7 +5,6 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
-from app.auth.security import require_user_if_auth_enabled
 from app.config import DEFAULT_EXCHANGE_SEGMENT, settings
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_order_event, read_jsonl
@@ -32,7 +31,7 @@ def require_debug_enabled() -> None:
         raise HTTPException(status_code=404, detail="Debug endpoints are disabled.")
 
 
-router = APIRouter(dependencies=[Depends(require_user_if_auth_enabled), Depends(require_debug_enabled)])
+router = APIRouter(dependencies=[Depends(require_debug_enabled)])
 
 
 def _public_signal(signal: NormalizedSignal) -> dict[str, Any]:

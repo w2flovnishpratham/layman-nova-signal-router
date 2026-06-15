@@ -5,30 +5,27 @@ import type { ClientCommand, SetupState } from '../types'
 
 interface Props {
   state: SetupState
-  pending: boolean
-  connected: boolean
   onUserReply: (text: string) => void
-  onSend: (command: ClientCommand) => boolean
+  onSend: (command: ClientCommand) => void
 }
 
-export function ChatCommandInput({ state, pending, connected, onUserReply, onSend }: Props) {
+export function ChatCommandInput({ state, onUserReply, onSend }: Props) {
   const [value, setValue] = useState('')
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const text = value.trim()
     if (!text) return
+    setValue('')
+    onUserReply(text)
+
     const normalized = text.toLowerCase()
     if (normalized === 'pause') {
-      if (!onSend({ type: 'session.pause', data: {} })) return
-      setValue('')
-      onUserReply(text)
+      onSend({ type: 'session.pause', data: {} })
       return
     }
     if (normalized === 'resume entries' || normalized === 'resume') {
-      if (!onSend({ type: 'session.resume', data: {} })) return
-      setValue('')
-      onUserReply(text)
+      onSend({ type: 'session.resume', data: {} })
     }
   }
 
@@ -38,9 +35,8 @@ export function ChatCommandInput({ state, pending, connected, onUserReply, onSen
         value={value}
         onChange={(event) => setValue(event.target.value)}
         placeholder={state === 'PAUSED' ? 'Type "resume entries"' : 'Type "pause" or "resume entries"'}
-        disabled={!connected || pending}
       />
-      <button type="submit" aria-label="Send command" disabled={!connected || pending}>
+      <button type="submit" aria-label="Send command">
         <Send size={15} />
       </button>
     </form>

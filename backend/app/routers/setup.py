@@ -13,11 +13,10 @@ from typing import Any
 from urllib.parse import urlparse
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Literal
 
-from app.auth.security import require_user_if_auth_enabled
 from app.config import BACKEND_DIR, DEFAULT_NIFTY_LOT_SIZE, DISABLED_OPTION_SL_PERCENT, RUNTIME_STATE_DIR, settings
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import (
@@ -56,15 +55,9 @@ from app.services.state_store import (
     update_runtime_settings_if_version,
     utc_now,
 )
-from app.services.user_connections import (
-    active_user_id,
-    connection_status,
-    mark_dhan_account_disconnected,
-    upsert_dhan_account_metadata,
-)
 
 
-router = APIRouter(dependencies=[Depends(require_user_if_auth_enabled)])
+router = APIRouter()
 
 DHAN_CONNECT_RATE_LIMIT_MAX_ATTEMPTS = 5
 DHAN_CONNECT_RATE_LIMIT_WINDOW_SECONDS = 5 * 60
@@ -494,8 +487,6 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
     issues: list[str] = []
     warnings: list[str] = []
     engine_mode = get_engine_mode(legacy_fallback=False)
-    user_id = active_user_id()
-    connection = connection_status(user_id)
 
     if engine_mode is None:
         issues.append("Engine mode is not selected.")
@@ -533,15 +524,6 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
         issues.append("Live mode requires ENABLE_LIVE_ORDERS=true.")
     if engine_mode == "live" and settings.DHAN_MODE.upper() == "REAL" and settings.ENABLE_LIVE_ORDERS:
         warnings.append("LIVE ORDERS ENABLED - real money orders can be placed after risk checks.")
-        if settings.UNIQUE_EGRESS_PER_USER_REQUIRED and (
-            settings.AUTH_REQUIRED or settings.APP_ENV.lower() == "production"
-        ):
-            if settings.AUTH_REQUIRED and not user_id:
-                issues.append("Login is required before live trading.")
-            elif not connection.get("egressAssigned"):
-                issues.append("Live mode requires a unique assigned execution IP for this user.")
-            if not settings.EXECUTION_NODE_ROUTING_ENABLED:
-                issues.append("Execution-node routing is not enabled yet; live orders must not leave the control-plane backend IP.")
 
     return {
         "ready": not issues,
@@ -550,7 +532,6 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
         "dhan_ping": dhan_ping,
         "risk_configured": risk_ok,
         "engine_mode": engine_mode,
-        "connection": connection,
     }
 
 
@@ -562,7 +543,6 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
     outgoing = get_outgoing_ip(timeout=2.0) if include_outgoing_ip else {"outgoing_ip": None, "ok": False, "error": None}
     readiness = setup_readiness(check_dhan_ping=False)
     wallet = get_wallet_snapshot()
-    connection = connection_status(active_user_id())
 
     token_meta = dhan_token_age_metadata()
     return {
@@ -581,11 +561,7 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
         "webhook_url": tradingview_webhook_url(),
         "outgoing_ip": outgoing.get("outgoing_ip"),
         "outgoing_ip_check": outgoing,
-        "connection": connection,
-        "static_ip_note": (
-            "Live Dhan orders must be routed through this user's assigned execution IP. "
-            "Paper mode does not need a Dhan IP whitelist."
-        ),
+        "static_ip_note": "Dhan orders will be sent from backend server IP. Make sure this IP is whitelisted in Dhan.",
         "token_age": token_meta,
         "mode": {
             "dhan_mode": settings.DHAN_MODE.upper(),
@@ -682,9 +658,6 @@ def connect_dhan(body: DhanConnectRequest, request: Request) -> dict[str, Any]:
     try:
         if has_credential_changes:
             save_dhan_credentials(client_id, access_token)
-        user_id = active_user_id()
-        if user_id:
-            upsert_dhan_account_metadata(user_id, client_id=client_id, access_token_present=True, validated=True)
         wallet = set_wallet_snapshot(_wallet_from_funds(funds, get_wallet_snapshot())) if funds else get_wallet_snapshot()
         token_meta = dhan_token_age_metadata()
         outgoing = get_outgoing_ip(timeout=3.0)
@@ -706,10 +679,8 @@ def connect_dhan(body: DhanConnectRequest, request: Request) -> dict[str, Any]:
             "client_id_masked": mask_client_id(client_id),
             "dhan_mode": settings.DHAN_MODE.upper(),
             "outgoing_ip": outgoing.get("outgoing_ip"),
-            "connection": connection_status(active_user_id()),
         },
     )
-    connection = connection_status(active_user_id())
     return {
         "success": True,
         "message": message,
@@ -718,14 +689,12 @@ def connect_dhan(body: DhanConnectRequest, request: Request) -> dict[str, Any]:
         "access_token_present": True,
         "wallet": wallet,
         "outgoing_ip": outgoing.get("outgoing_ip"),
-        "connection": connection,
         "ip_whitelist": {
             "checked": outgoing.get("ok", False),
             "backend_ip": outgoing.get("outgoing_ip"),
-            "assigned_execution_ip": (connection.get("egressNode") or {}).get("publicIp") if connection else None,
             "warning": (
-                "Confirm the assigned execution IP is whitelisted in this user's Dhan account. "
-                "Each user requires a unique IP before live order placement."
+                "Confirm this backend IP is whitelisted in your Dhan account. "
+                "Dhan order placement requires static IP whitelisting."
             ),
         },
         "token": {
@@ -746,9 +715,6 @@ def disconnect_dhan() -> dict[str, Any]:
     except VaultError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     set_wallet_snapshot(default_wallet_snapshot())
-    user_id = active_user_id()
-    if user_id:
-        mark_dhan_account_disconnected(user_id)
     update_app_state(
         state="ENGINE_STOPPED",
         engine_started=False,

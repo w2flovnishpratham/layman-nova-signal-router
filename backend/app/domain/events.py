@@ -17,7 +17,6 @@ EventType = Literal[
     "setup.info",
     "mode.update",
     "signal.received",
-    "strategy.job",
     "order.placed",
     "order.filled",
     "order.rejected",

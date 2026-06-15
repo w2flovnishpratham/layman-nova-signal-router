@@ -4,15 +4,13 @@ import base64
 import json
 import math
 import threading
-from collections.abc import MutableMapping
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from app.config import RUNTIME_STATE_DIR, settings
-from app.services.state_store import scoped_runtime_file, utc_now
-from app.services.user_context import RuntimeScopeError, current_user_id, require_runtime_user_id
+from app.services.state_store import utc_now
 
 try:
     from cryptography.fernet import Fernet, InvalidToken
@@ -23,7 +21,7 @@ except Exception:  # pragma: no cover - exercised only when dependency is absent
 
 CREDENTIALS_FILE = RUNTIME_STATE_DIR / "credentials.enc.json"
 _LOCK = threading.RLock()
-_LOCAL_MEMORY_PAYLOADS: dict[str, dict[str, Any]] = {}
+_LOCAL_MEMORY_PAYLOAD: dict[str, Any] = {"version": 1, "dhan": None, "webhook_secret": None}
 WEBHOOK_SECRET_MIN_LENGTH = 16
 WEBHOOK_SECRET_MIN_ENTROPY_BITS = 60.0
 WEBHOOK_SECRET_STRENGTH_MESSAGE = (
@@ -92,21 +90,17 @@ def vault_status() -> dict[str, Any]:
     except VaultError as exc:
         ready = False
         error = str(exc)
-    try:
-        path = _credentials_file()
-    except RuntimeScopeError:
-        path = None
     return {
         "ready": ready,
         "local_mock_allowed": local_mock_without_key_allowed(),
-        "file_exists": bool(path and path.exists()),
-        "path": str(path) if path else None,
+        "file_exists": CREDENTIALS_FILE.exists(),
+        "path": str(CREDENTIALS_FILE),
         "error": error,
     }
 
 
 def local_mock_without_key_allowed() -> bool:
-    return settings.APP_ENV.lower() in {"local", "test"} and settings.DHAN_MODE.upper() == "MOCK"
+    return settings.APP_ENV.lower() != "production" and settings.DHAN_MODE.upper() == "MOCK"
 
 
 def generate_fernet_key() -> str:
@@ -119,46 +113,9 @@ def _empty_payload() -> dict[str, Any]:
     return {"version": 1, "dhan": None, "webhook_secret": None}
 
 
-def _credentials_file() -> Path:
-    return scoped_runtime_file(CREDENTIALS_FILE)
-
-
-def _memory_key() -> str:
-    return require_runtime_user_id(current_user_id()) or "__global__"
-
-
-class _CurrentMemoryPayload(MutableMapping[str, Any]):
-    def _payload(self) -> dict[str, Any]:
-        return _LOCAL_MEMORY_PAYLOADS.setdefault(_memory_key(), _empty_payload())
-
-    def __getitem__(self, key: str) -> Any:
-        return self._payload()[key]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self._payload()[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        del self._payload()[key]
-
-    def __iter__(self):
-        return iter(self._payload())
-
-    def __len__(self) -> int:
-        return len(self._payload())
-
-    def clear(self) -> None:
-        _LOCAL_MEMORY_PAYLOADS[_memory_key()] = {}
-
-    def update(self, *args: Any, **kwargs: Any) -> None:
-        self._payload().update(*args, **kwargs)
-
-
-_LOCAL_MEMORY_PAYLOAD = _CurrentMemoryPayload()
-
-
 def _memory_payload() -> dict[str, Any]:
     base = _empty_payload()
-    base.update(deepcopy(_LOCAL_MEMORY_PAYLOADS.get(_memory_key(), _empty_payload())))
+    base.update(deepcopy(_LOCAL_MEMORY_PAYLOAD))
     return base
 
 
@@ -166,11 +123,10 @@ def _read_payload() -> dict[str, Any]:
     with _LOCK:
         if local_mock_without_key_allowed() and not _encryption_key():
             return _memory_payload()
-        path = _credentials_file()
-        if not path.exists():
+        if not CREDENTIALS_FILE.exists():
             return _empty_payload()
         try:
-            envelope = json.loads(path.read_text(encoding="utf-8"))
+            envelope = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
             token = envelope.get("fernet")
             if not token:
                 return _empty_payload()
@@ -190,13 +146,12 @@ def _read_payload() -> dict[str, Any]:
 def _write_payload(payload: dict[str, Any]) -> None:
     with _LOCK:
         if local_mock_without_key_allowed() and not _encryption_key():
-            memory_payload = deepcopy(payload)
-            memory_payload["version"] = 1
-            memory_payload["updated_at"] = utc_now()
-            _LOCAL_MEMORY_PAYLOADS[_memory_key()] = memory_payload
+            _LOCAL_MEMORY_PAYLOAD.clear()
+            _LOCAL_MEMORY_PAYLOAD.update(deepcopy(payload))
+            _LOCAL_MEMORY_PAYLOAD["version"] = 1
+            _LOCAL_MEMORY_PAYLOAD["updated_at"] = utc_now()
             return
-        path = _credentials_file()
-        path.parent.mkdir(parents=True, exist_ok=True)
+        CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
         payload = deepcopy(payload)
         payload["version"] = 1
         payload["updated_at"] = utc_now()
@@ -206,9 +161,9 @@ def _write_payload(payload: dict[str, Any]) -> None:
             "updated_at": payload["updated_at"],
             "fernet": ciphertext.decode("utf-8"),
         }
-        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp = CREDENTIALS_FILE.with_suffix(CREDENTIALS_FILE.suffix + ".tmp")
         tmp.write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        tmp.replace(CREDENTIALS_FILE)
 
 
 def get_dhan_credentials() -> DhanCredentials | None:
@@ -402,11 +357,6 @@ def save_webhook_secret(webhook_secret: str) -> dict[str, Any]:
     payload["webhook_secret"] = webhook_secret
     payload["webhook_secret_updated_at"] = utc_now()
     _write_payload(payload)
-    user_id = current_user_id()
-    if user_id:
-        from app.services.user_connections import upsert_user_runtime_profile
-
-        upsert_user_runtime_profile(user_id, webhook_secret=webhook_secret)
     return webhook_secret_metadata()
 
 
@@ -433,4 +383,4 @@ def clear_all_credentials() -> None:
 
 
 def credentials_file_path() -> Path:
-    return _credentials_file()
+    return CREDENTIALS_FILE

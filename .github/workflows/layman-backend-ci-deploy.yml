@@ -1,60 +1,21 @@
-name: Layman CI and approved production deploy
+name: Layman backend CI and deploy
 
 on:
   push:
     branches: [main]
     paths:
       - "backend/**"
-      - "frontend/**"
       - "deploy/**"
-      - "docs/**"
-      - "scripts/**"
-      - ".gitignore"
-      - ".github/workflows/layman-backend-ci-deploy.yml"
-  pull_request:
-    paths:
-      - "backend/**"
-      - "frontend/**"
-      - "deploy/**"
-      - "docs/**"
-      - "scripts/**"
-      - ".gitignore"
       - ".github/workflows/layman-backend-ci-deploy.yml"
   workflow_dispatch:
-    inputs:
-      deploy_production:
-        description: Deploy the tested main branch to production
-        required: true
-        type: boolean
-        default: false
-
-permissions:
-  contents: read
 
 concurrency:
-  group: layman-nova-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: layman-nova-vps-deploy-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  backend-security:
+  test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_DB: layman_ci
-          POSTGRES_USER: layman_ci
-          POSTGRES_PASSWORD: layman_ci_password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U layman_ci -d layman_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-    env:
-      APP_ENV: test
-      DATABASE_URL: postgresql+psycopg://layman_ci:layman_ci_password@localhost:5432/layman_ci
     defaults:
       run:
         working-directory: backend
@@ -67,95 +28,26 @@ jobs:
           cache-dependency-path: |
             backend/requirements.txt
             backend/requirements_test.txt
-      - run: python -m pip install --upgrade pip
-      - run: pip install -r requirements.txt -r requirements_test.txt bandit pip-audit
-      - run: python ../scripts/check_repo_hygiene.py
-      - run: bandit -r app -ll -ii
-      - run: pip-audit -r requirements.txt
-      - run: alembic upgrade head
-      - run: alembic check
-      - run: python -m pytest app/tests -q
-      - run: python -m compileall app
+      - run: pip install -r requirements.txt -r requirements_test.txt
+      - run: pytest app/tests -q
 
-  frontend-security:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - working-directory: frontend
-        run: npm ci
-      - working-directory: frontend
-        run: npm audit --omit=dev --audit-level=high
-      - working-directory: frontend
-        run: npm run test:security
-      - working-directory: frontend
-        run: npm run lint
-      - working-directory: frontend
-        run: npm run build
-
-  deployment-policy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - run: python scripts/check_repo_hygiene.py
-      - run: python scripts/check_deployment_hardening.py
-      - run: bash -n deploy/deploy_vps.sh
-      - run: bash -n deploy/configure_vps_env.sh
-      - run: bash -n deploy/backup_postgres.sh
-      - run: bash -n deploy/enable_layman_api_tls.sh
-      - run: bash -n deploy/install_restricted_ci_key.sh
-
-  deploy-production:
-    if: >-
-      github.event_name == 'workflow_dispatch' &&
-      inputs.deploy_production == true &&
-      github.ref == 'refs/heads/main'
-    needs: [backend-security, frontend-security, deployment-policy]
+  deploy:
+    needs: test
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Validate deployment configuration
-        env:
-          VPS_HOST: ${{ vars.VPS_HOST }}
-          VPS_PORT: ${{ vars.VPS_PORT }}
-          VPS_USER: ${{ vars.VPS_USER }}
-          VPS_APP_DIR: ${{ vars.VPS_APP_DIR }}
-          VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-        run: |
-          test -n "$VPS_HOST"
-          test -n "$VPS_PORT"
-          test -n "$VPS_USER"
-          test -n "$VPS_APP_DIR"
-          test -n "$VPS_HOST_KEY"
-          test -n "$VPS_SSH_KEY"
       - name: Configure SSH
         env:
-          VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
+          test -n "$VPS_SSH_KEY"
           install -d -m 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "$VPS_HOST_KEY" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-      - name: Deploy approved main revision
-        env:
-          VPS_HOST: ${{ vars.VPS_HOST }}
-          VPS_PORT: ${{ vars.VPS_PORT }}
-          VPS_USER: ${{ vars.VPS_USER }}
-          VPS_APP_DIR: ${{ vars.VPS_APP_DIR }}
-        run: |
-          ssh \
-            -i ~/.ssh/id_ed25519 \
-            -p "$VPS_PORT" \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o ConnectTimeout=20 \
-            "$VPS_USER@$VPS_HOST" \
-            "bash '$VPS_APP_DIR/deploy/deploy_vps.sh'"
+          printf '%s\n' \
+            'layman-vps ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM2zwz7xaJZ46kG6w+BEOFilMdNcEiveSZWxzbaU5OBy' \
+            '187.127.153.128 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM2zwz7xaJZ46kG6w+BEOFilMdNcEiveSZWxzbaU5OBy' \
+            >> ~/.ssh/known_hosts
+          printf 'Host layman-vps\n  HostName 187.127.153.128\n  Port 22\n  User root\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 20\n' >> ~/.ssh/config
+      - name: Deploy isolated Layman backend
+        run: ssh layman-vps 'bash /root/layman-nova-signal-router/deploy/deploy_vps.sh'

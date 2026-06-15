@@ -16,11 +16,6 @@ Covers all gaps identified in the DHAN_V2_COMPLIANCE_AUDIT.md:
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
-import time
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -55,25 +50,6 @@ from app.tests.test_signal_parser import TEST_WEBHOOK_SECRET, nova_payload, pine
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
-
-def _post_signed_webhook(client: TestClient, payload: dict):
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    timestamp = int(time.time())
-    signature = hmac.new(
-        TEST_WEBHOOK_SECRET.encode("utf-8"),
-        f"{timestamp}.{raw}".encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return client.post(
-        "/webhook/tradingview",
-        content=raw,
-        headers={
-            "Content-Type": "application/json",
-            "X-Nova-Timestamp": str(timestamp),
-            "X-Nova-Signature": f"sha256={signature}",
-        },
-    )
-
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     """Full integration test client with isolated tmp state."""
@@ -99,8 +75,6 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False)
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False)
     monkeypatch.setattr(settings, "WEBHOOK_TRADING_ENABLED", True)
-    monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False)
-    monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
     monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
     setup_router._DHAN_CONNECT_RATE_LIMIT.clear()
@@ -177,8 +151,6 @@ class TestWebhookSecretFlow:
         monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
         monkeypatch.setattr(settings, "APP_ENV", "local")
         monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
-        monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
-        monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False)
         monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
 
         from app.main import app
@@ -231,7 +203,7 @@ class TestWebhookSecretFlow:
         assert response.status_code == 403
         body = response.json()
         assert body["status"] == "SETUP_INCOMPLETE"
-        assert body["message"] == "Webhook authentication failed."
+        assert "too weak" in body["message"]
 
 
 # ===========================================================================
@@ -417,7 +389,7 @@ class TestLiveOrderGating:
             fake_real_place_order,
         )
         payload = nova_payload("ENTRY", "BUY", "mock-gate-001")
-        response = _post_signed_webhook(client, payload)
+        response = client.post("/webhook/tradingview", json=payload)
         assert response.status_code == 200
         assert real_called["called"] is False
 
@@ -448,7 +420,7 @@ class TestLiveOrderGating:
         monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "123456")
 
         payload = nova_payload("ENTRY", "BUY", "real-disabled-001")
-        response = _post_signed_webhook(client, payload)
+        response = client.post("/webhook/tradingview", json=payload)
         assert response.status_code == 200
         body = response.json()
         assert real_called["called"] is False
@@ -597,7 +569,7 @@ class TestLiveOrderGating:
         monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
 
         payload = nova_payload("ENTRY", "BUY", "dhan-open-position-001")
-        response = _post_signed_webhook(client, payload)
+        response = client.post("/webhook/tradingview", json=payload)
         body = response.json()
 
         assert response.status_code == 200
@@ -990,7 +962,7 @@ class TestLiveOrderGating:
         monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
 
         payload = nova_payload("ENTRY", "BUY", "dhan-pending-order-001")
-        response = _post_signed_webhook(client, payload)
+        response = client.post("/webhook/tradingview", json=payload)
         body = response.json()
 
         assert response.status_code == 200
@@ -1000,8 +972,6 @@ class TestLiveOrderGating:
 
     def test_exit_uses_tracked_open_position_contract(self, monkeypatch):
         """EXIT alerts must close NOVA's tracked position, not a stale alert contract."""
-        monkeypatch.setattr(settings, "APP_ENV", "local")
-        monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
         monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
         monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
         monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)

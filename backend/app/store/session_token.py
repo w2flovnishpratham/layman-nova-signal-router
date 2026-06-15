@@ -14,52 +14,17 @@ class SessionTokenError(ValueError):
     pass
 
 
-def issue_session_token(session_id: str, *, user_id: str | None = None) -> str:
+def issue_session_token(session_id: str) -> str:
     payload = {
-        "typ": "session",
         "sid": session_id,
         "exp": int(time.time()) + settings.SESSION_TOKEN_TTL_SECONDS,
     }
-    if user_id:
-        payload["uid"] = user_id
-    return _encode_signed_payload(payload)
-
-
-def issue_auth_token(user_id: str, *, auth_session_id: str) -> str:
-    payload = {
-        "typ": "auth",
-        "uid": user_id,
-        "asid": auth_session_id,
-        "exp": int(time.time()) + settings.AUTH_COOKIE_TTL_SECONDS,
-    }
-    return _encode_signed_payload(payload)
-
-
-def verify_auth_token(token: str) -> dict[str, Any]:
-    payload = _decode_signed_payload(token)
-    if payload.get("typ") != "auth":
-        raise SessionTokenError("Invalid auth token")
-    if not payload.get("uid"):
-        raise SessionTokenError("Auth token is missing a user")
-    return payload
-
-
-def _encode_signed_payload(payload: dict[str, Any]) -> str:
     encoded_payload = _b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signature = _sign(encoded_payload)
     return f"{encoded_payload}.{signature}"
 
 
 def verify_session_token(token: str, session_id: str) -> dict[str, Any]:
-    payload = _decode_signed_payload(token)
-    if payload.get("typ") not in {None, "session"}:
-        raise SessionTokenError("Invalid session token")
-    if payload.get("sid") != session_id:
-        raise SessionTokenError("Session token does not match this session")
-    return payload
-
-
-def _decode_signed_payload(token: str) -> dict[str, Any]:
     try:
         encoded_payload, signature = token.split(".", 1)
     except ValueError as exc:
@@ -70,6 +35,8 @@ def _decode_signed_payload(token: str) -> dict[str, Any]:
         raise SessionTokenError("Invalid session token")
 
     payload = json.loads(_b64decode(encoded_payload))
+    if payload.get("sid") != session_id:
+        raise SessionTokenError("Session token does not match this session")
     if int(payload.get("exp", 0)) < int(time.time()):
         raise SessionTokenError("Session token expired")
     return payload

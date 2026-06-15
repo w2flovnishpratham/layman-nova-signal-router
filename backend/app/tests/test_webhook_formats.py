@@ -36,8 +36,6 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False)
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False)
     monkeypatch.setattr(settings, "WEBHOOK_TRADING_ENABLED", True)
-    monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False)
-    monkeypatch.setattr(settings, "AUTH_REQUIRED", False)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
     monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
 
@@ -104,7 +102,6 @@ def test_duplicate_signal_logic_works_for_nova_signal_id(client):
 
 def test_duplicate_signal_logic_works_for_generated_pine_signal_id(client):
     payload = pine_payload("B")
-    payload["timestamp"] = "2026-06-13T09:15:00Z"
 
     first = client.post("/webhook/tradingview", json=payload)
     second = client.post("/webhook/tradingview", json=payload)

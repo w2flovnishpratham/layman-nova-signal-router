@@ -1,19 +1,13 @@
 import { formatCurrency, exitModeLabel, sideLabel } from '../../lib/format'
-import { useState } from 'react'
-import { ConfirmationDialog } from '../ConfirmationDialog'
-import type { ClientCommand, SafetyStatus, TradeConfig } from '../../types'
+import type { ClientCommand, TradeConfig } from '../../types'
 import { contractsForLots, DEFAULT_NIFTY_LOT_SIZE } from '../../lib/trading'
 
 interface Props {
   config: TradeConfig
-  safetyStatus: SafetyStatus | null
-  pending: boolean
-  error?: string
-  onSend: (command: ClientCommand) => boolean
+  onSend: (command: ClientCommand) => void
 }
 
-export function ConfirmLaunchCard({ config, safetyStatus, pending, error, onSend }: Props) {
-  const [open, setOpen] = useState(false)
+export function ConfirmLaunchCard({ config, onSend }: Props) {
   const lots = config.risk?.lots ?? 1
   const quantity = contractsForLots(lots, DEFAULT_NIFTY_LOT_SIZE)
   const sampleStrike = 'NIFTY 23500 CE / weekly 4 Jun'
@@ -36,22 +30,9 @@ export function ConfirmLaunchCard({ config, safetyStatus, pending, error, onSend
         <div><span>Est. margin</span><strong>{formatCurrency(estimatedMargin)}</strong></div>
         <div><span>Round-trip charges</span><strong>{formatCurrency(estimatedCharges)}</strong></div>
       </div>
-      <button className="live-confirm" type="button" disabled={!safetyStatus?.single_operator_live_allowed || pending} onClick={() => setOpen(true)}>
-        {pending ? 'Starting...' : 'Review real-money launch'}
+      <button className="live-confirm" type="button" onClick={() => onSend({ type: 'setup.confirm_live', data: {} })}>
+        Confirm trade real money
       </button>
-      <ConfirmationDialog
-        open={open}
-        title="Start Live trading with real money?"
-        consequence="Real Dhan orders may be placed after backend risk checks."
-        confirmLabel="Start Live Trading"
-        confirmPhrase="START LIVE WITH REAL MONEY"
-        mode="live"
-        affectsRealOrders
-        pending={pending}
-        error={error}
-        onClose={() => setOpen(false)}
-        onConfirm={() => { onSend({ type: 'setup.confirm_live', data: {} }) }}
-      />
     </article>
   )
 }
