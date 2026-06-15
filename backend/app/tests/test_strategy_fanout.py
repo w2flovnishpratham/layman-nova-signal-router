@@ -196,11 +196,11 @@ def test_authenticated_users_select_distinct_configured_egress_ips(
     bob = make_user("egress-bob@gmail.com")
     nodes = [
         {
-            "public_ip": "64.225.87.19",
+            "public_ip": "165.232.184.177",
             "proxy_url": "http://alice-node:secret-one@64.225.87.19:8888",
         },
         {
-            "public_ip": "152.42.157.165",
+            "public_ip": "167.71.232.232",
             "proxy_url": "http://bob-node:secret-two@152.42.157.165:8888",
         },
     ]
@@ -216,7 +216,9 @@ def test_authenticated_users_select_distinct_configured_egress_ips(
         lambda user_id: {
             "ok": True,
             "expected_ip": (
-                "64.225.87.19" if user_id == alice.id else "152.42.157.165"
+                "165.232.184.177"
+                if user_id == alice.id
+                else "167.71.232.232"
             ),
         },
     )
@@ -229,15 +231,15 @@ def test_authenticated_users_select_distinct_configured_egress_ips(
     options = client.get("/api/strategies/egress/options")
     assert options.status_code == 200
     assert [node["public_ip"] for node in options.json()["nodes"]] == [
-        "64.225.87.19",
-        "152.42.157.165",
+        "165.232.184.177",
+        "167.71.232.232",
     ]
     assert "secret-one" not in options.text
     assert "secret-two" not in options.text
 
     selected = client.post(
         "/api/strategies/egress/select",
-        json={"public_ip": "64.225.87.19"},
+        json={"public_ip": "165.232.184.177"},
     )
     assert selected.status_code == 200
     assert selected.json()["verification"]["ok"] is True
@@ -250,13 +252,13 @@ def test_authenticated_users_select_distinct_configured_egress_ips(
 
     conflict = client.post(
         "/api/strategies/egress/select",
-        json={"public_ip": "64.225.87.19"},
+        json={"public_ip": "165.232.184.177"},
     )
     assert conflict.status_code == 409
 
     bob_selected = client.post(
         "/api/strategies/egress/select",
-        json={"public_ip": "152.42.157.165"},
+        json={"public_ip": "167.71.232.232"},
     )
     assert bob_selected.status_code == 200
 

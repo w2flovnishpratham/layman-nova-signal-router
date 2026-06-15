@@ -12,10 +12,10 @@ same IP. TradingView webhook details remain server-side.
 
 ## Node pool
 
-| Droplet | Dhan whitelist |
-|---|---|
-| `nova-exec-user-001` | `64.225.87.19` |
-| `nova-exec-user-002` | `152.42.157.165` |
+| Droplet | Proxy ingress | Dhan whitelist/outbound |
+|---|---|---|
+| `nova-exec-user-001` | `64.225.87.19` | `165.232.184.177` |
+| `nova-exec-user-002` | `152.42.157.165` | `167.71.232.232` |
 
 Do not assign either IP to both users. Attach a DigitalOcean Reserved IP before
 whitelisting if these are currently ordinary droplet addresses.
@@ -60,7 +60,7 @@ STRATEGY_WEBHOOK_SECRET=<long-random-secret-used-in-tradingview-json>
 EXECUTION_NODE_ROUTING_ENABLED=false
 ENABLE_LIVE_ORDERS=false
 DHAN_READ_ONLY_REAL_DATA=true
-EGRESS_NODES_JSON=[{"public_ip":"64.225.87.19","proxy_url":"http://<node-1-user>:<node-1-password>@64.225.87.19:8888"},{"public_ip":"152.42.157.165","proxy_url":"http://<node-2-user>:<node-2-password>@152.42.157.165:8888"}]
+EGRESS_NODES_JSON=[{"public_ip":"165.232.184.177","proxy_url":"http://<node-1-user>:<node-1-password>@64.225.87.19:8888"},{"public_ip":"167.71.232.232","proxy_url":"http://<node-2-user>:<node-2-password>@152.42.157.165:8888"}]
 ```
 
 Restart the service with the safety gates still off.
@@ -102,8 +102,8 @@ the current NIFTY lot size.
 
 1. Generate fresh Dhan access tokens on June 16; Dhan tokens expire after about
    24 hours.
-2. Confirm User 1 whitelisted `64.225.87.19` and User 2 whitelisted
-   `152.42.157.165`.
+2. Confirm User 1 whitelisted `165.232.184.177` and User 2 whitelisted
+   `167.71.232.232`.
 3. Both users complete the unchanged chatbot flow and select `supertrend`.
 4. Verify both egress proxies again.
 5. Keep all live gates off and have both users select **Paper** for one full

@@ -12,11 +12,28 @@ set_env() {
   local key="$1"
   local value="$2"
 
-  if grep -q "^${key}=" "$env_file"; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "$env_file"
-  else
-    printf '%s=%s\n' "$key" "$value" >> "$env_file"
-  fi
+  ENV_FILE="$env_file" ENV_KEY="$key" ENV_VALUE="$value" "$python_bin" - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["ENV_FILE"])
+key = os.environ["ENV_KEY"]
+value = os.environ["ENV_VALUE"]
+lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+replacement = f"{key}={value}"
+updated = False
+result = []
+for line in lines:
+    if line.startswith(f"{key}="):
+        if not updated:
+            result.append(replacement)
+            updated = True
+        continue
+    result.append(line)
+if not updated:
+    result.append(replacement)
+path.write_text("\n".join(result) + "\n", encoding="utf-8")
+PY
 }
 
 set_env APP_ENV production

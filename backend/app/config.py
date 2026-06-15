@@ -160,9 +160,10 @@ class Settings(BaseSettings):
     EXECUTION_NODE_ROUTING_ENABLED: bool = False
 
     # Server-only JSON list of selectable egress nodes. Proxy URLs may contain
-    # credentials and are never returned to the frontend.
+    # credentials and are never returned to the frontend. public_ip is the
+    # outbound address Dhan sees; the proxy URL may use a different Reserved IP.
     # Example:
-    # [{"public_ip":"203.0.113.10","proxy_url":"http://user:pass@203.0.113.10:8888"}]
+    # [{"public_ip":"203.0.113.10","proxy_url":"http://user:pass@198.51.100.20:8888"}]
     EGRESS_NODES_JSON: str = "[]"
 
     # Cookie configuration

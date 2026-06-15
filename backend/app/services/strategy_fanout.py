@@ -223,8 +223,6 @@ def configured_egress_nodes() -> list[dict[str, str]]:
             raise ValueError("Each egress node must be a JSON object.")
         public_ip = _validated_public_ip(str(raw_node.get("public_ip") or ""))
         proxy_url = _validated_proxy_url(str(raw_node.get("proxy_url") or ""))
-        if urlparse(proxy_url).hostname != public_ip:
-            raise ValueError("Egress proxy hostname must match its public IP.")
         if public_ip in seen_ips:
             raise ValueError(f"Duplicate egress node IP: {public_ip}")
         seen_ips.add(public_ip)
@@ -283,6 +281,7 @@ def select_user_egress(user_id: uuid.UUID, public_ip: str) -> dict[str, Any]:
         public_ip=public_ip,
         proxy_url=node["proxy_url"],
         active=True,
+        allow_proxy_host_mismatch=True,
     )
     verification = verify_user_egress(user_id)
     return {"assignment": assignment, "verification": verification}
@@ -294,10 +293,11 @@ def set_user_egress(
     public_ip: str,
     proxy_url: str,
     active: bool = True,
+    allow_proxy_host_mismatch: bool = False,
 ) -> dict[str, Any]:
     public_ip = _validated_public_ip(public_ip)
     proxy_url = _validated_proxy_url(proxy_url)
-    if urlparse(proxy_url).hostname != public_ip:
+    if not allow_proxy_host_mismatch and urlparse(proxy_url).hostname != public_ip:
         raise ValueError("proxy_url hostname must match public_ip.")
     encrypted_proxy_url = vault._encrypt(proxy_url)
     try:
