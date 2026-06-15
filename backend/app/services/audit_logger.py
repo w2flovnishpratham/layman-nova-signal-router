@@ -14,7 +14,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from app.services.state_store import LOG_FILES, get_engine_mode, utc_now
+from app.services.state_store import LOG_FILES, get_engine_mode, scoped_runtime_path, utc_now
 
 
 logger = logging.getLogger("audit")
@@ -58,6 +58,7 @@ def sanitize_for_log(data: Any) -> Any:
 
 
 def _append_jsonl(path: Path, event: dict[str, Any]) -> dict[str, Any]:
+    path = scoped_runtime_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {"timestamp": utc_now(), "mode": get_engine_mode(legacy_fallback=False), **sanitize_for_log(event)}
     line = json.dumps(record, separators=(",", ":"), ensure_ascii=False)
@@ -112,7 +113,7 @@ def log_error_event(event_type: str, message: str, *, metadata: dict[str, Any] |
 
 
 def read_jsonl(log_name: str, limit: int = 100) -> list[dict[str, Any]]:
-    path = LOG_FILES[log_name]
+    path = scoped_runtime_path(LOG_FILES[log_name])
     if not path.exists():
         return []
     with _LOG_LOCK:

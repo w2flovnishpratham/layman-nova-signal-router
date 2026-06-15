@@ -132,18 +132,40 @@ class DhanOrderResult:
 
 
 class RealDhanClient:
+    def __init__(
+        self,
+        *,
+        proxy_url: str | None = None,
+        expected_egress_ip: str | None = None,
+    ) -> None:
+        self.proxy_url = (proxy_url or "").strip() or None
+        self.expected_egress_ip = (expected_egress_ip or "").strip() or None
+
     def _client(self, *, timeout: float) -> httpx.Client:
-        # Dhan static-IP whitelisting is configured for the server's IPv4.
-        # Bind outbound Dhan calls to IPv4 so dual-stack DNS cannot choose IPv6.
-        transport = httpx.HTTPTransport(local_address="0.0.0.0")
-        return httpx.Client(
-            timeout=timeout,
-            transport=transport,
-            event_hooks={
+        options: dict[str, Any] = {
+            "timeout": timeout,
+            "event_hooks": {
                 "request": [before_dhan_request],
                 "response": [after_dhan_response],
             },
+        }
+        if self.proxy_url:
+            options["proxy"] = self.proxy_url
+        else:
+            # Legacy single-user mode binds directly to the server's IPv4.
+            options["transport"] = httpx.HTTPTransport(local_address="0.0.0.0")
+        return httpx.Client(
+            **options,
         )
+
+    def _outgoing_ip_result(self) -> dict[str, Any]:
+        if self.proxy_url:
+            return {
+                "ok": bool(self.expected_egress_ip),
+                "outgoing_ip": self.expected_egress_ip,
+                "source": "configured_proxy",
+            }
+        return get_outgoing_ip(timeout=2.0)
 
     def _headers(self, client_id: str, access_token: str) -> dict[str, str]:
         """
@@ -435,7 +457,7 @@ class RealDhanClient:
 
     def place_order(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanOrderResult:
         url = f"{DHAN_BASE_URL}/orders"
-        outgoing_ip_result = get_outgoing_ip(timeout=2.0)
+        outgoing_ip_result = self._outgoing_ip_result()
         outgoing_ip = outgoing_ip_result.get("outgoing_ip")
         headers_masked = build_dhan_headers_debug(client_id, access_token)
         payload_validation = validate_dhan_payload(payload)
@@ -566,7 +588,7 @@ class RealDhanClient:
 
     def place_super_order(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanOrderResult:
         url = f"{DHAN_BASE_URL}/super/orders"
-        outgoing_ip_result = get_outgoing_ip(timeout=2.0)
+        outgoing_ip_result = self._outgoing_ip_result()
         outgoing_ip = outgoing_ip_result.get("outgoing_ip")
         headers_masked = build_dhan_headers_debug(client_id, access_token)
 
@@ -666,7 +688,7 @@ class RealDhanClient:
 
     def modify_super_order(self, *, client_id: str, access_token: str, order_id: str, payload: dict[str, Any]) -> DhanOrderResult:
         url = f"{DHAN_BASE_URL}/super/orders/{order_id}"
-        outgoing_ip_result = get_outgoing_ip(timeout=2.0)
+        outgoing_ip_result = self._outgoing_ip_result()
         outgoing_ip = outgoing_ip_result.get("outgoing_ip")
         headers_masked = build_dhan_headers_debug(client_id, access_token)
 
@@ -768,7 +790,7 @@ class RealDhanClient:
 
     def cancel_super_order_leg(self, *, client_id: str, access_token: str, order_id: str, leg_name: str) -> DhanOrderResult:
         url = f"{DHAN_BASE_URL}/super/orders/{order_id}/{leg_name}"
-        outgoing_ip_result = get_outgoing_ip(timeout=2.0)
+        outgoing_ip_result = self._outgoing_ip_result()
         outgoing_ip = outgoing_ip_result.get("outgoing_ip")
         headers_masked = build_dhan_headers_debug(client_id, access_token)
 
@@ -1228,5 +1250,21 @@ def get_broker_client(engine_mode: str | None = None) -> Any:
 
         return PaperBroker()
     if mode == "live":
-        return RealDhanClient()
+        from app.services.execution_context import (
+            current_egress_ip,
+            current_execution_user,
+            current_proxy_url,
+        )
+
+        user = current_execution_user()
+        proxy_url = current_proxy_url()
+        if user is not None and not user.is_dev:
+            if not settings.EXECUTION_NODE_ROUTING_ENABLED:
+                raise RuntimeError("Per-user execution-node routing is disabled.")
+            if not proxy_url:
+                raise RuntimeError("No whitelisted egress proxy is assigned to this user.")
+        return RealDhanClient(
+            proxy_url=proxy_url,
+            expected_egress_ip=current_egress_ip(),
+        )
     raise ValueError("engine_mode not set; cannot select broker client")

@@ -14,7 +14,12 @@ from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.chat_event_publisher import publish_chat_result_from_sync
 from app.services.credential_vault import dhan_token_age_metadata, get_dhan_credentials
-from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, RealDhanClient, get_broker_client
+from app.services.dhan_client import (
+    DHAN_OPEN_ORDER_STATUSES,
+    DHAN_TERMINAL_STATUSES,
+    RealDhanClient,
+    get_broker_client,
+)
 from app.services.risk_manager import (
     RiskDecision,
     _market_is_open,
@@ -35,6 +40,20 @@ from app.services.state_store import (
     utc_now,
 )
 from app.services.wallet_service import refresh_wallet_snapshot
+
+
+def _live_broker_client():
+    """Use per-user proxy routing, retaining legacy local test compatibility."""
+    from app.services.execution_context import current_execution_user
+
+    user = current_execution_user()
+    if user is not None and not user.is_dev:
+        return get_broker_client("live")
+    if settings.EXECUTION_NODE_ROUTING_ENABLED:
+        raise RuntimeError(
+            "Context-free live routing is disabled while execution-node routing is enabled."
+        )
+    return RealDhanClient()
 
 
 def _public_order_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -310,7 +329,7 @@ def _cancel_super_order_exit_legs(position: dict[str, Any]) -> dict[str, Any] | 
     if engine_mode == "live":
         if not creds:
             return {"attempted": False, "reason": "missing_dhan_credentials"}
-        client = RealDhanClient()
+        client = _live_broker_client()
         client_id = creds.client_id
         access_token = creds.access_token
     else:
@@ -724,7 +743,7 @@ def _reconcile_tracked_position_before_entry(signal: NormalizedSignal) -> RiskDe
         return RiskDecision(False, "Trade blocked: local open position exists and Dhan credentials are missing.")
 
     preflight = _dhan_entry_preflight(
-        RealDhanClient(),
+        _live_broker_client(),
         client_id=creds.client_id,
         access_token=creds.access_token,
         signal=signal,
@@ -826,7 +845,7 @@ def _place_order(
                 security_id=request_payload.get("securityId"),
                 trading_symbol=request_payload.get("tradingSymbol"),
             )
-        client = RealDhanClient()
+        client = _live_broker_client()
         client_id = creds.client_id
         access_token = creds.access_token
     else:

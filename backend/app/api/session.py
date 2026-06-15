@@ -10,6 +10,7 @@ from app.domain.events import event
 from app.domain.state_machine import SetupState
 from app.routers.setup import current_nifty_lot_size
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret, save_webhook_secret
+from app.services.execution_context import bind_execution_context
 from app.services.chat_event_publisher import active_trade_from_position
 from app.services.state_store import get_app_state, get_daily_risk, get_engine_mode, get_open_position, get_runtime_settings, get_wallet_snapshot
 from app.store.redis_session import session_store
@@ -22,28 +23,33 @@ router = APIRouter(prefix="/api/session", tags=["session"])
 
 @router.post("/start")
 async def start_session(user: CurrentUser = Depends(get_current_user)) -> dict[str, object]:
-    webhook_secret = get_webhook_secret()
-    if not webhook_secret:
-        webhook_secret = secrets.token_urlsafe(32)
-        save_webhook_secret(webhook_secret)
+    with bind_execution_context(user):
+        actual_webhook_secret = (
+            (settings.STRATEGY_WEBHOOK_SECRET or "").strip()
+            or get_webhook_secret()
+        )
+        if not actual_webhook_secret:
+            actual_webhook_secret = secrets.token_urlsafe(32)
+            save_webhook_secret(actual_webhook_secret)
+        displayed_webhook_secret = "Managed server-side"
 
-    state, config = _production_chat_snapshot()
-    session = await session_store.create(
-        webhook_secret=webhook_secret,
-        user_id=user.id_str,
-        state=state,
-        config=config,
-    )
-    await _hydrate_production_session(session.id)
-    token = issue_session_token(session.id)
-    webhook_url = f"{settings.BACKEND_PUBLIC_BASE_URL.rstrip('/')}/webhook/tradingview"
-    return {
-        "sessionId": session.id,
-        "sessionToken": token,
-        "webhookSecret": webhook_secret,
-        "webhookUrl": webhook_url,
-        "lotSize": current_nifty_lot_size(),
-    }
+        state, config = _production_chat_snapshot()
+        session = await session_store.create(
+            webhook_secret=displayed_webhook_secret,
+            user_id=user.id_str,
+            state=state,
+            config=config,
+        )
+        await _hydrate_production_session(session.id)
+        token = issue_session_token(session.id)
+        webhook_url = f"{settings.BACKEND_PUBLIC_BASE_URL.rstrip('/')}/api/webhook/strategy/supertrend"
+        return {
+            "sessionId": session.id,
+            "sessionToken": token,
+            "webhookSecret": displayed_webhook_secret,
+            "webhookUrl": webhook_url,
+            "lotSize": current_nifty_lot_size(),
+        }
 
 
 async def _hydrate_production_session(session_id: str) -> None:

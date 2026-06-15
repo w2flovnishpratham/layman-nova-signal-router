@@ -16,7 +16,14 @@ from app.services.dhan_client import (
     RealDhanClient,
 )
 from app.services.paper_portfolio import apply_paper_entry, apply_paper_exit, paper_wallet_snapshot
-from app.services.state_store import LOG_FILES, get_engine_mode, get_paper_position, get_runtime_settings, utc_now
+from app.services.state_store import (
+    LOG_FILES,
+    get_engine_mode,
+    get_paper_position,
+    get_runtime_settings,
+    scoped_runtime_path,
+    utc_now,
+)
 
 
 _ORDER_LOCK = threading.RLock()
@@ -46,6 +53,7 @@ def _record_order(order: dict[str, Any]) -> None:
         path = LOG_FILES.get("paper_orders")
         if path is None:
             return
+        path = scoped_runtime_path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({"timestamp": utc_now(), **order}, separators=(",", ":")) + "\n")

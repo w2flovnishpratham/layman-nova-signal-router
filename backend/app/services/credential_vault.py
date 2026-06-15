@@ -167,6 +167,21 @@ def _write_payload(payload: dict[str, Any]) -> None:
 
 
 def get_dhan_credentials() -> DhanCredentials | None:
+    from app.services.execution_context import current_execution_user
+
+    user = current_execution_user()
+    if user is not None and not user.is_dev:
+        from app.services.user_credential_vault import get_user_dhan_credentials
+
+        credentials = get_user_dhan_credentials(user.id)
+        if credentials is None:
+            return None
+        return DhanCredentials(
+            client_id=credentials.client_id,
+            access_token=credentials.access_token,
+            source=credentials.source,
+        )
+
     try:
         payload = _read_payload()
     except VaultError:
@@ -188,6 +203,20 @@ def save_dhan_credentials(client_id: str, access_token: str) -> dict[str, Any]:
         raise VaultError("Dhan Client ID is required.")
     if not access_token:
         raise VaultError("Dhan Access Token is required.")
+
+    from app.services.execution_context import current_execution_user
+
+    user = current_execution_user()
+    if user is not None and not user.is_dev:
+        from app.services.user_credential_vault import save_user_credentials
+
+        save_user_credentials(
+            user.id,
+            dhan_client_id=client_id,
+            dhan_access_token=access_token,
+        )
+        return dhan_metadata()
+
     payload = _read_payload()
     payload["dhan"] = {
         "client_id": client_id,
@@ -213,6 +242,15 @@ def restore_dhan_credentials_snapshot(snapshot: dict[str, Any] | None) -> None:
 
 
 def clear_dhan_credentials() -> None:
+    from app.services.execution_context import current_execution_user
+
+    user = current_execution_user()
+    if user is not None and not user.is_dev:
+        from app.services.user_credential_vault import delete_user_credentials
+
+        delete_user_credentials(user.id)
+        return
+
     payload = _read_payload()
     payload["dhan"] = None
     _write_payload(payload)
@@ -226,13 +264,20 @@ def dhan_token_age_metadata() -> dict[str, Any]:
     from datetime import datetime, timezone, timedelta
     from app.config import settings as _settings
 
-    try:
-        payload = _read_payload()
-    except VaultError:
-        payload = _empty_payload()
+    from app.services.execution_context import current_execution_user
 
-    dhan_entry = payload.get("dhan") or {}
-    saved_at_raw = dhan_entry.get("connected_at") if isinstance(dhan_entry, dict) else None
+    user = current_execution_user()
+    if user is not None and not user.is_dev:
+        from app.services.user_credential_vault import user_credential_status
+
+        saved_at_raw = user_credential_status(user.id).get("dhan_token_saved_at")
+    else:
+        try:
+            payload = _read_payload()
+        except VaultError:
+            payload = _empty_payload()
+        dhan_entry = payload.get("dhan") or {}
+        saved_at_raw = dhan_entry.get("connected_at") if isinstance(dhan_entry, dict) else None
 
     if not saved_at_raw:
         return {
@@ -288,6 +333,9 @@ def dhan_metadata() -> dict[str, Any]:
 
 
 def get_webhook_secret() -> str | None:
+    strategy_secret = (settings.STRATEGY_WEBHOOK_SECRET or "").strip()
+    if strategy_secret:
+        return strategy_secret
     try:
         payload = _read_payload()
     except VaultError:
@@ -365,7 +413,13 @@ def webhook_secret_metadata() -> dict[str, Any]:
     return {
         "set": bool(secret),
         "masked": mask_secret(secret),
-        "source": "vault" if _vault_has_webhook_secret() else None,
+        "source": (
+            "environment"
+            if (settings.STRATEGY_WEBHOOK_SECRET or "").strip()
+            else "vault"
+            if _vault_has_webhook_secret()
+            else None
+        ),
     }
 
 

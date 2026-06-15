@@ -179,3 +179,67 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(60), nullable=False)
     audit_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class StrategySubscription(Base):
+    """A user subscribes to a strategy. One TradingView alert for that strategy
+    fans out to every active subscriber, executing with each user's own creds."""
+
+    __tablename__ = "strategy_subscriptions"
+    __table_args__ = (UniqueConstraint("user_id", "strategy_name", name="uq_user_strategy"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    strategy_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    lots: Mapped[int] = mapped_column(default=1, nullable=False)
+    # signal_only / paper_live_data / real_orders — per-user, per-subscription
+    execution_mode: Mapped[str] = mapped_column(String(30), default="signal_only", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class StrategySignal(Base):
+    """Durable idempotency record for one inbound strategy alert."""
+
+    __tablename__ = "strategy_signals"
+    __table_args__ = (
+        UniqueConstraint("strategy_name", "signal_id", name="uq_strategy_signal"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    signal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(30), default="accepted", nullable=False)
+    result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class UserEgress(Base):
+    """Per-user egress node: the droplet whose static IP is whitelisted in that
+    user's Dhan account. Live order calls for the user route through proxy_url so
+    they exit from public_ip. proxy_url is encrypted (it may carry credentials)."""
+
+    __tablename__ = "user_egress"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
+    )
+    public_ip: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    proxy_url_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_observed_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    verification_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )

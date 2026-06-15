@@ -1,0 +1,268 @@
+from __future__ import annotations
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
+
+
+def _current_user(model):
+    from app.services.user_context import current_user_from_model
+
+    return current_user_from_model(model)
+
+
+def _signal(secret: str, signal_id: str = "fanout-1"):
+    from app.config import DEFAULT_STRATEGY_CODE
+    from app.schemas.signal import NormalizedSignal
+
+    payload = {
+        "secret": secret,
+        "signal_id": signal_id,
+        "strategy_code": DEFAULT_STRATEGY_CODE,
+        "action": "ENTRY",
+        "side": "BUY",
+        "symbol": "NIFTY",
+        "qty": 1,
+        "order_type": "MARKET",
+        "product_type": "INTRADAY",
+    }
+    return NormalizedSignal(
+        payload_format="NOVA",
+        secret=secret,
+        signal_id=signal_id,
+        strategy_code=DEFAULT_STRATEGY_CODE,
+        action="ENTRY",
+        side="BUY",
+        symbol="NIFTY",
+        qty=1,
+        order_type="MARKET",
+        product_type="INTRADAY",
+        raw_payload=payload,
+    )
+
+
+def test_context_credentials_are_isolated_per_user(mu_db):
+    from app.services.credential_vault import get_dhan_credentials, save_dhan_credentials
+    from app.services.execution_context import bind_execution_context
+
+    alice = _current_user(make_user("fanout-alice@gmail.com"))
+    bob = _current_user(make_user("fanout-bob@gmail.com"))
+
+    with bind_execution_context(alice):
+        save_dhan_credentials("ALICE-ID", "alice-token")
+    with bind_execution_context(bob):
+        save_dhan_credentials("BOB-ID", "bob-token")
+
+    with bind_execution_context(alice):
+        assert get_dhan_credentials().client_id == "ALICE-ID"
+    with bind_execution_context(bob):
+        assert get_dhan_credentials().client_id == "BOB-ID"
+
+
+def test_runtime_state_is_isolated_per_user(mu_db, monkeypatch, tmp_path):
+    from app.services import state_store, user_context
+    from app.services.execution_context import bind_execution_context
+
+    state_root = tmp_path / "state"
+    log_root = tmp_path / "logs"
+    monkeypatch.setattr(state_store, "RUNTIME_STATE_DIR", state_root)
+    monkeypatch.setattr(state_store, "RUNTIME_LOG_DIR", log_root)
+    monkeypatch.setattr(user_context, "RUNTIME_STATE_DIR", state_root)
+    monkeypatch.setattr(user_context, "RUNTIME_LOG_DIR", log_root)
+    for name, filename in {
+        "APP_STATE_FILE": "app_state.json",
+        "OPEN_POSITION_FILE": "open_position.json",
+        "PAPER_POSITION_FILE": "paper_position.json",
+        "PAPER_PORTFOLIO_FILE": "paper_portfolio.json",
+        "EXTERNAL_POSITIONS_FILE": "external_positions.json",
+        "SEEN_SIGNALS_FILE": "seen_signals.json",
+        "SETTINGS_FILE": "settings.json",
+    }.items():
+        monkeypatch.setattr(state_store, name, state_root / filename)
+    monkeypatch.setattr(
+        state_store,
+        "LOG_FILES",
+        {
+            "webhook": log_root / "webhook_events.jsonl",
+            "order": log_root / "order_events.jsonl",
+            "audit": log_root / "audit_events.jsonl",
+            "error": log_root / "errors.jsonl",
+            "paper_orders": log_root / "paper_orders.jsonl",
+        },
+    )
+
+    alice = _current_user(make_user("state-alice@gmail.com"))
+    bob = _current_user(make_user("state-bob@gmail.com"))
+    with bind_execution_context(alice):
+        state_store.init_runtime_files()
+        state_store.update_app_state(last_message="alice-state")
+    with bind_execution_context(bob):
+        state_store.init_runtime_files()
+        state_store.update_app_state(last_message="bob-state")
+
+    with bind_execution_context(alice):
+        assert state_store.get_app_state()["last_message"] == "alice-state"
+    with bind_execution_context(bob):
+        assert state_store.get_app_state()["last_message"] == "bob-state"
+
+
+def test_one_signal_routes_to_two_subscribers_with_their_lots(mu_db, monkeypatch):
+    from app.services import strategy_fanout
+    from app.services.execution_context import current_execution_user
+
+    alice = make_user("route-alice@gmail.com")
+    bob = make_user("route-bob@gmail.com")
+    strategy_fanout.subscribe_user(
+        alice.id,
+        "supertrend",
+        lots=1,
+        execution_mode="paper_live_data",
+    )
+    strategy_fanout.subscribe_user(
+        bob.id,
+        "supertrend",
+        lots=2,
+        execution_mode="paper_live_data",
+    )
+
+    calls = []
+
+    def fake_route(signal):
+        calls.append((current_execution_user().email, signal.qty))
+        return {"success": True, "status": "TRADED"}
+
+    monkeypatch.setattr(strategy_fanout, "route_signal", fake_route)
+    monkeypatch.setattr(strategy_fanout, "init_runtime_files", lambda: None)
+    monkeypatch.setattr(
+        strategy_fanout,
+        "_quantity_for_subscription",
+        lambda lots: lots * 75,
+    )
+
+    result = strategy_fanout.process_signal("supertrend", _signal("shared-secret"))
+
+    assert result["subscriber_count"] == 2
+    assert sorted(calls) == [
+        ("route-alice@gmail.com", 75),
+        ("route-bob@gmail.com", 150),
+    ]
+
+
+def test_live_broker_requires_and_uses_user_proxy(mu_db, monkeypatch):
+    from app.config import settings
+    from app.services import dhan_client
+    from app.services.execution_context import bind_execution_context
+
+    user = _current_user(make_user("proxy-user@gmail.com"))
+    monkeypatch.setattr(
+        settings,
+        "EXECUTION_NODE_ROUTING_ENABLED",
+        True,
+        raising=False,
+    )
+    captured = {}
+
+    def fake_http_client(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(dhan_client.httpx, "Client", fake_http_client)
+    with bind_execution_context(
+        user,
+        proxy_url="http://proxy-user:secret@152.42.157.165:8888",
+        egress_ip="152.42.157.165",
+    ):
+        client = dhan_client.get_broker_client("live")
+        client._client(timeout=10)
+
+    assert captured["proxy"].startswith("http://proxy-user:")
+    assert "transport" not in captured
+
+
+def test_context_free_live_router_is_blocked_when_egress_routing_is_enabled(
+    monkeypatch,
+):
+    from app.config import settings
+    from app.services.execution_router import _live_broker_client
+
+    monkeypatch.setattr(
+        settings,
+        "EXECUTION_NODE_ROUTING_ENABLED",
+        True,
+        raising=False,
+    )
+    with pytest.raises(RuntimeError, match="Context-free live routing"):
+        _live_broker_client()
+
+
+def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
+    mu_db,
+    monkeypatch,
+):
+    from app.config import DEFAULT_STRATEGY_CODE, settings
+    from app.routers.strategies import router
+    from app.services import strategy_fanout
+
+    secret = "strategy-secret-1234567890-strong"
+    monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
+    processed = []
+    monkeypatch.setattr(
+        strategy_fanout,
+        "process_signal",
+        lambda strategy, signal: processed.append((strategy, signal.signal_id)),
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    body = {
+        "secret": secret,
+        "signal_id": "tv-shared-1",
+        "strategy_code": DEFAULT_STRATEGY_CODE,
+        "action": "ENTRY",
+        "side": "BUY",
+        "symbol": "NIFTY",
+        "qty": 75,
+        "order_type": "MARKET",
+        "product_type": "INTRADAY",
+    }
+
+    response = client.post("/api/webhook/strategy/supertrend", json=body)
+    assert response.status_code == 202
+    assert processed == [("supertrend", "tv-shared-1")]
+
+    duplicate = client.post("/api/webhook/strategy/supertrend", json=body)
+    assert duplicate.status_code == 409
+
+
+def test_additive_schema_upgrades_pre_release_user_egress_table(tmp_path):
+    from sqlalchemy import create_engine, inspect, text
+
+    from scripts.init_db import ensure_additive_schema
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'old-schema.db'}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE user_egress ("
+                "id VARCHAR(36) PRIMARY KEY, "
+                "user_id VARCHAR(36) NOT NULL, "
+                "public_ip VARCHAR(64), "
+                "proxy_url_encrypted TEXT, "
+                "active BOOLEAN NOT NULL"
+                ")"
+            )
+        )
+
+    ensure_additive_schema(engine)
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("user_egress")
+    }
+    assert {
+        "last_verified_at",
+        "last_observed_ip",
+        "verification_error",
+    }.issubset(columns)

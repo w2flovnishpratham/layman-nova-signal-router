@@ -37,6 +37,44 @@ LOG_FILES = {
 }
 
 
+def scoped_runtime_path(path: Path) -> Path:
+    """Map runtime state/log files into the active user's private directory."""
+    from app.services.execution_context import current_execution_user
+    from app.services.user_context import user_runtime_log_dir, user_runtime_state_dir
+
+    user = current_execution_user()
+    if user is None or user.is_dev:
+        return path
+
+    state_dir = user_runtime_state_dir(user)
+    log_dir = user_runtime_log_dir(user)
+    try:
+        path.relative_to(state_dir)
+    except ValueError:
+        pass
+    else:
+        return path
+    try:
+        path.relative_to(log_dir)
+    except ValueError:
+        pass
+    else:
+        return path
+
+    try:
+        relative = path.relative_to(RUNTIME_STATE_DIR)
+    except ValueError:
+        pass
+    else:
+        return state_dir / relative
+
+    try:
+        relative = path.relative_to(RUNTIME_LOG_DIR)
+    except ValueError:
+        return path
+    return log_dir / relative
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -163,6 +201,7 @@ def _state_defaults() -> dict[Path, Callable[[], dict[str, Any]]]:
 
 
 def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+    path = scoped_runtime_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
@@ -170,6 +209,7 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 def _read_json(path: Path, default_factory: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    path = scoped_runtime_path(path)
     with _LOCK:
         if not path.exists():
             data = default_factory()
@@ -185,18 +225,20 @@ def _read_json(path: Path, default_factory: Callable[[], dict[str, Any]]) -> dic
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> dict[str, Any]:
+    path = scoped_runtime_path(path)
     with _LOCK:
         _atomic_write_json(path, data)
         return deepcopy(data)
 
 
 def init_runtime_files() -> None:
-    RUNTIME_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    RUNTIME_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    scoped_runtime_path(RUNTIME_STATE_DIR).mkdir(parents=True, exist_ok=True)
+    scoped_runtime_path(RUNTIME_LOG_DIR).mkdir(parents=True, exist_ok=True)
     for path, default_factory in _state_defaults().items():
-        if not path.exists():
+        if not scoped_runtime_path(path).exists():
             _atomic_write_json(path, default_factory())
     for path in LOG_FILES.values():
+        path = scoped_runtime_path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(exist_ok=True)
     sync_runtime_flags_from_env()
@@ -581,6 +623,7 @@ def set_wallet_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 def clear_runtime_logs() -> None:
     for path in LOG_FILES.values():
+        path = scoped_runtime_path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("", encoding="utf-8")
 

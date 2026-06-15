@@ -150,9 +150,14 @@ class Settings(BaseSettings):
     # Comma-separated admin emails. Only gates /api/admin/* — never blocks login.
     ADMIN_EMAILS: str = ""
 
-    # Live-mode safety. Real orders require BOTH the global flag and per-user
-    # credentials plus an explicit real_orders execution mode.
-    DHAN_READ_ONLY_REAL_DATA: bool = True
+    # Shared secret for the single strategy fan-out webhook (one TradingView
+    # account fires one alert per strategy; the backend fans it out to all
+    # active subscribers of that strategy). TradingView sends it in the JSON
+    # body because TradingView webhooks cannot generate dynamic HMAC headers.
+    STRATEGY_WEBHOOK_SECRET: str = ""
+
+    # Master gate for routing real orders through per-user egress nodes.
+    EXECUTION_NODE_ROUTING_ENABLED: bool = False
 
     # Cookie configuration
     SESSION_COOKIE_NAME: str = "nova_session"

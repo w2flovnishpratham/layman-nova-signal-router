@@ -28,7 +28,11 @@ def publish_chat_result_from_sync(payload: NormalizedSignal, execution_result: d
     if loop is None or loop.is_closed():
         return
 
-    coroutine = publish_chat_result(payload, execution_result)
+    coroutine = publish_chat_result(
+        payload,
+        execution_result,
+        user_id=_current_execution_user_id(),
+    )
     try:
         running_loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -60,6 +64,7 @@ def publish_tick_pnl_from_sync(
         pnl=pnl,
         pnl_pct=pnl_pct,
         mode=mode,
+        user_id=_current_execution_user_id(),
     )
     try:
         running_loop = asyncio.get_running_loop()
@@ -77,7 +82,11 @@ def publish_active_trade_from_sync(position: dict[str, Any], mode: str | None) -
     if loop is None or loop.is_closed():
         return
 
-    coroutine = publish_active_trade(position, mode)
+    coroutine = publish_active_trade(
+        position,
+        mode,
+        user_id=_current_execution_user_id(),
+    )
     try:
         running_loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -97,8 +106,9 @@ async def publish_tick_pnl(
     pnl: float,
     pnl_pct: float | None,
     mode: str | None,
+    user_id: str | None = None,
 ) -> None:
-    for session_id in await session_store.active_session_ids():
+    for session_id in await session_store.active_session_ids(user_id=user_id):
         await session_store.append_event(
             session_id,
             event(
@@ -113,23 +123,33 @@ async def publish_tick_pnl(
         )
 
 
-async def publish_active_trade(position: dict[str, Any], mode: str | None) -> None:
+async def publish_active_trade(
+    position: dict[str, Any],
+    mode: str | None,
+    *,
+    user_id: str | None = None,
+) -> None:
     active_trade = active_trade_from_position(position, mode)
     if active_trade is None or active_trade["avgPrice"] <= 0:
         return
-    for session_id in await session_store.active_session_ids():
+    for session_id in await session_store.active_session_ids(user_id=user_id):
         await session_store.update_active_trade(session_id, active_trade)
         await session_store.append_event(session_id, event("order.filled", **active_trade))
 
 
-async def publish_chat_result(payload: NormalizedSignal, execution_result: dict[str, Any]) -> None:
+async def publish_chat_result(
+    payload: NormalizedSignal,
+    execution_result: dict[str, Any],
+    *,
+    user_id: str | None = None,
+) -> None:
     explicit_mode = get_engine_mode(legacy_fallback=False)
     mode = explicit_mode or get_engine_mode()
     paper_exit: dict[str, Any] = {}
     if explicit_mode == "paper" and payload.action == "EXIT" and execution_result.get("success"):
         closed_trades = get_paper_portfolio().closed_trades
         paper_exit = closed_trades[-1] if closed_trades else {}
-    for session_id in await session_store.active_session_ids():
+    for session_id in await session_store.active_session_ids(user_id=user_id):
         await session_store.append_event(
             session_id,
             event(
@@ -241,6 +261,13 @@ def active_trade_from_position(position: dict[str, Any], mode: str | None) -> di
         "correlationId": "",
         "status": "OPEN",
     }
+
+
+def _current_execution_user_id() -> str | None:
+    from app.services.execution_context import current_execution_user
+
+    user = current_execution_user()
+    return user.id_str if user is not None and not user.is_dev else None
 
 
 def _entry_fill_is_confirmed(

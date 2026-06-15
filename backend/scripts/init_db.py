@@ -29,7 +29,40 @@ EXPECTED_TABLES = {
     "user_credential_vaults",
     "user_runs",
     "audit_logs",
+    "strategy_subscriptions",
+    "strategy_signals",
+    "user_egress",
 }
+
+
+def ensure_additive_schema(engine) -> None:
+    """Apply the small additive migration needed by pre-release fan-out tables."""
+    inspector = inspect(engine)
+    if "user_egress" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("user_egress")}
+    timestamp_type = (
+        "TIMESTAMP WITH TIME ZONE"
+        if engine.dialect.name == "postgresql"
+        else "DATETIME"
+    )
+    additions = {
+        "last_verified_at": timestamp_type,
+        "last_observed_ip": "VARCHAR(64)",
+        "verification_error": "TEXT",
+    }
+    with engine.begin() as connection:
+        for name, sql_type in additions.items():
+            if name not in columns:
+                connection.execute(
+                    text(f"ALTER TABLE user_egress ADD COLUMN {name} {sql_type}")
+                )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_user_egress_public_ip ON user_egress (public_ip)"
+            )
+        )
 
 
 def main() -> int:
@@ -40,6 +73,7 @@ def main() -> int:
     print(f"Connecting to: {normalize_database_url('postgresql://***')[:24]}... (driver normalized)")
     print(f"Host: {engine.url.host}  Database: {engine.url.database}")
     init_db()
+    ensure_additive_schema(engine)
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
     tables = set(inspect(engine).get_table_names())
@@ -47,7 +81,7 @@ def main() -> int:
     if missing:
         print(f"ERROR: schema verification failed; missing tables: {', '.join(sorted(missing))}")
         return 1
-    print("OK: database connection and all auth tables verified.")
+    print("OK: database connection and all application tables verified.")
     return 0
 
 

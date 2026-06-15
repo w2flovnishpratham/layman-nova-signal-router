@@ -57,9 +57,10 @@ def test_chat_session_uses_persistent_production_webhook(tmp_path, monkeypatch):
         first = client.post("/api/session/start").json()
         second = client.post("/api/session/start").json()
 
-    assert first["webhookUrl"].endswith("/webhook/tradingview")
+    assert first["webhookUrl"].endswith("/api/webhook/strategy/supertrend")
     assert first["webhookSecret"] == second["webhookSecret"]
-    assert first["webhookSecret"] == credential_vault.get_webhook_secret()
+    assert first["webhookSecret"] == "Managed server-side"
+    assert credential_vault.get_webhook_secret()
 
 
 def test_session_bootstrap_exposes_current_lot_size(tmp_path, monkeypatch):

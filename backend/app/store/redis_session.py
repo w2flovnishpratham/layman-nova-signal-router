@@ -70,12 +70,13 @@ class InMemorySessionStore:
         async with self._lock:
             return self._sessions.get(session_id)
 
-    async def active_session_ids(self) -> list[str]:
+    async def active_session_ids(self, *, user_id: str | None = None) -> list[str]:
         async with self._lock:
             return [
                 session_id
                 for session_id, session in self._sessions.items()
                 if session.state in {SetupState.LIVE, SetupState.PAUSED}
+                and (user_id is None or session.user_id == user_id)
             ]
 
     async def find_by_webhook_secret(self, webhook_secret: str) -> SessionDocument | None:

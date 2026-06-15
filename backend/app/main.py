@@ -16,6 +16,7 @@ from app.routers import admin as admin_router
 from app.routers import live as live_router
 from app.routers import user_credentials as user_credentials_router
 from app.routers import user_webhook as user_webhook_router
+from app.routers import strategies as strategies_router
 from app.auth import google as google_auth
 from app.db.engine import database_configured, init_db
 from app.services.user_credential_vault import vault_ready as user_vault_ready
@@ -61,6 +62,10 @@ def validate_production_configuration() -> None:
         ):
             if not (value or "").strip():
                 raise RuntimeError(f"AUTH_REQUIRED=true but {name} is not configured.")
+    if len((settings.STRATEGY_WEBHOOK_SECRET or "").strip()) < 24:
+        raise RuntimeError(
+            "STRATEGY_WEBHOOK_SECRET must be set to at least 24 random characters in production."
+        )
 
 
 @asynccontextmanager
@@ -169,6 +174,7 @@ app.include_router(google_auth.router)
 app.include_router(user_credentials_router.router)
 app.include_router(live_router.router)
 app.include_router(user_webhook_router.router)
+app.include_router(strategies_router.router)
 app.include_router(admin_router.router)
 
 
