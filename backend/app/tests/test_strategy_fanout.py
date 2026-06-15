@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -179,6 +181,84 @@ def test_live_broker_requires_and_uses_user_proxy(mu_db, monkeypatch):
 
     assert captured["proxy"].startswith("http://proxy-user:")
     assert "transport" not in captured
+
+
+def test_authenticated_users_select_distinct_configured_egress_ips(
+    mu_db,
+    monkeypatch,
+):
+    from app.auth.dependencies import get_current_user
+    from app.config import settings
+    from app.routers.strategies import router
+    from app.services import strategy_fanout
+
+    alice = make_user("egress-alice@gmail.com")
+    bob = make_user("egress-bob@gmail.com")
+    nodes = [
+        {
+            "public_ip": "64.225.87.19",
+            "proxy_url": "http://alice-node:secret-one@64.225.87.19:8888",
+        },
+        {
+            "public_ip": "152.42.157.165",
+            "proxy_url": "http://bob-node:secret-two@152.42.157.165:8888",
+        },
+    ]
+    monkeypatch.setattr(
+        settings,
+        "EGRESS_NODES_JSON",
+        json.dumps(nodes),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy_fanout,
+        "verify_user_egress",
+        lambda user_id: {
+            "ok": True,
+            "expected_ip": (
+                "64.225.87.19" if user_id == alice.id else "152.42.157.165"
+            ),
+        },
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: _current_user(alice)
+    client = TestClient(app)
+
+    options = client.get("/api/strategies/egress/options")
+    assert options.status_code == 200
+    assert [node["public_ip"] for node in options.json()["nodes"]] == [
+        "64.225.87.19",
+        "152.42.157.165",
+    ]
+    assert "secret-one" not in options.text
+    assert "secret-two" not in options.text
+
+    selected = client.post(
+        "/api/strategies/egress/select",
+        json={"public_ip": "64.225.87.19"},
+    )
+    assert selected.status_code == 200
+    assert selected.json()["verification"]["ok"] is True
+    assert "secret-one" not in selected.text
+
+    app.dependency_overrides[get_current_user] = lambda: _current_user(bob)
+    bob_options = client.get("/api/strategies/egress/options").json()
+    assert bob_options["nodes"][0]["available"] is False
+    assert bob_options["nodes"][1]["available"] is True
+
+    conflict = client.post(
+        "/api/strategies/egress/select",
+        json={"public_ip": "64.225.87.19"},
+    )
+    assert conflict.status_code == 409
+
+    bob_selected = client.post(
+        "/api/strategies/egress/select",
+        json={"public_ip": "152.42.157.165"},
+    )
+    assert bob_selected.status_code == 200
 
 
 def test_context_free_live_router_is_blocked_when_egress_routing_is_enabled(

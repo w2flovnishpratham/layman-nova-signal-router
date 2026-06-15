@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -205,6 +206,86 @@ def _validated_proxy_url(proxy_url: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or not parsed.port:
         raise ValueError("proxy_url must be an http(s) URL with an explicit port.")
     return parsed.geturl()
+
+
+def configured_egress_nodes() -> list[dict[str, str]]:
+    try:
+        raw_nodes = json.loads(settings.EGRESS_NODES_JSON or "[]")
+    except json.JSONDecodeError as exc:
+        raise ValueError("EGRESS_NODES_JSON is not valid JSON.") from exc
+    if not isinstance(raw_nodes, list):
+        raise ValueError("EGRESS_NODES_JSON must contain a JSON list.")
+
+    nodes: list[dict[str, str]] = []
+    seen_ips: set[str] = set()
+    for raw_node in raw_nodes:
+        if not isinstance(raw_node, dict):
+            raise ValueError("Each egress node must be a JSON object.")
+        public_ip = _validated_public_ip(str(raw_node.get("public_ip") or ""))
+        proxy_url = _validated_proxy_url(str(raw_node.get("proxy_url") or ""))
+        if urlparse(proxy_url).hostname != public_ip:
+            raise ValueError("Egress proxy hostname must match its public IP.")
+        if public_ip in seen_ips:
+            raise ValueError(f"Duplicate egress node IP: {public_ip}")
+        seen_ips.add(public_ip)
+        nodes.append({"public_ip": public_ip, "proxy_url": proxy_url})
+    return nodes
+
+
+def user_egress_options(user_id: uuid.UUID) -> dict[str, Any]:
+    nodes = configured_egress_nodes()
+    configured_ips = {node["public_ip"] for node in nodes}
+    assignments: dict[str, uuid.UUID] = {}
+    selected_ip: str | None = None
+    if database_configured() and configured_ips:
+        with session_scope() as db:
+            rows = db.scalars(
+                select(models.UserEgress).where(
+                    models.UserEgress.public_ip.in_(configured_ips)
+                )
+            ).all()
+            for row in rows:
+                if row.public_ip:
+                    assignments[row.public_ip] = row.user_id
+                if row.user_id == user_id and row.active:
+                    selected_ip = row.public_ip
+    status = user_egress_status(user_id)
+    return {
+        "nodes": [
+            {
+                "public_ip": node["public_ip"],
+                "available": (
+                    node["public_ip"] not in assignments
+                    or assignments[node["public_ip"]] == user_id
+                ),
+                "selected": node["public_ip"] == selected_ip,
+            }
+            for node in nodes
+        ],
+        "egress": status,
+    }
+
+
+def select_user_egress(user_id: uuid.UUID, public_ip: str) -> dict[str, Any]:
+    public_ip = _validated_public_ip(public_ip)
+    node = next(
+        (
+            configured_node
+            for configured_node in configured_egress_nodes()
+            if configured_node["public_ip"] == public_ip
+        ),
+        None,
+    )
+    if node is None:
+        raise ValueError("That egress IP is not configured.")
+    assignment = set_user_egress(
+        user_id,
+        public_ip=public_ip,
+        proxy_url=node["proxy_url"],
+        active=True,
+    )
+    verification = verify_user_egress(user_id)
+    return {"assignment": assignment, "verification": verification}
 
 
 def set_user_egress(

@@ -159,6 +159,12 @@ class Settings(BaseSettings):
     # Master gate for routing real orders through per-user egress nodes.
     EXECUTION_NODE_ROUTING_ENABLED: bool = False
 
+    # Server-only JSON list of selectable egress nodes. Proxy URLs may contain
+    # credentials and are never returned to the frontend.
+    # Example:
+    # [{"public_ip":"203.0.113.10","proxy_url":"http://user:pass@203.0.113.10:8888"}]
+    EGRESS_NODES_JSON: str = "[]"
+
     # Cookie configuration
     SESSION_COOKIE_NAME: str = "nova_session"
     SESSION_COOKIE_SECURE: bool = True

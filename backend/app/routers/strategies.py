@@ -181,6 +181,37 @@ class EgressPayload(BaseModel):
     active: bool = True
 
 
+class EgressSelectionPayload(BaseModel):
+    public_ip: str = Field(min_length=3, max_length=64)
+
+
+@router.get("/api/strategies/egress/options")
+def egress_options(user: CurrentUser = Depends(get_current_user)) -> dict:
+    try:
+        return strategy_fanout.user_egress_options(user.id)
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": str(exc)},
+        )
+
+
+@router.post("/api/strategies/egress/select")
+def select_egress(
+    payload: EgressSelectionPayload,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    try:
+        result = strategy_fanout.select_user_egress(user.id, payload.public_ip)
+    except ValueError as exc:
+        status_code = 409 if "already assigned" in str(exc) else 400
+        return JSONResponse(
+            status_code=status_code,
+            content={"ok": False, "error": str(exc)},
+        )
+    return {"ok": True, **result}
+
+
 @router.post("/api/admin/egress")
 def assign_egress(
     payload: EgressPayload,

@@ -3,10 +3,9 @@ import type { ReactNode } from 'react'
 import { ActiveTradeCard } from './ActiveTradeCard'
 import { TickingNumber } from './TickingNumber'
 import { formatCurrency } from '../lib/format'
-import type { ActiveTrade, ClientCommand, EngineMode, SessionBootstrap, SetupState, SideFilter } from '../types'
+import type { ActiveTrade, ClientCommand, EngineMode, SetupState, SideFilter } from '../types'
 
 interface Props {
-  session: SessionBootstrap | null
   state: SetupState
   wallet: number | null
   marginUtilized: number | null
@@ -18,7 +17,7 @@ interface Props {
   onSend: (command: ClientCommand) => void
 }
 
-export function EngineSidebar({ session, state, wallet, marginUtilized, realizedPnl, activeTrade, lotSize, side, engineMode, onSend }: Props) {
+export function EngineSidebar({ state, wallet, marginUtilized, realizedPnl, activeTrade, lotSize, side, engineMode, onSend }: Props) {
   const paper = engineMode === 'paper'
   const entriesBlocked = state === 'PAUSED'
   return (
@@ -87,8 +86,6 @@ export function EngineSidebar({ session, state, wallet, marginUtilized, realized
             ))}
           </div>
         </div>
-        <CopyField label="TradingView Webhook URL" value={session?.webhookUrl ?? 'Starting session'} />
-        <CopyField label="Webhook Secret Key" value={session?.webhookSecret ?? 'Starting session'} />
       </section>
     </aside>
   )
@@ -100,19 +97,5 @@ function MetricRow({ label, children }: { label: string; children: ReactNode }) 
       <span>{label}</span>
       <strong>{children}</strong>
     </div>
-  )
-}
-
-function CopyField({ label, value }: { label: string; value: string }) {
-  return (
-    <label className="copy-field">
-      <span>
-        {label}
-        <button type="button" aria-label={`Copy ${label}`} onClick={() => void navigator.clipboard?.writeText(value)}>Copy</button>
-      </span>
-      <div className="copy-field-row">
-        <code>{value}</code>
-      </div>
-    </label>
   )
 }

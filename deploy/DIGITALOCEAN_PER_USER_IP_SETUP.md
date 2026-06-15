@@ -1,35 +1,41 @@
 # Two-User Dhan Egress Setup
 
-The browser UI is unchanged. The Hostinger VPS receives one TradingView alert,
-loads every active `supertrend` subscription, and runs the existing order router
-once per user. Each live Dhan HTTP client uses that user's authenticated CONNECT
-proxy, so TLS still terminates at Dhan and the request exits from the user's
-whitelisted DigitalOcean IP.
+The Hostinger VPS receives one TradingView alert, loads every active
+`supertrend` subscription, and runs the order router once per user. Each live
+Dhan HTTP client uses that user's authenticated CONNECT proxy, so TLS still
+terminates at Dhan and the request exits from the user's whitelisted
+DigitalOcean IP.
 
-## Fixed routing
+The user UI shows both available static IPs. The authenticated user selects one,
+and the database uniqueness constraint prevents another user from selecting the
+same IP. TradingView webhook details remain server-side.
 
-| User | Droplet | Dhan whitelist |
-|---|---|---|
-| User 1 | `nova-exec-user-001` | `64.225.87.19` |
-| User 2 | `nova-exec-user-002` | `152.42.157.165` |
+## Node pool
+
+| Droplet | Dhan whitelist |
+|---|---|
+| `nova-exec-user-001` | `64.225.87.19` |
+| `nova-exec-user-002` | `152.42.157.165` |
 
 Do not assign either IP to both users. Attach a DigitalOcean Reserved IP before
 whitelisting if these are currently ordinary droplet addresses.
 
 ## 1. Install the proxy on each droplet
 
-Generate a different username/password for each droplet. Run from this repo,
-replacing the Hostinger control-plane IP if it changes:
+Run from this repo, replacing the Hostinger control-plane IP if it changes:
 
 ```bash
 scp deploy/setup_dhan_egress_proxy.sh root@64.225.87.19:/root/
 ssh root@64.225.87.19 \
-  "bash /root/setup_dhan_egress_proxy.sh 187.127.153.128 8888 user001 '<strong-password-1>'"
+  "bash /root/setup_dhan_egress_proxy.sh 187.127.153.128 8888"
 
 scp deploy/setup_dhan_egress_proxy.sh root@152.42.157.165:/root/
 ssh root@152.42.157.165 \
-  "bash /root/setup_dhan_egress_proxy.sh 187.127.153.128 8888 user002 '<strong-password-2>'"
+  "bash /root/setup_dhan_egress_proxy.sh 187.127.153.128 8888"
 ```
+
+Each droplet generates unique proxy credentials and stores them in
+`/root/.config/layman-egress-proxy.env` with mode `0600`.
 
 The firewall permits proxy traffic only from the Hostinger VPS. Dhan
 credentials remain encrypted on the control plane and are sent only inside the
@@ -54,26 +60,16 @@ STRATEGY_WEBHOOK_SECRET=<long-random-secret-used-in-tradingview-json>
 EXECUTION_NODE_ROUTING_ENABLED=false
 ENABLE_LIVE_ORDERS=false
 DHAN_READ_ONLY_REAL_DATA=true
+EGRESS_NODES_JSON=[{"public_ip":"64.225.87.19","proxy_url":"http://<node-1-user>:<node-1-password>@64.225.87.19:8888"},{"public_ip":"152.42.157.165","proxy_url":"http://<node-2-user>:<node-2-password>@152.42.157.165:8888"}]
 ```
 
 Restart the service with the safety gates still off.
 
-## 3. Assign users after both Google logins
+## 3. Select IPs after both Google logins
 
-Each person must sign in once so their email exists in `users`. On Hostinger:
-
-```bash
-export EGRESS_PROXY_URL='http://user001:<strong-password-1>@64.225.87.19:8888'
-python -m scripts.assign_user_egress \
-  --email '<user-1-google-email>' --public-ip 64.225.87.19 --verify
-
-export EGRESS_PROXY_URL='http://user002:<strong-password-2>@152.42.157.165:8888'
-python -m scripts.assign_user_egress \
-  --email '<user-2-google-email>' --public-ip 152.42.157.165 --verify
-unset EGRESS_PROXY_URL
-```
-
-Verification must report the same observed IP as the assigned IP.
+Each person signs in, sees both static IPs in the chatbot, and selects one.
+Selection immediately verifies that the observed proxy IP matches the selected
+IP. The other user sees that IP as unavailable and selects the remaining node.
 
 ## 4. TradingView alert
 

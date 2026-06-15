@@ -222,7 +222,6 @@ function App() {
 
         {engineLive ? (
           <EngineSidebar
-            session={session}
             state={setupState}
             wallet={wallet}
             marginUtilized={marginUtilized}

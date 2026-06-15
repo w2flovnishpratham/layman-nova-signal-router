@@ -3,7 +3,7 @@ import { EodCard, ExitCard, RejectCard } from './EventCards'
 import { SetupInfoCard } from './SetupInfoCard'
 import { UserBubble } from './UserBubble'
 import type { ReactNode } from 'react'
-import type { RenderableMessage, SetupInfo } from '../../types'
+import type { RenderableMessage } from '../../types'
 
 export function MessageRow({ message, inlinePanel = null }: { message: RenderableMessage; inlinePanel?: ReactNode }) {
   if (message.type === 'system.event') {
@@ -20,8 +20,8 @@ export function MessageRow({ message, inlinePanel = null }: { message: Renderabl
 
   if (message.type === 'setup.info') {
     return (
-      <BotBubble label="Nova TradingView setup">
-        <SetupInfoCard info={message.data as unknown as SetupInfo} />
+      <BotBubble label="Nova Dhan static IP">
+        <SetupInfoCard />
       </BotBubble>
     )
   }

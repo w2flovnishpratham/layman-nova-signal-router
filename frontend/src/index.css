@@ -1544,17 +1544,68 @@ code {
   gap: 10px;
 }
 
-.setup-info-toggle {
-  justify-content: space-between;
-  width: 100%;
-  min-height: 34px;
+.static-ip-heading {
+  display: grid;
+  gap: 4px;
+}
+
+.static-ip-heading span,
+.static-ip-option span,
+.static-ip-verification {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.static-ip-options {
+  display: grid;
+  gap: 8px;
+}
+
+.static-ip-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.static-ip-option.selected {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border));
+}
+
+.static-ip-option > div {
+  display: grid;
+  gap: 3px;
+}
+
+.static-ip-option button {
+  width: auto;
+  min-height: 30px;
   padding: 0 10px;
 }
 
-.setup-info-card dl {
-  display: grid;
-  gap: 8px;
+.static-ip-option .static-ip-copy {
+  padding: 0 8px;
+}
+
+.static-ip-loading,
+.static-ip-verification {
+  display: flex;
+  gap: 6px;
+  align-items: center;
   margin: 0;
+}
+
+.static-ip-verification.verified {
+  color: var(--success);
+}
+
+.static-ip-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 11px;
 }
 
 .rich-event-card {

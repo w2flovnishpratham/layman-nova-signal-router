@@ -16,6 +16,27 @@ interface MeResponse {
   auth_required: boolean
 }
 
+export interface EgressNodeOption {
+  public_ip: string
+  available: boolean
+  selected: boolean
+}
+
+export interface EgressStatus {
+  public_ip: string | null
+  active: boolean
+  has_proxy: boolean
+  verified?: boolean
+  last_verified_at?: string | null
+  last_observed_ip?: string | null
+  verification_error?: string | null
+}
+
+export interface EgressOptionsResponse {
+  nodes: EgressNodeOption[]
+  egress: EgressStatus
+}
+
 async function apiFetch(path: `/${string}`, init: RequestInit = {}): Promise<Response> {
   return fetch(backendHttpUrl(path), {
     ...init,
@@ -70,5 +91,26 @@ export async function prepareReconfigure(): Promise<void> {
     const detail = body?.detail
     const message = typeof detail === 'string' ? detail : detail?.message
     throw new Error(message || `Could not reconfigure: ${response.status}`)
+  }
+}
+
+export async function getEgressOptions(): Promise<EgressOptionsResponse> {
+  const response = await apiFetch('/api/strategies/egress/options', { cache: 'no-store' })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(body?.error || `Could not load static IPs: ${response.status}`)
+  }
+  return response.json() as Promise<EgressOptionsResponse>
+}
+
+export async function selectEgressIp(publicIp: string): Promise<void> {
+  const response = await apiFetch('/api/strategies/egress/select', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ public_ip: publicIp }),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(body?.error || `Could not select static IP: ${response.status}`)
   }
 }
