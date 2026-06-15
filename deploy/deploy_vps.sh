@@ -20,6 +20,7 @@ ln -sfn /etc/nginx/sites-available/layman-api.manyacare.com /etc/nginx/sites-ena
 
 systemctl daemon-reload
 systemctl enable --now layman-nova-signal-router.service
+systemctl restart layman-nova-signal-router.service
 
 nginx -t
 systemctl reload nginx
