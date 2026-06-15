@@ -51,6 +51,7 @@ jobs:
           printf 'Host layman-vps\n  HostName 187.127.153.128\n  Port 22\n  User root\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 20\n' >> ~/.ssh/config
       - name: Deploy isolated Layman backend
         timeout-minutes: 8
+        # Values come from the protected GitHub "production" environment.
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
