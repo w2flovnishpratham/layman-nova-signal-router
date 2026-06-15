@@ -51,9 +51,31 @@ jobs:
           printf 'Host layman-vps\n  HostName 187.127.153.128\n  Port 22\n  User root\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 20\n' >> ~/.ssh/config
       - name: Deploy isolated Layman backend
         timeout-minutes: 8
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         run: |
+          for required_name in DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
+            if [ -z "${!required_name}" ]; then
+              echo "Missing production environment secret: $required_name" >&2
+              exit 1
+            fi
+          done
+
+          secrets_file="$(mktemp)"
+          trap 'rm -f "$secrets_file"' EXIT
+          chmod 600 "$secrets_file"
+          {
+            printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
+            printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
+            printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
+          } > "$secrets_file"
+
           for attempt in 1 2 3 4 5 6; do
-            if ssh layman-vps 'bash /root/layman-nova-signal-router/deploy/deploy_vps.sh'; then
+            scp "$secrets_file" layman-vps:/root/layman-production-secrets.env
+            if ssh layman-vps \
+              'chmod 600 /root/layman-production-secrets.env && LAYMAN_DEPLOY_SECRETS_FILE=/root/layman-production-secrets.env bash /root/layman-nova-signal-router/deploy/deploy_vps.sh'; then
               exit 0
             fi
 
