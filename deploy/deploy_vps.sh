@@ -2,6 +2,20 @@
 set -euo pipefail
 
 repo_dir="${LAYMAN_REPO_DIR:-/root/layman-nova-signal-router}"
+deploy_secrets_file="${LAYMAN_DEPLOY_SECRETS_FILE:-}"
+
+if [[ "${SSH_ORIGINAL_COMMAND:-}" == "deploy-with-secrets-v1" ]]; then
+  deploy_secrets_file="$(mktemp /root/layman-production-secrets.XXXXXX)"
+  chmod 600 "$deploy_secrets_file"
+  cat > "$deploy_secrets_file"
+  export LAYMAN_DEPLOY_SECRETS_FILE="$deploy_secrets_file"
+  trap 'rm -f "$deploy_secrets_file"' EXIT
+fi
+
+if [[ -z "$deploy_secrets_file" || ! -s "$deploy_secrets_file" ]]; then
+  echo "Production deployment secrets were not provided." >&2
+  exit 1
+fi
 
 cd "$repo_dir"
 

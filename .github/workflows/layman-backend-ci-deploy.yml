@@ -74,11 +74,7 @@ jobs:
           } > "$secrets_file"
 
           for attempt in 1 2 3 4 5 6; do
-            if ssh layman-vps \
-              'umask 077; cat > /root/layman-production-secrets.env' \
-              < "$secrets_file" &&
-              ssh layman-vps \
-                'chmod 600 /root/layman-production-secrets.env && LAYMAN_DEPLOY_SECRETS_FILE=/root/layman-production-secrets.env bash /root/layman-nova-signal-router/deploy/deploy_vps.sh'; then
+            if ssh layman-vps deploy-with-secrets-v1 < "$secrets_file"; then
               exit 0
             fi
 
