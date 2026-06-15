@@ -37,6 +37,32 @@ def bind_execution_context(
         _CURRENT_EXECUTION.reset(token)
 
 
+@contextmanager
+def bind_user_execution_context(user: CurrentUser) -> Iterator[ExecutionContext]:
+    """Bind a user and their currently assigned egress node for request work."""
+    proxy_url = None
+    egress_ip = None
+    if not user.is_dev:
+        try:
+            # Local import avoids a module cycle during application startup.
+            from app.services.strategy_fanout import get_user_egress
+
+            egress = get_user_egress(user.id)
+            if egress:
+                proxy_url = egress.get("proxy_url")
+                egress_ip = egress.get("public_ip")
+        except Exception:
+            # Live Dhan calls fail closed when routing is enabled and no proxy is
+            # present. Non-Dhan account screens should still remain available.
+            pass
+    with bind_execution_context(
+        user,
+        proxy_url=proxy_url,
+        egress_ip=egress_ip,
+    ) as context:
+        yield context
+
+
 def current_execution_context() -> ExecutionContext | None:
     return _CURRENT_EXECUTION.get()
 

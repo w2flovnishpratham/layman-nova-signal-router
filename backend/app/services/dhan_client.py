@@ -138,10 +138,23 @@ class RealDhanClient:
         proxy_url: str | None = None,
         expected_egress_ip: str | None = None,
     ) -> None:
+        self._requires_user_proxy = False
+        if proxy_url is None:
+            from app.services.execution_context import current_execution_context
+
+            context = current_execution_context()
+            if context is not None and not context.user.is_dev:
+                proxy_url = context.proxy_url
+                expected_egress_ip = expected_egress_ip or context.egress_ip
+                self._requires_user_proxy = settings.EXECUTION_NODE_ROUTING_ENABLED
         self.proxy_url = (proxy_url or "").strip() or None
         self.expected_egress_ip = (expected_egress_ip or "").strip() or None
 
     def _client(self, *, timeout: float) -> httpx.Client:
+        if self._requires_user_proxy and not self.proxy_url:
+            raise RuntimeError(
+                "No Dhan static-IP execution node is assigned to this user."
+            )
         options: dict[str, Any] = {
             "timeout": timeout,
             "event_hooks": {

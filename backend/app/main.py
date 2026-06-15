@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import session as chat_session
 from app.api import ws as chat_ws
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_execution_scoped_user
 from app.config import settings
 from app.routers import broker, control, dashboard, debug, engine, orders, positions, setup, webhook
 from app.routers import admin as admin_router
@@ -29,6 +29,11 @@ from app.services.state_store import get_app_state, get_engine_mode, get_runtime
 from app.services.startup_reconciler import reconcile_open_position_on_startup
 from app.workers.eod_squareoff import start_eod_squareoff_worker, stop_eod_squareoff_worker
 from app.workers.ghost_position_watcher import start_ghost_position_watcher, stop_ghost_position_watcher
+from app.workers.strategy_job_worker import (
+    start_strategy_job_worker,
+    stop_strategy_job_worker,
+    strategy_job_worker_status,
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +71,29 @@ def validate_production_configuration() -> None:
         raise RuntimeError(
             "STRATEGY_WEBHOOK_SECRET must be set to at least 24 random characters in production."
         )
+    if settings.ENABLE_LIVE_ORDERS:
+        if settings.DHAN_READ_ONLY_REAL_DATA:
+            raise RuntimeError(
+                "ENABLE_LIVE_ORDERS=true requires DHAN_READ_ONLY_REAL_DATA=false."
+            )
+        if not settings.EXECUTION_NODE_ROUTING_ENABLED:
+            raise RuntimeError(
+                "ENABLE_LIVE_ORDERS=true requires EXECUTION_NODE_ROUTING_ENABLED=true."
+            )
+        if not settings.STRATEGY_JOB_WORKER_ENABLED:
+            raise RuntimeError(
+                "ENABLE_LIVE_ORDERS=true requires STRATEGY_JOB_WORKER_ENABLED=true."
+            )
+        from app.services.strategy_fanout import configured_egress_nodes
+
+        if len(configured_egress_nodes()) < 2:
+            raise RuntimeError(
+                "The two-user live pilot requires at least two configured egress nodes."
+            )
+
+
+def _multi_user_mode() -> bool:
+    return settings.AUTH_REQUIRED and database_configured()
 
 
 @asynccontextmanager
@@ -106,11 +134,35 @@ async def lifespan(app: FastAPI):
         logger.warning("REAL DHAN MODE CONFIGURED.")
     if settings.ENABLE_LIVE_ORDERS:
         logger.warning("LIVE ORDERS ENABLED. REAL MONEY ORDERS MAY BE SENT AFTER RISK CHECKS.")
-    reconcile_open_position_on_startup()
-    start_option_position_monitor()
-    # C1 — EOD square-off worker (15:15 IST). Runs as daemon; idempotent.
-    start_eod_squareoff_worker()
-    start_ghost_position_watcher()
+    start_strategy_job_worker()
+    if _multi_user_mode():
+        logger.info(
+            "Multi-user reconcile, position monitor, EOD, and ghost workers enabled."
+        )
+        from app.services.execution_context import bind_user_execution_context
+        from app.services.strategy_fanout import (
+            active_routing_user_ids,
+            load_user_context,
+        )
+
+        for user_id in active_routing_user_ids(real_orders_only=True):
+            user = load_user_context(user_id)
+            if user is None:
+                continue
+            try:
+                with bind_user_execution_context(user):
+                    reconcile_open_position_on_startup()
+            except Exception:
+                logger.exception("Per-user startup reconciliation failed for %s", user.id_str)
+        start_option_position_monitor()
+        start_eod_squareoff_worker()
+        start_ghost_position_watcher()
+    else:
+        reconcile_open_position_on_startup()
+        start_option_position_monitor()
+        # EOD square-off worker (15:15 IST). Runs as daemon; idempotent.
+        start_eod_squareoff_worker()
+        start_ghost_position_watcher()
     log_audit_event(
         "APP_START",
         "NOVA Signal Router backend started.",
@@ -123,6 +175,7 @@ async def lifespan(app: FastAPI):
         },
     )
     yield
+    stop_strategy_job_worker()
     stop_option_position_monitor()
     stop_eod_squareoff_worker()
     stop_ghost_position_watcher()
@@ -154,7 +207,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-authenticated = [Depends(get_current_user)]
+authenticated = [Depends(get_execution_scoped_user)]
 
 app.include_router(setup.router, prefix="/api", tags=["Setup"], dependencies=authenticated)
 app.include_router(engine.router, prefix="/api", tags=["Engine"], dependencies=authenticated)
@@ -192,6 +245,10 @@ def _health() -> dict:
         "webhook_trading_enabled": bool(app_state.get("webhook_trading_enabled")),
         "emergency_stop": runtime_settings.get("emergency_stop"),
         "global_kill_switch": runtime_settings.get("global_kill_switch"),
+        "execution_node_routing_enabled": settings.EXECUTION_NODE_ROUTING_ENABLED,
+        "multi_user_mode": _multi_user_mode(),
+        "legacy_single_user_workers_enabled": not _multi_user_mode(),
+        "strategy_job_worker": strategy_job_worker_status(),
     }
 
 

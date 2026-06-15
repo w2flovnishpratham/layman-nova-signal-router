@@ -211,10 +211,28 @@ def _loop() -> None:
     while not _STOP_EVENT.is_set():
         try:
             if _is_weekday_ist() and _in_eod_window():
-                # Optional kill switch: if user disables it at runtime, skip.
-                runtime = get_runtime_settings()
-                if bool(runtime.get("eod_squareoff_enabled", True)):
-                    _try_flatten_once()
+                from app.config import settings
+                from app.db.engine import database_configured
+
+                if settings.AUTH_REQUIRED and database_configured():
+                    from app.services.execution_context import bind_user_execution_context
+                    from app.services.strategy_fanout import (
+                        active_routing_user_ids,
+                        load_user_context,
+                    )
+
+                    for user_id in active_routing_user_ids(real_orders_only=True):
+                        user = load_user_context(user_id)
+                        if user is None:
+                            continue
+                        with bind_user_execution_context(user):
+                            runtime = get_runtime_settings()
+                            if bool(runtime.get("eod_squareoff_enabled", True)):
+                                _try_flatten_once()
+                else:
+                    runtime = get_runtime_settings()
+                    if bool(runtime.get("eod_squareoff_enabled", True)):
+                        _try_flatten_once()
         except Exception as exc:  # pragma: no cover
             logger.exception("EOD square-off loop error: %s", exc)
         # Sleep with quick wake on stop request.

@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -16,6 +16,7 @@ from app.services import live_engine, strategy_fanout
 from app.services.signal_parser import PayloadParseError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
 from app.services.user_context import CurrentUser
+from app.workers.strategy_job_worker import wake_strategy_job_worker
 
 
 router = APIRouter(tags=["Strategies"])
@@ -90,7 +91,6 @@ def egress_status(user: CurrentUser = Depends(get_current_user)) -> dict:
 async def strategy_webhook(
     strategy_name: str,
     request: Request,
-    background_tasks: BackgroundTasks,
 ) -> JSONResponse:
     secret = (settings.STRATEGY_WEBHOOK_SECRET or "").strip()
     if not secret:
@@ -146,7 +146,8 @@ async def strategy_webhook(
             status_code=422,
             content={"ok": False, "error": error or "Invalid signal."},
         )
-    if not strategy_fanout.claim_strategy_signal(path_strategy, signal.signal_id):
+    queued = strategy_fanout.enqueue_strategy_signal(path_strategy, signal)
+    if not queued["accepted"]:
         return JSONResponse(
             status_code=409,
             content={
@@ -156,20 +157,15 @@ async def strategy_webhook(
             },
         )
 
-    subscriber_count = strategy_fanout.active_subscriber_count(path_strategy)
-    background_tasks.add_task(
-        strategy_fanout.process_signal,
-        path_strategy,
-        signal,
-    )
+    wake_strategy_job_worker()
     return JSONResponse(
         status_code=202,
         content={
             "ok": True,
             "signal_id": signal.signal_id,
             "strategy_name": path_strategy,
-            "subscriber_count": subscriber_count,
-            "status": "accepted",
+            "subscriber_count": queued["subscriber_count"],
+            "status": "queued",
         },
     )
 

@@ -550,7 +550,24 @@ def _loop() -> None:
     logger.info("Ghost-position watcher started.")
     while not _STOP_EVENT.is_set():
         try:
-            sync_ghost_positions_once(reason="worker")
+            from app.config import settings
+            from app.db.engine import database_configured
+
+            if settings.AUTH_REQUIRED and database_configured():
+                from app.services.execution_context import bind_user_execution_context
+                from app.services.strategy_fanout import (
+                    active_routing_user_ids,
+                    load_user_context,
+                )
+
+                for user_id in active_routing_user_ids(real_orders_only=True):
+                    user = load_user_context(user_id)
+                    if user is None:
+                        continue
+                    with bind_user_execution_context(user):
+                        sync_ghost_positions_once(reason="multi_user_worker")
+            else:
+                sync_ghost_positions_once(reason="worker")
         except Exception as exc:  # pragma: no cover
             logger.exception("Ghost-position watcher loop error: %s", exc)
             log_error_event("GHOST_POSITION_WATCHER_EXCEPTION", str(exc))

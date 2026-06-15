@@ -103,6 +103,30 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
         webhook_secret_present = bool(vault.get_user_webhook_secret(user.id))
     except Exception:
         webhook_secret_present = False
+    credential_status = vault.user_credential_status(user.id)
+    token_saved_at = credential_status.get("dhan_token_saved_at")
+    token_age_hours: float | None = None
+    if token_saved_at:
+        try:
+            saved_at = datetime.fromisoformat(str(token_saved_at).replace("Z", "+00:00"))
+            if saved_at.tzinfo is None:
+                saved_at = saved_at.replace(tzinfo=timezone.utc)
+            token_age_hours = max((_now() - saved_at).total_seconds() / 3600, 0)
+        except (TypeError, ValueError):
+            token_age_hours = None
+
+    egress_status: dict[str, Any] = {}
+    subscriptions: list[dict[str, Any]] = []
+    worker_status: dict[str, Any] = {}
+    try:
+        from app.services import strategy_fanout
+        from app.workers.strategy_job_worker import strategy_job_worker_status
+
+        egress_status = strategy_fanout.user_egress_status(user.id)
+        subscriptions = strategy_fanout.list_user_subscriptions(user.id)
+        worker_status = strategy_job_worker_status()
+    except Exception:
+        pass
 
     checks = {
         "logged_in": True,
@@ -114,6 +138,13 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
         "webhook_hmac_required": bool(settings.WEBHOOK_HMAC_REQUIRED),
         "webhook_secret_present": webhook_secret_present,
         "dhan_mode": settings.DHAN_MODE.upper(),
+        "dhan_read_only_real_data": bool(settings.DHAN_READ_ONLY_REAL_DATA),
+        "execution_node_routing_enabled": bool(settings.EXECUTION_NODE_ROUTING_ENABLED),
+        "egress_assigned": bool(egress_status.get("public_ip")),
+        "egress_verified": bool(egress_status.get("verified")),
+        "strategy_job_worker_enabled": bool(worker_status.get("enabled")),
+        "strategy_job_worker_running": bool(worker_status.get("running")),
+        "token_age_hours": round(token_age_hours, 2) if token_age_hours is not None else None,
     }
 
     blockers: list[str] = []
@@ -123,6 +154,8 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
         blockers.append("Credential vault could not be decrypted.")
     if has_creds and not token_ok:
         blockers.append("Dhan token failed basic validation.")
+    if token_age_hours is not None and token_age_hours >= settings.TOKEN_MAX_AGE_HOURS:
+        blockers.append("Saved Dhan token is too old; generate and save a fresh token.")
 
     if execution_mode == "real_orders":
         if not settings.ENABLE_LIVE_ORDERS:
@@ -131,6 +164,16 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
             blockers.append("DHAN_MODE must be REAL for real orders.")
         if settings.DHAN_READ_ONLY_REAL_DATA:
             blockers.append("DHAN_READ_ONLY_REAL_DATA=true blocks real order placement.")
+        if not settings.EXECUTION_NODE_ROUTING_ENABLED:
+            blockers.append("EXECUTION_NODE_ROUTING_ENABLED is not true.")
+        if not egress_status.get("public_ip"):
+            blockers.append("No Dhan static-IP execution node is assigned to this user.")
+        elif not egress_status.get("verified"):
+            blockers.append("The assigned Dhan static-IP execution node is not verified.")
+        if not worker_status.get("enabled"):
+            blockers.append("The durable strategy execution worker is disabled.")
+        if settings.is_production and not worker_status.get("running"):
+            blockers.append("The durable strategy execution worker is not running.")
 
     if uses_webhook:
         if not settings.WEBHOOK_TRADING_ENABLED:
@@ -144,6 +187,9 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
         "blockers": blockers,
         "ready": len(blockers) == 0,
         "real_orders_allowed": execution_mode == "real_orders" and len(blockers) == 0,
+        "egress": egress_status,
+        "subscriptions": subscriptions,
+        "worker": worker_status,
     }
 
 

@@ -8,6 +8,20 @@ on:
       - "deploy/**"
       - ".github/workflows/layman-backend-ci-deploy.yml"
   workflow_dispatch:
+    inputs:
+      live_trading_mode:
+        description: "Deployment safety mode"
+        required: true
+        default: "safe"
+        type: choice
+        options:
+          - safe
+          - armed
+      live_confirmation:
+        description: "For armed mode, type exactly: ARM TWO USER LIVE"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: layman-nova-vps-deploy-${{ github.ref }}
@@ -56,6 +70,8 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          LIVE_TRADING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_trading_mode || 'safe' }}
+          LIVE_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.live_confirmation || '' }}
         run: |
           for required_name in DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
             if [ -z "${!required_name}" ]; then
@@ -67,10 +83,19 @@ jobs:
           secrets_file="$(mktemp)"
           trap 'rm -f "$secrets_file"' EXIT
           chmod 600 "$secrets_file"
+          live_trading_armed=false
+          if [ "$LIVE_TRADING_MODE" = "armed" ]; then
+            if [ "$LIVE_CONFIRMATION" != "ARM TWO USER LIVE" ]; then
+              echo "Armed deployment requires the exact confirmation phrase." >&2
+              exit 1
+            fi
+            live_trading_armed=true
+          fi
           {
             printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
             printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
             printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
+            printf 'LIVE_TRADING_ARMED=%s\n' "$live_trading_armed"
           } > "$secrets_file"
 
           for attempt in 1 2 3 4 5 6; do

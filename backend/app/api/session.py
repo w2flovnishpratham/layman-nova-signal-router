@@ -10,7 +10,7 @@ from app.domain.events import event
 from app.domain.state_machine import SetupState
 from app.routers.setup import current_nifty_lot_size
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret, save_webhook_secret
-from app.services.execution_context import bind_execution_context
+from app.services.execution_context import bind_user_execution_context
 from app.services.chat_event_publisher import active_trade_from_position
 from app.services.state_store import get_app_state, get_daily_risk, get_engine_mode, get_open_position, get_runtime_settings, get_wallet_snapshot
 from app.store.redis_session import session_store
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/session", tags=["session"])
 
 @router.post("/start")
 async def start_session(user: CurrentUser = Depends(get_current_user)) -> dict[str, object]:
-    with bind_execution_context(user):
+    with bind_user_execution_context(user):
         actual_webhook_secret = (
             (settings.STRATEGY_WEBHOOK_SECRET or "").strip()
             or get_webhook_secret()

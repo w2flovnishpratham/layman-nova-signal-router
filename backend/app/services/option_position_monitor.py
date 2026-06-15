@@ -481,14 +481,15 @@ def _route_server_exit(position: dict[str, Any], reason: str, snapshot: dict[str
     _unlock_exit_attempt(marked, result)
 
 
-def monitor_once() -> None:
+def monitor_once(*, force_rest: bool = False) -> None:
     runtime = get_runtime_settings()
     if not _monitor_should_run(runtime):
         return
 
     position = get_open_position()
     if not position.get("has_open_position"):
-        clear_marketfeed_subscription()
+        if not force_rest:
+            clear_marketfeed_subscription()
         return
 
     creds = get_dhan_credentials()
@@ -509,7 +510,7 @@ def monitor_once() -> None:
     if entry_price_before_sync is None:
         publish_active_trade_from_sync(position, get_engine_mode())
 
-    source = _ltp_source(runtime)
+    source = "REST" if force_rest else _ltp_source(runtime)
     quote: Any = None
     if source in {"WEBSOCKET", "AUTO"} and _runtime_bool(runtime, "marketfeed_ws_enabled", True):
         ensure_marketfeed_subscription(exchange_segment=exchange_segment, security_id=security_id)
@@ -608,7 +609,24 @@ def _monitor_loop() -> None:
     while not _STOP_EVENT.is_set():
         runtime = get_runtime_settings()
         try:
-            monitor_once()
+            from app.config import settings
+            from app.db.engine import database_configured
+
+            if settings.AUTH_REQUIRED and database_configured():
+                from app.services.execution_context import bind_user_execution_context
+                from app.services.strategy_fanout import (
+                    active_routing_user_ids,
+                    load_user_context,
+                )
+
+                for user_id in active_routing_user_ids():
+                    user = load_user_context(user_id)
+                    if user is None:
+                        continue
+                    with bind_user_execution_context(user):
+                        monitor_once(force_rest=True)
+            else:
+                monitor_once()
         except Exception as exc:
             logger.exception("Option position monitor loop error")
             log_error_event("OPTION_POSITION_MONITOR_ERROR", str(exc))

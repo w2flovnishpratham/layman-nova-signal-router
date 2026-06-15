@@ -20,6 +20,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -216,6 +217,51 @@ class StrategySignal(Base):
     signal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(30), default="accepted", nullable=False)
     result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class StrategyExecutionJob(Base):
+    """Durable per-user work item created before a strategy webhook is acknowledged."""
+
+    __tablename__ = "strategy_execution_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "strategy_name",
+            "signal_id",
+            "user_id",
+            name="uq_strategy_signal_user_job",
+        ),
+        Index("ix_strategy_jobs_status_available", "status", "available_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_signal_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("strategy_signals.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    strategy_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    signal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    signal_payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    lots: Mapped[int] = mapped_column(Integer, nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False

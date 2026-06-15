@@ -159,6 +159,13 @@ class Settings(BaseSettings):
     # Master gate for routing real orders through per-user egress nodes.
     EXECUTION_NODE_ROUTING_ENABLED: bool = False
 
+    # Durable fan-out worker. The webhook commits one job per subscribed user
+    # before returning 202, then this worker executes those jobs independently.
+    STRATEGY_JOB_WORKER_ENABLED: bool = True
+    STRATEGY_JOB_WORKER_POLL_SECONDS: float = 0.5
+    STRATEGY_JOB_WORKER_CONCURRENCY: int = 4
+    STRATEGY_JOB_STALE_SECONDS: int = 120
+
     # Server-only JSON list of selectable egress nodes. Proxy URLs may contain
     # credentials and are never returned to the frontend. public_ip is the
     # outbound address Dhan sees; the proxy URL may use a different Reserved IP.

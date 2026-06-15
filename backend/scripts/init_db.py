@@ -31,6 +31,7 @@ EXPECTED_TABLES = {
     "audit_logs",
     "strategy_subscriptions",
     "strategy_signals",
+    "strategy_execution_jobs",
     "user_egress",
 }
 

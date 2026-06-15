@@ -156,6 +156,22 @@ def active_subscribers(strategy_name: str) -> list[models.StrategySubscription]:
         return list(rows)
 
 
+def active_routing_user_ids(*, real_orders_only: bool = False) -> list[uuid.UUID]:
+    """Return distinct users whose active subscription needs background care."""
+    modes = ["real_orders"] if real_orders_only else ["paper_live_data", "real_orders"]
+    with session_scope() as db:
+        return list(
+            db.scalars(
+                select(models.StrategySubscription.user_id)
+                .where(
+                    models.StrategySubscription.active.is_(True),
+                    models.StrategySubscription.execution_mode.in_(modes),
+                )
+                .distinct()
+            ).all()
+        )
+
+
 def claim_strategy_signal(strategy_name: str, signal_id: str) -> bool:
     """Atomically claim a signal so retries cannot fan out twice."""
     try:
@@ -171,6 +187,78 @@ def claim_strategy_signal(strategy_name: str, signal_id: str) -> bool:
         return True
     except IntegrityError:
         return False
+
+
+def enqueue_strategy_signal(
+    strategy_name: str,
+    signal: NormalizedSignal,
+) -> dict[str, Any]:
+    """Atomically claim an inbound alert and enqueue one immutable job per user."""
+    strategy_name = canonical_strategy_name(strategy_name)
+    try:
+        with session_scope() as db:
+            signal_row = models.StrategySignal(
+                strategy_name=strategy_name,
+                signal_id=signal.signal_id,
+                status="queued",
+            )
+            db.add(signal_row)
+            db.flush()
+
+            subscriptions = db.scalars(
+                select(models.StrategySubscription).where(
+                    models.StrategySubscription.strategy_name == strategy_name,
+                    models.StrategySubscription.active.is_(True),
+                )
+            ).all()
+            raw_payload = (
+                {
+                    key: value
+                    for key, value in signal.raw_payload.items()
+                    if key.lower() != "secret"
+                }
+                if isinstance(signal.raw_payload, dict)
+                else {}
+            )
+            signal_payload = signal.model_copy(
+                update={"secret": "", "raw_payload": raw_payload}
+            ).model_dump(mode="json")
+            for subscription in subscriptions:
+                db.add(
+                    models.StrategyExecutionJob(
+                        strategy_signal_id=signal_row.id,
+                        user_id=subscription.user_id,
+                        strategy_name=strategy_name,
+                        signal_id=signal.signal_id,
+                        signal_payload=signal_payload,
+                        lots=subscription.lots,
+                        execution_mode=subscription.execution_mode,
+                        status="queued",
+                    )
+                )
+
+            if not subscriptions:
+                signal_row.status = "completed"
+                signal_row.result_summary = {
+                    "strategy_name": strategy_name,
+                    "signal_id": signal.signal_id,
+                    "subscriber_count": 0,
+                    "results": [],
+                }
+            db.flush()
+            return {
+                "accepted": True,
+                "strategy_name": strategy_name,
+                "signal_id": signal.signal_id,
+                "subscriber_count": len(subscriptions),
+            }
+    except IntegrityError:
+        return {
+            "accepted": False,
+            "strategy_name": strategy_name,
+            "signal_id": signal.signal_id,
+            "subscriber_count": 0,
+        }
 
 
 def _finish_strategy_signal(
@@ -435,7 +523,7 @@ def _effective_mode(requested: str) -> str:
     return requested
 
 
-def _load_user(user_id: uuid.UUID) -> CurrentUser | None:
+def load_user_context(user_id: uuid.UUID) -> CurrentUser | None:
     with session_scope() as db:
         user = crud.get_user_by_id(db, user_id)
         return current_user_from_model(user) if user else None
@@ -507,15 +595,33 @@ def _dispatch_to_subscriber(
     subscription: models.StrategySubscription,
     signal: NormalizedSignal,
 ) -> dict[str, Any]:
-    user = _load_user(subscription.user_id)
+    return dispatch_signal_job(
+        user_id=subscription.user_id,
+        strategy_name=subscription.strategy_name,
+        lots=subscription.lots,
+        execution_mode=subscription.execution_mode,
+        signal=signal,
+    )
+
+
+def dispatch_signal_job(
+    *,
+    user_id: uuid.UUID,
+    strategy_name: str,
+    lots: int,
+    execution_mode: str,
+    signal: NormalizedSignal,
+) -> dict[str, Any]:
+    """Execute one immutable user job using only that user's state and proxy."""
+    user = load_user_context(user_id)
     if user is None:
         return {
-            "user_id": str(subscription.user_id),
+            "user_id": str(user_id),
             "status": "skipped",
             "reason": "user_not_found",
         }
 
-    mode = _effective_mode(subscription.execution_mode)
+    mode = _effective_mode(execution_mode)
     base = {
         "user_id": user.id_str,
         "execution_mode": mode,
@@ -551,9 +657,9 @@ def _dispatch_to_subscriber(
             db,
             user_id=user.id,
             run_type="live" if mode == "real_orders" else "paper",
-            strategy_name=subscription.strategy_name,
+            strategy_name=strategy_name,
             execution_mode=mode,
-            mode_config={"lots": subscription.lots, "signal_id": signal.signal_id},
+            mode_config={"lots": lots, "signal_id": signal.signal_id},
             status="running",
         )
         crud.add_audit_log(
@@ -561,7 +667,7 @@ def _dispatch_to_subscriber(
             user_id=user.id,
             action="STRATEGY_SIGNAL_FANOUT",
             metadata={
-                "strategy": subscription.strategy_name,
+                "strategy": strategy_name,
                 "signal_id": signal.signal_id,
                 "execution_mode": mode,
             },
@@ -569,7 +675,7 @@ def _dispatch_to_subscriber(
         run_id = str(run.id)
 
     per_user_signal = signal.model_copy(
-        update={"qty": _quantity_for_subscription(subscription.lots)}
+        update={"qty": _quantity_for_subscription(lots)}
     )
     try:
         with bind_execution_context(
@@ -592,7 +698,13 @@ def _dispatch_to_subscriber(
     return {
         **base,
         "run_id": run_id,
-        "status": "blocked" if execution_result.get("blocked") else "completed",
+        "status": (
+            "blocked"
+            if execution_result.get("blocked")
+            else "error"
+            if execution_result.get("success") is False
+            else "completed"
+        ),
         "execution_result": execution_result,
     }
 

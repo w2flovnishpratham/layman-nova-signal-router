@@ -44,8 +44,6 @@ set_env FRONTEND_ORIGIN https://layman.manyacare.com
 set_env FRONTEND_URL https://layman.manyacare.com
 set_env DHAN_MODE REAL
 set_env PAPER_MODE_ENABLED true
-set_env ENABLE_LIVE_ORDERS false
-set_env WEBHOOK_TRADING_ENABLED false
 set_env REQUIRE_MARKET_HOURS true
 set_env DEBUG_ENABLED false
 set_env MARKET_CLOSED_DEBUG false
@@ -56,6 +54,7 @@ set_env ADMIN_EMAILS ""
 set_env SESSION_COOKIE_SECURE true
 set_env SESSION_COOKIE_SAMESITE lax
 set_env SESSION_COOKIE_DOMAIN ""
+set_env STRATEGY_JOB_WORKER_ENABLED true
 
 deploy_secrets_file="${LAYMAN_DEPLOY_SECRETS_FILE:-}"
 if [[ -z "$deploy_secrets_file" || ! -f "$deploy_secrets_file" ]]; then
@@ -71,6 +70,21 @@ for required_key in DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
   fi
   set_env "$required_key" "$value"
 done
+
+live_trading_armed="$(
+  grep -m1 '^LIVE_TRADING_ARMED=' "$deploy_secrets_file" | cut -d= -f2- || true
+)"
+if [[ "$live_trading_armed" == "true" ]]; then
+  set_env ENABLE_LIVE_ORDERS true
+  set_env DHAN_READ_ONLY_REAL_DATA false
+  set_env EXECUTION_NODE_ROUTING_ENABLED true
+  set_env WEBHOOK_TRADING_ENABLED true
+else
+  set_env ENABLE_LIVE_ORDERS false
+  set_env DHAN_READ_ONLY_REAL_DATA true
+  set_env EXECUTION_NODE_ROUTING_ENABLED false
+  set_env WEBHOOK_TRADING_ENABLED false
+fi
 
 if ! grep -Eq '^SESSION_TOKEN_SECRET=.{32,}$' "$env_file"; then
   set_env SESSION_TOKEN_SECRET "$(openssl rand -hex 32)"

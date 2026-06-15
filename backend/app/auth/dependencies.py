@@ -17,6 +17,7 @@ from app.services.user_context import (
     current_user_from_model,
     dev_user,
 )
+from app.services.execution_context import bind_user_execution_context
 
 
 def resolve_user_from_cookie(cookie: str | None) -> CurrentUser | None:
@@ -56,6 +57,13 @@ def get_current_user(request: Request) -> CurrentUser:
     if user is not None:
         return user
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+
+async def get_execution_scoped_user(request: Request):
+    """Keep legacy authenticated endpoints inside the user's isolated runtime."""
+    user = get_current_user(request)
+    with bind_user_execution_context(user):
+        yield user
 
 
 def get_optional_user(request: Request) -> CurrentUser | None:

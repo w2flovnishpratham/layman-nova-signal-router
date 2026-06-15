@@ -284,16 +284,19 @@ def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
     monkeypatch,
 ):
     from app.config import DEFAULT_STRATEGY_CODE, settings
+    from app.db import models
+    from app.db.engine import session_scope
     from app.routers.strategies import router
     from app.services import strategy_fanout
 
     secret = "strategy-secret-1234567890-strong"
     monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
-    processed = []
-    monkeypatch.setattr(
-        strategy_fanout,
-        "process_signal",
-        lambda strategy, signal: processed.append((strategy, signal.signal_id)),
+    user = make_user("queued-user@gmail.com")
+    strategy_fanout.subscribe_user(
+        user.id,
+        "supertrend",
+        lots=1,
+        execution_mode="signal_only",
     )
 
     app = FastAPI()
@@ -313,10 +316,70 @@ def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
 
     response = client.post("/api/webhook/strategy/supertrend", json=body)
     assert response.status_code == 202
-    assert processed == [("supertrend", "tv-shared-1")]
+    assert response.json()["status"] == "queued"
+    assert response.json()["subscriber_count"] == 1
+    with session_scope() as db:
+        jobs = db.query(models.StrategyExecutionJob).all()
+        assert len(jobs) == 1
+        assert jobs[0].user_id == user.id
+        assert jobs[0].status == "queued"
+        assert jobs[0].signal_payload["secret"] == ""
+        assert "secret" not in jobs[0].signal_payload["raw_payload"]
 
     duplicate = client.post("/api/webhook/strategy/supertrend", json=body)
     assert duplicate.status_code == 409
+
+
+def test_durable_jobs_process_two_users_independently(mu_db, monkeypatch):
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import strategy_fanout
+    from app.services.execution_context import current_execution_user
+    from app.workers.strategy_job_worker import process_queued_jobs_once
+
+    alice = make_user("job-alice@gmail.com")
+    bob = make_user("job-bob@gmail.com")
+    strategy_fanout.subscribe_user(
+        alice.id,
+        "supertrend",
+        lots=1,
+        execution_mode="paper_live_data",
+    )
+    strategy_fanout.subscribe_user(
+        bob.id,
+        "supertrend",
+        lots=2,
+        execution_mode="paper_live_data",
+    )
+    calls = []
+
+    def fake_route(signal):
+        calls.append((current_execution_user().email, signal.qty))
+        return {"success": True, "status": "TRADED"}
+
+    monkeypatch.setattr(strategy_fanout, "route_signal", fake_route)
+    monkeypatch.setattr(strategy_fanout, "init_runtime_files", lambda: None)
+    monkeypatch.setattr(
+        strategy_fanout,
+        "_quantity_for_subscription",
+        lambda lots: lots * 75,
+    )
+
+    queued = strategy_fanout.enqueue_strategy_signal(
+        "supertrend",
+        _signal("shared-secret", signal_id="durable-two-user-1"),
+    )
+    assert queued["subscriber_count"] == 2
+    assert process_queued_jobs_once(limit=2) == 2
+    assert sorted(calls) == [
+        ("job-alice@gmail.com", 75),
+        ("job-bob@gmail.com", 150),
+    ]
+    with session_scope() as db:
+        jobs = db.query(models.StrategyExecutionJob).all()
+        assert {job.status for job in jobs} == {"completed"}
+        signal = db.query(models.StrategySignal).one()
+        assert signal.status == "completed"
 
 
 def test_additive_schema_upgrades_pre_release_user_egress_table(tmp_path):

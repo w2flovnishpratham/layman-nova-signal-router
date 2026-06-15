@@ -35,11 +35,22 @@ def test_real_orders_blocked_without_enable_live_orders(mu_db, monkeypatch):
 
 def test_real_orders_allowed_only_when_all_flags_set(mu_db, monkeypatch):
     from app.config import settings
-    from app.services import live_engine, user_credential_vault as vault
+    from app.services import live_engine, strategy_fanout, user_credential_vault as vault
 
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True, raising=False)
     monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
+    monkeypatch.setattr(settings, "EXECUTION_NODE_ROUTING_ENABLED", True, raising=False)
+    monkeypatch.setattr(
+        strategy_fanout,
+        "user_egress_status",
+        lambda user_id: {
+            "public_ip": "165.232.184.177",
+            "active": True,
+            "has_proxy": True,
+            "verified": True,
+        },
+    )
     user = make_user("alice@gmail.com")
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
 

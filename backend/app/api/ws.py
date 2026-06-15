@@ -14,7 +14,7 @@ from app.routers.engine import StartEngineRequest, start_engine, stop_engine
 from app.routers.setup import EngineModeRequest, configure_engine_mode, current_nifty_lot_size, validate_dhan_credentials
 from app.services.credential_vault import save_dhan_credentials
 from app.services.chat_event_publisher import active_trade_from_position
-from app.services.execution_context import bind_execution_context
+from app.services.execution_context import bind_user_execution_context
 from app.services.state_store import get_engine_mode, get_open_position, get_wallet_snapshot, set_open_position, update_runtime_settings, utc_now
 from app.services import strategy_fanout
 from app.services.wallet_service import refresh_wallet_snapshot
@@ -84,7 +84,7 @@ async def _receive_commands(websocket: WebSocket, session_id: str, user: Current
         if session is None:
             return
 
-        with bind_execution_context(user):
+        with bind_user_execution_context(user):
             try:
                 next_state, patch = validate_command(session.state, command_type, data)
                 await _apply_production_command(command_type, data, user=user, session=session)
@@ -108,6 +108,16 @@ async def _receive_commands(websocket: WebSocket, session_id: str, user: Current
                         paperBalance=get_wallet_snapshot().get("available_balance") if get_engine_mode() == "paper" else None,
                     ),
                 )
+                if str(data.get("engineMode") or "").lower() == "live":
+                    await session_store.append_event(
+                        session_id,
+                        event(
+                            "setup.info",
+                            sessionId=session.id,
+                            webhookUrl=f"{settings.BACKEND_PUBLIC_BASE_URL.rstrip('/')}/api/webhook/strategy/supertrend",
+                            webhookSecret=session.webhook_secret,
+                        ),
+                    )
             elif command_type == "setup.broker_creds":
                 wallet = await asyncio.to_thread(get_wallet_snapshot)
                 await session_store.append_event(
@@ -119,15 +129,6 @@ async def _receive_commands(websocket: WebSocket, session_id: str, user: Current
                         utilizedAmount=_optional_number(wallet.get("utilized_amount")),
                         success=bool(wallet.get("success")),
                         message=wallet.get("message"),
-                    ),
-                )
-                await session_store.append_event(
-                    session_id,
-                    event(
-                        "setup.info",
-                        sessionId=session.id,
-                        webhookUrl=f"{settings.BACKEND_PUBLIC_BASE_URL.rstrip('/')}/api/webhook/strategy/supertrend",
-                        webhookSecret=session.webhook_secret,
                     ),
                 )
             elif command_type == "setup.confirm_live":
