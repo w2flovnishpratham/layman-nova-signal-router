@@ -309,7 +309,6 @@ def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
         "action": "ENTRY",
         "side": "BUY",
         "symbol": "NIFTY",
-        "qty": 75,
         "order_type": "MARKET",
         "product_type": "INTRADAY",
     }
@@ -323,6 +322,7 @@ def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
         assert len(jobs) == 1
         assert jobs[0].user_id == user.id
         assert jobs[0].status == "queued"
+        assert jobs[0].signal_payload["qty"] == 1
         assert jobs[0].signal_payload["secret"] == ""
         assert "secret" not in jobs[0].signal_payload["raw_payload"]
 

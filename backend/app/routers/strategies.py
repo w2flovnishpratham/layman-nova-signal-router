@@ -22,6 +22,7 @@ from app.workers.strategy_job_worker import wake_strategy_job_worker
 router = APIRouter(tags=["Strategies"])
 _WEBHOOK_REQUESTS: dict[str, list[float]] = {}
 _WEBHOOK_RATE_LOCK = threading.RLock()
+_FANOUT_QTY_PLACEHOLDER = 1
 
 
 def _webhook_rate_limited(client_host: str) -> bool:
@@ -40,6 +41,14 @@ def _webhook_rate_limited(client_host: str) -> bool:
         recent.append(now)
         _WEBHOOK_REQUESTS[client_host] = recent
         return False
+
+
+def _fanout_parse_body(body: dict) -> dict:
+    """Add parser-only defaults that are replaced before per-user execution."""
+    if body.get("qty") in (None, ""):
+        body = dict(body)
+        body["qty"] = _FANOUT_QTY_PLACEHOLDER
+    return body
 
 
 class SubscribePayload(BaseModel):
@@ -123,7 +132,7 @@ async def strategy_webhook(
         )
 
     try:
-        signal = parse_webhook_payload(body)
+        signal = parse_webhook_payload(_fanout_parse_body(body))
     except PayloadParseError as exc:
         return JSONResponse(
             status_code=422,
