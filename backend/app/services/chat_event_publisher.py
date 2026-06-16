@@ -143,93 +143,103 @@ async def publish_chat_result(
     *,
     user_id: str | None = None,
 ) -> None:
+    for session_id in await session_store.active_session_ids(user_id=user_id):
+        await append_chat_result_to_session(session_id, payload, execution_result)
+
+
+async def append_chat_result_to_session(
+    session_id: str,
+    payload: NormalizedSignal,
+    execution_result: dict[str, Any],
+) -> None:
     explicit_mode = get_engine_mode(legacy_fallback=False)
     mode = explicit_mode or get_engine_mode()
     paper_exit: dict[str, Any] = {}
     if explicit_mode == "paper" and payload.action == "EXIT" and execution_result.get("success"):
         closed_trades = get_paper_portfolio().closed_trades
         paper_exit = closed_trades[-1] if closed_trades else {}
-    for session_id in await session_store.active_session_ids(user_id=user_id):
+
+    await session_store.append_event(
+        session_id,
+        event(
+            "signal.received",
+            message=_signal_message(payload),
+            strategy=_strategy_label(payload),
+            signalId=payload.signal_id,
+            action=payload.action,
+            optionSide=payload.option_side,
+            strike=payload.strike,
+            expiry=payload.expiry,
+            qty=payload.qty,
+            source=payload.source,
+            mode=mode,
+        ),
+    )
+    if _entry_fill_is_confirmed(explicit_mode, payload, execution_result):
+        active_trade = _active_trade_from_fill(payload, execution_result, mode)
+        await session_store.update_active_trade(session_id, active_trade)
+        await session_store.append_event(session_id, event("order.filled", **active_trade))
+
+    wallet = get_wallet_snapshot()
+    await session_store.append_event(
+        session_id,
+        event(
+            "funds.update",
+            wallet=wallet.get("available_balance"),
+            availableBalance=wallet.get("available_balance"),
+            utilizedAmount=wallet.get("utilized_amount"),
+            sessionPnl=wallet.get("session_pnl"),
+            realizedPnl=wallet.get("realized_pnl"),
+            success=wallet.get("success"),
+            mode=mode,
+        ),
+    )
+    if execution_result.get("blocked") or execution_result.get("success") is False:
         await session_store.append_event(
             session_id,
             event(
-                "signal.received",
-                message=_signal_message(payload),
+                "order.rejected",
+                message=execution_result.get("reason") or execution_result.get("error") or "Trade blocked.",
                 signalId=payload.signal_id,
-                action=payload.action,
-                optionSide=payload.option_side,
-                strike=payload.strike,
-                expiry=payload.expiry,
-                qty=payload.qty,
-                source=payload.source,
-                mode=mode,
-            ),
-        )
-        if _entry_fill_is_confirmed(explicit_mode, payload, execution_result):
-            active_trade = _active_trade_from_fill(payload, execution_result, mode)
-            await session_store.update_active_trade(session_id, active_trade)
-            await session_store.append_event(session_id, event("order.filled", **active_trade))
-
-        wallet = get_wallet_snapshot()
-        await session_store.append_event(
-            session_id,
-            event(
-                "funds.update",
-                wallet=wallet.get("available_balance"),
-                availableBalance=wallet.get("available_balance"),
-                utilizedAmount=wallet.get("utilized_amount"),
-                sessionPnl=wallet.get("session_pnl"),
-                realizedPnl=wallet.get("realized_pnl"),
-                success=wallet.get("success"),
-                mode=mode,
-            ),
-        )
-        if execution_result.get("blocked") or execution_result.get("success") is False:
-            await session_store.append_event(
-                session_id,
-                event(
-                    "order.rejected",
-                    message=execution_result.get("reason") or execution_result.get("error") or "Trade blocked.",
-                    signalId=payload.signal_id,
-                    status=execution_result.get("status"),
-                    mode=mode,
-                ),
-            )
-            continue
-
-        if payload.action == "EXIT" and execution_result.get("status") != "PARTIAL_EXIT_FILLED":
-            await session_store.update_active_trade(session_id, None)
-            await session_store.append_event(
-                session_id,
-                event(
-                    "trade.exit",
-                    message=f"Exit executed for {payload.trading_symbol or payload.symbol}.",
-                    signalId=payload.signal_id,
-                    orderId=execution_result.get("order_id"),
-                    symbol=payload.trading_symbol or payload.symbol,
-                    qty=execution_result.get("filled_qty") or payload.qty,
-                    exitPrice=execution_result.get("avg_price"),
-                    grossPnl=_paper_gross_pnl(paper_exit) if paper_exit else _exit_gross_pnl(payload),
-                    charges=_paper_charges(paper_exit) if paper_exit else None,
-                    netPnl=paper_exit.get("realized_pnl") if paper_exit else None,
-                    reason=_exit_reason(payload),
-                    status=execution_result.get("status"),
-                    mode=mode,
-                ),
-            )
-            continue
-
-        await session_store.append_event(
-            session_id,
-            event(
-                "order.placed",
-                message=f"{payload.action.title()} order accepted by the production router.",
-                signalId=payload.signal_id,
-                orderId=execution_result.get("order_id"),
                 status=execution_result.get("status"),
                 mode=mode,
             ),
         )
+        return
+
+    if payload.action == "EXIT" and execution_result.get("status") != "PARTIAL_EXIT_FILLED":
+        await session_store.update_active_trade(session_id, None)
+        await session_store.append_event(
+            session_id,
+            event(
+                "trade.exit",
+                message=f"Exit executed for {payload.trading_symbol or payload.symbol}.",
+                signalId=payload.signal_id,
+                orderId=execution_result.get("order_id"),
+                symbol=payload.trading_symbol or payload.symbol,
+                qty=execution_result.get("filled_qty") or payload.qty,
+                exitPrice=execution_result.get("avg_price"),
+                grossPnl=_paper_gross_pnl(paper_exit) if paper_exit else _exit_gross_pnl(payload),
+                charges=_paper_charges(paper_exit) if paper_exit else None,
+                netPnl=paper_exit.get("realized_pnl") if paper_exit else None,
+                reason=_exit_reason(payload),
+                status=execution_result.get("status"),
+                mode=mode,
+            ),
+        )
+        return
+
+    await session_store.append_event(
+        session_id,
+        event(
+            "order.placed",
+            message=f"{payload.action.title()} order accepted by the production router.",
+            signalId=payload.signal_id,
+            orderId=execution_result.get("order_id"),
+            status=execution_result.get("status"),
+            mode=mode,
+        ),
+    )
 
 
 def active_trade_from_position(position: dict[str, Any], mode: str | None) -> dict[str, Any] | None:
@@ -339,6 +349,13 @@ def _number(value: Any) -> float:
 def _signal_message(payload: NormalizedSignal) -> str:
     source = "TradingView" if payload.source in {"tradingview", "webhook"} else "NOVA"
     return f"{source} {payload.action.lower()} signal received for {payload.option_side or payload.symbol}."
+
+
+def _strategy_label(payload: NormalizedSignal) -> str:
+    code = str(payload.strategy_code or "").upper()
+    if code == "TRADINGVIEW_NIFTY_V1":
+        return "Supertrend"
+    return payload.strategy_code or "Strategy"
 
 
 def _exit_reason(payload: NormalizedSignal) -> str | None:

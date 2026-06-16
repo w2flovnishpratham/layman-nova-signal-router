@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -380,6 +382,99 @@ def test_durable_jobs_process_two_users_independently(mu_db, monkeypatch):
         assert {job.status for job in jobs} == {"completed"}
         signal = db.query(models.StrategySignal).one()
         assert signal.status == "completed"
+
+
+def test_new_session_replays_recent_strategy_job_result(mu_db, monkeypatch, tmp_path):
+    from app.api.session import start_session
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.domain.state_machine import SetupState
+    from app.services import state_store, user_context
+    from app.store.redis_session import session_store
+
+    state_root = tmp_path / "state"
+    log_root = tmp_path / "logs"
+    monkeypatch.setattr(state_store, "RUNTIME_STATE_DIR", state_root)
+    monkeypatch.setattr(state_store, "RUNTIME_LOG_DIR", log_root)
+    monkeypatch.setattr(user_context, "RUNTIME_STATE_DIR", state_root)
+    monkeypatch.setattr(user_context, "RUNTIME_LOG_DIR", log_root)
+    for name, filename in {
+        "APP_STATE_FILE": "app_state.json",
+        "OPEN_POSITION_FILE": "open_position.json",
+        "PAPER_POSITION_FILE": "paper_position.json",
+        "PAPER_PORTFOLIO_FILE": "paper_portfolio.json",
+        "EXTERNAL_POSITIONS_FILE": "external_positions.json",
+        "SEEN_SIGNALS_FILE": "seen_signals.json",
+        "SETTINGS_FILE": "settings.json",
+    }.items():
+        monkeypatch.setattr(state_store, name, state_root / filename)
+    monkeypatch.setattr(
+        state_store,
+        "LOG_FILES",
+        {
+            "webhook": log_root / "webhook_events.jsonl",
+            "order": log_root / "order_events.jsonl",
+            "audit": log_root / "audit_events.jsonl",
+            "error": log_root / "errors.jsonl",
+            "paper_orders": log_root / "paper_orders.jsonl",
+        },
+    )
+    state_store.init_runtime_files()
+    state_store.set_engine_mode("live")
+    state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
+
+    user = make_user("replay-user@gmail.com")
+    signal = _signal("", signal_id="missed-eod")
+    signal = signal.model_copy(update={"action": "EXIT", "source": "tradingview_eod"})
+    now = datetime.now(timezone.utc)
+    with session_scope() as db:
+        signal_row = models.StrategySignal(
+            strategy_name="supertrend",
+            signal_id=signal.signal_id,
+            status="completed",
+            result_summary={"subscriber_count": 1},
+        )
+        db.add(signal_row)
+        db.flush()
+        db.add(
+            models.StrategyExecutionJob(
+                strategy_signal_id=signal_row.id,
+                user_id=user.id,
+                strategy_name="supertrend",
+                signal_id=signal.signal_id,
+                signal_payload=signal.model_dump(mode="json"),
+                lots=1,
+                execution_mode="real_orders",
+                status="completed",
+                locked_at=now,
+                completed_at=now,
+                result_summary={
+                    "status": "blocked",
+                    "execution_result": {
+                        "blocked": True,
+                        "status": "BLOCKED",
+                        "reason": "Exit blocked: no open position exists.",
+                    },
+                },
+            )
+        )
+
+    async def scenario():
+        bootstrap = await start_session(_current_user(user))
+        session = await session_store.get(str(bootstrap["sessionId"]))
+        assert session is not None
+        await session_store.update_state(session.id, SetupState.ENDED, {})
+        return session
+
+    session = asyncio.run(scenario())
+    event_types = [item.type for item in session.events]
+    signal_events = [item for item in session.events if item.type == "signal.received"]
+    rejected_events = [item for item in session.events if item.type == "order.rejected"]
+
+    assert "system.event" in event_types
+    assert signal_events[-1].data["strategy"] == "Supertrend"
+    assert signal_events[-1].data["action"] == "EXIT"
+    assert rejected_events[-1].data["message"] == "Exit blocked: no open position exists."
 
 
 def test_additive_schema_upgrades_pre_release_user_egress_table(tmp_path):

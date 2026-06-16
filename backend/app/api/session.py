@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import desc, select
 
 from app.auth.dependencies import get_current_user
 from app.config import DISABLED_OPTION_SL_PERCENT, settings
+from app.db import models
+from app.db.engine import database_configured, session_scope
 from app.domain.events import event
 from app.domain.state_machine import SetupState
 from app.routers.setup import current_nifty_lot_size
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret, save_webhook_secret
 from app.services.execution_context import bind_user_execution_context
-from app.services.chat_event_publisher import active_trade_from_position
+from app.schemas.signal import NormalizedSignal
+from app.services.chat_event_publisher import active_trade_from_position, append_chat_result_to_session
 from app.services.state_store import get_app_state, get_daily_risk, get_engine_mode, get_open_position, get_runtime_settings, get_wallet_snapshot
 from app.store.redis_session import session_store
 from app.store.session_token import issue_session_token
@@ -19,6 +24,8 @@ from app.services.user_context import CurrentUser
 
 
 router = APIRouter(prefix="/api/session", tags=["session"])
+RECENT_STRATEGY_REPLAY_HOURS = 24
+RECENT_STRATEGY_REPLAY_LIMIT = 10
 
 
 @router.post("/start")
@@ -40,7 +47,7 @@ async def start_session(user: CurrentUser = Depends(get_current_user)) -> dict[s
             state=state,
             config=config,
         )
-        await _hydrate_production_session(session.id)
+        await _hydrate_production_session(session.id, user)
         token = issue_session_token(session.id)
         webhook_url = f"{settings.BACKEND_PUBLIC_BASE_URL.rstrip('/')}/api/webhook/strategy/supertrend"
         return {
@@ -52,7 +59,7 @@ async def start_session(user: CurrentUser = Depends(get_current_user)) -> dict[s
         }
 
 
-async def _hydrate_production_session(session_id: str) -> None:
+async def _hydrate_production_session(session_id: str, user: CurrentUser) -> None:
     mode = get_engine_mode(legacy_fallback=False)
     wallet = get_wallet_snapshot()
     position = get_open_position()
@@ -85,6 +92,63 @@ async def _hydrate_production_session(session_id: str) -> None:
             mode=mode,
         ),
     )
+    await _hydrate_recent_strategy_results(session_id, user)
+
+
+async def _hydrate_recent_strategy_results(session_id: str, user: CurrentUser) -> None:
+    if user.is_dev or not database_configured():
+        return
+
+    jobs = await _recent_strategy_jobs(user)
+    if not jobs:
+        return
+
+    await session_store.append_event(
+        session_id,
+        event(
+            "system.event",
+            kind="history_replay",
+            label="Recent backend activity restored",
+            message="Recent TradingView activity was restored from the server.",
+        ),
+    )
+    for signal, execution_result in jobs:
+        await append_chat_result_to_session(session_id, signal, execution_result)
+
+
+async def _recent_strategy_jobs(
+    user: CurrentUser,
+) -> list[tuple[NormalizedSignal, dict[str, object]]]:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=RECENT_STRATEGY_REPLAY_HOURS)
+    with session_scope() as db:
+        rows = db.scalars(
+            select(models.StrategyExecutionJob)
+            .where(
+                models.StrategyExecutionJob.user_id == user.id,
+                models.StrategyExecutionJob.status.in_(["completed", "failed"]),
+                models.StrategyExecutionJob.completed_at.is_not(None),
+                models.StrategyExecutionJob.completed_at >= cutoff,
+            )
+            .order_by(desc(models.StrategyExecutionJob.created_at))
+            .limit(RECENT_STRATEGY_REPLAY_LIMIT)
+        ).all()
+
+    replay: list[tuple[NormalizedSignal, dict[str, object]]] = []
+    for row in reversed(rows):
+        try:
+            signal = NormalizedSignal.model_validate(row.signal_payload)
+        except Exception:
+            continue
+        result = row.result_summary if isinstance(row.result_summary, dict) else {}
+        execution_result = result.get("execution_result")
+        if not isinstance(execution_result, dict):
+            execution_result = {
+                "success": False,
+                "status": row.status.upper(),
+                "reason": row.last_error or result.get("reason") or "Strategy job did not complete.",
+            }
+        replay.append((signal, execution_result))
+    return replay
 
 
 @router.get("/{session_id}")
