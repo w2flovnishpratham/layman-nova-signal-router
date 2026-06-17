@@ -1,9 +1,11 @@
 import { Ban, CheckCircle2, LogOut, Play } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ActiveTradeCard } from './ActiveTradeCard'
+import { ManualOrderPanel } from './ManualOrderPanel'
+import { MarketCard } from './MarketCard'
 import { TickingNumber } from './TickingNumber'
 import { formatCurrency } from '../lib/format'
-import type { ActiveTrade, ClientCommand, EngineMode, SetupState, SideFilter } from '../types'
+import type { ActiveTrade, ClientCommand, EngineMode, MarketSnapshot, SetupState, SideFilter, SystemHealth } from '../types'
 
 interface Props {
   state: SetupState
@@ -14,10 +16,12 @@ interface Props {
   lotSize: number
   side: SideFilter
   engineMode: EngineMode | null
+  marketSnapshot: MarketSnapshot | null
+  health: SystemHealth | null
   onSend: (command: ClientCommand) => void
 }
 
-export function EngineSidebar({ state, wallet, marginUtilized, realizedPnl, activeTrade, lotSize, side, engineMode, onSend }: Props) {
+export function EngineSidebar({ state, wallet, marginUtilized, realizedPnl, activeTrade, lotSize, side, engineMode, marketSnapshot, health, onSend }: Props) {
   const paper = engineMode === 'paper'
   const entriesBlocked = state === 'PAUSED'
   return (
@@ -87,6 +91,22 @@ export function EngineSidebar({ state, wallet, marginUtilized, realizedPnl, acti
           </div>
         </div>
       </section>
+
+      <MarketCard snapshot={marketSnapshot} />
+
+      <ManualOrderPanel engineMode={engineMode} activeTrade={activeTrade} />
+
+      <section className="sidebar-card safety-card">
+        <div className="sidebar-title">
+          <span>Safety State</span>
+        </div>
+        <div className="safety-state-list">
+          <span>{entriesBlocked ? 'Nova is paused; exits still allowed' : 'Nova is listening for entries'}</span>
+          <span>{activeTrade ? 'Order filled; position open' : 'No order sent; flat'}</span>
+          <span>{engineMode === 'live' ? 'Live mode requires explicit confirmation' : 'Paper mode simulation active'}</span>
+          <span>Dhan: {healthLabel(health?.dhan)}</span>
+        </div>
+      </section>
     </aside>
   )
 }
@@ -98,4 +118,10 @@ function MetricRow({ label, children }: { label: string; children: ReactNode }) 
       <strong>{children}</strong>
     </div>
   )
+}
+
+function healthLabel(value: SystemHealth['dhan'] | undefined): string {
+  if (value === 'connected') return 'Connected'
+  if (value === 'auth_issue') return 'Auth Issue'
+  return 'Unknown'
 }

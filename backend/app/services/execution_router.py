@@ -20,6 +20,7 @@ from app.services.dhan_client import (
     RealDhanClient,
     get_broker_client,
 )
+from app.services.normalized_errors import classify_failure, order_journey
 from app.services.risk_manager import (
     RiskDecision,
     _market_is_open,
@@ -377,6 +378,25 @@ def _blocked(
     audit_metadata: dict[str, Any] | None = None,
     result_extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
+    normalized_error = classify_failure(
+        reason,
+        source=_error_source_from_reason(reason, signal),
+        status=status,
+        signal=signal,
+        mode=mode,
+        order_sent_to_broker=False,
+        money_at_risk=False,
+        raw_response=result_extra,
+        debug_pack={
+            "action": signal.action,
+            "optionSide": signal.option_side,
+            "strike": signal.strike,
+            "qty": signal.qty,
+            "securityId": security_id or signal.security_id,
+            "tradingSymbol": trading_symbol or signal.trading_symbol,
+        },
+    )
     log_order_event(
         {
             "phase": "blocked",
@@ -394,6 +414,7 @@ def _blocked(
             "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
             **(result_extra or {}),
             **_normalized_log_fields(signal),
+            "normalized_error": normalized_error,
         }
     )
     metadata = {"signal_id": signal.signal_id, "action": signal.action, "payload_format": signal.payload_format}
@@ -408,8 +429,10 @@ def _blocked(
     update_app_state(state="BLOCKED", last_message=reason)
     result = {
         "blocked": True,
+        "success": False,
         "status": status,
         "reason": reason,
+        "normalizedError": normalized_error,
         "payload_format": signal.payload_format,
         "normalized_action": signal.action,
         "normalized_side": signal.side,
@@ -424,7 +447,21 @@ def _blocked(
     }
     if result_extra:
         result.update(result_extra)
+    result["orderJourney"] = order_journey(signal=signal, execution_result=result, normalized_error=normalized_error)
     return result
+
+
+def _error_source_from_reason(reason: str, signal: NormalizedSignal) -> str:
+    lowered = str(reason or "").lower()
+    if "dhan" in lowered:
+        return "DHAN"
+    if "paper" in lowered:
+        return "PAPER_ENGINE"
+    if any(term in lowered for term in ("risk", "blocked", "open position", "allow_entry", "global_kill", "emergency_stop", "qty", "quantity", "market-hours")):
+        return "RISK_ENGINE"
+    if signal.source in {"tradingview", "webhook"}:
+        return "TRADINGVIEW"
+    return "NOVA_BACKEND"
 
 
 def _dhan_token_signal_preflight(signal: NormalizedSignal) -> dict[str, Any] | None:
@@ -495,6 +532,15 @@ def _int_value(value: Any) -> int | None:
 def _payload_number(signal: NormalizedSignal, key: str) -> float | None:
     raw_payload = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
     return _number(raw_payload.get(key))
+
+
+def _raw_payload_number(signal: NormalizedSignal, *keys: str) -> float | None:
+    raw_payload = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
+    for key in keys:
+        value = _number(raw_payload.get(key))
+        if value is not None:
+            return value
+    return None
 
 
 def _round_sr_option_price(price: float) -> float:
@@ -779,13 +825,22 @@ def _place_order(
 ) -> dict[str, Any]:
     engine_mode = get_engine_mode()
     explicit_engine_mode = get_engine_mode(legacy_fallback=False)
-    creds = get_dhan_credentials()
     request_payload, security_id_resolution = _build_dhan_payload_and_resolution(signal, qty, action)
     # C11 — Settings snapshot per signal: caller passes the snapshot taken
     # at signal arrival. Fall back to live read only when called directly
     # (e.g. server-side option monitor exits that aren't tied to a webhook).
     if runtime is None:
         runtime = get_runtime_settings()
+    if not _market_is_open():
+        return _blocked(
+            "BLOCKED",
+            "Trade blocked: market is closed; Dhan WebSocket and REST market-data fetching are disabled.",
+            signal,
+            security_id_resolution=security_id_resolution,
+            security_id=request_payload.get("securityId"),
+            trading_symbol=request_payload.get("tradingSymbol"),
+        )
+    creds = get_dhan_credentials()
     exit_mode = _option_exit_mode(runtime)
     use_super_order = engine_mode == "live" and action == "ENTRY" and exit_mode == "DHAN_SUPER"
 
@@ -1057,7 +1112,7 @@ def _place_order(
             current_levels=super_order_levels,
         )
 
-    return {
+    result_payload = {
         "blocked": False,
         "success": final_success,
         "order_id": result.order_id,
@@ -1093,6 +1148,34 @@ def _place_order(
         "trading_symbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
         "security_id_resolution": security_id_resolution,
     }
+    if not final_success or final_status in {"PENDING_CONFIRMATION", "PARTIAL_FILL_PENDING", "PARTIAL_FILL", "ORDER_STATE_UNKNOWN"}:
+        normalized_error = classify_failure(
+            result.error or final_status or "Dhan order status could not be verified.",
+            source="DHAN" if engine_mode == "live" else "PAPER_ENGINE",
+            status=final_status,
+            signal=signal,
+            mode=explicit_engine_mode or engine_mode,
+            correlation_id=str(request_payload.get("correlationId") or ""),
+            raw_response=result.raw_response,
+            order_sent_to_broker=not bool(result.raw_response.get("payload_validation")) if isinstance(result.raw_response, dict) else True,
+            money_at_risk=final_status in {"PENDING_CONFIRMATION", "PARTIAL_FILL_PENDING", "PARTIAL_FILL", "ORDER_STATE_UNKNOWN"},
+            debug_pack={
+                "action": action,
+                "optionSide": signal.option_side,
+                "strike": signal.strike,
+                "qty": qty,
+                "securityId": request_payload.get("securityId"),
+                "tradingSymbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
+                "rawBrokerStatus": result.status,
+            },
+        )
+        result_payload["normalizedError"] = normalized_error
+    result_payload["orderJourney"] = order_journey(
+        signal=signal,
+        execution_result=result_payload,
+        normalized_error=result_payload.get("normalizedError"),
+    )
+    return result_payload
 
 
 def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty: int) -> dict[str, Any]:
@@ -1645,6 +1728,20 @@ def route_signal(signal: NormalizedSignal) -> dict[str, Any]:
     # signals can't end up using different SL%/TP%/max_qty/etc. just
     # because a user clicked Save between them.
     runtime = get_runtime_settings()
+    update_app_state(
+        last_signal={
+            "signalId": signal.signal_id,
+            "action": signal.action,
+            "side": signal.side,
+            "optionSide": signal.option_side,
+            "strike": signal.strike,
+            "tradingSymbol": signal.trading_symbol,
+            "source": signal.source,
+            "niftyPrice": _raw_payload_number(signal, "nifty_price", "nifty", "spot", "niftySpot"),
+            "dayChangePct": _raw_payload_number(signal, "day_change_pct", "dayChangePct", "change_pct"),
+            "receivedAt": utc_now(),
+        }
+    )
     token_block = _dhan_token_signal_preflight(signal)
     if token_block:
         publish_chat_result_from_sync(signal, token_block)

@@ -57,3 +57,4 @@ class WebhookResponse(BaseModel):
     status: str
     message: str
     execution_result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None

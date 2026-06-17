@@ -120,7 +120,7 @@ class DhanOrderResult:
         avg_price: float | None,
         raw_response: dict[str, Any],
         error: str | None = None,
-        interpreted_error: dict[str, str] | None = None,
+        interpreted_error: dict[str, Any] | None = None,
     ) -> None:
         self.success = success
         self.order_id = order_id
@@ -1012,6 +1012,16 @@ class RealDhanClient:
         """
         segment = str(exchange_segment or "").upper()
         sid = str(security_id or "").strip()
+        if not _market_is_open():
+            return DhanLtpResult(
+                success=False,
+                message="Market is closed; Dhan REST LTP fetching is disabled.",
+                ltp=None,
+                exchange_segment=segment or None,
+                security_id=sid or None,
+                error="market_closed",
+                raw_response={"market_closed": True},
+            )
         if not segment or not sid:
             return DhanLtpResult(
                 success=False,

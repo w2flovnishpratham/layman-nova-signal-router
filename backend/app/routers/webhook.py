@@ -6,6 +6,7 @@ import json
 import secrets
 import threading
 import time
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -15,6 +16,7 @@ from app.schemas.signal import NormalizedSignal, WebhookResponse
 from app.services.audit_logger import log_audit_event, log_error_event, log_webhook_event
 from app.services.credential_vault import get_webhook_secret, webhook_secret_strength_error
 from app.services.execution_router import route_signal
+from app.services.normalized_errors import classify_failure, order_journey
 from app.services.signal_parser import PayloadParseError, UnsupportedPayloadFormatError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
 from app.services.state_store import add_seen_signal, get_app_state, get_engine_mode, has_seen_signal, update_app_state, utc_now
@@ -39,6 +41,30 @@ _SENSITIVE_WEBHOOK_KEYS = {
 
 def _response(status_code: int, payload: WebhookResponse) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=payload.model_dump())
+
+
+def _webhook_error(
+    message: str,
+    *,
+    status: str,
+    status_code: int,
+    payload: NormalizedSignal | None = None,
+    action: str | None = None,
+    payload_format: str | None = None,
+) -> dict[str, Any]:
+    return classify_failure(
+        message,
+        source="TRADINGVIEW",
+        status=status,
+        status_code=status_code,
+        signal=payload,
+        order_sent_to_broker=False,
+        money_at_risk=False,
+        debug_pack={
+            "action": payload.action if payload is not None else action,
+            "payloadFormat": payload.payload_format if payload is not None else payload_format,
+        },
+    )
 
 
 def _begin_processing_signal(signal_id: str) -> bool:
@@ -223,12 +249,28 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
     except json.JSONDecodeError as exc:
         message = f"Invalid JSON payload: {exc.msg}"
         log_error_event("WEBHOOK_INVALID_JSON", message, metadata={"client_host": client_host})
-        return _response(400, WebhookResponse(accepted=False, status="INVALID_JSON", message=message))
+        return _response(
+            400,
+            WebhookResponse(
+                accepted=False,
+                status="INVALID_JSON",
+                message=message,
+                error=_webhook_error(message, status="INVALID_JSON", status_code=400),
+            ),
+        )
 
     if not isinstance(data, dict):
         message = "Invalid JSON payload: top-level value must be an object."
         log_error_event("WEBHOOK_INVALID_JSON", message, metadata={"client_host": client_host})
-        return _response(400, WebhookResponse(accepted=False, status="INVALID_JSON", message=message))
+        return _response(
+            400,
+            WebhookResponse(
+                accepted=False,
+                status="INVALID_JSON",
+                message=message,
+                error=_webhook_error(message, status="INVALID_JSON", status_code=400),
+            ),
+        )
 
     try:
         payload = parse_webhook_payload(data)
@@ -246,6 +288,7 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 action=data.get("action"),
                 status="UNSUPPORTED_PAYLOAD_FORMAT",
                 message=str(exc),
+                error=_webhook_error(str(exc), status="UNSUPPORTED_PAYLOAD_FORMAT", status_code=400, action=data.get("action")),
             ),
         )
     except PayloadParseError as exc:
@@ -263,6 +306,7 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 action=data.get("action"),
                 status=getattr(exc, "status", "INVALID_PAYLOAD"),
                 message=str(exc),
+                error=_webhook_error(str(exc), status=getattr(exc, "status", "INVALID_PAYLOAD"), status_code=422, action=data.get("action")),
             ),
         )
 
@@ -308,6 +352,7 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 payload_format=payload.payload_format,
                 status="SETUP_INCOMPLETE",
                 message="Webhook secret is not configured. Complete setup first.",
+                error=_webhook_error("Webhook secret is not configured. Complete setup first.", status="SETUP_INCOMPLETE", status_code=403, payload=payload),
             ),
         )
 
@@ -332,6 +377,7 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 payload_format=payload.payload_format,
                 status="SETUP_INCOMPLETE",
                 message=secret_strength_error,
+                error=_webhook_error(secret_strength_error, status="SETUP_INCOMPLETE", status_code=403, payload=payload),
             ),
         )
 
@@ -357,6 +403,7 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                     payload_format=payload.payload_format,
                     status="UNAUTHORIZED",
                     message="Webhook rejected: invalid or missing HMAC signature.",
+                    error=_webhook_error("Webhook rejected: invalid or missing HMAC signature.", status="UNAUTHORIZED", status_code=403, payload=payload),
                 ),
             )
 
@@ -380,6 +427,7 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 payload_format=payload.payload_format,
                 status="UNAUTHORIZED",
                 message="Webhook rejected: invalid secret.",
+                error=_webhook_error("Webhook rejected: invalid secret.", status="UNAUTHORIZED", status_code=403, payload=payload),
             ),
         )
 
@@ -400,11 +448,28 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 payload_format=payload.payload_format,
                 status="INVALID_SIGNAL",
                 message=error or "Signal invalid.",
+                error=_webhook_error(error or "Signal invalid.", status="INVALID_SIGNAL", status_code=422, payload=payload),
             ),
         )
 
     if BLOCK_DUPLICATE_SIGNALS and has_seen_signal(payload.signal_id):
         message = f"Trade blocked: duplicate signal_id {payload.signal_id}"
+        normalized_error = _webhook_error(message, status="DUPLICATE_SIGNAL", status_code=200, payload=payload)
+        execution_result = {
+            "blocked": True,
+            "success": False,
+            "reason": message,
+            "payload_format": payload.payload_format,
+            "normalized_action": payload.action,
+            "normalized_side": payload.side,
+            "normalized_qty": payload.qty,
+            "normalized_symbol": payload.symbol,
+            "normalized_strike": payload.strike,
+            "normalized_expiry": payload.expiry,
+            "normalized_option_side": payload.option_side,
+            "normalizedError": normalized_error,
+        }
+        execution_result["orderJourney"] = order_journey(signal=payload, execution_result=execution_result, normalized_error=normalized_error)
         log_audit_event(
             "DUPLICATE_SIGNAL",
             message,
@@ -426,23 +491,29 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 payload_format=payload.payload_format,
                 status="BLOCKED",
                 message=message,
-                execution_result={
-                    "blocked": True,
-                    "reason": message,
-                    "payload_format": payload.payload_format,
-                    "normalized_action": payload.action,
-                    "normalized_side": payload.side,
-                    "normalized_qty": payload.qty,
-                    "normalized_symbol": payload.symbol,
-                    "normalized_strike": payload.strike,
-                    "normalized_expiry": payload.expiry,
-                    "normalized_option_side": payload.option_side,
-                },
+                execution_result=execution_result,
+                error=normalized_error,
             ),
         )
 
     if BLOCK_DUPLICATE_SIGNALS and not _begin_processing_signal(payload.signal_id):
         message = f"Trade blocked: signal_id {payload.signal_id} is already being processed"
+        normalized_error = _webhook_error(message, status="DUPLICATE_SIGNAL", status_code=200, payload=payload)
+        execution_result = {
+            "blocked": True,
+            "success": False,
+            "reason": message,
+            "payload_format": payload.payload_format,
+            "normalized_action": payload.action,
+            "normalized_side": payload.side,
+            "normalized_qty": payload.qty,
+            "normalized_symbol": payload.symbol,
+            "normalized_strike": payload.strike,
+            "normalized_expiry": payload.expiry,
+            "normalized_option_side": payload.option_side,
+            "normalizedError": normalized_error,
+        }
+        execution_result["orderJourney"] = order_journey(signal=payload, execution_result=execution_result, normalized_error=normalized_error)
         log_audit_event(
             "DUPLICATE_SIGNAL",
             message,
@@ -464,18 +535,8 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
                 payload_format=payload.payload_format,
                 status="BLOCKED",
                 message=message,
-                execution_result={
-                    "blocked": True,
-                    "reason": message,
-                    "payload_format": payload.payload_format,
-                    "normalized_action": payload.action,
-                    "normalized_side": payload.side,
-                    "normalized_qty": payload.qty,
-                    "normalized_symbol": payload.symbol,
-                    "normalized_strike": payload.strike,
-                    "normalized_expiry": payload.expiry,
-                    "normalized_option_side": payload.option_side,
-                },
+                execution_result=execution_result,
+                error=normalized_error,
             ),
         )
 
@@ -536,5 +597,6 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
             status=status,
             message=message,
             execution_result=execution_result,
+            error=execution_result.get("normalizedError") if isinstance(execution_result.get("normalizedError"), dict) else None,
         ),
     )

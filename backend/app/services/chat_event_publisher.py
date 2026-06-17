@@ -5,6 +5,7 @@ from typing import Any
 
 from app.domain.events import event
 from app.schemas.signal import NormalizedSignal
+from app.services.normalized_errors import classify_failure, order_journey
 from app.services.paper_portfolio import get_paper_portfolio
 from app.store.redis_session import session_store
 from app.services.state_store import get_engine_mode, get_wallet_snapshot
@@ -151,6 +152,8 @@ async def append_chat_result_to_session(
     session_id: str,
     payload: NormalizedSignal,
     execution_result: dict[str, Any],
+    *,
+    restored_recent: bool = False,
 ) -> None:
     explicit_mode = get_engine_mode(legacy_fallback=False)
     mode = explicit_mode or get_engine_mode()
@@ -173,6 +176,7 @@ async def append_chat_result_to_session(
             qty=payload.qty,
             source=payload.source,
             mode=mode,
+            restoredRecent=restored_recent,
         ),
     )
     if _entry_fill_is_confirmed(explicit_mode, payload, execution_result):
@@ -195,14 +199,24 @@ async def append_chat_result_to_session(
         ),
     )
     if execution_result.get("blocked") or execution_result.get("success") is False:
+        normalized_error = _normalized_error(payload, execution_result, mode)
         await session_store.append_event(
             session_id,
             event(
                 "order.rejected",
-                message=execution_result.get("reason") or execution_result.get("error") or "Trade blocked.",
+                message=execution_result.get("reason") or execution_result.get("error") or normalized_error.get("userMessage") or "Trade blocked.",
+                humanMessage=normalized_error.get("userMessage"),
+                userTitle=normalized_error.get("userTitle"),
                 signalId=payload.signal_id,
                 status=execution_result.get("status"),
+                reason=execution_result.get("reason") or execution_result.get("error"),
+                normalizedError=normalized_error,
+                orderJourney=execution_result.get("orderJourney") or order_journey(signal=payload, execution_result=execution_result, normalized_error=normalized_error),
+                orderSentToBroker=normalized_error.get("orderSentToBroker"),
+                moneyAtRisk=normalized_error.get("moneyAtRisk"),
+                debugPack=normalized_error.get("debugPack"),
                 mode=mode,
+                restoredRecent=restored_recent,
             ),
         )
         return
@@ -225,6 +239,8 @@ async def append_chat_result_to_session(
                 reason=_exit_reason(payload),
                 status=execution_result.get("status"),
                 mode=mode,
+                orderJourney=execution_result.get("orderJourney") or order_journey(signal=payload, execution_result=execution_result),
+                restoredRecent=restored_recent,
             ),
         )
         return
@@ -238,6 +254,10 @@ async def append_chat_result_to_session(
             orderId=execution_result.get("order_id"),
             status=execution_result.get("status"),
             mode=mode,
+            orderJourney=execution_result.get("orderJourney") or order_journey(signal=payload, execution_result=execution_result),
+            orderSentToBroker=True,
+            moneyAtRisk=mode == "live",
+            restoredRecent=restored_recent,
         ),
     )
 
@@ -297,6 +317,34 @@ def _entry_fill_is_confirmed(
     if explicit_mode == "paper":
         return execution_result.get("status") in {"TRADED", "ORDER_PLACED", "REVERSAL_ORDER_PLACED"}
     return False
+
+
+def _normalized_error(payload: NormalizedSignal, execution_result: dict[str, Any], mode: str | None) -> dict[str, Any]:
+    existing = execution_result.get("normalizedError")
+    if isinstance(existing, dict):
+        return existing
+    interpreted = execution_result.get("interpreted_error")
+    if isinstance(interpreted, dict) and interpreted.get("errorId"):
+        return interpreted
+    source = "PAPER_ENGINE" if mode == "paper" else "DHAN" if execution_result.get("raw_response") else "RISK_ENGINE"
+    return classify_failure(
+        execution_result.get("reason") or execution_result.get("error") or execution_result.get("status") or "Trade blocked.",
+        source=source,
+        status=str(execution_result.get("status") or ""),
+        signal=payload,
+        mode=mode,
+        raw_response=execution_result.get("raw_response") or execution_result,
+        order_sent_to_broker=bool(execution_result.get("order_id")),
+        money_at_risk=bool(execution_result.get("order_id") and mode == "live"),
+        debug_pack={
+            "action": payload.action,
+            "optionSide": payload.option_side,
+            "strike": payload.strike,
+            "qty": payload.qty,
+            "securityId": execution_result.get("security_id") or payload.security_id,
+            "tradingSymbol": execution_result.get("trading_symbol") or payload.trading_symbol,
+        },
+    )
 
 
 def _active_trade_from_fill(

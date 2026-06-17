@@ -77,14 +77,38 @@ def _target_key(exchange_segment: str, security_id: str) -> tuple[str, str]:
     return (str(exchange_segment or "").upper(), str(security_id or "").strip())
 
 
+def _targets_for_status(targets: set[tuple[str, str]] | None) -> list[dict[str, str]]:
+    return [
+        {"exchange_segment": exchange_segment, "security_id": security_id}
+        for exchange_segment, security_id in sorted(targets or set())
+    ]
+
+
+def _subscription_message_many(request_code: int, targets: set[tuple[str, str]]) -> str:
+    ordered = sorted(target for target in targets if target[0] and target[1])
+    payload = {
+        "RequestCode": request_code,
+        "InstrumentCount": len(ordered),
+        "InstrumentList": [
+            {
+                "ExchangeSegment": exchange_segment,
+                "SecurityId": str(security_id),
+            }
+            for exchange_segment, security_id in ordered
+        ],
+    }
+    return json.dumps(payload, separators=(",", ":"))
+
+
 def _subscription_message(request_code: int, exchange_segment: str, security_id: str) -> str:
+    target = _target_key(exchange_segment, security_id)
     payload = {
         "RequestCode": request_code,
         "InstrumentCount": 1,
         "InstrumentList": [
             {
-                "ExchangeSegment": exchange_segment,
-                "SecurityId": str(security_id),
+                "ExchangeSegment": target[0],
+                "SecurityId": target[1],
             }
         ],
     }
@@ -150,8 +174,8 @@ class DhanMarketFeedWsManager:
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._desired_target: tuple[str, str] | None = None
-        self._active_target: tuple[str, str] | None = None
+        self._desired_targets: set[tuple[str, str]] = set()
+        self._active_targets: set[tuple[str, str]] = set()
         self._connected = False
         self._last_error: str | None = None
         self._last_connected_at: str | None = None
@@ -165,7 +189,26 @@ class DhanMarketFeedWsManager:
         if not target[0] or not target[1]:
             return
         with self._lock:
-            self._desired_target = target
+            self._desired_targets.add(target)
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._run_thread, name="dhan-marketfeed-ws", daemon=True)
+            self._thread.start()
+
+    def ensure_subscriptions(self, targets: list[dict[str, str]] | set[tuple[str, str]]) -> None:
+        normalized: set[tuple[str, str]] = set()
+        for item in targets:
+            if isinstance(item, tuple):
+                target = _target_key(item[0], item[1])
+            else:
+                target = _target_key(item.get("exchange_segment", ""), item.get("security_id", ""))
+            if target[0] and target[1]:
+                normalized.add(target)
+        if not normalized:
+            return
+        with self._lock:
+            self._desired_targets.update(normalized)
             if self._thread and self._thread.is_alive():
                 return
             self._stop_event.clear()
@@ -174,14 +217,14 @@ class DhanMarketFeedWsManager:
 
     def clear_subscription(self) -> None:
         with self._lock:
-            self._desired_target = None
-            self._active_target = None
+            self._desired_targets.clear()
+            self._active_targets.clear()
 
     def stop(self, timeout: float = 2.0) -> None:
         with self._lock:
             thread = self._thread
             self._stop_event.set()
-            self._desired_target = None
+            self._desired_targets.clear()
         if thread:
             thread.join(timeout=timeout)
 
@@ -233,8 +276,10 @@ class DhanMarketFeedWsManager:
                 "source": "dhan_marketfeed_ws",
                 "thread_alive": bool(self._thread and self._thread.is_alive()),
                 "connected": self._connected,
-                "desired_target": self._desired_target,
-                "active_target": self._active_target,
+                "desired_targets": _targets_for_status(self._desired_targets),
+                "active_targets": _targets_for_status(self._active_targets),
+                "desired_target": next(iter(sorted(self._desired_targets)), None),
+                "active_target": next(iter(sorted(self._active_targets)), None),
                 "last_error": self._last_error,
                 "last_connected_at": self._last_connected_at,
                 "last_message_at": self._last_message_at,
@@ -248,25 +293,25 @@ class DhanMarketFeedWsManager:
     async def _run_loop(self) -> None:
         backoff_seconds = 1.0
         while not self._stop_event.is_set():
-            target = self._get_desired_target()
-            if not target:
+            targets = self._get_desired_targets()
+            if not targets:
                 await asyncio.sleep(0.5)
                 continue
             try:
-                await self._connect_and_stream(target)
+                await self._connect_and_stream(targets)
                 backoff_seconds = 1.0
             except Exception as exc:
                 message = str(exc)
                 logger.warning("Dhan market-feed WebSocket disconnected: %s", message)
                 with self._lock:
                     self._connected = False
-                    self._active_target = None
+                    self._active_targets.clear()
                     self._last_error = message
                     self._reconnect_count += 1
                 await asyncio.sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, 15.0)
 
-    async def _connect_and_stream(self, target: tuple[str, str]) -> None:
+    async def _connect_and_stream(self, initial_targets: set[tuple[str, str]]) -> None:
         creds = get_dhan_credentials()
         if not creds:
             with self._lock:
@@ -274,29 +319,48 @@ class DhanMarketFeedWsManager:
             await asyncio.sleep(2.0)
             return
 
-        exchange_segment, security_id = target
         encoded_token = quote(creds.access_token, safe="")
         url = f"{DHAN_MARKETFEED_WS_URL}?version=2&token={encoded_token}&clientId={creds.client_id}&authType=2"
 
         async with websockets.connect(url, ping_interval=None, close_timeout=5) as ws:
             with self._lock:
                 self._connected = True
-                self._active_target = target
+                self._active_targets.clear()
                 self._last_connected_at = utc_now()
                 self._last_error = None
 
-            await ws.send(_subscription_message(SUBSCRIBE_TICKER_REQUEST_CODE, exchange_segment, security_id))
+            active_targets = set(initial_targets)
+            await ws.send(_subscription_message_many(SUBSCRIBE_TICKER_REQUEST_CODE, active_targets))
             with self._lock:
+                self._active_targets = set(active_targets)
                 self._last_subscribed_at = utc_now()
 
             while not self._stop_event.is_set():
-                desired = self._get_desired_target()
-                if desired != target:
+                desired = self._get_desired_targets()
+                if not desired:
                     try:
-                        await ws.send(_subscription_message(UNSUBSCRIBE_TICKER_REQUEST_CODE, exchange_segment, security_id))
+                        await ws.send(_subscription_message_many(UNSUBSCRIBE_TICKER_REQUEST_CODE, active_targets))
                     except Exception:
                         pass
                     return
+
+                to_unsubscribe = active_targets - desired
+                if to_unsubscribe:
+                    try:
+                        await ws.send(_subscription_message_many(UNSUBSCRIBE_TICKER_REQUEST_CODE, to_unsubscribe))
+                    except Exception:
+                        pass
+                    active_targets -= to_unsubscribe
+                    with self._lock:
+                        self._active_targets = set(active_targets)
+
+                to_subscribe = desired - active_targets
+                if to_subscribe:
+                    await ws.send(_subscription_message_many(SUBSCRIBE_TICKER_REQUEST_CODE, to_subscribe))
+                    active_targets |= to_subscribe
+                    with self._lock:
+                        self._active_targets = set(active_targets)
+                        self._last_subscribed_at = utc_now()
 
                 try:
                     message = await asyncio.wait_for(ws.recv(), timeout=1.0)
@@ -308,9 +372,9 @@ class DhanMarketFeedWsManager:
                 else:
                     self._handle_text(str(message))
 
-    def _get_desired_target(self) -> tuple[str, str] | None:
+    def _get_desired_targets(self) -> set[tuple[str, str]]:
         with self._lock:
-            return self._desired_target
+            return set(self._desired_targets)
 
     def _handle_binary(self, message: bytes) -> None:
         packet = parse_marketfeed_packet(message)
@@ -345,6 +409,10 @@ _MANAGER = DhanMarketFeedWsManager()
 
 def ensure_marketfeed_subscription(*, exchange_segment: str, security_id: str) -> None:
     _MANAGER.ensure_subscription(exchange_segment=exchange_segment, security_id=security_id)
+
+
+def ensure_marketfeed_subscriptions(targets: list[dict[str, str]] | set[tuple[str, str]]) -> None:
+    _MANAGER.ensure_subscriptions(targets)
 
 
 def clear_marketfeed_subscription() -> None:

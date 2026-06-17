@@ -74,17 +74,34 @@ done
 live_trading_armed="$(
   grep -m1 '^LIVE_TRADING_ARMED=' "$deploy_secrets_file" | cut -d= -f2- || true
 )"
-if [[ "$live_trading_armed" == "true" ]]; then
-  set_env ENABLE_LIVE_ORDERS true
-  set_env DHAN_READ_ONLY_REAL_DATA false
-  set_env EXECUTION_NODE_ROUTING_ENABLED true
-  set_env WEBHOOK_TRADING_ENABLED true
-else
-  set_env ENABLE_LIVE_ORDERS false
-  set_env DHAN_READ_ONLY_REAL_DATA true
-  set_env EXECUTION_NODE_ROUTING_ENABLED false
-  set_env WEBHOOK_TRADING_ENABLED false
-fi
+case "$live_trading_armed" in
+  true|armed)
+    set_env ENABLE_LIVE_ORDERS true
+    set_env DHAN_READ_ONLY_REAL_DATA false
+    set_env EXECUTION_NODE_ROUTING_ENABLED true
+    set_env WEBHOOK_TRADING_ENABLED true
+    ;;
+  false|safe)
+    set_env ENABLE_LIVE_ORDERS false
+    set_env DHAN_READ_ONLY_REAL_DATA true
+    set_env EXECUTION_NODE_ROUTING_ENABLED false
+    set_env WEBHOOK_TRADING_ENABLED false
+    ;;
+  ""|preserve)
+    if ! grep -Eq '^ENABLE_LIVE_ORDERS=' "$env_file"; then
+      set_env ENABLE_LIVE_ORDERS false
+      set_env DHAN_READ_ONLY_REAL_DATA true
+      set_env EXECUTION_NODE_ROUTING_ENABLED false
+      set_env WEBHOOK_TRADING_ENABLED false
+    else
+      echo "Preserving existing live trading gate values in $env_file."
+    fi
+    ;;
+  *)
+    echo "Invalid LIVE_TRADING_ARMED value: $live_trading_armed" >&2
+    exit 1
+    ;;
+esac
 
 if ! grep -Eq '^SESSION_TOKEN_SECRET=.{32,}$' "$env_file"; then
   set_env SESSION_TOKEN_SECRET "$(openssl rand -hex 32)"

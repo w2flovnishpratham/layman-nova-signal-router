@@ -5,6 +5,7 @@ import threading
 import uuid
 from typing import Any
 
+from app.config import settings
 from app.services.audit_logger import log_order_event
 from app.services.dhan_client import (
     DhanFundsResult,
@@ -16,6 +17,7 @@ from app.services.dhan_client import (
     RealDhanClient,
 )
 from app.services.paper_portfolio import apply_paper_entry, apply_paper_exit, paper_wallet_snapshot
+from app.services.risk_manager import _market_is_open
 from app.services.state_store import (
     LOG_FILES,
     get_engine_mode,
@@ -32,6 +34,14 @@ _ORDERS: list[dict[str, Any]] = []
 
 def _round_tick(price: float) -> float:
     return round(max(round(price / 0.05) * 0.05, 0.05), 2)
+
+
+def _local_mock_ltp(security_id: str) -> float:
+    try:
+        seed = int(str(security_id or "0"))
+    except ValueError:
+        seed = sum(ord(char) for char in str(security_id or ""))
+    return _round_tick(90.0 + float(seed % 75))
 
 
 def _simulated_charges(qty: int, price: float, transaction_type: str) -> float:
@@ -63,6 +73,16 @@ class PaperBroker:
     """High-fidelity paper broker. It never calls a Dhan order endpoint."""
 
     def _ltp(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanLtpResult:
+        if not _market_is_open():
+            return DhanLtpResult(
+                success=False,
+                message="Market is closed; Dhan REST LTP fetching is disabled.",
+                ltp=None,
+                exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
+                security_id=str(payload.get("securityId") or ""),
+                error="market_closed",
+                raw_response={"market_closed": True},
+            )
         result = RealDhanClient().get_ltp(
             client_id=client_id,
             access_token=access_token,
@@ -79,6 +99,24 @@ class PaperBroker:
                 exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
                 security_id=str(payload.get("securityId") or ""),
                 raw_response={"legacy_local_fallback": True},
+            )
+        if (
+            not result.success
+            and settings.DHAN_MODE.upper() == "MOCK"
+            and not settings.ENABLE_LIVE_ORDERS
+        ):
+            security_id = str(payload.get("securityId") or "")
+            return DhanLtpResult(
+                success=True,
+                message="Local MOCK paper fill.",
+                ltp=_local_mock_ltp(security_id),
+                exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
+                security_id=security_id,
+                raw_response={
+                    "mode": "paper",
+                    "mock_ltp_fallback": True,
+                    "real_ltp_error": result.message or result.error,
+                },
             )
         return result
 
@@ -218,6 +256,16 @@ class PaperBroker:
         return DhanListResult(success=True, message="Paper order book fetched.", items=items, raw_response=items)
 
     def get_ltp(self, *, client_id: str, access_token: str, exchange_segment: str, security_id: str) -> DhanLtpResult:
+        if not _market_is_open():
+            return DhanLtpResult(
+                success=False,
+                message="Market is closed; Dhan REST LTP fetching is disabled.",
+                ltp=None,
+                exchange_segment=exchange_segment,
+                security_id=security_id,
+                error="market_closed",
+                raw_response={"market_closed": True},
+            )
         return RealDhanClient().get_ltp(
             client_id=client_id,
             access_token=access_token,

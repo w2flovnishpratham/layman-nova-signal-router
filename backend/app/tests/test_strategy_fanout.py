@@ -390,7 +390,7 @@ def test_durable_jobs_process_two_users_independently(mu_db, monkeypatch):
         assert signal.status == "completed"
 
 
-def test_new_session_replays_recent_strategy_job_result(mu_db, monkeypatch, tmp_path):
+def test_new_session_does_not_replay_recent_strategy_job_result_by_default(mu_db, monkeypatch, tmp_path):
     from app.api.session import start_session
     from app.db import models
     from app.db.engine import session_scope
@@ -465,14 +465,29 @@ def test_new_session_replays_recent_strategy_job_result(mu_db, monkeypatch, tmp_
             )
         )
 
-    async def scenario():
+    async def default_scenario():
         bootstrap = await start_session(_current_user(user))
         session = await session_store.get(str(bootstrap["sessionId"]))
         assert session is not None
         await session_store.update_state(session.id, SetupState.ENDED, {})
         return session
 
-    session = asyncio.run(scenario())
+    session = asyncio.run(default_scenario())
+    default_event_types = [item.type for item in session.events]
+    assert "funds.update" in default_event_types
+    assert "position.update" in default_event_types
+    assert "system.event" not in default_event_types
+    assert "signal.received" not in default_event_types
+    assert "order.rejected" not in default_event_types
+
+    async def restore_scenario():
+        bootstrap = await start_session(_current_user(user), restore_recent=True)
+        session = await session_store.get(str(bootstrap["sessionId"]))
+        assert session is not None
+        await session_store.update_state(session.id, SetupState.ENDED, {})
+        return session
+
+    session = asyncio.run(restore_scenario())
     event_types = [item.type for item in session.events]
     signal_events = [item for item in session.events if item.type == "signal.received"]
     rejected_events = [item for item in session.events if item.type == "order.rejected"]
@@ -481,6 +496,7 @@ def test_new_session_replays_recent_strategy_job_result(mu_db, monkeypatch, tmp_
     assert signal_events[-1].data["strategy"] == "Supertrend"
     assert signal_events[-1].data["action"] == "EXIT"
     assert rejected_events[-1].data["message"] == "Exit blocked: no open position exists."
+    assert rejected_events[-1].data["normalizedError"]["category"] == "NO_POSITION"
 
 
 def test_additive_schema_upgrades_pre_release_user_egress_table(tmp_path):

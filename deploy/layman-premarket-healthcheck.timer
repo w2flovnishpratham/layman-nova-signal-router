@@ -1,0 +1,13 @@
+[Unit]
+Description=Run Layman NOVA pre-market healthcheck on market days
+
+[Timer]
+# 08:55 and 09:10 IST, expressed in UTC.
+OnCalendar=Mon..Fri *-*-* 03:25:00 UTC
+OnCalendar=Mon..Fri *-*-* 03:40:00 UTC
+Persistent=true
+RandomizedDelaySec=30
+Unit=layman-premarket-healthcheck.service
+
+[Install]
+WantedBy=timers.target

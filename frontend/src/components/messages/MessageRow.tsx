@@ -1,5 +1,5 @@
 import { BotBubble } from './BotBubble'
-import { EodCard, ExitCard, RejectCard } from './EventCards'
+import { EodCard, ExitCard, OrderPlacedCard, RecentActivityCard, RejectCard, SignalCard } from './EventCards'
 import { SetupInfoCard } from './SetupInfoCard'
 import { UserBubble } from './UserBubble'
 import type { ReactNode } from 'react'
@@ -7,6 +7,13 @@ import type { RenderableMessage } from '../../types'
 
 export function MessageRow({ message, inlinePanel = null }: { message: RenderableMessage; inlinePanel?: ReactNode }) {
   if (message.type === 'system.event') {
+    if (message.data.kind === 'history_replay') {
+      return (
+        <BotBubble label="Nova history">
+          <RecentActivityCard />
+        </BotBubble>
+      )
+    }
     return <div className="system-chip">{String(message.data.label ?? message.data.kind ?? 'System event')}</div>
   }
 
@@ -29,7 +36,7 @@ export function MessageRow({ message, inlinePanel = null }: { message: Renderabl
   if (message.type === 'signal.received') {
     return (
       <BotBubble label={`Nova signal ${message.data.action}`}>
-        <p>{String(message.data.strategy)} signal received: {String(message.data.action)}</p>
+        <SignalCard message={message} />
       </BotBubble>
     )
   }
@@ -37,8 +44,7 @@ export function MessageRow({ message, inlinePanel = null }: { message: Renderabl
   if (message.type === 'order.placed') {
     return (
       <BotBubble label="Nova order placed">
-        <p>Order accepted for {String(message.data.instrument)}.</p>
-        <code>{String(message.data.correlationId)}</code>
+        <OrderPlacedCard message={message} />
       </BotBubble>
     )
   }
@@ -58,7 +64,7 @@ export function MessageRow({ message, inlinePanel = null }: { message: Renderabl
   if (message.type === 'session.error') {
     return (
       <BotBubble label="Nova error" tone="error">
-        <p>{String(message.data.message)}</p>
+        {message.data.normalizedError ? <RejectCard message={message} /> : <p>{String(message.data.message)}</p>}
       </BotBubble>
     )
   }

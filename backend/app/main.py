@@ -11,7 +11,7 @@ from app.api import session as chat_session
 from app.api import ws as chat_ws
 from app.auth.dependencies import get_execution_scoped_user
 from app.config import settings
-from app.routers import broker, control, dashboard, debug, engine, orders, positions, setup, webhook
+from app.routers import broker, control, dashboard, debug, engine, market, orders, positions, setup, webhook
 from app.routers import admin as admin_router
 from app.routers import live as live_router
 from app.routers import user_credentials as user_credentials_router
@@ -213,6 +213,7 @@ app.include_router(setup.router, prefix="/api", tags=["Setup"], dependencies=aut
 app.include_router(engine.router, prefix="/api", tags=["Engine"], dependencies=authenticated)
 app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"], dependencies=authenticated)
 app.include_router(orders.router, prefix="/api", tags=["Orders"], dependencies=authenticated)
+app.include_router(market.router, prefix="/api", tags=["Market"], dependencies=authenticated)
 app.include_router(positions.router, prefix="/api", tags=["Positions"], dependencies=authenticated)
 app.include_router(control.router, prefix="/api/control", tags=["Control"], dependencies=authenticated)
 app.include_router(broker.router, prefix="/api/broker", tags=["Broker"], dependencies=authenticated)

@@ -74,3 +74,6 @@ backend/runtime_state/credentials.enc.json
 
 # Local WIP backups (do not commit)
 *.wip-broken.bak
+
+# Local dev runner state
+.local/

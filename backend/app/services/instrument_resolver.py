@@ -32,6 +32,17 @@ class InstrumentMatch:
     lot_size: int | None = None
 
 
+@dataclass(frozen=True)
+class InstrumentContract:
+    symbol: str
+    expiry: str
+    strike: float
+    option_side: str
+    security_id: str
+    trading_symbol: str | None = None
+    lot_size: int | None = None
+
+
 def _is_cache_fresh(path: Path) -> bool:
     if not path.exists() or path.stat().st_size == 0:
         return False
@@ -204,3 +215,40 @@ def resolve_option_security_id(signal: NormalizedSignal) -> InstrumentMatch | No
         trading_symbol=match.trading_symbol or signal.trading_symbol,
         lot_size=match.lot_size,
     )
+
+
+def list_option_contracts(*, symbol: str = "NIFTY", option_side: str | None = None) -> list[InstrumentContract]:
+    try:
+        if not load_instrument_index(allow_download=False):
+            start_instrument_cache_warmup()
+            return []
+    except Exception as exc:
+        logger.warning("Unable to read Dhan instrument master: %s", exc)
+        return []
+
+    target_symbol = str(symbol or "").upper()
+    target_side = str(option_side or "").upper()
+    contracts: list[InstrumentContract] = []
+    with _INDEX_LOCK:
+        items = list((_INDEX or {}).items())
+    for (row_symbol, expiry, strike_key, row_side), match in items:
+        if target_symbol and row_symbol != target_symbol:
+            continue
+        if target_side and row_side != target_side:
+            continue
+        try:
+            strike = float(strike_key)
+        except (TypeError, ValueError):
+            continue
+        contracts.append(
+            InstrumentContract(
+                symbol=row_symbol,
+                expiry=expiry,
+                strike=strike,
+                option_side=row_side,
+                security_id=match.security_id,
+                trading_symbol=match.trading_symbol,
+                lot_size=match.lot_size,
+            )
+        )
+    return contracts

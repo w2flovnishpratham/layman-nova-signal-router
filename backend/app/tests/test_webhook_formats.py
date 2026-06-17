@@ -17,6 +17,8 @@ def client(tmp_path, monkeypatch):
     log_dir = tmp_path / "runtime_logs"
     monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
     monkeypatch.setattr(state_store, "OPEN_POSITION_FILE", state_dir / "open_position.json")
+    monkeypatch.setattr(state_store, "PAPER_POSITION_FILE", state_dir / "paper_position.json")
+    monkeypatch.setattr(state_store, "PAPER_PORTFOLIO_FILE", state_dir / "paper_portfolio.json")
     monkeypatch.setattr(state_store, "SEEN_SIGNALS_FILE", state_dir / "seen_signals.json")
     monkeypatch.setattr(state_store, "SETTINGS_FILE", state_dir / "settings.json")
     monkeypatch.setattr(credential_vault, "CREDENTIALS_FILE", state_dir / "credentials.enc.json")
@@ -27,6 +29,7 @@ def client(tmp_path, monkeypatch):
         "order": log_dir / "order_events.jsonl",
         "audit": log_dir / "audit_events.jsonl",
         "error": log_dir / "errors.jsonl",
+        "paper_orders": log_dir / "paper_orders.jsonl",
     }
     monkeypatch.setattr(state_store, "LOG_FILES", log_files)
     monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
@@ -98,10 +101,13 @@ def test_duplicate_signal_logic_works_for_nova_signal_id(client):
     assert second.json()["accepted"] is False
     assert second.json()["status"] == "BLOCKED"
     assert "duplicate signal_id duplicate-nova-001" in second.json()["message"]
+    assert second.json()["error"]["category"] == "DUPLICATE_SIGNAL"
+    assert second.json()["execution_result"]["normalizedError"]["orderSentToBroker"] is False
 
 
 def test_duplicate_signal_logic_works_for_generated_pine_signal_id(client):
     payload = pine_payload("B")
+    payload["signal_time"] = "2026-06-17T09:15:00Z"
 
     first = client.post("/webhook/tradingview", json=payload)
     second = client.post("/webhook/tradingview", json=payload)
@@ -112,6 +118,7 @@ def test_duplicate_signal_logic_works_for_generated_pine_signal_id(client):
     assert second.json()["accepted"] is False
     assert second.json()["payload_format"] == "PINE_MULTI_LEG"
     assert "duplicate signal_id" in second.json()["message"]
+    assert second.json()["error"]["category"] == "DUPLICATE_SIGNAL"
 
 
 def test_same_strategy_signals_are_serialized(client, monkeypatch):

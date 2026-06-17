@@ -6,6 +6,29 @@ The frontend never calls Dhan. Dhan credentials are submitted once during onboar
 
 ## Quick Start
 
+### Local paper-mode runner
+
+For local UI/backend work without Neon or live Dhan order routing:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-local.ps1
+```
+
+Open `http://127.0.0.1:5173`.
+
+This starts:
+
+- FastAPI on `http://127.0.0.1:8000`
+- Vite on `http://127.0.0.1:5173`
+- SQLite auth/dev DB at `backend/auth_local.db`
+- safe local overrides: `DHAN_MODE=MOCK`, `ENABLE_LIVE_ORDERS=false`, `WEBHOOK_TRADING_ENABLED=false`
+
+Stop local dev windows directly or run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\stop-local.ps1
+```
+
 ### Backend
 
 ```bash
@@ -25,7 +48,6 @@ Put the generated key in `.env` as `TOKEN_ENCRYPTION_KEY`.
 ```bash
 cd frontend
 npm install
-copy .env.local.example .env.local
 npm run dev
 ```
 

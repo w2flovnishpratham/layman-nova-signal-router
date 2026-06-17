@@ -34,9 +34,14 @@ bash deploy/configure_vps_env.sh "$repo_dir"
 
 install -m 644 deploy/layman-nova-signal-router.service /etc/systemd/system/layman-nova-signal-router.service
 install -m 644 deploy/nginx/layman-api.manyacare.com.conf /etc/nginx/sites-available/layman-api.manyacare.com
+install -m 755 deploy/configure_hostinger_firewall.sh /usr/local/sbin/layman-configure-hostinger-firewall
+install -m 644 deploy/layman-premarket-healthcheck.service /etc/systemd/system/layman-premarket-healthcheck.service
+install -m 644 deploy/layman-premarket-healthcheck.timer /etc/systemd/system/layman-premarket-healthcheck.timer
 ln -sfn /etc/nginx/sites-available/layman-api.manyacare.com /etc/nginx/sites-enabled/layman-api.manyacare.com
 
+/usr/local/sbin/layman-configure-hostinger-firewall
 systemctl daemon-reload
+systemctl enable --now layman-premarket-healthcheck.timer
 systemctl enable --now layman-nova-signal-router.service
 systemctl restart layman-nova-signal-router.service
 

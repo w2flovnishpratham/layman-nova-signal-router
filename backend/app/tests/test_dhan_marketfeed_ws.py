@@ -3,6 +3,7 @@ import struct
 from app.services.dhan_marketfeed_ws import (
     SUBSCRIBE_TICKER_REQUEST_CODE,
     _subscription_message,
+    _subscription_message_many,
     parse_marketfeed_packet,
 )
 
@@ -39,4 +40,19 @@ def test_subscription_message_is_ticker_json_without_credentials():
     assert '"InstrumentCount":1' in message
     assert '"ExchangeSegment":"NSE_FNO"' in message
     assert '"SecurityId":"49081"' in message
+    assert "token" not in message.lower()
+
+
+def test_subscription_message_many_includes_all_targets_without_credentials():
+    message = _subscription_message_many(
+        SUBSCRIBE_TICKER_REQUEST_CODE,
+        {("NSE_FNO", "56376"), ("IDX_I", "13")},
+    )
+
+    assert '"RequestCode":15' in message
+    assert '"InstrumentCount":2' in message
+    assert '"ExchangeSegment":"IDX_I"' in message
+    assert '"SecurityId":"13"' in message
+    assert '"ExchangeSegment":"NSE_FNO"' in message
+    assert '"SecurityId":"56376"' in message
     assert "token" not in message.lower()

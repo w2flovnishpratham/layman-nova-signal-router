@@ -3,9 +3,10 @@ from __future__ import annotations
 import csv
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.config import BACKEND_DIR, DEFAULT_EXCHANGE_SEGMENT, RUNTIME_STATE_DIR, settings
 from app.schemas.signal import NormalizedSignal
@@ -48,6 +49,36 @@ class SecurityIdResolution:
         }
 
 
+@dataclass(frozen=True)
+class OptionContractSuggestion:
+    symbol: str
+    expiry: str
+    strike: float
+    option_side: str
+    security_id: str
+    trading_symbol: str | None = None
+    lot_size: int | None = None
+    reference_price: float | None = None
+    method: str = "SCRIP_MASTER_AUTO"
+    reason: str = "Auto-selected from local Dhan scrip master."
+    source_path: str | None = None
+
+    def model_dump(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "expiry": self.expiry,
+            "strike": self.strike,
+            "optionSide": self.option_side,
+            "securityId": self.security_id,
+            "tradingSymbol": self.trading_symbol,
+            "lotSize": self.lot_size,
+            "referencePrice": self.reference_price,
+            "method": self.method,
+            "reason": self.reason,
+            "sourcePath": self.source_path,
+        }
+
+
 def _contract_label(symbol: str | None, expiry: str | None, strike: float | str | None, option_side: str | None) -> str:
     strike_text = ""
     if strike not in (None, ""):
@@ -81,6 +112,25 @@ def _normalize_date(value: str | None) -> str:
         except ValueError:
             continue
     return text[:10]
+
+
+def _date_from_normalized(value: str | None) -> date | None:
+    normalized = _normalize_date(value)
+    if not normalized:
+        return None
+    try:
+        return date.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _parse_float(value: float | str | None) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _strike_key(value: float | str | None) -> str:
@@ -282,6 +332,168 @@ def resolve_security_id_for_contract(
         security_id=None,
         method="NOT_FOUND",
         reason=unresolved_reason(symbol, expiry, strike, option_side),
+    )
+
+
+def suggest_option_contract(
+    *,
+    symbol: str = "NIFTY",
+    option_side: str,
+    exchange_segment: str | None = None,
+    reference_price: float | None = None,
+    expiry: str | None = None,
+    strike: float | str | None = None,
+) -> OptionContractSuggestion | None:
+    """Suggest a concrete option contract from the local Dhan scrip master.
+
+    This is intentionally data-driven and only suggests contracts already
+    present in the scrip master. Callers decide whether auto-selection is safe
+    for their mode; live order paths should require explicit user intent.
+    """
+    target_symbol = str(symbol or "NIFTY").upper()
+    target_side = str(option_side or "").upper()
+    if target_side not in {"CE", "PE"}:
+        return None
+
+    target_expiry = _normalize_date(expiry)
+    target_strike = _strike_key(strike)
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    parsed_reference = _parse_float(reference_price)
+
+    indexed = _suggest_option_contract_from_index(
+        symbol=target_symbol,
+        option_side=target_side,
+        target_expiry=target_expiry,
+        target_strike=target_strike,
+        reference_price=parsed_reference,
+        today=today,
+    )
+    if indexed is not None:
+        return indexed
+
+    candidates: list[tuple[date, float, dict[str, Any], Path]] = []
+
+    for path in _candidate_scrip_master_paths():
+        if not path.exists() or path.stat().st_size == 0:
+            continue
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                row_symbol = _value(row, "UNDERLYING_SYMBOL", "SM_SYMBOL_NAME", "SYMBOL_NAME").upper()
+                if row_symbol != target_symbol:
+                    continue
+                if not _row_is_index_option(row, exchange_segment):
+                    continue
+                if _value(row, "SEM_OPTION_TYPE", "OPTION_TYPE").upper() != target_side:
+                    continue
+
+                row_expiry_text = _normalize_date(_value(row, "SEM_EXPIRY_DATE", "SM_EXPIRY_DATE"))
+                row_expiry_date = _date_from_normalized(row_expiry_text)
+                if row_expiry_date is None or row_expiry_date < today:
+                    continue
+                if target_expiry and row_expiry_text != target_expiry:
+                    continue
+
+                row_strike = _parse_float(_value(row, "SEM_STRIKE_PRICE", "STRIKE_PRICE"))
+                if row_strike is None:
+                    continue
+                if target_strike and _strike_key(row_strike) != target_strike:
+                    continue
+
+                security_id = _value(row, "SEM_SMST_SECURITY_ID", "SECURITY_ID")
+                if not security_id:
+                    continue
+                blocked, _ = _guard_nifty_underlying_id(security_id, is_option_order=True)
+                if blocked:
+                    continue
+
+                candidates.append((row_expiry_date, row_strike, row, path))
+
+    if not candidates:
+        return None
+
+    nearest_expiry = min(item[0] for item in candidates)
+    same_expiry = [item for item in candidates if item[0] == nearest_expiry]
+    if parsed_reference is None:
+        strikes = sorted({item[1] for item in same_expiry})
+        parsed_reference = strikes[len(strikes) // 2] if strikes else None
+
+    chosen_expiry, chosen_strike, chosen_row, chosen_path = min(
+        same_expiry,
+        key=lambda item: (abs(item[1] - (parsed_reference if parsed_reference is not None else item[1])), item[1]),
+    )
+    trading_symbol = _value(chosen_row, "SEM_TRADING_SYMBOL", "SYMBOL_NAME", "DISPLAY_NAME", "SEM_CUSTOM_SYMBOL")
+    lot_size = _parse_lot_size(chosen_row)
+    security_id = _value(chosen_row, "SEM_SMST_SECURITY_ID", "SECURITY_ID")
+    return OptionContractSuggestion(
+        symbol=target_symbol,
+        expiry=chosen_expiry.isoformat(),
+        strike=chosen_strike,
+        option_side=target_side,
+        security_id=security_id,
+        trading_symbol=trading_symbol or None,
+        lot_size=lot_size,
+        reference_price=parsed_reference,
+        reason=(
+            "Auto-selected nearest-expiry option from local Dhan scrip master"
+            + (" using latest NIFTY reference price." if reference_price is not None else " for local paper testing.")
+        ),
+        source_path=str(chosen_path),
+    )
+
+
+def _suggest_option_contract_from_index(
+    *,
+    symbol: str,
+    option_side: str,
+    target_expiry: str,
+    target_strike: str,
+    reference_price: float | None,
+    today: date,
+) -> OptionContractSuggestion | None:
+    try:
+        from app.services.instrument_resolver import list_option_contracts
+
+        contracts = list_option_contracts(symbol=symbol, option_side=option_side)
+    except Exception:
+        return None
+    candidates: list[Any] = []
+    for contract in contracts:
+        expiry_date = _date_from_normalized(contract.expiry)
+        if expiry_date is None or expiry_date < today:
+            continue
+        if target_expiry and contract.expiry != target_expiry:
+            continue
+        if target_strike and _strike_key(contract.strike) != target_strike:
+            continue
+        candidates.append(contract)
+
+    if not candidates:
+        return None
+
+    nearest_expiry = min(_date_from_normalized(item.expiry) for item in candidates)
+    same_expiry = [item for item in candidates if _date_from_normalized(item.expiry) == nearest_expiry]
+    if reference_price is None:
+        strikes = sorted({float(item.strike) for item in same_expiry})
+        reference_price = strikes[len(strikes) // 2] if strikes else None
+    chosen = min(
+        same_expiry,
+        key=lambda item: (abs(float(item.strike) - (reference_price if reference_price is not None else float(item.strike))), float(item.strike)),
+    )
+    return OptionContractSuggestion(
+        symbol=symbol,
+        expiry=chosen.expiry,
+        strike=float(chosen.strike),
+        option_side=option_side,
+        security_id=chosen.security_id,
+        trading_symbol=chosen.trading_symbol,
+        lot_size=chosen.lot_size,
+        reference_price=reference_price,
+        reason=(
+            "Auto-selected nearest-expiry option from warmed Dhan instrument index"
+            + (" using latest NIFTY reference price." if reference_price is not None else " for local paper testing.")
+        ),
+        source_path="instrument_index",
     )
 
 

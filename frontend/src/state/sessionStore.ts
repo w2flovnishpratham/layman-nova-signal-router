@@ -38,11 +38,14 @@ interface SessionStore {
   theme: string
   seenEvents: Set<string>
   seenSummaries: Set<string>
+  hiddenRecentMessages: RenderableMessage[]
+  recentActivityVisible: boolean
   setTheme: (theme: string) => void
   setWsStatus: (status: WsStatus) => void
   setBootError: (message: string) => void
   markCommandSent: () => void
   resetSession: () => void
+  showRecentActivity: () => void
   addUserMessage: (text: string) => void
   updateSetupDraft: (patch: Partial<SetupDraft>) => void
   setSetupFlowStep: (step: SetupFlowStep) => void
@@ -90,6 +93,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   theme: initialTheme,
   seenEvents: new Set<string>(),
   seenSummaries: new Set<string>(),
+  hiddenRecentMessages: [],
+  recentActivityVisible: false,
 
   setTheme: (theme) => {
     document.documentElement.dataset.theme = theme
@@ -125,8 +130,16 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       theme,
       seenEvents: new Set<string>(),
       seenSummaries: new Set<string>(),
+      hiddenRecentMessages: [],
+      recentActivityVisible: false,
     })
   },
+
+  showRecentActivity: () => set((state) => ({
+    recentActivityVisible: true,
+    messages: appendMessages(state.messages, state.hiddenRecentMessages),
+    hiddenRecentMessages: [],
+  })),
 
   addUserMessage: (text) => {
     const message: RenderableMessage = {
@@ -177,6 +190,19 @@ export function motionConfigMode(): 'always' | 'never' | 'user' {
 }
 
 function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<SessionStore> {
+  if (isRestoredRecentEvent(event) && !state.recentActivityVisible) {
+    if (event.type === 'system.event' && event.data.restoredRecentHeader) {
+      return {
+        typing: false,
+        messages: appendMessage(state.messages, event),
+      }
+    }
+    return {
+      typing: false,
+      hiddenRecentMessages: appendMessage(state.hiddenRecentMessages, event),
+    }
+  }
+
   if (event.type === 'setup.state') {
     const data = event.data as { state?: SetupState; config?: TradeConfig; lotSize?: number }
     const nextState = isSetupState(data.state) ? data.state : state.setupState
@@ -399,4 +425,13 @@ function normalizeActiveExitLevels(value: unknown): ActiveTrade['activeExitLevel
 
 function appendMessage(messages: RenderableMessage[], message: RenderableMessage): RenderableMessage[] {
   return [...messages, message].slice(-250)
+}
+
+function appendMessages(messages: RenderableMessage[], nextMessages: RenderableMessage[]): RenderableMessage[] {
+  return [...messages, ...nextMessages].slice(-250)
+}
+
+function isRestoredRecentEvent(event: ServerEvent): boolean {
+  return Boolean((event.data as { restoredRecent?: unknown; restoredRecentHeader?: unknown }).restoredRecent)
+    || Boolean((event.data as { restoredRecent?: unknown; restoredRecentHeader?: unknown }).restoredRecentHeader)
 }

@@ -1,4 +1,4 @@
-import type { SessionBootstrap, SessionSnapshot } from './types'
+import type { AtmLtpSnapshot, MarketSnapshot, SessionBootstrap, SessionSnapshot, SystemHealth } from './types'
 import { backendHttpUrl } from './lib/backend'
 
 export interface AuthUser {
@@ -68,8 +68,40 @@ export async function logout(): Promise<void> {
   }
 }
 
-export async function startSession(): Promise<SessionBootstrap> {
-  const response = await apiFetch('/api/session/start', { method: 'POST' })
+export interface ManualEntryPayload {
+  side: 'CE' | 'PE'
+  lots: number
+  targetProfitPct?: number
+  stopLossPct?: number
+}
+
+export interface ManualOrderResponse {
+  ok: boolean
+  message: string
+  executionResult?: Record<string, unknown>
+  normalizedError?: Record<string, unknown> | null
+  orderJourney?: Array<Record<string, unknown>>
+}
+
+export interface OrderQuote {
+  ok: boolean
+  message?: string
+  mode?: string
+  side: 'CE' | 'PE'
+  lots: number
+  qty: number
+  securityId?: string | null
+  tradingSymbol?: string | null
+  estimatedPremium?: number | null
+  estimatedCost?: number | null
+  estimatedMargin?: number | null
+  normalizedError?: Record<string, unknown> | null
+  atm?: AtmLtpSnapshot | null
+}
+
+export async function startSession(options: { restoreRecent?: boolean } = {}): Promise<SessionBootstrap> {
+  const path: `/${string}` = options.restoreRecent ? '/api/session/start?restore_recent=true' : '/api/session/start'
+  const response = await apiFetch(path, { method: 'POST' })
   if (!response.ok) {
     throw new Error(`Could not start session: ${response.status}`)
   }
@@ -125,4 +157,54 @@ export async function verifyEgressIp(): Promise<void> {
   if (!body?.ok) {
     throw new Error(body?.egress?.error || 'Static IP verification failed.')
   }
+}
+
+export async function getMarketSnapshot(): Promise<MarketSnapshot> {
+  const response = await apiFetch('/api/market/nifty-snapshot', { cache: 'no-store' })
+  if (!response.ok) {
+    throw new Error(`Could not load market snapshot: ${response.status}`)
+  }
+  return response.json() as Promise<MarketSnapshot>
+}
+
+export async function getSystemHealth(): Promise<SystemHealth> {
+  const response = await apiFetch('/api/system/health-strip', { cache: 'no-store' })
+  if (!response.ok) {
+    throw new Error(`Could not load system health: ${response.status}`)
+  }
+  return response.json() as Promise<SystemHealth>
+}
+
+export async function getOrderQuote(side: 'CE' | 'PE', lots: number): Promise<OrderQuote> {
+  const params = new URLSearchParams({ side, lots: String(lots) })
+  const response = await apiFetch(`/api/orders/quote?${params.toString()}` as `/${string}`, { cache: 'no-store' })
+  if (!response.ok) {
+    throw new Error(`Could not load quote: ${response.status}`)
+  }
+  return response.json() as Promise<OrderQuote>
+}
+
+export async function postManualEntry(payload: ManualEntryPayload): Promise<ManualOrderResponse> {
+  return postManualOrder('/api/orders/manual-entry', payload)
+}
+
+export async function postManualExit(): Promise<ManualOrderResponse> {
+  return postManualOrder('/api/orders/manual-exit', { reason: 'manual_panel' })
+}
+
+export async function postManualReverse(lots: number): Promise<ManualOrderResponse> {
+  return postManualOrder('/api/orders/manual-reverse', { lots })
+}
+
+async function postManualOrder(path: `/${string}`, payload: unknown): Promise<ManualOrderResponse> {
+  const response = await apiFetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as ManualOrderResponse | null
+  if (!response.ok) {
+    throw new Error(body?.message || `Manual order failed: ${response.status}`)
+  }
+  return body ?? { ok: false, message: 'Manual order failed.' }
 }

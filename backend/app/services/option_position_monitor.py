@@ -18,6 +18,7 @@ from app.services.dhan_marketfeed_ws import (
     marketfeed_ws_status,
     stop_marketfeed_ws,
 )
+from app.services.risk_manager import _market_is_open
 from app.services.state_store import get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
 
 
@@ -490,6 +491,22 @@ def monitor_once(*, force_rest: bool = False) -> None:
     if not position.get("has_open_position"):
         if not force_rest:
             clear_marketfeed_subscription()
+        return
+
+    if not _market_is_open():
+        if not force_rest:
+            clear_marketfeed_subscription()
+        current = dict(get_open_position())
+        if current.get("has_open_position"):
+            current["live_pnl"] = {
+                "source": "market_closed",
+                "status": "market_closed",
+                "message": "Market is closed; Dhan WebSocket and REST LTP fetching are disabled.",
+                "ltp": None,
+                "last_checked_at": utc_now(),
+                "ws_status": marketfeed_ws_status(),
+            }
+            set_open_position(current)
         return
 
     creds = get_dhan_credentials()

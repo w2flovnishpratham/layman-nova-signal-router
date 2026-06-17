@@ -12,9 +12,10 @@ on:
       live_trading_mode:
         description: "Deployment safety mode"
         required: true
-        default: "safe"
+        default: "preserve"
         type: choice
         options:
+          - preserve
           - safe
           - armed
       live_confirmation:
@@ -70,7 +71,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          LIVE_TRADING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_trading_mode || 'safe' }}
+          LIVE_TRADING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_trading_mode || 'preserve' }}
           LIVE_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.live_confirmation || '' }}
         run: |
           for required_name in DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
@@ -83,13 +84,15 @@ jobs:
           secrets_file="$(mktemp)"
           trap 'rm -f "$secrets_file"' EXIT
           chmod 600 "$secrets_file"
-          live_trading_armed=false
+          live_trading_armed=preserve
           if [ "$LIVE_TRADING_MODE" = "armed" ]; then
             if [ "$LIVE_CONFIRMATION" != "ARM TWO USER LIVE" ]; then
               echo "Armed deployment requires the exact confirmation phrase." >&2
               exit 1
             fi
             live_trading_armed=true
+          elif [ "$LIVE_TRADING_MODE" = "safe" ]; then
+            live_trading_armed=false
           fi
           {
             printf 'DATABASE_URL=%s\n' "$DATABASE_URL"

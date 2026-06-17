@@ -29,7 +29,10 @@ RECENT_STRATEGY_REPLAY_LIMIT = 10
 
 
 @router.post("/start")
-async def start_session(user: CurrentUser = Depends(get_current_user)) -> dict[str, object]:
+async def start_session(
+    user: CurrentUser = Depends(get_current_user),
+    restore_recent: bool = False,
+) -> dict[str, object]:
     with bind_user_execution_context(user):
         actual_webhook_secret = (
             (settings.STRATEGY_WEBHOOK_SECRET or "").strip()
@@ -47,7 +50,7 @@ async def start_session(user: CurrentUser = Depends(get_current_user)) -> dict[s
             state=state,
             config=config,
         )
-        await _hydrate_production_session(session.id, user)
+        await _hydrate_production_session(session.id, user, restore_recent=restore_recent)
         token = issue_session_token(session.id)
         webhook_url = f"{settings.BACKEND_PUBLIC_BASE_URL.rstrip('/')}/api/webhook/strategy/supertrend"
         return {
@@ -59,7 +62,7 @@ async def start_session(user: CurrentUser = Depends(get_current_user)) -> dict[s
         }
 
 
-async def _hydrate_production_session(session_id: str, user: CurrentUser) -> None:
+async def _hydrate_production_session(session_id: str, user: CurrentUser, *, restore_recent: bool = False) -> None:
     mode = get_engine_mode(legacy_fallback=False)
     wallet = get_wallet_snapshot()
     position = get_open_position()
@@ -92,7 +95,8 @@ async def _hydrate_production_session(session_id: str, user: CurrentUser) -> Non
             mode=mode,
         ),
     )
-    await _hydrate_recent_strategy_results(session_id, user)
+    if restore_recent:
+        await _hydrate_recent_strategy_results(session_id, user)
 
 
 async def _hydrate_recent_strategy_results(session_id: str, user: CurrentUser) -> None:
@@ -110,10 +114,11 @@ async def _hydrate_recent_strategy_results(session_id: str, user: CurrentUser) -
             kind="history_replay",
             label="Recent backend activity restored",
             message="Recent TradingView activity was restored from the server.",
+            restoredRecentHeader=True,
         ),
     )
     for signal, execution_result in jobs:
-        await append_chat_result_to_session(session_id, signal, execution_result)
+        await append_chat_result_to_session(session_id, signal, execution_result, restored_recent=True)
 
 
 async def _recent_strategy_jobs(

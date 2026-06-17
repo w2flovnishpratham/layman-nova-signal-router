@@ -2,7 +2,8 @@ from app.config import settings
 from app.schemas.signal import NormalizedSignal
 from app.services.dhan_debugger import validate_dhan_payload
 from app.services.execution_router import _build_dhan_payload_and_resolution
-from app.services.security_id_resolver import resolve_security_id
+from app.services import security_id_resolver
+from app.services.security_id_resolver import resolve_security_id, suggest_option_contract
 
 
 def make_signal(security_id=None) -> NormalizedSignal:
@@ -94,3 +95,28 @@ def test_dhan_payload_validation_passes_after_security_id_resolution(monkeypatch
     assert resolution["ok"] is True
     assert payload["securityId"] == "999999"
     assert validation["ok"] is True
+
+
+def test_suggest_option_contract_selects_nearest_future_strike(tmp_path, monkeypatch):
+    csv_path = tmp_path / "scrip.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "EXCH_ID,SEGMENT,SECURITY_ID,INSTRUMENT,UNDERLYING_SYMBOL,SYMBOL_NAME,DISPLAY_NAME,LOT_SIZE,SM_EXPIRY_DATE,STRIKE_PRICE,OPTION_TYPE",
+                "NSE,D,111,OPTIDX,NIFTY,NIFTY-Dec2099-23000-CE,NIFTY 31 DEC 23000 CALL,65,2099-12-31,23000.00000,CE",
+                "NSE,D,222,OPTIDX,NIFTY,NIFTY-Dec2099-23100-CE,NIFTY 31 DEC 23100 CALL,65,2099-12-31,23100.00000,CE",
+                "NSE,D,333,OPTIDX,NIFTY,NIFTY-Dec2099-23200-PE,NIFTY 31 DEC 23200 PUT,65,2099-12-31,23200.00000,PE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(security_id_resolver, "_candidate_scrip_master_paths", lambda: [csv_path])
+    monkeypatch.setattr(security_id_resolver, "_suggest_option_contract_from_index", lambda **_kwargs: None)
+
+    result = suggest_option_contract(option_side="CE", reference_price=23080)
+
+    assert result is not None
+    assert result.security_id == "222"
+    assert result.expiry == "2099-12-31"
+    assert result.strike == 23100.0
+    assert result.trading_symbol == "NIFTY-Dec2099-23100-CE"

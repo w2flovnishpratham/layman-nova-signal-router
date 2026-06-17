@@ -28,6 +28,7 @@ def _isolate_paper_runtime(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(state_store, "LOG_FILES", log_files)
     monkeypatch.setattr(paper_broker, "LOG_FILES", log_files)
     monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
+    monkeypatch.setattr(paper_broker, "_market_is_open", lambda: True)
     credential_vault._LOCAL_MEMORY_PAYLOAD.clear()
     credential_vault._LOCAL_MEMORY_PAYLOAD.update({"version": 1, "dhan": None, "webhook_secret": None})
 

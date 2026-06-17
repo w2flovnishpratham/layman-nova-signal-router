@@ -14,6 +14,28 @@ export type WsStatus = 'live' | 'degraded' | 'down'
 export type Tone = 'up' | 'down' | 'flat'
 export type EngineMode = 'paper' | 'live'
 export type SetupFlowStep = 'mode' | 'strategy' | 'broker' | 'side' | 'lots' | 'exits' | 'limits' | 'confirm' | 'complete'
+export type ErrorSource = 'TRADINGVIEW' | 'DHAN' | 'NOVA_BACKEND' | 'PAPER_ENGINE' | 'RISK_ENGINE' | 'NETWORK' | 'PUBSUB' | 'STATIC_IP'
+export type ErrorCategory =
+  | 'AUTH'
+  | 'TOKEN_EXPIRED'
+  | 'STATIC_IP'
+  | 'FUNDS'
+  | 'MARGIN'
+  | 'LTP'
+  | 'MARKET_CLOSED'
+  | 'PAYLOAD_INVALID'
+  | 'DUPLICATE_SIGNAL'
+  | 'NO_POSITION'
+  | 'POSITION_MISMATCH'
+  | 'RATE_LIMIT'
+  | 'TIMEOUT'
+  | 'ORDER_PENDING'
+  | 'PARTIAL_FILL'
+  | 'ORDER_UNKNOWN'
+  | 'RISK_BLOCK'
+  | 'CONFIG_MISSING'
+  | 'UNKNOWN'
+export type ErrorSeverity = 'info' | 'warning' | 'blocked' | 'critical'
 
 export type ServerEventType =
   | 'bot.message'
@@ -39,6 +61,98 @@ export interface ServerEvent<TData = Record<string, unknown>> {
   type: ServerEventType
   ts: string
   data: TData
+}
+
+export interface NormalizedError {
+  errorId: string
+  source: ErrorSource
+  category: ErrorCategory
+  severity: ErrorSeverity
+  userTitle: string
+  userMessage: string
+  technicalMessage?: string
+  nextAction: string
+  retryable: boolean
+  moneyAtRisk: boolean | null
+  orderSentToBroker: boolean | null
+  actionButtons: string[]
+  correlationId?: string | null
+  signalId?: string | null
+  rawStatusCode?: number | null
+  timestamp: string
+  mode?: EngineMode | string | null
+  debugPack?: Record<string, unknown>
+}
+
+export interface OrderJourneyStep {
+  label: string
+  status: 'complete' | 'pending' | 'warning' | 'failed'
+  detail?: string | null
+}
+
+export interface MarketSnapshot {
+  niftySpot: number | null
+  niftySpotSource?: string | null
+  dayChangePct: number | null
+  marketStatus: 'open' | 'closed'
+  lastUpdatedAt: string
+  atm?: AtmLtpSnapshot | null
+  latestSignal: {
+    signalId?: string | null
+    action?: string | null
+    side?: string | null
+    optionSide?: string | null
+    receivedAt?: string | null
+  }
+  activeOptionLtp: number | null
+  activeOptionSide?: 'CE' | 'PE' | null
+  sparkline: number[]
+  markers: Array<{ side?: string | null; optionSide?: string | null; timestamp?: string | null }>
+}
+
+export interface AtmOptionLtp {
+  ok: boolean
+  side: 'CE' | 'PE'
+  expiry?: string | null
+  strike?: number | null
+  securityId?: string | null
+  tradingSymbol?: string | null
+  lotSize?: number | null
+  qty?: number | null
+  ltp?: number | null
+  ltpSource?: string | null
+  ltpStatus?: string | null
+  ltpReceivedAt?: string | null
+  ltpAgeSeconds?: number | null
+  estimatedCost?: number | null
+  message?: string | null
+  error?: string | null
+}
+
+export interface AtmLtpSnapshot {
+  ok: boolean
+  mode?: EngineMode | string | null
+  symbol: 'NIFTY' | string
+  marketOpen?: boolean
+  niftySpot: number | null
+  niftySpotSource?: string | null
+  niftySpotStatus?: string | null
+  atmStrike: number | null
+  strikeStep: number
+  lots: number
+  computedAt: string
+  options: Partial<Record<'CE' | 'PE', AtmOptionLtp>>
+  message?: string | null
+}
+
+export interface SystemHealth {
+  dhan: 'connected' | 'auth_issue' | 'unknown'
+  staticIp: 'verified' | 'failed' | 'unknown'
+  market: 'open' | 'closed'
+  engine: 'listening' | 'paused' | 'idle'
+  pubsub: 'healthy' | 'delayed' | 'unknown'
+  lastSignalAt?: string | null
+  walletOk?: boolean
 }
 
 export interface SessionBootstrap {

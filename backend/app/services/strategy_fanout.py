@@ -465,6 +465,60 @@ def user_egress_status(user_id: uuid.UUID) -> dict[str, Any]:
         }
 
 
+def active_user_egress_assignments() -> list[dict[str, Any]]:
+    if not database_configured():
+        return []
+    with session_scope() as db:
+        rows = db.scalars(
+            select(models.UserEgress).where(models.UserEgress.active.is_(True))
+        ).all()
+        return [
+            {
+                "user_id": str(row.user_id),
+                "public_ip": row.public_ip,
+                "has_proxy": bool(row.proxy_url_encrypted),
+                "verified": _egress_is_verified(row),
+                "last_verified_at": (
+                    row.last_verified_at.isoformat()
+                    if row.last_verified_at
+                    else None
+                ),
+                "last_observed_ip": row.last_observed_ip,
+                "verification_error": row.verification_error,
+            }
+            for row in rows
+        ]
+
+
+def mark_user_egress_unverified(
+    user_id: uuid.UUID | str,
+    *,
+    error: str,
+    observed_ip: str | None = None,
+) -> dict[str, Any] | None:
+    if not database_configured():
+        return None
+    user_uuid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(str(user_id))
+    with session_scope() as db:
+        row = db.scalar(
+            select(models.UserEgress).where(models.UserEgress.user_id == user_uuid)
+        )
+        if row is None:
+            return None
+        row.last_verified_at = None
+        if observed_ip is not None:
+            row.last_observed_ip = observed_ip
+        row.verification_error = error
+        row.updated_at = _now()
+        return {
+            "user_id": str(row.user_id),
+            "public_ip": row.public_ip,
+            "active": row.active,
+            "verified": False,
+            "verification_error": row.verification_error,
+        }
+
+
 def verify_user_egress(user_id: uuid.UUID, *, timeout: float = 8.0) -> dict[str, Any]:
     egress = get_user_egress(user_id)
     if egress is None or not egress.get("proxy_url"):

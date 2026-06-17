@@ -7,7 +7,9 @@ import { ChatLog } from './components/messages/ChatLog'
 import { SetupPanel } from './components/setup/SetupPanel'
 import {
   getCurrentUser,
+  getMarketSnapshot,
   getSession,
+  getSystemHealth,
   googleLoginUrl,
   logout,
   prepareReconfigure,
@@ -17,7 +19,7 @@ import type { AuthUser } from './api'
 import { DEFAULT_NIFTY_LOT_SIZE } from './lib/trading'
 import { useSessionStore } from './state/sessionStore'
 import { SessionWS } from './ws'
-import type { ClientCommand } from './types'
+import type { ClientCommand, MarketSnapshot, SystemHealth } from './types'
 
 function App() {
   const wsRef = useRef<SessionWS | null>(null)
@@ -25,6 +27,8 @@ function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState('')
+  const [marketSnapshot, setMarketSnapshot] = useState<MarketSnapshot | null>(null)
+  const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
   const session = useSessionStore((state) => state.session)
   const setupFlowStep = useSessionStore((state) => state.setupFlowStep)
   const setupDraft = useSessionStore((state) => state.setupDraft)
@@ -86,6 +90,7 @@ function App() {
     if (!authUser) return
     let mounted = true
 
+    resetSession()
     startSession()
       .then(async (bootstrap) => {
         if (!mounted) return
@@ -116,6 +121,35 @@ function App() {
       wsRef.current?.close()
     }
   }, [applyServerEvent, authUser, bootNonce, loadBootstrap, loadSnapshot, resetSession, setBootError, setWsStatus])
+
+  useEffect(() => {
+    if (!authUser) return
+    let mounted = true
+    let timer: number | null = null
+
+    const poll = () => {
+      Promise.allSettled([getMarketSnapshot(), getSystemHealth()]).then(([market, health]) => {
+        if (!mounted) return
+        if (market.status === 'fulfilled') setMarketSnapshot(market.value)
+        if (health.status === 'fulfilled') setSystemHealth(health.value)
+      })
+      timer = window.setTimeout(poll, 4000)
+    }
+
+    poll()
+    return () => {
+      mounted = false
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [authUser, bootNonce])
+
+  useEffect(() => {
+    const handler = () => {
+      void reconfigure()
+    }
+    window.addEventListener('nova:reconfigure-request', handler)
+    return () => window.removeEventListener('nova:reconfigure-request', handler)
+  })
 
   useEffect(() => {
     document.documentElement.dataset.mode = engineMode ?? 'unset'
@@ -189,6 +223,7 @@ function App() {
         engineLive={engineLive}
         engineMode={engineMode}
         setupState={setupState}
+        health={systemHealth}
         user={authUser}
         onKill={() => send({ type: 'session.kill', data: {} })}
         onReconfigure={reconfigure}
@@ -230,6 +265,8 @@ function App() {
             lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
             side={config.risk?.side ?? 'BOTH'}
             engineMode={engineMode}
+            marketSnapshot={marketSnapshot}
+            health={systemHealth}
             onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
           />
         ) : null}
