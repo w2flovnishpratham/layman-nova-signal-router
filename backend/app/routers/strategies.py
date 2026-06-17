@@ -96,6 +96,12 @@ def egress_status(user: CurrentUser = Depends(get_current_user)) -> dict:
     return strategy_fanout.user_egress_status(user.id)
 
 
+@router.post("/api/strategies/egress/verify")
+def verify_current_user_egress(user: CurrentUser = Depends(get_current_user)) -> dict:
+    result = strategy_fanout.verify_user_egress(user.id)
+    return {"ok": bool(result.get("ok")), "egress": result}
+
+
 @router.post("/api/webhook/strategy/{strategy_name}")
 async def strategy_webhook(
     strategy_name: str,

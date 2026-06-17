@@ -114,3 +114,15 @@ export async function selectEgressIp(publicIp: string): Promise<void> {
     throw new Error(body?.error || `Could not select static IP: ${response.status}`)
   }
 }
+
+export async function verifyEgressIp(): Promise<void> {
+  const response = await apiFetch('/api/strategies/egress/verify', { method: 'POST' })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(body?.error || `Could not verify static IP: ${response.status}`)
+  }
+  const body = await response.json().catch(() => null) as { ok?: boolean, egress?: { error?: string } } | null
+  if (!body?.ok) {
+    throw new Error(body?.egress?.error || 'Static IP verification failed.')
+  }
+}

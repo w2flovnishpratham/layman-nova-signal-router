@@ -247,6 +247,12 @@ def test_authenticated_users_select_distinct_configured_egress_ips(
     assert selected.json()["verification"]["ok"] is True
     assert "secret-one" not in selected.text
 
+    verified = client.post("/api/strategies/egress/verify")
+    assert verified.status_code == 200
+    assert verified.json()["ok"] is True
+    assert verified.json()["egress"]["expected_ip"] == "165.232.184.177"
+    assert "secret-one" not in verified.text
+
     app.dependency_overrides[get_current_user] = lambda: _current_user(bob)
     bob_options = client.get("/api/strategies/egress/options").json()
     assert bob_options["nodes"][0]["available"] is False

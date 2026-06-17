@@ -1598,6 +1598,20 @@ code {
   margin: 0;
 }
 
+.static-ip-verification-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.static-ip-verification-row button {
+  width: auto;
+  min-height: 28px;
+  padding: 0 10px;
+}
+
 .static-ip-verification.verified {
   color: var(--success);
 }

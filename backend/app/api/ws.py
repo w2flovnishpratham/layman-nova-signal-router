@@ -277,9 +277,16 @@ async def _apply_production_command(
                     "No verified Dhan static-IP execution node is assigned to this account."
                 )
             if not egress.get("verified"):
-                raise ValueError(
-                    "The assigned Dhan execution node has not passed its IP verification in the last 24 hours."
+                verification = await asyncio.to_thread(
+                    strategy_fanout.verify_user_egress,
+                    user.id,
                 )
+                if not verification.get("ok"):
+                    detail = verification.get("error") or "verification failed"
+                    raise ValueError(
+                        "The assigned Dhan execution node has not passed its IP verification "
+                        f"in the last 24 hours: {detail}"
+                    )
         await asyncio.to_thread(
             start_engine,
             StartEngineRequest(engine_mode=mode, confirm_live_orders=mode == "live"),

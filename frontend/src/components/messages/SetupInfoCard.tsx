@@ -1,11 +1,12 @@
-import { CheckCircle2, Copy, LoaderCircle } from 'lucide-react'
+import { CheckCircle2, Copy, LoaderCircle, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { getEgressOptions, selectEgressIp, type EgressOptionsResponse } from '../../api'
+import { getEgressOptions, selectEgressIp, verifyEgressIp, type EgressOptionsResponse } from '../../api'
 
 export function SetupInfoCard() {
   const [options, setOptions] = useState<EgressOptionsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [selecting, setSelecting] = useState<string | null>(null)
+  const [verifying, setVerifying] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -40,6 +41,20 @@ export function SetupInfoCard() {
     }
   }
 
+  async function verifyIp() {
+    setVerifying(true)
+    setError(null)
+    try {
+      await verifyEgressIp()
+      setOptions(await getEgressOptions())
+    } catch (verifyError) {
+      setError(verifyError instanceof Error ? verifyError.message : 'Could not verify static IP.')
+      setOptions(await getEgressOptions().catch(() => options))
+    } finally {
+      setVerifying(false)
+    }
+  }
+
   return (
     <div className="setup-info-card">
       <div className="static-ip-heading">
@@ -68,9 +83,15 @@ export function SetupInfoCard() {
         })}
       </div>
       {options?.egress.public_ip ? (
-        <p className={`static-ip-verification ${options.egress.verified ? 'verified' : ''}`}>
-          {options.egress.verified ? 'Proxy verified. Add the selected IP to Dhan.' : options.egress.verification_error || 'Proxy verification is pending.'}
-        </p>
+        <div className="static-ip-verification-row">
+          <p className={`static-ip-verification ${options.egress.verified ? 'verified' : ''}`}>
+            {options.egress.verified ? 'Proxy verified. Add the selected IP to Dhan.' : options.egress.verification_error || 'Proxy verification is pending.'}
+          </p>
+          <button type="button" onClick={() => void verifyIp()} disabled={selecting !== null || verifying}>
+            {verifying ? <LoaderCircle size={13} /> : <RefreshCw size={13} />}
+            Verify
+          </button>
+        </div>
       ) : null}
       {error ? <p className="static-ip-error">{error}</p> : null}
     </div>
