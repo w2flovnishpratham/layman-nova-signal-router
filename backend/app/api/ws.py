@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 
@@ -180,10 +180,13 @@ async def _apply_production_command(
         else {}
     )
     if command_type == "setup.mode":
+        raw_mode = str(data.get("engineMode") or "").strip().lower()
+        if raw_mode not in {"paper", "live"}:
+            raise ValueError("engineMode must be either 'paper' or 'live'.")
         await asyncio.to_thread(
             configure_engine_mode,
             EngineModeRequest(
-                engine_mode=str(data.get("engineMode") or "").lower(),
+                engine_mode=cast(Literal["paper", "live"], raw_mode),
                 paper_starting_balance=float(data.get("paperStartingBalance") or 100000),
             ),
         )
@@ -255,7 +258,10 @@ async def _apply_production_command(
 
     if command_type == "setup.confirm_live":
         mode = get_engine_mode(legacy_fallback=False)
-        if mode == "live" and not user.is_dev:
+        if mode not in {"paper", "live"}:
+            raise ValueError("Engine mode is not configured.")
+        engine_mode = cast(Literal["paper", "live"], mode)
+        if engine_mode == "live" and not user.is_dev:
             if (
                 settings.DHAN_MODE.upper() != "REAL"
                 or not settings.ENABLE_LIVE_ORDERS
@@ -289,15 +295,15 @@ async def _apply_production_command(
                     )
         await asyncio.to_thread(
             start_engine,
-            StartEngineRequest(engine_mode=mode, confirm_live_orders=mode == "live"),
+            StartEngineRequest(
+                engine_mode=engine_mode,
+                confirm_live_orders=engine_mode == "live",
+            ),
         )
-        risk = (
-            session_config.get("risk")
-            if isinstance(session_config.get("risk"), dict)
-            else {}
-        )
+        risk_data = session_config.get("risk")
+        risk: dict[str, Any] = risk_data if isinstance(risk_data, dict) else {}
         strategy = str(session_config.get("strategy") or "supertrend")
-        execution_mode = "real_orders" if mode == "live" else "paper_live_data"
+        execution_mode = "real_orders" if engine_mode == "live" else "paper_live_data"
         if not user.is_dev:
             await asyncio.to_thread(
                 strategy_fanout.subscribe_user,
