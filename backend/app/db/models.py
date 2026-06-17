@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -289,3 +290,64 @@ class UserEgress(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
+
+
+class PortfolioTrade(Base):
+    """A completed round-trip the engine actually bought and sold for a user.
+
+    One row per closed trade (entry order + matching exit order). This is the
+    durable backing store for the analytics dashboard: only orders NOVA tracked
+    end-to-end land here, so the dashboard never shows untracked broker activity.
+    Idempotent on (user_id, exit_order_id) so repeated syncs never duplicate.
+    """
+
+    __tablename__ = "portfolio_trades"
+    __table_args__ = (
+        UniqueConstraint("user_id", "exit_order_id", name="uq_portfolio_trade_exit"),
+        Index("ix_portfolio_trades_user_closed", "user_id", "closed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    mode: Mapped[str] = mapped_column(String(20), default="paper", nullable=False)  # paper/live
+    strategy_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    symbol: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    option_side: Mapped[str | None] = mapped_column(String(8), nullable=True)  # CE/PE
+    qty: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    entry_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_charges: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    exit_charges: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    gross_pnl: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    realized_pnl: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    entry_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    exit_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class PortfolioSnapshot(Base):
+    """Point-in-time wallet/equity reading per user, used to persist the equity
+    curve so the dashboard can render history beyond the in-memory log window."""
+
+    __tablename__ = "portfolio_snapshots"
+    __table_args__ = (
+        Index("ix_portfolio_snapshots_user_captured", "user_id", "captured_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    mode: Mapped[str] = mapped_column(String(20), default="paper", nullable=False)
+    starting_balance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    available_balance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    utilized_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    equity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trade_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

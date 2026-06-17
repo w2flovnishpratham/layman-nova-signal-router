@@ -5,6 +5,8 @@ import { EngineSidebar } from './components/EngineSidebar'
 import { Header } from './components/Header'
 import { ChatLog } from './components/messages/ChatLog'
 import { SetupPanel } from './components/setup/SetupPanel'
+import { PortfolioDashboard } from './dashboard/PortfolioDashboard'
+import type { NovaView } from './types'
 import {
   getCurrentUser,
   getMarketSnapshot,
@@ -24,6 +26,7 @@ import type { ClientCommand, MarketSnapshot, SystemHealth } from './types'
 function App() {
   const wsRef = useRef<SessionWS | null>(null)
   const [bootNonce, setBootNonce] = useState(0)
+  const [view, setView] = useState<NovaView>('trading')
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState('')
@@ -225,11 +228,16 @@ function App() {
         setupState={setupState}
         health={systemHealth}
         user={authUser}
+        view={view}
+        onNavigate={setView}
         onKill={() => send({ type: 'session.kill', data: {} })}
         onReconfigure={reconfigure}
         onLogout={handleLogout}
       />
 
+      {view === 'dashboard' ? (
+        <PortfolioDashboard />
+      ) : (
       <section className={engineLive ? 'engine-shell' : 'chat-shell'} aria-label="Nova trading session">
         {bootError ? <div className="error-banner">{bootError}</div> : null}
         {!session && !bootError ? <div className="system-chip">Starting session</div> : null}
@@ -271,6 +279,7 @@ function App() {
           />
         ) : null}
       </section>
+      )}
 
       <footer className="app-footer">(c) 2026 Layman Signal Route. Deployed Live with Dhan. All rights reserved.</footer>
     </main>

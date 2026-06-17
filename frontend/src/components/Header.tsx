@@ -1,8 +1,8 @@
-import { FlaskConical, LogOut, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
+import { BarChart3, FlaskConical, LineChart, LogOut, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
 import { useRef, useState } from 'react'
 import type { AuthUser } from '../api'
 import { modeBadgeText } from '../lib/mode'
-import type { EngineMode, SetupState, SystemHealth, WsStatus } from '../types'
+import type { EngineMode, NovaView, SetupState, SystemHealth, WsStatus } from '../types'
 
 interface Props {
   status: WsStatus
@@ -12,6 +12,8 @@ interface Props {
   setupState: SetupState
   health: SystemHealth | null
   user: AuthUser
+  view: NovaView
+  onNavigate: (view: NovaView) => void
   onKill: () => void
   onReconfigure: () => void
   onLogout: () => void
@@ -25,6 +27,8 @@ export function Header({
   setupState,
   health,
   user,
+  view,
+  onNavigate,
   onKill,
   onReconfigure,
   onLogout,
@@ -59,6 +63,26 @@ export function Header({
         <div className="brand-lockup">
           <span className="nova-mark" />
           <strong>NOVA SIGNAL ROUTER</strong>
+          <nav className="nv-nav-tabs" aria-label="Primary">
+            <button
+              type="button"
+              className={`nv-nav-tab${view === 'trading' ? ' active' : ''}`}
+              aria-current={view === 'trading'}
+              onClick={() => onNavigate('trading')}
+            >
+              <LineChart size={13} />
+              Trading
+            </button>
+            <button
+              type="button"
+              className={`nv-nav-tab${view === 'dashboard' ? ' active' : ''}`}
+              aria-current={view === 'dashboard'}
+              onClick={() => onNavigate('dashboard')}
+            >
+              <BarChart3 size={13} />
+              Dashboard
+            </button>
+          </nav>
         </div>
 
         <div className="header-actions">

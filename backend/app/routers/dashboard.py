@@ -9,6 +9,7 @@ from app.config import settings
 from app.routers.setup import tradingview_webhook_url
 from app.services.audit_logger import read_jsonl
 from app.services.credential_vault import dhan_metadata, get_dhan_credentials, webhook_secret_metadata
+from app.services.portfolio_analytics import build_portfolio_analytics
 from app.services.position_reconciler import get_reconciled_open_position
 from app.services.state_store import get_app_state, get_external_positions, get_runtime_settings
 from app.services.wallet_service import refresh_wallet_snapshot
@@ -90,6 +91,17 @@ def dashboard_summary() -> dict:
         },
     }
 
+
+
+@router.get("/dashboard/portfolio")
+def dashboard_portfolio() -> dict:
+    """Analytics for the user's portfolio dashboard.
+
+    Only round-trips NOVA actually executed (an entry order it placed and the
+    matching exit it placed) are included. Returns KPIs, equity curve, daily
+    PnL, side/symbol breakdowns and the closed-trade ledger.
+    """
+    return build_portfolio_analytics()
 
 
 @router.get("/dashboard/live-flow")
