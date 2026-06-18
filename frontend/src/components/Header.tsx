@@ -91,7 +91,7 @@ export function Header({
             <span className="status-dot" />
             {modeBadgeText(engineMode)}{engineLive ? ` - ${statusLabel(status, setupState)}` : ''}
           </div>
-          {engineLive ? <HealthStrip status={status} setupState={setupState} health={health} /> : null}
+          {engineLive ? <HealthStrip setupState={setupState} health={health} /> : null}
           {clientId ? (
             <div className="client-badge">CLIENT: {maskClientId(clientId)}</div>
           ) : null}
@@ -152,15 +152,28 @@ export function Header({
   )
 }
 
-function HealthStrip({ status, setupState, health }: { status: WsStatus; setupState: SetupState; health: SystemHealth | null }) {
+function HealthStrip({ setupState, health }: { setupState: SetupState; health: SystemHealth | null }) {
   const chips = [
-    { key: 'ws', label: 'WebSocket', value: wsHealthLabel(status), tone: status === 'live' ? 'ok' : status === 'degraded' ? 'warn' : 'bad' },
-    { key: 'dhan', label: 'Dhan', value: dhanLabel(health?.dhan), tone: health?.dhan === 'connected' ? 'ok' : health?.dhan === 'auth_issue' ? 'bad' : 'muted' },
-    { key: 'ip', label: 'Static IP', value: staticIpLabel(health?.staticIp), tone: health?.staticIp === 'verified' ? 'ok' : health?.staticIp === 'failed' ? 'bad' : 'muted' },
-    { key: 'market', label: 'Market', value: health?.market === 'open' ? 'Open' : 'Closed', tone: health?.market === 'open' ? 'ok' : 'muted' },
-    { key: 'engine', label: 'Engine', value: setupState === 'PAUSED' ? 'Paused' : health?.engine === 'listening' ? 'Listening' : 'Idle', tone: setupState === 'PAUSED' ? 'warn' : health?.engine === 'listening' ? 'ok' : 'muted' },
-    { key: 'pubsub', label: 'Pub/Sub', value: pubsubLabel(health?.pubsub), tone: health?.pubsub === 'healthy' ? 'ok' : health?.pubsub === 'delayed' ? 'warn' : 'muted' },
+    {
+      key: 'dhan',
+      label: 'Dhan',
+      value: dhanLabel(health?.dhan),
+      tone: health?.dhan === 'connected' ? 'ok' : health?.dhan === 'auth_issue' ? 'bad' : 'muted',
+    },
+    {
+      key: 'market',
+      label: 'Market',
+      value: health?.market === 'open' ? 'Open' : 'Closed',
+      tone: health?.market === 'open' ? 'ok' : 'muted',
+    },
+    {
+      key: 'engine',
+      label: 'Engine',
+      value: setupState === 'PAUSED' ? 'Paused' : health?.engine === 'listening' ? 'Listening' : 'Idle',
+      tone: setupState === 'PAUSED' ? 'warn' : health?.engine === 'listening' ? 'ok' : 'muted',
+    },
   ]
+
   return (
     <div className="health-strip" aria-label="System health">
       {chips.map((chip) => (
@@ -169,12 +182,6 @@ function HealthStrip({ status, setupState, health }: { status: WsStatus; setupSt
           <strong>{chip.value}</strong>
         </span>
       ))}
-      {health?.lastSignalAt ? (
-        <span className="health-chip muted" title={health.lastSignalAt}>
-          <span>Last signal</span>
-          <strong>{shortTime(health.lastSignalAt)}</strong>
-        </span>
-      ) : null}
     </div>
   )
 }
@@ -189,32 +196,8 @@ function statusLabel(status: WsStatus, setupState: SetupState): string {
   return 'listening'
 }
 
-function wsHealthLabel(status: WsStatus): string {
-  if (status === 'live') return 'Live'
-  if (status === 'degraded') return 'Reconnecting'
-  return 'Down'
-}
-
 function dhanLabel(value: SystemHealth['dhan'] | undefined): string {
   if (value === 'connected') return 'Connected'
   if (value === 'auth_issue') return 'Auth Issue'
   return 'Unknown'
-}
-
-function staticIpLabel(value: SystemHealth['staticIp'] | undefined): string {
-  if (value === 'verified') return 'Verified'
-  if (value === 'failed') return 'Failed'
-  return 'Unknown'
-}
-
-function pubsubLabel(value: SystemHealth['pubsub'] | undefined): string {
-  if (value === 'healthy') return 'Healthy'
-  if (value === 'delayed') return 'Delayed'
-  return 'Unknown'
-}
-
-function shortTime(value: string): string {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return 'Pending'
-  return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
