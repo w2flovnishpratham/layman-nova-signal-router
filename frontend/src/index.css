@@ -898,27 +898,8 @@ code {
 }
 
 .engine-shell {
-  display: grid;
-  grid-template-columns: minmax(270px, 0.78fr) minmax(0, 1.5fr) minmax(290px, 0.88fr);
-  gap: 16px;
   width: min(calc(100% - 32px), 1480px);
-  height: calc(100dvh - 118px);
-  min-height: 0;
   margin: 22px auto 0;
-  align-items: stretch;
-}
-
-/* Account/position/controls on the LEFT, market + manual order on the RIGHT. */
-.engine-shell .engine-sidebar {
-  grid-column: 1;
-}
-
-.engine-shell .engine-main-pane {
-  grid-column: 2;
-}
-
-.engine-left {
-  grid-column: 3;
 }
 
 /* Transient boot/error notices span the full width above the panels. */
@@ -932,9 +913,6 @@ code {
   grid-auto-rows: max-content;
   gap: 18px;
   align-content: start;
-  height: 100%;
-  min-height: 0;
-  overflow-y: auto;
   width: 100%;
   scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
   scrollbar-width: thin;
@@ -947,8 +925,6 @@ code {
 .engine-shell .engine-main-pane {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  height: 100%;
   border: 1px solid rgba(157, 91, 255, 0.16);
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(13, 12, 20, 0.96), rgba(9, 7, 14, 0.94));
@@ -2041,9 +2017,6 @@ code {
   grid-auto-rows: max-content;
   gap: 20px;
   align-content: start;
-  height: 100%;
-  min-height: 0;
-  overflow-y: auto;
   padding-top: 0;
   width: 100%;
   scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
@@ -2684,37 +2657,6 @@ code {
 /* Below the 3-column threshold: stack panels into one scrollable column.
    Order: chat/execution first, then market + manual, then account + controls. */
 @media (max-width: 1180px) {
-  .engine-shell {
-    grid-template-columns: 1fr;
-    width: min(calc(100% - 24px), 980px);
-    height: auto;
-    min-height: 0;
-    overflow: visible;
-    gap: 16px;
-    align-content: start;
-  }
-
-  .engine-left,
-  .engine-shell .engine-main-pane,
-  .engine-shell .engine-sidebar {
-    grid-column: 1;
-    height: auto;
-    min-height: 0;
-    overflow: visible;
-  }
-
-  .engine-shell .engine-main-pane {
-    order: 1;
-  }
-
-  .engine-left {
-    order: 2;
-  }
-
-  .engine-shell .engine-sidebar {
-    order: 3;
-  }
-
   .engine-shell .chat-log {
     height: 52vh;
     min-height: 300px;
@@ -2765,29 +2707,9 @@ code {
     width: min(100vw - 16px, 1120px);
   }
 
-  .engine-shell {
-    grid-template-columns: 1fr;
-    width: min(100vw - 16px, 640px);
-    height: calc(100dvh - 104px);
-    min-height: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
-
-  .chat-shell .chat-log {
-    height: calc(100dvh - 220px);
-    padding-right: 0;
-  }
-
   .engine-shell .chat-log {
     height: 48vh;
     min-height: 260px;
-  }
-
-  .engine-sidebar {
-    position: static;
-    height: auto;
-    overflow: visible;
   }
 
   .active-trade-slot {

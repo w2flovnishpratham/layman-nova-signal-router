@@ -1,4 +1,4 @@
-import { BarChart3, FlaskConical, LineChart, LogOut, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
+import { BarChart3, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
 import { useRef, useState } from 'react'
 import type { AuthUser } from '../api'
 import { modeBadgeText } from '../lib/mode'
@@ -34,6 +34,7 @@ export function Header({
   onLogout,
 }: Props) {
   const [killDialogOpen, setKillDialogOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const holdTimer = useRef<number | null>(null)
 
   function cancelHold() {
@@ -85,35 +86,93 @@ export function Header({
           </nav>
         </div>
 
-        <div className="header-actions">
+        <div className="header-actions relative flex items-center gap-3">
           <div className={`mode-badge mode-badge-${engineMode ?? 'unset'}`}>
             {engineMode === 'paper' ? <FlaskConical size={13} /> : engineMode === 'live' ? <Zap size={13} /> : null}
             <span className="status-dot" />
             {modeBadgeText(engineMode)}{engineLive ? ` - ${statusLabel(status, setupState)}` : ''}
           </div>
-          {engineLive ? <HealthStrip setupState={setupState} health={health} /> : null}
-          {clientId ? (
-            <div className="client-badge">CLIENT: {maskClientId(clientId)}</div>
-          ) : null}
-          <div className="user-badge" title={user.email}>
-            {user.picture_url ? <img src={user.picture_url} alt="" referrerPolicy="no-referrer" /> : null}
-            <span>{user.name || user.email}</span>
-          </div>
-          {engineLive ? (
-            <>
-              <button className="kill-button" type="button" onClick={() => setKillDialogOpen(true)}>
-                <ShieldAlert size={14} />
-                Stop & Square Off
-              </button>
-              <button className="secondary-button" type="button" onClick={onReconfigure}>
-                <RotateCcw size={14} />
-                Re-Configure
-              </button>
-            </>
-          ) : null}
-          <button className="icon-button" type="button" aria-label="Log out" title="Log out" onClick={onLogout}>
-            <LogOut size={15} />
+
+          <button
+            className="icon-button p-1.5 rounded-lg border border-white/10 hover:bg-white/5 transition-colors"
+            type="button"
+            aria-label="More actions"
+            title="More actions"
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            <MoreVertical size={18} />
           </button>
+
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-30 cursor-default" onClick={() => setMenuOpen(false)} />
+              <div className="absolute right-0 top-full mt-2 w-72 bg-[#12111b] border border-white/10 rounded-xl shadow-2xl p-4 flex flex-col gap-4 z-40 animate-in fade-in slide-in-from-top-2 duration-150">
+                <div className="flex items-center gap-3 pb-3 border-b border-white/5">
+                  {user.picture_url ? (
+                    <img src={user.picture_url} alt="" referrerPolicy="no-referrer" className="w-10 h-10 rounded-full border border-white/10 object-cover" />
+                  ) : null}
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-semibold text-sm truncate text-white">{user.name || user.email}</span>
+                    <span className="text-xs text-white/50 truncate">{user.email}</span>
+                  </div>
+                </div>
+
+                {clientId && (
+                  <div className="text-xs text-white/70 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/5 flex justify-between items-center">
+                    <span className="opacity-70">Client ID:</span>
+                    <strong className="font-mono">{maskClientId(clientId)}</strong>
+                  </div>
+                )}
+
+                {engineLive && (
+                  <div className="flex flex-col gap-2 py-1">
+                    <span className="text-[10px] uppercase font-bold tracking-wider text-white/40">System Health</span>
+                    <HealthStrip setupState={setupState} health={health} />
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-2 pt-2 border-t border-white/5">
+                  {engineLive && (
+                    <>
+                      <button
+                        className="kill-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-red-400 hover:text-white bg-red-950/30 hover:bg-red-900/40 border border-red-900/30 hover:border-red-500/40 transition-all font-medium text-sm"
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          setKillDialogOpen(true)
+                        }}
+                      >
+                        <ShieldAlert size={14} />
+                        Stop & Square Off
+                      </button>
+                      <button
+                        className="secondary-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-sm font-medium"
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          onReconfigure()
+                        }}
+                      >
+                        <RotateCcw size={14} />
+                        Re-Configure
+                      </button>
+                    </>
+                  )}
+                  <button
+                    className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/15 transition-all text-sm font-medium"
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false)
+                      onLogout()
+                    }}
+                  >
+                    <LogOut size={14} />
+                    Log Out
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </header>
 

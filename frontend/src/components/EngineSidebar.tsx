@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { ActiveTradeCard } from './ActiveTradeCard'
 import { TickingNumber } from './TickingNumber'
 import { formatCurrency } from '../lib/format'
-import type { ActiveTrade, ClientCommand, EngineMode, SetupState, SideFilter, SystemHealth } from '../types'
+import type { ActiveTrade, ClientCommand, EngineMode, SetupState, SideFilter } from '../types'
 
 interface Props {
   state: SetupState
@@ -14,15 +14,14 @@ interface Props {
   lotSize: number
   side: SideFilter
   engineMode: EngineMode | null
-  health: SystemHealth | null
   onSend: (command: ClientCommand) => void
 }
 
-export function EngineSidebar({ state, wallet, marginUtilized, realizedPnl, activeTrade, lotSize, side, engineMode, health, onSend }: Props) {
+export function EngineSidebar({ state, wallet, marginUtilized, realizedPnl, activeTrade, lotSize, side, engineMode, onSend }: Props) {
   const paper = engineMode === 'paper'
   const entriesBlocked = state === 'PAUSED'
   return (
-    <aside className="engine-sidebar" aria-label={`${paper ? 'Paper' : 'Live'} account data`}>
+    <aside className="engine-sidebar lg:col-span-3 order-2 lg:order-1 lg:h-full lg:overflow-y-auto pr-1" aria-label={`${paper ? 'Paper' : 'Live'} account data`}>
       <section className="sidebar-card account-card">
         <span className={`sidebar-mode-chip ${engineMode ?? 'unset'}`}>{paper ? 'paper' : 'live'}</span>
         <MetricRow label={paper ? 'Virtual Balance' : 'Margin Available'}>{wallet === null ? 'Pending' : <TickingNumber value={wallet} decimals={2} />}</MetricRow>
@@ -88,18 +87,6 @@ export function EngineSidebar({ state, wallet, marginUtilized, realizedPnl, acti
           </div>
         </div>
       </section>
-
-      <section className="sidebar-card safety-card">
-        <div className="sidebar-title">
-          <span>Safety State</span>
-        </div>
-        <div className="safety-state-list">
-          <span>{entriesBlocked ? 'Nova is paused; exits still allowed' : 'Nova is listening for entries'}</span>
-          <span>{activeTrade ? 'Order filled; position open' : 'No order sent; flat'}</span>
-          <span>{engineMode === 'live' ? 'Live mode requires explicit confirmation' : 'Paper mode simulation active'}</span>
-          <span>Dhan: {healthLabel(health?.dhan)}</span>
-        </div>
-      </section>
     </aside>
   )
 }
@@ -111,10 +98,4 @@ function MetricRow({ label, children }: { label: string; children: ReactNode }) 
       <strong>{children}</strong>
     </div>
   )
-}
-
-function healthLabel(value: SystemHealth['dhan'] | undefined): string {
-  if (value === 'connected') return 'Connected'
-  if (value === 'auth_issue') return 'Auth Issue'
-  return 'Unknown'
 }

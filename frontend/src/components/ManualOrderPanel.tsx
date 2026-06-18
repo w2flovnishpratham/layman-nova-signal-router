@@ -1,4 +1,4 @@
-import { LogOut, Repeat2, ShoppingCart } from 'lucide-react'
+import { LogOut, Repeat2, ShoppingCart, Sliders } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
@@ -29,6 +29,8 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const [quotePending, setQuotePending] = useState(false)
   const [quote, setQuote] = useState<OrderQuote | null>(null)
   const [message, setMessage] = useState('')
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  
   const live = engineMode === 'live'
   const marketClosed = quote?.atm?.marketOpen === false
 
@@ -101,98 +103,157 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
         <span className={`sidebar-mode-chip ${engineMode ?? 'unset'}`}>{engineMode ?? 'unset'}</span>
       </div>
 
-      <div className="manual-controls-grid">
-        <label>
-          <span>Lots</span>
-          <input
-            type="number"
-            min={1}
-            max={20}
-            value={lots}
-            disabled={pending}
-            onChange={(event) => setLots(Math.max(1, Number(event.target.value) || 1))}
-            aria-label="Manual order lots"
-          />
-        </label>
-        <label>
-          <span>Side</span>
-          <select value={side} disabled={pending} onChange={(event) => setSide(event.target.value as 'CE' | 'PE')} aria-label="Manual order side">
-            <option value="CE">CE</option>
-            <option value="PE">PE</option>
-          </select>
-        </label>
-        <label>
-          <span>Target %</span>
-          <input type="number" min={0} value={targetProfitPct} disabled={pending} onChange={(event) => setTargetProfitPct(Number(event.target.value) || 0)} aria-label="Manual target profit percent" />
-        </label>
-        <label>
-          <span>Stop %</span>
-          <input type="number" min={0} value={stopLossPct} disabled={pending} onChange={(event) => setStopLossPct(Number(event.target.value) || 0)} aria-label="Manual stop loss percent" />
-        </label>
-      </div>
-
-      <div className="manual-estimate-grid">
-        <div><span>Premium</span><strong>{quote?.estimatedPremium ? formatCurrency(quote.estimatedPremium, { decimals: 2 }) : 'Pending'}</strong></div>
-        <div><span>Cost/Margin</span><strong>{quote?.estimatedCost ? formatCurrency(quote.estimatedCost, { decimals: 0 }) : 'Pending'}</strong></div>
-      </div>
-      <div className="manual-atm-row">
-        <span>{quote?.atm?.marketOpen === false ? 'Market closed' : quote?.atm?.atmStrike ? `ATM ${quote.atm.atmStrike.toLocaleString()} ${side}` : 'ATM calculating'}</span>
-        <strong>{quote?.tradingSymbol ?? 'Waiting for contract'}</strong>
-        <small>{quoteSourceLabel(quote)}{quotePending ? ' - updating' : ''}</small>
-      </div>
-
-      <div className="manual-button-grid">
-        <ActionButton live={live} disabled={pending || marketClosed} onConfirm={() => void runOrder('entry', 'CE')} ariaLabel="Buy CE market">
+      {/* Main Order Action Buttons (Side-by-side CE and PE) */}
+      <div className="flex gap-2 mt-4">
+        <ActionButton
+          live={live}
+          disabled={pending || marketClosed}
+          onConfirm={() => void runOrder('entry', 'CE')}
+          ariaLabel="Buy CE market"
+          className="flex-1 py-3 px-4 rounded-xl font-semibold border border-emerald-500/20 hover:border-emerald-500/50 bg-emerald-500/10 text-emerald-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+        >
           <ShoppingCart size={13} />
-          Buy CE Market
+          Buy CE
         </ActionButton>
-        <ActionButton live={live} disabled={pending || marketClosed} onConfirm={() => void runOrder('entry', 'PE')} ariaLabel="Buy PE market">
+        <ActionButton
+          live={live}
+          disabled={pending || marketClosed}
+          onConfirm={() => void runOrder('entry', 'PE')}
+          ariaLabel="Buy PE market"
+          className="flex-1 py-3 px-4 rounded-xl font-semibold border border-rose-500/20 hover:border-rose-500/50 bg-rose-500/10 text-rose-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+        >
           <ShoppingCart size={13} />
-          Buy PE Market
-        </ActionButton>
-        <ActionButton live={live} disabled={pending || marketClosed || !activeTrade} onConfirm={() => void runOrder('exit')} ariaLabel="Exit current position">
-          <LogOut size={13} />
-          Exit Current Position
-        </ActionButton>
-        <ActionButton live={live} disabled={pending || marketClosed || !activeTrade} onConfirm={() => void runOrder('reverse')} ariaLabel="Reverse position">
-          <Repeat2 size={13} />
-          Reverse Position
+          Buy PE
         </ActionButton>
       </div>
 
-      <div className={`manual-progress stage-${stage === 'Failed' ? 'failed' : stage === 'Done' ? 'done' : 'active'}`}>
+      {/* Lots Stepper Stepper Component */}
+      <div className="flex flex-col gap-1.5 mt-4 select-none">
+        <span className="text-xs text-white/50 font-medium">Lots</span>
+        <div className="flex items-center gap-1 bg-[#161421] border border-white/5 rounded-lg w-max p-1">
+          <button
+            type="button"
+            className="w-8 h-8 flex items-center justify-center hover:bg-white/5 active:scale-95 text-lg font-bold rounded-md transition-all border border-transparent disabled:opacity-30 cursor-pointer"
+            disabled={pending || lots <= 1}
+            onClick={() => setLots(prev => Math.max(1, prev - 1))}
+          >
+            -
+          </button>
+          <span className="text-sm font-semibold px-4 min-w-8 text-center text-white">{lots}</span>
+          <button
+            type="button"
+            className="w-8 h-8 flex items-center justify-center hover:bg-white/5 active:scale-95 text-lg font-bold rounded-md transition-all border border-transparent disabled:opacity-30 cursor-pointer"
+            disabled={pending || lots >= 20}
+            onClick={() => setLots(prev => Math.min(20, prev + 1))}
+          >
+            +
+          </button>
+        </div>
+      </div>
+
+      {/* Collapsible Advanced Toggle */}
+      <button
+        type="button"
+        className="mt-4 text-[11px] font-semibold text-white/40 hover:text-white/70 flex items-center gap-1.5 transition-all bg-transparent border-0 p-0 self-start cursor-pointer"
+        onClick={() => setShowAdvanced(!showAdvanced)}
+      >
+        <Sliders size={12} />
+        {showAdvanced ? 'Hide Advanced Options' : 'Show Advanced Options'}
+      </button>
+
+      {/* Collapsible Content */}
+      {showAdvanced && (
+        <div className="mt-4 pt-4 border-t border-white/5 flex flex-col gap-4 animate-in fade-in slide-in-from-top-1 duration-150">
+          <div className="manual-controls-grid">
+            <label>
+              <span>Side</span>
+              <select value={side} disabled={pending} onChange={(event) => setSide(event.target.value as 'CE' | 'PE')} aria-label="Manual order side">
+                <option value="CE">CE</option>
+                <option value="PE">PE</option>
+              </select>
+            </label>
+            <label>
+              <span>Target %</span>
+              <input type="number" min={0} value={targetProfitPct} disabled={pending} onChange={(event) => setTargetProfitPct(Number(event.target.value) || 0)} aria-label="Manual target profit percent" />
+            </label>
+            <label>
+              <span>Stop %</span>
+              <input type="number" min={0} value={stopLossPct} disabled={pending} onChange={(event) => setStopLossPct(Number(event.target.value) || 0)} aria-label="Manual stop loss percent" />
+            </label>
+          </div>
+
+          <div className="manual-estimate-grid">
+            <div><span>Premium</span><strong>{quote?.estimatedPremium ? formatCurrency(quote.estimatedPremium, { decimals: 2 }) : 'Pending'}</strong></div>
+            <div><span>Cost/Margin</span><strong>{quote?.estimatedCost ? formatCurrency(quote.estimatedCost, { decimals: 0 }) : 'Pending'}</strong></div>
+          </div>
+          
+          <div className="manual-atm-row">
+            <span>{quote?.atm?.marketOpen === false ? 'Market closed' : quote?.atm?.atmStrike ? `ATM ${quote.atm.atmStrike.toLocaleString()} ${side}` : 'ATM calculating'}</span>
+            <strong>{quote?.tradingSymbol ?? 'Waiting for contract'}</strong>
+            <small>{quoteSourceLabel(quote)}{quotePending ? ' - updating' : ''}</small>
+          </div>
+
+          <div className="flex gap-2">
+            <ActionButton
+              live={live}
+              disabled={pending || marketClosed || !activeTrade}
+              onConfirm={() => void runOrder('exit')}
+              ariaLabel="Exit current position"
+              className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            >
+              <LogOut size={12} />
+              Exit Position
+            </ActionButton>
+            <ActionButton
+              live={live}
+              disabled={pending || marketClosed || !activeTrade}
+              onConfirm={() => void runOrder('reverse')}
+              ariaLabel="Reverse position"
+              className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            >
+              <Repeat2 size={12} />
+              Reverse Position
+            </ActionButton>
+          </div>
+        </div>
+      )}
+
+      {/* Progress and status message */}
+      <div className={`manual-progress mt-4 stage-${stage === 'Failed' ? 'failed' : stage === 'Done' ? 'done' : 'active'}`}>
         <span>{stage === 'idle' ? 'Ready' : stage}</span>
       </div>
-      {message ? <p className="manual-status-message">{message}</p> : null}
+      {message ? <p className="manual-status-message mt-2">{message}</p> : null}
     </section>
   )
 }
 
-function ActionButton({ live, disabled, onConfirm, ariaLabel, children }: {
+function ActionButton({ live, disabled, onConfirm, ariaLabel, className, children }: {
   live: boolean
   disabled: boolean
   onConfirm: () => void
   ariaLabel: string
+  className?: string
   children: ReactNode
 }) {
   if (!live) {
     return (
-      <button type="button" className="manual-action-button" disabled={disabled} onClick={onConfirm} aria-label={ariaLabel}>
+      <button type="button" className={className || "manual-action-button"} disabled={disabled} onClick={onConfirm} aria-label={ariaLabel}>
         {children}
       </button>
     )
   }
   return (
-    <HoldButton disabled={disabled} onConfirm={onConfirm} ariaLabel={`${ariaLabel}, hold to confirm`}>
+    <HoldButton disabled={disabled} onConfirm={onConfirm} ariaLabel={`${ariaLabel}, hold to confirm`} className={className}>
       {children}
     </HoldButton>
   )
 }
 
-function HoldButton({ disabled, onConfirm, ariaLabel, children }: {
+function HoldButton({ disabled, onConfirm, ariaLabel, className, children }: {
   disabled: boolean
   onConfirm: () => void
   ariaLabel: string
+  className?: string
   children: ReactNode
 }) {
   const timer = useRef<number | null>(null)
@@ -220,7 +281,7 @@ function HoldButton({ disabled, onConfirm, ariaLabel, children }: {
   return (
     <button
       type="button"
-      className={`manual-action-button hold-live ${holding ? 'holding' : ''}`}
+      className={`${className || "manual-action-button hold-live"} ${holding ? 'holding' : ''}`}
       disabled={disabled}
       onPointerDown={start}
       onPointerUp={cancel}

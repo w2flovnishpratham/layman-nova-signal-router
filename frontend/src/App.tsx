@@ -240,15 +240,15 @@ function App() {
       {view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : (
-      <section className={engineLive ? 'engine-shell' : 'chat-shell'} aria-label="Nova trading session">
-        {bootError ? <div className="error-banner">{bootError}</div> : null}
-        {!session && !bootError ? <div className="system-chip">Starting session</div> : null}
+      <section className={engineLive ? 'engine-shell grid grid-cols-1 lg:grid-cols-12 gap-5 px-4 w-full max-w-[1480px] mx-auto lg:h-[calc(100vh-120px)] lg:min-h-0 min-h-screen items-stretch' : 'chat-shell'} aria-label="Nova trading session">
+        {bootError ? <div className="error-banner col-span-full">{bootError}</div> : null}
+        {!session && !bootError ? <div className="system-chip col-span-full">Starting session</div> : null}
 
         {engineLive ? (
           <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
         ) : null}
 
-        <div className="engine-main-pane">
+        <div className="engine-main-pane lg:col-span-5 order-3 lg:order-2 lg:h-full flex flex-col min-h-[450px] lg:min-h-0">
           <ChatLog
             messages={messages}
             typing={typing}
@@ -279,7 +279,6 @@ function App() {
             lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
             side={config.risk?.side ?? 'BOTH'}
             engineMode={engineMode}
-            health={systemHealth}
             onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
           />
         ) : null}

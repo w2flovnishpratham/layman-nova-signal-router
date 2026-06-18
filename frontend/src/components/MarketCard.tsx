@@ -31,30 +31,24 @@ export function MarketCard({ snapshot }: { snapshot: MarketSnapshot | null }) {
           <span>ATM strike</span>
           <strong>{atm?.atmStrike ? atm.atmStrike.toLocaleString() : 'Pending'}</strong>
         </div>
-        <div>
-          <span>Spot source</span>
-          <strong>{sourceLabel(snapshot?.niftySpotSource)}</strong>
-        </div>
       </div>
       <div className="atm-ltp-grid">
-        <AtmCell label="ATM CE" ltp={ce?.ltp} source={ce?.ltpSource} status={ce?.ltpStatus} />
-        <AtmCell label="ATM PE" ltp={pe?.ltp} source={pe?.ltpSource} status={pe?.ltpStatus} />
+        <AtmCell label="ATM CE" ltp={ce?.ltp} />
+        <AtmCell label="ATM PE" ltp={pe?.ltp} />
       </div>
       <div className="market-detail-grid">
         <div><span>Latest signal</span><strong>{signalLabel(snapshot)}</strong></div>
-        <div><span>Active option LTP</span><strong>{snapshot?.activeOptionLtp ? formatCurrency(snapshot.activeOptionLtp, { decimals: 2 }) : 'Flat'}</strong></div>
-        <div><span>Updated</span><strong><Clock size={12} /> {snapshot?.lastUpdatedAt ? shortTime(snapshot.lastUpdatedAt) : 'Pending'}</strong></div>
+        <div><span>Updated</span><strong><Clock size={12} className="inline mr-1" /> {snapshot?.lastUpdatedAt ? shortTime(snapshot.lastUpdatedAt) : 'Pending'}</strong></div>
       </div>
     </section>
   )
 }
 
-function AtmCell({ label, ltp, source, status }: { label: string; ltp?: number | null; source?: string | null; status?: string | null }) {
+function AtmCell({ label, ltp }: { label: string; ltp?: number | null }) {
   return (
     <div className="atm-ltp-cell">
       <span>{label}</span>
       <strong>{ltp === null || ltp === undefined ? 'Pending' : formatCurrency(ltp, { decimals: 2 })}</strong>
-      <small>{sourceLabel(source || status)}</small>
     </div>
   )
 }
@@ -90,11 +84,3 @@ function shortTime(value: string): string {
   return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-function sourceLabel(source?: string | null): string {
-  if (!source) return 'Pending'
-  if (source.includes('marketfeed_ws') || source === 'websocket') return 'WebSocket'
-  if (source.includes('rest') || source === 'rest') return 'REST'
-  if (source === 'market_closed') return 'Closed'
-  if (source === 'latest_signal') return 'Signal'
-  return source.replace(/_/g, ' ')
-}
