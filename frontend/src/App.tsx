@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BarChart3, LineChart, Sliders, Wallet } from 'lucide-react'
+import { BarChart3, LineChart, Loader2, Sliders, Wallet } from 'lucide-react'
 import { AuthScreen } from './components/AuthScreen'
 import { EngineLeftPanel } from './components/EngineLeftPanel'
 import { EngineListening } from './components/EngineListening'
@@ -254,42 +254,51 @@ function App() {
         ) : null}
 
         <div className="engine-main-pane col-span-1 lg:col-span-5 lg:h-full flex flex-col min-h-[450px] lg:min-h-0">
-          <ChatLog
-            messages={messages}
-            typing={typing}
-            panelKey={`${setupState}-${setupFlowStep}-${engineLive ? 'engine' : 'setup'}`}
-            inlinePanel={setupFlowStep === 'mode' || setupFlowStep === 'strategy' ? setupPanel : null}
-          >
-            {setupFlowStep === 'mode' || setupFlowStep === 'strategy' ? null : setupPanel}
-          </ChatLog>
-          {engineLive ? (
-            <div className="live-engine-stack">
-              <EngineListening
-                paused={setupState === 'PAUSED'}
-                activeTrade={activeTrade}
-                side={config.risk?.side ?? 'BOTH'}
-                engineMode={engineMode}
-              />
+          {!session && !bootError ? (
+            <div className="flex flex-col items-center justify-center flex-grow min-h-[350px] gap-3 text-white/40">
+              <Loader2 className="w-8 h-8 animate-spin text-[#9d5bff]" />
+              <span className="text-xs font-semibold tracking-widest uppercase animate-pulse">Initializing Session...</span>
             </div>
-          ) : null}
+          ) : (
+            <>
+              <ChatLog
+                messages={messages}
+                typing={typing}
+                panelKey={`${setupState}-${setupFlowStep}-${engineLive ? 'engine' : 'setup'}`}
+                inlinePanel={setupFlowStep === 'mode' || setupFlowStep === 'strategy' ? setupPanel : null}
+              >
+                {setupFlowStep === 'mode' || setupFlowStep === 'strategy' ? null : setupPanel}
+              </ChatLog>
+              {engineLive ? (
+                <div className="live-engine-stack">
+                  <EngineListening
+                    paused={setupState === 'PAUSED'}
+                    activeTrade={activeTrade}
+                    side={config.risk?.side ?? 'BOTH'}
+                    engineMode={engineMode}
+                  />
+                </div>
+              ) : null}
 
-          {/* Mobile-only inline active position & routing controls below main chat */}
-          {engineLive ? (
-            <div className="block lg:hidden mt-6">
-              <EngineSidebar
-                state={setupState}
-                wallet={wallet}
-                marginUtilized={marginUtilized}
-                realizedPnl={realizedPnl}
-                activeTrade={activeTrade}
-                lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
-                side={config.risk?.side ?? 'BOTH'}
-                engineMode={engineMode}
-                onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
-                hideMargin={true}
-              />
-            </div>
-          ) : null}
+              {/* Mobile-only inline active position & routing controls below main chat */}
+              {engineLive ? (
+                <div className="block lg:hidden mt-6">
+                  <EngineSidebar
+                    state={setupState}
+                    wallet={wallet}
+                    marginUtilized={marginUtilized}
+                    realizedPnl={realizedPnl}
+                    activeTrade={activeTrade}
+                    lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
+                    side={config.risk?.side ?? 'BOTH'}
+                    engineMode={engineMode}
+                    onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
+                    hideMargin={true}
+                  />
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
 
         {engineLive ? (
