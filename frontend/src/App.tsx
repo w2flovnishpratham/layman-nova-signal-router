@@ -313,12 +313,13 @@ function App() {
       {/* Mobile-only sliding drawers and floating action bar */}
       {engineLive && (
         <>
-          {/* Left-to-Right Drawer: Market LTP & Manual Order */}
+          {/* Bottom-to-Top Drawer: Market LTP & Manual Order */}
           {leftDrawerOpen && (
             <div className="fixed inset-0 z-[110] block lg:hidden">
-              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setLeftDrawerOpen(false)} />
-              <div className="fixed inset-y-0 left-0 w-80 max-w-[calc(100vw-60px)] bg-[#0f0e1c] border-r border-white/10 p-5 overflow-y-auto shadow-2xl flex flex-col gap-4 animate-in slide-in-from-left duration-200">
-                <div className="flex justify-between items-center pb-3 border-b border-white/5 mb-2">
+              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm drawer-backdrop" onClick={() => setLeftDrawerOpen(false)} />
+              <div className="fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 drawer-content">
+                <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
+                <div className="flex justify-between items-center pb-3 border-b border-white/5">
                   <span className="font-bold text-sm text-white tracking-wide">Market & Order</span>
                   <button
                     type="button"
@@ -333,12 +334,13 @@ function App() {
             </div>
           )}
 
-          {/* Right-to-Left Drawer: Margin & Balance */}
+          {/* Bottom-to-Top Drawer: Margin & Balance */}
           {rightDrawerOpen && (
             <div className="fixed inset-0 z-[110] block lg:hidden">
-              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setRightDrawerOpen(false)} />
-              <div className="fixed inset-y-0 right-0 w-80 max-w-[calc(100vw-60px)] bg-[#0f0e1c] border-l border-white/10 p-5 overflow-y-auto shadow-2xl flex flex-col gap-4 animate-in slide-in-from-right duration-200">
-                <div className="flex justify-between items-center pb-3 border-b border-white/5 mb-2">
+              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm drawer-backdrop" onClick={() => setRightDrawerOpen(false)} />
+              <div className="fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 drawer-content">
+                <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
+                <div className="flex justify-between items-center pb-3 border-b border-white/5">
                   <span className="font-bold text-sm text-white tracking-wide">Account & Balance</span>
                   <button
                     type="button"
@@ -368,7 +370,7 @@ function App() {
           <div className="fixed bottom-0 left-0 right-0 h-16 bg-[#0c0a14]/95 backdrop-blur-md border-t border-white/10 flex items-center justify-around z-[90] lg:hidden px-2">
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 h-full border-0 bg-transparent cursor-pointer transition-colors ${view === 'trading' && !leftDrawerOpen && !rightDrawerOpen ? 'text-[#9d5bff]' : 'text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'trading' && !leftDrawerOpen && !rightDrawerOpen ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('trading')
                 setLeftDrawerOpen(false)
@@ -376,12 +378,12 @@ function App() {
               }}
             >
               <LineChart size={18} />
-              <span className="text-[10px] font-semibold">Trading</span>
+              <span className="text-[10px]">Trading</span>
             </button>
 
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 h-full border-0 bg-transparent cursor-pointer transition-colors ${view === 'dashboard' ? 'text-[#9d5bff]' : 'text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'dashboard' ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('dashboard')
                 setLeftDrawerOpen(false)
@@ -389,12 +391,12 @@ function App() {
               }}
             >
               <BarChart3 size={18} />
-              <span className="text-[10px] font-semibold">Dashboard</span>
+              <span className="text-[10px]">Dashboard</span>
             </button>
 
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 h-full border-0 bg-transparent cursor-pointer transition-colors ${leftDrawerOpen ? 'text-[#9d5bff]' : 'text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${leftDrawerOpen ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('trading')
                 setLeftDrawerOpen(true)
@@ -402,12 +404,12 @@ function App() {
               }}
             >
               <Sliders size={18} />
-              <span className="text-[10px] font-semibold">Market & Trade</span>
+              <span className="text-[10px]">Market & Trade</span>
             </button>
 
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 h-full border-0 bg-transparent cursor-pointer transition-colors ${rightDrawerOpen ? 'text-[#9d5bff]' : 'text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${rightDrawerOpen ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('trading')
                 setLeftDrawerOpen(false)
@@ -415,7 +417,7 @@ function App() {
               }}
             >
               <Wallet size={18} />
-              <span className="text-[10px] font-semibold">Account</span>
+              <span className="text-[10px]">Account</span>
             </button>
           </div>
         </>

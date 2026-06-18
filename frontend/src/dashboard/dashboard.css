@@ -520,7 +520,7 @@
 /* ------------------------------ Nav tabs ------------------------------- */
 
 .nv-nav-tabs {
-  display: inline-flex;
+  display: none;
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--border);
@@ -528,7 +528,15 @@
   background: var(--bg-2);
 }
 
+@media (min-width: 1024px) {
+  .nv-nav-tabs {
+    display: inline-flex;
+  }
+}
+
 .nv-nav-tab {
+  display: flex;
+  align-items: center;
   border: 0;
   background: transparent;
   color: var(--text-3);
@@ -537,6 +545,7 @@
   padding: 6px 13px;
   border-radius: 7px;
   gap: 6px;
+  cursor: pointer;
 }
 
 .nv-nav-tab:hover { background: var(--bg-tertiary); color: var(--text-2); }
