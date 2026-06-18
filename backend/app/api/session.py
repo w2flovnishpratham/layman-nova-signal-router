@@ -53,12 +53,15 @@ async def start_session(
         await _hydrate_production_session(session.id, user, restore_recent=restore_recent)
         token = issue_session_token(session.id)
         webhook_url = f"{settings.BACKEND_PUBLIC_BASE_URL.rstrip('/')}/api/webhook/strategy/supertrend"
+        from app.services.shared_market_data import shared_market_data_configured
+
         return {
             "sessionId": session.id,
             "sessionToken": token,
             "webhookSecret": displayed_webhook_secret,
             "webhookUrl": webhook_url,
             "lotSize": current_nifty_lot_size(),
+            "sharedMarketData": shared_market_data_configured(),
         }
 
 

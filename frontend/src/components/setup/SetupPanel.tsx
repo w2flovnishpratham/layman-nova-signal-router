@@ -15,6 +15,7 @@ interface Props {
   lastError: string
   verifyPending: boolean
   lotSize: number
+  sharedMarketData?: boolean
   onSend: (command: ClientCommand) => void
   onUserReply: (text: string) => void
   onDraft: (patch: Partial<SetupDraft>) => void
@@ -28,6 +29,7 @@ export function SetupPanel({
   lastError,
   verifyPending,
   lotSize,
+  sharedMarketData = false,
   onSend,
   onUserReply,
   onDraft,
@@ -43,6 +45,12 @@ export function SetupPanel({
     onUserReply('Supertrend Strategy (NSE Options)')
     onSend({ type: 'setup.select_strategy', data: { strategy: 'supertrend' } })
   }} />
+  if (flowStep === 'broker' && draft.engineMode === 'paper' && sharedMarketData) {
+    return <SharedDataStep onContinue={() => {
+      onUserReply('Use shared live market data (no Dhan account needed)')
+      onSend({ type: 'setup.use_shared_data', data: {} })
+    }} />
+  }
   if (flowStep === 'broker') return <BrokerStep draft={draft} mode={draft.engineMode} error={lastError} pending={verifyPending} onDraft={onDraft} onSubmit={(clientId, accessToken) => {
     onUserReply(`Dhan credentials submitted for CLIENT: ${maskClientId(clientId)}`)
     onSend({ type: 'setup.broker_creds', data: { clientId, accessToken } })
@@ -136,6 +144,24 @@ function StrategyStep({ onSelect }: { onSelect: () => void }) {
         <button type="button" className="disabled-option" disabled>VWAP</button>
         <button type="button" className="disabled-option" disabled>RSI</button>
         <button type="button" className="disabled-option" disabled>Scalper</button>
+      </div>
+    </article>
+  )
+}
+
+function SharedDataStep({ onContinue }: { onContinue: () => void }) {
+  return (
+    <article className="setup-card broker-panel">
+      <div className="shared-data-step">
+        <span className="shared-data-badge"><FlaskConical size={14} /> Paper mode</span>
+        <h3>No Dhan account needed</h3>
+        <p className="form-hint">
+          Paper mode runs on NOVA's shared live market data feed. Your trades are simulated against
+          real NIFTY option prices — no Dhan Client ID or token required, and no real money is ever at risk.
+        </p>
+        <button type="button" className="primary-button" onClick={onContinue}>
+          Continue with shared market data
+        </button>
       </div>
     </article>
   )

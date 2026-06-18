@@ -1,11 +1,9 @@
 import { Ban, CheckCircle2, LogOut, Play } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ActiveTradeCard } from './ActiveTradeCard'
-import { ManualOrderPanel } from './ManualOrderPanel'
-import { MarketCard } from './MarketCard'
 import { TickingNumber } from './TickingNumber'
 import { formatCurrency } from '../lib/format'
-import type { ActiveTrade, ClientCommand, EngineMode, MarketSnapshot, SetupState, SideFilter, SystemHealth } from '../types'
+import type { ActiveTrade, ClientCommand, EngineMode, SetupState, SideFilter, SystemHealth } from '../types'
 
 interface Props {
   state: SetupState
@@ -16,12 +14,11 @@ interface Props {
   lotSize: number
   side: SideFilter
   engineMode: EngineMode | null
-  marketSnapshot: MarketSnapshot | null
   health: SystemHealth | null
   onSend: (command: ClientCommand) => void
 }
 
-export function EngineSidebar({ state, wallet, marginUtilized, realizedPnl, activeTrade, lotSize, side, engineMode, marketSnapshot, health, onSend }: Props) {
+export function EngineSidebar({ state, wallet, marginUtilized, realizedPnl, activeTrade, lotSize, side, engineMode, health, onSend }: Props) {
   const paper = engineMode === 'paper'
   const entriesBlocked = state === 'PAUSED'
   return (
@@ -91,10 +88,6 @@ export function EngineSidebar({ state, wallet, marginUtilized, realizedPnl, acti
           </div>
         </div>
       </section>
-
-      <MarketCard snapshot={marketSnapshot} />
-
-      <ManualOrderPanel engineMode={engineMode} activeTrade={activeTrade} />
 
       <section className="sidebar-card safety-card">
         <div className="sidebar-title">

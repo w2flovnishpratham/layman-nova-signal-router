@@ -5,8 +5,8 @@ import threading
 from typing import Any
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT
-from app.services.credential_vault import get_dhan_credentials
-from app.services.dhan_client import get_broker_client
+from app.services.dhan_client import RealDhanClient, get_broker_client
+from app.services.shared_market_data import market_data_credentials
 from app.services.dhan_marketfeed_ws import (
     clear_marketfeed_subscription,
     ensure_marketfeed_subscription,
@@ -231,7 +231,7 @@ def _ltp_with_prefer_ws(
             "error": "rest_disabled",
         }
 
-    creds = get_dhan_credentials()
+    creds = market_data_credentials()
     if not creds:
         return {
             "status": "credentials_missing",
@@ -242,7 +242,9 @@ def _ltp_with_prefer_ws(
         }
 
     try:
-        client = get_broker_client(get_engine_mode())
+        # Shared data token reads market data directly (no per-user egress proxy);
+        # per-user creds keep the existing broker-client routing.
+        client = RealDhanClient() if creds.source == "shared_market_data" else get_broker_client(get_engine_mode())
         quote = client.get_ltp(
             client_id=creds.client_id,
             access_token=creds.access_token,

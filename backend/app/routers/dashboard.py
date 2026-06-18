@@ -11,6 +11,7 @@ from app.services.audit_logger import read_jsonl
 from app.services.credential_vault import dhan_metadata, get_dhan_credentials, webhook_secret_metadata
 from app.services.portfolio_analytics import build_portfolio_analytics
 from app.services.position_reconciler import get_reconciled_open_position
+from app.services.shared_market_data import shared_market_data_status
 from app.services.state_store import get_app_state, get_external_positions, get_runtime_settings
 from app.services.wallet_service import refresh_wallet_snapshot
 
@@ -77,6 +78,7 @@ def dashboard_summary() -> dict:
         "wallet": wallet,
         "settings": runtime_settings,
         "webhook_url": tradingview_url,
+        "shared_market_data": shared_market_data_status(),
         "mode": {
             "dhan_mode": settings.DHAN_MODE.upper(),
             "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,

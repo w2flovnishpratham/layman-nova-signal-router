@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 import websockets
 
-from app.services.credential_vault import get_dhan_credentials
+from app.services.shared_market_data import market_data_credentials
 from app.services.state_store import utc_now
 
 
@@ -312,7 +312,7 @@ class DhanMarketFeedWsManager:
                 backoff_seconds = min(backoff_seconds * 2, 15.0)
 
     async def _connect_and_stream(self, initial_targets: set[tuple[str, str]]) -> None:
-        creds = get_dhan_credentials()
+        creds = market_data_credentials()
         if not creds:
             with self._lock:
                 self._last_error = "missing_dhan_credentials"

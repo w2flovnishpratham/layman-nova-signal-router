@@ -488,11 +488,17 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
     warnings: list[str] = []
     engine_mode = get_engine_mode(legacy_fallback=False)
 
+    from app.services.shared_market_data import shared_market_data_configured
+
+    # Paper mode can run on the shared market-data account, so it does not
+    # require the user to connect their own Dhan credentials.
+    paper_uses_shared_data = engine_mode == "paper" and shared_market_data_configured()
+
     if engine_mode is None:
         issues.append("Engine mode is not selected.")
     elif engine_mode == "paper" and not settings.PAPER_MODE_ENABLED:
         issues.append("Paper mode is disabled on this server.")
-    if not creds:
+    if not creds and not paper_uses_shared_data:
         issues.append("Dhan credentials are not connected.")
     if not webhook_secret:
         issues.append("Webhook secret is not set.")

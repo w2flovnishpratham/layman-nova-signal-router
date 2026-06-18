@@ -107,6 +107,16 @@ def validate_command(state: SetupState, command_type: str, data: dict[str, Any])
                 }
             }
 
+        if command_type == "setup.use_shared_data":
+            # Paper mode on the shared market-data account — no user creds.
+            _require_state(state, SetupState.STRATEGY_PICKED, command_type)
+            return SetupState.BROKER_CONNECTED, {
+                "broker": {
+                    "clientId": "",
+                    "status": "shared",
+                }
+            }
+
         if command_type == "setup.risk":
             _require_state(state, SetupState.BROKER_CONNECTED, command_type)
             payload = RiskPayload.model_validate(data).model_dump()

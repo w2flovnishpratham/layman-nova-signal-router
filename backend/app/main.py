@@ -24,6 +24,11 @@ from app.services.audit_logger import log_audit_event
 from app.services.chat_event_publisher import bind_chat_event_loop, clear_chat_event_loop
 from app.services.credential_vault import vault_status
 from app.services.instrument_resolver import start_instrument_cache_warmup
+from app.services.shared_market_data import (
+    shared_market_data_configured,
+    start_shared_token_worker,
+    stop_shared_token_worker,
+)
 from app.services.option_position_monitor import start_option_position_monitor, stop_option_position_monitor
 from app.services.state_store import get_app_state, get_engine_mode, get_runtime_settings, init_runtime_files, sync_runtime_flags_from_env
 from app.services.startup_reconciler import reconcile_open_position_on_startup
@@ -119,6 +124,9 @@ async def lifespan(app: FastAPI):
     if settings.is_production and not user_vault_ready():
         raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY is missing or invalid; refusing to start in production.")
     start_instrument_cache_warmup()
+    if shared_market_data_configured():
+        start_shared_token_worker()
+        logger.info("Shared market-data token worker enabled (global paper-mode feed).")
     runtime_settings = get_runtime_settings()
     logger.info("NOVA Signal Router backend starting.")
     logger.info("APP_ENV=%s", settings.APP_ENV)
@@ -176,6 +184,7 @@ async def lifespan(app: FastAPI):
     )
     yield
     stop_strategy_job_worker()
+    stop_shared_token_worker()
     stop_option_position_monitor()
     stop_eod_squareoff_worker()
     stop_ghost_position_watcher()

@@ -162,6 +162,7 @@ export interface SessionBootstrap {
   webhookSecret: string
   webhookUrl: string
   lotSize: number
+  sharedMarketData?: boolean
 }
 
 export interface RiskConfig {

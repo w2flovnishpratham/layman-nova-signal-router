@@ -118,7 +118,7 @@ async def _receive_commands(websocket: WebSocket, session_id: str, user: Current
                             webhookSecret=session.webhook_secret,
                         ),
                     )
-            elif command_type == "setup.broker_creds":
+            elif command_type in {"setup.broker_creds", "setup.use_shared_data"}:
                 wallet = await asyncio.to_thread(get_wallet_snapshot)
                 await session_store.append_event(
                     session_id,
@@ -204,6 +204,16 @@ async def _apply_production_command(
             raise ValueError(f"{message} {details}".strip())
         await asyncio.to_thread(save_dhan_credentials, client_id, access_token)
         await asyncio.to_thread(refresh_wallet_snapshot, force=True, log_event=True)
+        return
+
+    if command_type == "setup.use_shared_data":
+        from app.services.shared_market_data import shared_market_data_configured
+
+        if get_engine_mode(legacy_fallback=False) != "paper":
+            raise ValueError("Shared market data is only available for paper mode.")
+        if not shared_market_data_configured():
+            raise ValueError("Shared market data is not configured on this server.")
+        await asyncio.to_thread(refresh_wallet_snapshot, force=True, log_event=False)
         return
 
     if command_type == "setup.risk":

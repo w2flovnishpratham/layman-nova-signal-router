@@ -92,6 +92,17 @@ class Settings(BaseSettings):
     DHAN_SCRIP_MASTER_PATH: str = "data/dhan_scrip_master.csv"
     AUTO_RESOLVE_SECURITY_ID: bool = True
 
+    # ------------------------------------------------------------------
+    # Shared market-data account (global LTP/feed for all paper users).
+    # A dedicated, data-only Dhan account whose access token is refreshed
+    # automatically from a TOTP secret. Supplied via environment ONLY and
+    # never logged. When enabled, paper mode needs no per-user Dhan token.
+    # ------------------------------------------------------------------
+    DHAN_SHARED_DATA_ENABLED: bool = False
+    DHAN_SHARED_CLIENT_ID: str = ""
+    DHAN_SHARED_PIN: str = ""
+    DHAN_SHARED_TOTP_SECRET: str = ""
+
     REQUIRE_MARKET_HOURS: bool = False
 
     # Token lifetime - Dhan access tokens are short-lived (~24 hours).

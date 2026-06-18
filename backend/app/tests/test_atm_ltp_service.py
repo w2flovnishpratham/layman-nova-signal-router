@@ -121,7 +121,7 @@ def test_ltp_cache_reuses_recent_websocket_tick(monkeypatch):
     )
     monkeypatch.setattr(
         atm_ltp_service,
-        "get_dhan_credentials",
+        "market_data_credentials",
         lambda: (_ for _ in ()).throw(AssertionError("REST fallback should not be used when cache is fresh")),
     )
 

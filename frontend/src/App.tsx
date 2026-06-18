@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AuthScreen } from './components/AuthScreen'
+import { EngineLeftPanel } from './components/EngineLeftPanel'
 import { EngineListening } from './components/EngineListening'
 import { EngineSidebar } from './components/EngineSidebar'
 import { Header } from './components/Header'
@@ -211,6 +212,7 @@ function App() {
       lastError={lastSetupError}
       verifyPending={typing && setupFlowStep === 'broker'}
       lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
+      sharedMarketData={session?.sharedMarketData ?? false}
       onSend={send}
       onUserReply={addUserMessage}
       onDraft={updateSetupDraft}
@@ -241,6 +243,10 @@ function App() {
       <section className={engineLive ? 'engine-shell' : 'chat-shell'} aria-label="Nova trading session">
         {bootError ? <div className="error-banner">{bootError}</div> : null}
         {!session && !bootError ? <div className="system-chip">Starting session</div> : null}
+
+        {engineLive ? (
+          <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
+        ) : null}
 
         <div className="engine-main-pane">
           <ChatLog
@@ -273,7 +279,6 @@ function App() {
             lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
             side={config.risk?.side ?? 'BOTH'}
             engineMode={engineMode}
-            marketSnapshot={marketSnapshot}
             health={systemHealth}
             onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
           />
