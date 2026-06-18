@@ -36,6 +36,7 @@ function App() {
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false)
   const [rightDrawerOpen, setRightDrawerOpen] = useState(false)
+  const [snapshotLoaded, setSnapshotLoaded] = useState(false)
   const session = useSessionStore((state) => state.session)
   const setupFlowStep = useSessionStore((state) => state.setupFlowStep)
   const setupDraft = useSessionStore((state) => state.setupDraft)
@@ -98,6 +99,7 @@ function App() {
     let mounted = true
 
     resetSession()
+    setSnapshotLoaded(false)
     startSession()
       .then(async (bootstrap) => {
         if (!mounted) return
@@ -105,6 +107,7 @@ function App() {
         const snapshot = await getSession(bootstrap.sessionId)
         if (!mounted) return
         loadSnapshot(snapshot)
+        setSnapshotLoaded(true)
 
         const ws = new SessionWS(bootstrap.sessionId, bootstrap.sessionToken)
         wsRef.current = ws
@@ -178,6 +181,7 @@ function App() {
       await prepareReconfigure()
       wsRef.current?.close()
       resetSession()
+      setSnapshotLoaded(false)
       setBootNonce((current) => current + 1)
     } catch (error) {
       setBootError(error instanceof Error ? error.message : 'Could not reconfigure Nova')
@@ -187,6 +191,7 @@ function App() {
   async function handleLogout() {
     wsRef.current?.close()
     resetSession()
+    setSnapshotLoaded(false)
     setBootError('')
     try {
       await logout()
@@ -254,7 +259,7 @@ function App() {
         ) : null}
 
         <div className="engine-main-pane col-span-1 lg:col-span-5 lg:h-full flex flex-col min-h-[450px] lg:min-h-0">
-          {!session && !bootError ? (
+          {!snapshotLoaded && !bootError ? (
             <div className="flex flex-col items-center justify-center flex-grow min-h-[350px] gap-3 text-white/40">
               <Loader2 className="w-8 h-8 animate-spin text-[#9d5bff]" />
               <span className="text-xs font-semibold tracking-widest uppercase animate-pulse">Initializing Session...</span>
@@ -323,57 +328,63 @@ function App() {
       {engineLive && (
         <>
           {/* Bottom-to-Top Drawer: Market LTP & Manual Order */}
-          {leftDrawerOpen && (
-            <div className="fixed inset-0 z-[110] block lg:hidden">
-              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm drawer-backdrop" onClick={() => setLeftDrawerOpen(false)} />
-              <div className="fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 drawer-content">
-                <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
-                <div className="flex justify-between items-center pb-3 border-b border-white/5">
-                  <span className="font-bold text-sm text-white tracking-wide">Market & Order</span>
-                  <button
-                    type="button"
-                    className="text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer text-sm font-semibold transition-colors"
-                    onClick={() => setLeftDrawerOpen(false)}
-                  >
-                    ✕
-                  </button>
-                </div>
-                <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
+          <div className={`fixed inset-0 z-[110] block lg:hidden transition-all duration-300 ${leftDrawerOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}>
+            <div
+              className={`fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${leftDrawerOpen ? 'opacity-100' : 'opacity-0'}`}
+              onClick={() => setLeftDrawerOpen(false)}
+            />
+            <div
+              className={`fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 z-[120] transform transition-transform duration-300 ease-[cubic-bezier(0.32,0.94,0.6,1)] ${leftDrawerOpen ? 'translate-y-0' : 'translate-y-full'}`}
+            >
+              <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
+              <div className="flex justify-between items-center pb-3 border-b border-white/5">
+                <span className="font-bold text-sm text-white tracking-wide">Market & Order</span>
+                <button
+                  type="button"
+                  className="text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer text-sm font-semibold transition-colors"
+                  onClick={() => setLeftDrawerOpen(false)}
+                >
+                  ✕
+                </button>
               </div>
+              <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
             </div>
-          )}
+          </div>
 
           {/* Bottom-to-Top Drawer: Margin & Balance */}
-          {rightDrawerOpen && (
-            <div className="fixed inset-0 z-[110] block lg:hidden">
-              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm drawer-backdrop" onClick={() => setRightDrawerOpen(false)} />
-              <div className="fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 drawer-content">
-                <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
-                <div className="flex justify-between items-center pb-3 border-b border-white/5">
-                  <span className="font-bold text-sm text-white tracking-wide">Account & Balance</span>
-                  <button
-                    type="button"
-                    className="text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer text-sm font-semibold transition-colors"
-                    onClick={() => setRightDrawerOpen(false)}
-                  >
-                    ✕
-                  </button>
-                </div>
-                <EngineSidebar
-                  state={setupState}
-                  wallet={wallet}
-                  marginUtilized={marginUtilized}
-                  realizedPnl={realizedPnl}
-                  activeTrade={activeTrade}
-                  lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
-                  side={config.risk?.side ?? 'BOTH'}
-                  engineMode={engineMode}
-                  onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
-                  onlyMargin={true}
-                />
+          <div className={`fixed inset-0 z-[110] block lg:hidden transition-all duration-300 ${rightDrawerOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}>
+            <div
+              className={`fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${rightDrawerOpen ? 'opacity-100' : 'opacity-0'}`}
+              onClick={() => setRightDrawerOpen(false)}
+            />
+            <div
+              className={`fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 z-[120] transform transition-transform duration-300 ease-[cubic-bezier(0.32,0.94,0.6,1)] ${rightDrawerOpen ? 'translate-y-0' : 'translate-y-full'}`}
+            >
+              <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
+              <div className="flex justify-between items-center pb-3 border-b border-white/5">
+                <span className="font-bold text-sm text-white tracking-wide">Account & Balance</span>
+                <button
+                  type="button"
+                  className="text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer text-sm font-semibold transition-colors"
+                  onClick={() => setRightDrawerOpen(false)}
+                >
+                  ✕
+                </button>
               </div>
+              <EngineSidebar
+                state={setupState}
+                wallet={wallet}
+                marginUtilized={marginUtilized}
+                realizedPnl={realizedPnl}
+                activeTrade={activeTrade}
+                lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
+                side={config.risk?.side ?? 'BOTH'}
+                engineMode={engineMode}
+                onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
+                onlyMargin={true}
+              />
             </div>
-          )}
+          </div>
 
           {/* Sticky Bottom Navigation Bar on Mobile */}
           <div className="fixed bottom-0 left-0 right-0 h-16 bg-[#0c0a14]/95 backdrop-blur-md border-t border-white/10 flex items-center justify-around z-[90] lg:hidden px-2">

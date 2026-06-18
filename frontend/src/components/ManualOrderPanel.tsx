@@ -219,9 +219,11 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
       )}
 
       {/* Progress and status message */}
-      <div className={`manual-progress mt-4 stage-${stage === 'Failed' ? 'failed' : stage === 'Done' ? 'done' : 'active'}`}>
-        <span>{stage === 'idle' ? 'Ready' : stage}</span>
-      </div>
+      {stage !== 'idle' && (
+        <div className={`manual-progress mt-4 stage-${stage === 'Failed' ? 'failed' : stage === 'Done' ? 'done' : 'active'}`}>
+          <span>{stage}</span>
+        </div>
+      )}
       {message ? <p className="manual-status-message mt-2">{message}</p> : null}
     </section>
   )
