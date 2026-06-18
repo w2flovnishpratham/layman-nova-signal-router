@@ -2492,23 +2492,12 @@ code {
 }
 
 .kill-dialog {
-  width: min(360px, calc(100vw - 32px));
-  border: 0.5px solid var(--border-hi);
-  border-radius: 16px;
-  background: var(--bg-1);
-  padding: 18px;
   animation: dialog-in var(--dur-base) var(--ease-out);
 }
 
 .hold-confirm {
   position: relative;
-  width: 100%;
-  min-height: 42px;
-  margin-top: 16px;
   overflow: hidden;
-  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
-  background: var(--danger-bg);
-  color: var(--danger);
 }
 
 .hold-confirm:active::after {

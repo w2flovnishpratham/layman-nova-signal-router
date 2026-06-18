@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Sliders, Wallet } from 'lucide-react'
 import { AuthScreen } from './components/AuthScreen'
 import { EngineLeftPanel } from './components/EngineLeftPanel'
 import { EngineListening } from './components/EngineListening'
@@ -33,6 +34,8 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [marketSnapshot, setMarketSnapshot] = useState<MarketSnapshot | null>(null)
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
+  const [leftDrawerOpen, setLeftDrawerOpen] = useState(false)
+  const [rightDrawerOpen, setRightDrawerOpen] = useState(false)
   const session = useSessionStore((state) => state.session)
   const setupFlowStep = useSessionStore((state) => state.setupFlowStep)
   const setupDraft = useSessionStore((state) => state.setupDraft)
@@ -240,15 +243,18 @@ function App() {
       {view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : (
-      <section className={engineLive ? 'engine-shell grid grid-cols-1 lg:grid-cols-12 gap-5 px-4 w-full max-w-[1480px] mx-auto lg:h-[calc(100vh-120px)] lg:min-h-0 min-h-screen items-stretch' : 'chat-shell'} aria-label="Nova trading session">
+        <>
+          <section className={engineLive ? 'engine-shell grid grid-cols-1 lg:grid-cols-12 gap-5 px-4 w-full max-w-[1480px] mx-auto lg:h-[calc(100vh-120px)] lg:min-h-0 min-h-screen items-stretch' : 'chat-shell'} aria-label="Nova trading session">
         {bootError ? <div className="error-banner col-span-full">{bootError}</div> : null}
         {!session && !bootError ? <div className="system-chip col-span-full">Starting session</div> : null}
 
         {engineLive ? (
-          <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
+          <aside className="hidden lg:block lg:col-span-4 lg:h-full lg:overflow-y-auto pr-1">
+            <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
+          </aside>
         ) : null}
 
-        <div className="engine-main-pane lg:col-span-5 order-3 lg:order-2 lg:h-full flex flex-col min-h-[450px] lg:min-h-0">
+        <div className="engine-main-pane col-span-1 lg:col-span-5 lg:h-full flex flex-col min-h-[450px] lg:min-h-0">
           <ChatLog
             messages={messages}
             typing={typing}
@@ -267,22 +273,120 @@ function App() {
               />
             </div>
           ) : null}
+
+          {/* Mobile-only inline active position & routing controls below main chat */}
+          {engineLive ? (
+            <div className="block lg:hidden mt-6">
+              <EngineSidebar
+                state={setupState}
+                wallet={wallet}
+                marginUtilized={marginUtilized}
+                realizedPnl={realizedPnl}
+                activeTrade={activeTrade}
+                lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
+                side={config.risk?.side ?? 'BOTH'}
+                engineMode={engineMode}
+                onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
+                hideMargin={true}
+              />
+            </div>
+          ) : null}
         </div>
 
         {engineLive ? (
-          <EngineSidebar
-            state={setupState}
-            wallet={wallet}
-            marginUtilized={marginUtilized}
-            realizedPnl={realizedPnl}
-            activeTrade={activeTrade}
-            lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
-            side={config.risk?.side ?? 'BOTH'}
-            engineMode={engineMode}
-            onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
-          />
+          <aside className="hidden lg:block lg:col-span-3 lg:h-full lg:overflow-y-auto pr-1">
+            <EngineSidebar
+              state={setupState}
+              wallet={wallet}
+              marginUtilized={marginUtilized}
+              realizedPnl={realizedPnl}
+              activeTrade={activeTrade}
+              lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
+              side={config.risk?.side ?? 'BOTH'}
+              engineMode={engineMode}
+              onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
+            />
+          </aside>
         ) : null}
       </section>
+
+      {/* Mobile-only sliding drawers and floating action bar */}
+      {engineLive && (
+        <>
+          {/* Left-to-Right Drawer: Market LTP & Manual Order */}
+          {leftDrawerOpen && (
+            <div className="fixed inset-0 z-[110] block lg:hidden">
+              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setLeftDrawerOpen(false)} />
+              <div className="fixed inset-y-0 left-0 w-80 max-w-[calc(100vw-60px)] bg-[#0f0e1c] border-r border-white/10 p-5 overflow-y-auto shadow-2xl flex flex-col gap-4 animate-in slide-in-from-left duration-200">
+                <div className="flex justify-between items-center pb-3 border-b border-white/5 mb-2">
+                  <span className="font-bold text-sm text-white tracking-wide">Market & Order</span>
+                  <button
+                    type="button"
+                    className="text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer text-sm font-semibold transition-colors"
+                    onClick={() => setLeftDrawerOpen(false)}
+                  >
+                    ✕
+                  </button>
+                </div>
+                <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
+              </div>
+            </div>
+          )}
+
+          {/* Right-to-Left Drawer: Margin & Balance */}
+          {rightDrawerOpen && (
+            <div className="fixed inset-0 z-[110] block lg:hidden">
+              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setRightDrawerOpen(false)} />
+              <div className="fixed inset-y-0 right-0 w-80 max-w-[calc(100vw-60px)] bg-[#0f0e1c] border-l border-white/10 p-5 overflow-y-auto shadow-2xl flex flex-col gap-4 animate-in slide-in-from-right duration-200">
+                <div className="flex justify-between items-center pb-3 border-b border-white/5 mb-2">
+                  <span className="font-bold text-sm text-white tracking-wide">Account & Balance</span>
+                  <button
+                    type="button"
+                    className="text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer text-sm font-semibold transition-colors"
+                    onClick={() => setRightDrawerOpen(false)}
+                  >
+                    ✕
+                  </button>
+                </div>
+                <EngineSidebar
+                  state={setupState}
+                  wallet={wallet}
+                  marginUtilized={marginUtilized}
+                  realizedPnl={realizedPnl}
+                  activeTrade={activeTrade}
+                  lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
+                  side={config.risk?.side ?? 'BOTH'}
+                  engineMode={engineMode}
+                  onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
+                  onlyMargin={true}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Floating Action Menu Bar */}
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#12101e]/90 backdrop-blur-md border border-white/10 rounded-full py-2 px-3.5 shadow-2xl flex items-center gap-3 z-[90] lg:hidden">
+            <button
+              type="button"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 hover:bg-white/10 text-white/90 hover:text-white border-0 cursor-pointer transition-all"
+              onClick={() => setLeftDrawerOpen(true)}
+            >
+              <Sliders size={12} />
+              Market & Trade
+            </button>
+            <div className="w-[1px] h-4 bg-white/10" />
+            <button
+              type="button"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 hover:bg-white/10 text-white/90 hover:text-white border-0 cursor-pointer transition-all"
+              onClick={() => setRightDrawerOpen(true)}
+            >
+              <Wallet size={12} />
+              Account & Balance
+            </button>
+          </div>
+        </>
+      )}
+        </>
       )}
 
       <footer className="app-footer">(c) 2026 Layman Signal Route. Deployed Live with Dhan. All rights reserved.</footer>

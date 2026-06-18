@@ -177,33 +177,57 @@ export function Header({
       </header>
 
       {killDialogOpen ? (
-        <div className="modal-backdrop" role="presentation" onPointerDown={(event) => {
+        <div className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200" role="presentation" onPointerDown={(event) => {
           if (event.currentTarget === event.target) closeDialog()
         }}>
-          <section className="kill-dialog" role="dialog" aria-modal="true" aria-labelledby="kill-dialog-title">
-            <button className="icon-button" type="button" aria-label="Close stop and square-off confirmation" onClick={closeDialog}>
+          <section className="relative w-full max-w-[380px] bg-[#12101c] border border-red-500/20 rounded-2xl shadow-2xl p-6 flex flex-col items-center text-center gap-4 animate-in zoom-in-95 duration-200" role="dialog" aria-modal="true" aria-labelledby="kill-dialog-title">
+            <button
+              className="absolute right-4 top-4 text-white/40 hover:text-white hover:bg-white/5 p-1.5 rounded-lg transition-colors border-0 cursor-pointer"
+              type="button"
+              aria-label="Close stop and square-off confirmation"
+              onClick={closeDialog}
+            >
               <X size={16} />
             </button>
-            <ShieldAlert size={24} />
-            <h2 id="kill-dialog-title">Stop routing and square off?</h2>
-            <p>This stops new entries and exits NOVA's tracked open position.</p>
-            <button
-              className="hold-confirm"
-              type="button"
-              onPointerDown={startHold}
-              onPointerUp={cancelHold}
-              onPointerLeave={cancelHold}
-              onPointerCancel={cancelHold}
-              onKeyDown={(event) => {
-                if ((event.key === 'Enter' || event.key === ' ') && !event.repeat) startHold()
-              }}
-              onKeyUp={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') cancelHold()
-              }}
-            >
-              Hold to Stop & Square Off
-            </button>
-            <button className="secondary-button" type="button" onClick={closeDialog}>Cancel</button>
+
+            <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 mt-2">
+              <ShieldAlert size={24} />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <h2 id="kill-dialog-title" className="text-lg font-bold text-white tracking-wide m-0">
+                Stop routing and square off?
+              </h2>
+              <p className="text-xs text-white/60 leading-relaxed px-2 m-0">
+                This stops new entries and exits NOVA's tracked open position.
+              </p>
+            </div>
+
+            <div className="w-full flex flex-col gap-2 mt-2">
+              <button
+                className="hold-confirm w-full py-3 px-4 rounded-xl font-semibold border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm select-none cursor-pointer relative overflow-hidden"
+                type="button"
+                onPointerDown={startHold}
+                onPointerUp={cancelHold}
+                onPointerLeave={cancelHold}
+                onPointerCancel={cancelHold}
+                onKeyDown={(event) => {
+                  if ((event.key === 'Enter' || event.key === ' ') && !event.repeat) startHold()
+                }}
+                onKeyUp={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') cancelHold()
+                }}
+              >
+                Hold to Stop & Square Off
+              </button>
+              <button
+                className="w-full py-2.5 px-4 rounded-xl text-white/50 hover:text-white bg-transparent hover:bg-white/5 transition-all text-xs font-semibold cursor-pointer border-0"
+                type="button"
+                onClick={closeDialog}
+              >
+                Cancel
+              </button>
+            </div>
           </section>
         </div>
       ) : null}
