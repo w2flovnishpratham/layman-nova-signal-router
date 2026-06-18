@@ -64,7 +64,7 @@ export function Header({
         <div className="brand-lockup">
           <span className="nova-mark" />
           <strong>NOVA SIGNAL ROUTER</strong>
-          <nav className="nv-nav-tabs" aria-label="Primary">
+          <nav className="nv-nav-tabs hidden lg:flex" aria-label="Primary">
             <button
               type="button"
               className={`nv-nav-tab${view === 'trading' ? ' active' : ''}`}

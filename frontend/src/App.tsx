@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Sliders, Wallet } from 'lucide-react'
+import { BarChart3, LineChart, Sliders, Wallet } from 'lucide-react'
 import { AuthScreen } from './components/AuthScreen'
 import { EngineLeftPanel } from './components/EngineLeftPanel'
 import { EngineListening } from './components/EngineListening'
@@ -243,8 +243,7 @@ function App() {
       {view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : (
-        <>
-          <section className={engineLive ? 'engine-shell grid grid-cols-1 lg:grid-cols-12 gap-5 px-4 w-full max-w-[1480px] mx-auto lg:h-[calc(100vh-120px)] lg:min-h-0 min-h-screen items-stretch' : 'chat-shell'} aria-label="Nova trading session">
+        <section className={engineLive ? 'engine-shell grid grid-cols-1 lg:grid-cols-12 gap-5 px-4 w-full max-w-[1480px] mx-auto lg:h-[calc(100vh-120px)] lg:min-h-0 min-h-screen items-stretch' : 'chat-shell'} aria-label="Nova trading session">
         {bootError ? <div className="error-banner col-span-full">{bootError}</div> : null}
         {!session && !bootError ? <div className="system-chip col-span-full">Starting session</div> : null}
 
@@ -309,6 +308,7 @@ function App() {
           </aside>
         ) : null}
       </section>
+      )}
 
       {/* Mobile-only sliding drawers and floating action bar */}
       {engineLive && (
@@ -364,32 +364,64 @@ function App() {
             </div>
           )}
 
-          {/* Floating Action Menu Bar */}
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#12101e]/90 backdrop-blur-md border border-white/10 rounded-full py-2 px-3.5 shadow-2xl flex items-center gap-3 z-[90] lg:hidden">
+          {/* Sticky Bottom Navigation Bar on Mobile */}
+          <div className="fixed bottom-0 left-0 right-0 h-16 bg-[#0c0a14]/95 backdrop-blur-md border-t border-white/10 flex items-center justify-around z-[90] lg:hidden px-2">
             <button
               type="button"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 hover:bg-white/10 text-white/90 hover:text-white border-0 cursor-pointer transition-all"
-              onClick={() => setLeftDrawerOpen(true)}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 h-full border-0 bg-transparent cursor-pointer transition-colors ${view === 'trading' && !leftDrawerOpen && !rightDrawerOpen ? 'text-[#9d5bff]' : 'text-white/40 hover:text-white/70'}`}
+              onClick={() => {
+                setView('trading')
+                setLeftDrawerOpen(false)
+                setRightDrawerOpen(false)
+              }}
             >
-              <Sliders size={12} />
-              Market & Trade
+              <LineChart size={18} />
+              <span className="text-[10px] font-semibold">Trading</span>
             </button>
-            <div className="w-[1px] h-4 bg-white/10" />
+
             <button
               type="button"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 hover:bg-white/10 text-white/90 hover:text-white border-0 cursor-pointer transition-all"
-              onClick={() => setRightDrawerOpen(true)}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 h-full border-0 bg-transparent cursor-pointer transition-colors ${view === 'dashboard' ? 'text-[#9d5bff]' : 'text-white/40 hover:text-white/70'}`}
+              onClick={() => {
+                setView('dashboard')
+                setLeftDrawerOpen(false)
+                setRightDrawerOpen(false)
+              }}
             >
-              <Wallet size={12} />
-              Account & Balance
+              <BarChart3 size={18} />
+              <span className="text-[10px] font-semibold">Dashboard</span>
+            </button>
+
+            <button
+              type="button"
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 h-full border-0 bg-transparent cursor-pointer transition-colors ${leftDrawerOpen ? 'text-[#9d5bff]' : 'text-white/40 hover:text-white/70'}`}
+              onClick={() => {
+                setView('trading')
+                setLeftDrawerOpen(true)
+                setRightDrawerOpen(false)
+              }}
+            >
+              <Sliders size={18} />
+              <span className="text-[10px] font-semibold">Market & Trade</span>
+            </button>
+
+            <button
+              type="button"
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 h-full border-0 bg-transparent cursor-pointer transition-colors ${rightDrawerOpen ? 'text-[#9d5bff]' : 'text-white/40 hover:text-white/70'}`}
+              onClick={() => {
+                setView('trading')
+                setLeftDrawerOpen(false)
+                setRightDrawerOpen(true)
+              }}
+            >
+              <Wallet size={18} />
+              <span className="text-[10px] font-semibold">Account</span>
             </button>
           </div>
         </>
       )}
-        </>
-      )}
 
-      <footer className="app-footer">(c) 2026 Layman Signal Route. Deployed Live with Dhan. All rights reserved.</footer>
+      <footer className="app-footer pb-20 lg:pb-4">(c) 2026 Layman Signal Route. Deployed Live with Dhan. All rights reserved.</footer>
     </main>
   )
 }

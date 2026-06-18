@@ -939,8 +939,16 @@ code {
   height: 432px;
   overflow-y: auto;
   padding: 0 0 14px;
-  scrollbar-color: rgba(255, 255, 255, 0.36) transparent;
-  scrollbar-width: thin;
+  scrollbar-width: none !important; /* Firefox */
+  -ms-overflow-style: none !important; /* IE and Edge */
+}
+
+.chat-log::-webkit-scrollbar,
+.engine-shell .chat-log::-webkit-scrollbar,
+.chat-shell .chat-log::-webkit-scrollbar {
+  display: none !important; /* Chrome, Safari and Opera */
+  width: 0 !important;
+  height: 0 !important;
 }
 
 .engine-shell .chat-log {
@@ -949,6 +957,8 @@ code {
   min-height: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   padding-top: 0;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
 }
 
 .chat-shell .engine-main-pane {
@@ -963,6 +973,8 @@ code {
   height: auto;
   min-height: 0;
   padding-bottom: 28px;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
 }
 
 .app-footer {

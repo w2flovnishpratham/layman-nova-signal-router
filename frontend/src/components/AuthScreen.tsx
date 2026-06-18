@@ -1,4 +1,4 @@
-import { LogIn, ShieldCheck } from 'lucide-react'
+import { LogIn, ShieldCheck, Loader2 } from 'lucide-react'
 
 interface Props {
   loading: boolean
@@ -23,7 +23,10 @@ export function AuthScreen({ loading, error, onLogin, onRetry }: Props) {
         </p>
         {error ? <div className="error-banner">{error}</div> : null}
         {loading ? (
-          <div className="system-chip">Verifying login</div>
+          <div className="flex flex-col items-center gap-3 mt-4">
+            <Loader2 className="animate-spin text-purple-400" size={32} />
+            <div className="text-xs text-white/50 animate-pulse font-medium">Verifying login, please wait...</div>
+          </div>
         ) : (
           <div className="auth-actions">
             <button className="google-login-button" type="button" onClick={onLogin}>

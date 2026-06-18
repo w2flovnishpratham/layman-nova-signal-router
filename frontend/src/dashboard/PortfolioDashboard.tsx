@@ -8,6 +8,7 @@ import {
   Flame,
   Gauge,
   Layers,
+  Loader2,
   PieChart,
   RefreshCw,
   Receipt,
@@ -65,9 +66,9 @@ export function PortfolioDashboard() {
 
   if (loading && !data) {
     return (
-      <div className="nv-dash-state">
-        <span className="nv-dash-spinner" />
-        <p>Crunching your tracked trades…</p>
+      <div className="nv-dash-state flex flex-col items-center justify-center gap-4 py-20">
+        <Loader2 className="animate-spin text-purple-400" size={40} />
+        <p className="text-sm text-white/60 animate-pulse font-medium">Crunching your tracked trades…</p>
       </div>
     )
   }
@@ -101,7 +102,7 @@ export function PortfolioDashboard() {
         onClick={() => void load(true)}
         aria-label="Refresh analytics"
       >
-        <RefreshCw size={14} />
+        {refreshing ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
         {refreshing ? 'Refreshing' : 'Refresh'}
       </button>
     </div>
