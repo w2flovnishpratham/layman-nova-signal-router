@@ -207,11 +207,17 @@ def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
     if engine_mode is None:
         raise HTTPException(status_code=400, detail={"message": "Select Paper or Live mode before starting the engine."})
 
+    from app.services.shared_market_data import shared_market_data_configured
+
+    # Paper mode on the shared market-data account needs no per-user Dhan token,
+    # so the user's (possibly stale) token must not gate paper start.
+    paper_uses_shared_data = engine_mode == "paper" and shared_market_data_configured()
+
     # Gather token age metadata
     token_meta = dhan_token_age_metadata()
 
-    # Hard-block on expired token
-    if token_meta.get("token_expired") is True:
+    # Hard-block on expired token (not for paper on the shared data feed).
+    if not paper_uses_shared_data and token_meta.get("token_expired") is True:
         age_minutes = token_meta.get("token_age_minutes")
         raise HTTPException(
             status_code=400,

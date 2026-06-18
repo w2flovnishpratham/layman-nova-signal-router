@@ -516,7 +516,7 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
     issues.extend(risk_issues)
 
     dhan_ping: dict[str, Any] | None = None
-    if check_dhan_ping and creds:
+    if check_dhan_ping and creds and not paper_uses_shared_data:
         ok, message, _funds, details = validate_dhan_credentials(creds.client_id, creds.access_token)
         dhan_ping = {"ok": ok, "message": message, **details}
         if not ok:
