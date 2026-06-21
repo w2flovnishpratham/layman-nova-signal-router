@@ -30,6 +30,9 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const [quote, setQuote] = useState<OrderQuote | null>(null)
   const [message, setMessage] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const advancedToggleRef = useRef<HTMLButtonElement | null>(null)
+  const advancedRegionRef = useRef<HTMLDivElement | null>(null)
+  const advancedScrollTimerRef = useRef<number | null>(null)
   
   const live = engineMode === 'live'
   const marketClosed = quote?.atm?.marketOpen === false
@@ -61,6 +64,26 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
       window.clearInterval(interval)
     }
   }, [engineMode, lots, pending, side])
+
+  useEffect(() => {
+    if (advancedScrollTimerRef.current !== null) {
+      window.clearTimeout(advancedScrollTimerRef.current)
+    }
+    advancedScrollTimerRef.current = window.setTimeout(() => {
+      const target = showAdvanced ? advancedRegionRef.current : advancedToggleRef.current
+      target?.scrollIntoView({
+        behavior: 'smooth',
+        block: showAdvanced ? 'start' : 'nearest',
+      })
+    }, showAdvanced ? 140 : 60)
+
+    return () => {
+      if (advancedScrollTimerRef.current !== null) {
+        window.clearTimeout(advancedScrollTimerRef.current)
+        advancedScrollTimerRef.current = null
+      }
+    }
+  }, [showAdvanced])
 
   async function runOrder(action: 'entry' | 'exit' | 'reverse', entrySide: 'CE' | 'PE' = side) {
     if (pending) return
@@ -153,32 +176,40 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
 
       {/* Collapsible Advanced Toggle */}
       <button
+        ref={advancedToggleRef}
         type="button"
         className="mt-4 text-[11px] font-semibold text-white/40 hover:text-white/70 flex items-center gap-1.5 transition-all bg-transparent border-0 p-0 self-start cursor-pointer"
         onClick={() => setShowAdvanced(!showAdvanced)}
+        aria-expanded={showAdvanced}
+        aria-controls="manual-order-advanced"
       >
         <Sliders size={12} />
         {showAdvanced ? 'Hide Advanced Options' : 'Show Advanced Options'}
       </button>
 
       {/* Collapsible Content */}
-      {showAdvanced && (
-        <div className="mt-4 pt-4 border-t border-white/5 flex flex-col gap-4 animate-in fade-in slide-in-from-top-1 duration-150">
+      <div
+        id="manual-order-advanced"
+        ref={advancedRegionRef}
+        className={`manual-advanced-motion ${showAdvanced ? 'is-open' : ''}`}
+        aria-hidden={!showAdvanced}
+      >
+        <div className="manual-advanced-content">
           <div className="manual-controls-grid">
             <label>
               <span>Side</span>
-              <select value={side} disabled={pending} onChange={(event) => setSide(event.target.value as 'CE' | 'PE')} aria-label="Manual order side">
+              <select value={side} disabled={pending || !showAdvanced} onChange={(event) => setSide(event.target.value as 'CE' | 'PE')} aria-label="Manual order side">
                 <option value="CE">CE</option>
                 <option value="PE">PE</option>
               </select>
             </label>
             <label>
               <span>Target %</span>
-              <input type="number" min={0} value={targetProfitPct} disabled={pending} onChange={(event) => setTargetProfitPct(Number(event.target.value) || 0)} aria-label="Manual target profit percent" />
+              <input type="number" min={0} value={targetProfitPct} disabled={pending || !showAdvanced} onChange={(event) => setTargetProfitPct(Number(event.target.value) || 0)} aria-label="Manual target profit percent" />
             </label>
             <label>
               <span>Stop %</span>
-              <input type="number" min={0} value={stopLossPct} disabled={pending} onChange={(event) => setStopLossPct(Number(event.target.value) || 0)} aria-label="Manual stop loss percent" />
+              <input type="number" min={0} value={stopLossPct} disabled={pending || !showAdvanced} onChange={(event) => setStopLossPct(Number(event.target.value) || 0)} aria-label="Manual stop loss percent" />
             </label>
           </div>
 
@@ -196,7 +227,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
           <div className="flex gap-2">
             <ActionButton
               live={live}
-              disabled={pending || marketClosed || !activeTrade}
+              disabled={pending || marketClosed || !activeTrade || !showAdvanced}
               onConfirm={() => void runOrder('exit')}
               ariaLabel="Exit current position"
               className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
@@ -206,7 +237,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
             </ActionButton>
             <ActionButton
               live={live}
-              disabled={pending || marketClosed || !activeTrade}
+              disabled={pending || marketClosed || !activeTrade || !showAdvanced}
               onConfirm={() => void runOrder('reverse')}
               ariaLabel="Reverse position"
               className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
@@ -216,7 +247,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
             </ActionButton>
           </div>
         </div>
-      )}
+      </div>
 
       {/* Progress and status message */}
       {stage !== 'idle' && (

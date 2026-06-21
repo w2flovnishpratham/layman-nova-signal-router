@@ -5,6 +5,7 @@ official RFC 6238 test vectors (SHA1, 6 digits, 30s period).
 """
 from __future__ import annotations
 
+from app.services.credential_vault import DhanCredentials
 from app.services import shared_market_data as smd
 
 # RFC 6238 Appendix B seed "12345678901234567890" in base32.
@@ -71,3 +72,65 @@ def test_market_data_credentials_falls_back_when_shared_off(monkeypatch):
     result = smd.market_data_credentials()
     assert result is None
     assert captured.get("called") is True
+
+
+def test_market_data_credentials_uses_shared_when_configured(monkeypatch):
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
+    monkeypatch.setattr(
+        smd,
+        "get_shared_market_credentials",
+        lambda: DhanCredentials("shared-client", "shared-token", "shared_market_data"),
+    )
+    monkeypatch.setattr(
+        "app.services.credential_vault.get_dhan_credentials",
+        lambda: (_ for _ in ()).throw(AssertionError("user credentials must not be read")),
+        raising=False,
+    )
+
+    result = smd.market_data_credentials()
+
+    assert result is not None
+    assert result.client_id == "shared-client"
+    assert result.access_token == "shared-token"
+    assert result.source == "shared_market_data"
+
+
+def test_market_data_credentials_does_not_fallback_when_shared_unavailable(monkeypatch):
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
+    monkeypatch.setattr(smd, "get_shared_market_credentials", lambda: None)
+    monkeypatch.setattr(
+        "app.services.credential_vault.get_dhan_credentials",
+        lambda: (_ for _ in ()).throw(AssertionError("stale user credentials must not be used")),
+        raising=False,
+    )
+
+    assert smd.market_data_credentials() is None
+
+
+def test_auth_failure_invalidates_and_forces_shared_refresh(monkeypatch):
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
+    monkeypatch.setitem(smd._STATE, "access_token", "old-token")
+    monkeypatch.setitem(smd._STATE, "expiry_epoch", 9999999999.0)
+    calls: list[bool] = []
+
+    def fake_refresh(force: bool = False) -> bool:
+        calls.append(force)
+        return True
+
+    monkeypatch.setattr(smd, "refresh_shared_token", fake_refresh)
+
+    refreshed = smd.refresh_shared_token_after_auth_failure(status_code=401, message="Unauthorized")
+
+    assert refreshed is True
+    assert calls == [True]
+    assert smd._STATE["access_token"] is None
+    assert smd._STATE["expiry_epoch"] == 0.0

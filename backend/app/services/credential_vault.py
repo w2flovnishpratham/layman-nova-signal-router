@@ -65,13 +65,13 @@ def _encryption_key() -> str:
 def _fernet() -> Any:
     key = _encryption_key()
     if not key:
-        raise VaultError("TOKEN_ENCRYPTION_KEY is missing.")
+        raise VaultError("Credential encryption key is missing.")
     if Fernet is None:
-        raise VaultError("cryptography is not installed; encrypted credential vault is unavailable.")
+        raise VaultError("Encrypted credential vault is unavailable.")
     try:
         return Fernet(key.encode("utf-8"))
     except (ValueError, base64.binascii.Error) as exc:
-        raise VaultError("TOKEN_ENCRYPTION_KEY is not a valid Fernet key.") from exc
+        raise VaultError("Credential encryption key is invalid.") from exc
 
 
 def vault_ready() -> bool:
@@ -87,14 +87,13 @@ def vault_status() -> dict[str, Any]:
         _fernet()
         ready = True
         error = None
-    except VaultError as exc:
+    except VaultError:
         ready = False
-        error = str(exc)
+        error = "Credential vault is not available."
     return {
         "ready": ready,
         "local_mock_allowed": local_mock_without_key_allowed(),
         "file_exists": CREDENTIALS_FILE.exists(),
-        "path": str(CREDENTIALS_FILE),
         "error": error,
     }
 
@@ -105,7 +104,7 @@ def local_mock_without_key_allowed() -> bool:
 
 def generate_fernet_key() -> str:
     if Fernet is None:
-        raise VaultError("cryptography is not installed; cannot generate a Fernet key.")
+        raise VaultError("Credential encryption support is unavailable.")
     return Fernet.generate_key().decode("utf-8")
 
 
@@ -127,7 +126,7 @@ def _read_payload() -> dict[str, Any]:
             return _empty_payload()
         try:
             envelope = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
-            token = envelope.get("fernet")
+            token = envelope.get("ciphertext") or envelope.get("fernet")
             if not token:
                 return _empty_payload()
             decrypted = _fernet().decrypt(str(token).encode("utf-8"))
@@ -138,7 +137,7 @@ def _read_payload() -> dict[str, Any]:
             base.update(payload)
             return base
         except InvalidToken as exc:
-            raise VaultError("Credential vault could not be decrypted with TOKEN_ENCRYPTION_KEY.") from exc
+            raise VaultError("Credential vault could not be decrypted.") from exc
         except json.JSONDecodeError as exc:
             raise VaultError("Credential vault file is not valid JSON.") from exc
 
@@ -159,7 +158,7 @@ def _write_payload(payload: dict[str, Any]) -> None:
         envelope = {
             "version": 1,
             "updated_at": payload["updated_at"],
-            "fernet": ciphertext.decode("utf-8"),
+            "ciphertext": ciphertext.decode("utf-8"),
         }
         tmp = CREDENTIALS_FILE.with_suffix(CREDENTIALS_FILE.suffix + ".tmp")
         tmp.write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")

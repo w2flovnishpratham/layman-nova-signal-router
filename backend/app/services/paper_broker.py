@@ -18,6 +18,11 @@ from app.services.dhan_client import (
 )
 from app.services.paper_portfolio import apply_paper_entry, apply_paper_exit, paper_wallet_snapshot
 from app.services.risk_manager import _market_is_open
+from app.services.shared_market_data import (
+    market_data_credentials,
+    refresh_shared_token_after_auth_failure,
+    shared_market_data_configured,
+)
 from app.services.state_store import (
     LOG_FILES,
     get_engine_mode,
@@ -83,12 +88,47 @@ class PaperBroker:
                 error="market_closed",
                 raw_response={"market_closed": True},
             )
+        creds = market_data_credentials()
+        if creds is None:
+            if shared_market_data_configured():
+                return DhanLtpResult(
+                    success=False,
+                    message="Shared market-data token is unavailable; paper fill cannot fetch Dhan LTP.",
+                    ltp=None,
+                    exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
+                    security_id=str(payload.get("securityId") or ""),
+                    error="shared_market_data_unavailable",
+                )
+            ltp_client_id = client_id
+            ltp_access_token = access_token
+        else:
+            ltp_client_id = creds.client_id
+            ltp_access_token = creds.access_token
+
         result = RealDhanClient().get_ltp(
-            client_id=client_id,
-            access_token=access_token,
+            client_id=ltp_client_id,
+            access_token=ltp_access_token,
             exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
             security_id=str(payload.get("securityId") or ""),
         )
+        if (
+            creds is not None
+            and creds.source == "shared_market_data"
+            and not result.success
+            and refresh_shared_token_after_auth_failure(
+                status_code=result.status_code,
+                message=result.message or result.error,
+                raw_response=result.raw_response,
+            )
+        ):
+            refreshed = market_data_credentials()
+            if refreshed is not None:
+                result = RealDhanClient().get_ltp(
+                    client_id=refreshed.client_id,
+                    access_token=refreshed.access_token,
+                    exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
+                    security_id=str(payload.get("securityId") or ""),
+                )
         # Backward compatibility for old local tests that selected MOCK only
         # through the environment. Explicit Paper mode always requires real LTP.
         if not result.success and get_engine_mode(legacy_fallback=False) is None:
@@ -266,12 +306,48 @@ class PaperBroker:
                 error="market_closed",
                 raw_response={"market_closed": True},
             )
-        return RealDhanClient().get_ltp(
-            client_id=client_id,
-            access_token=access_token,
+        creds = market_data_credentials()
+        if creds is None:
+            if shared_market_data_configured():
+                return DhanLtpResult(
+                    success=False,
+                    message="Shared market-data token is unavailable; paper LTP cannot be fetched.",
+                    ltp=None,
+                    exchange_segment=exchange_segment,
+                    security_id=security_id,
+                    error="shared_market_data_unavailable",
+                )
+            ltp_client_id = client_id
+            ltp_access_token = access_token
+        else:
+            ltp_client_id = creds.client_id
+            ltp_access_token = creds.access_token
+
+        result = RealDhanClient().get_ltp(
+            client_id=ltp_client_id,
+            access_token=ltp_access_token,
             exchange_segment=exchange_segment,
             security_id=security_id,
         )
+        if (
+            creds is not None
+            and creds.source == "shared_market_data"
+            and not result.success
+            and refresh_shared_token_after_auth_failure(
+                status_code=result.status_code,
+                message=result.message or result.error,
+                raw_response=result.raw_response,
+            )
+        ):
+            refreshed = market_data_credentials()
+            if refreshed is not None:
+                result = RealDhanClient().get_ltp(
+                    client_id=refreshed.client_id,
+                    access_token=refreshed.access_token,
+                    exchange_segment=exchange_segment,
+                    security_id=security_id,
+                )
+        return result
 
     def get_fund_limit(self, *, client_id: str, access_token: str) -> DhanFundsResult:
         wallet = paper_wallet_snapshot()

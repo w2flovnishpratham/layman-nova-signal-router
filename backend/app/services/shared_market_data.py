@@ -49,6 +49,12 @@ _WORKER: threading.Thread | None = None
 _WORKER_LOCK = threading.RLock()
 
 
+def _set_last_error(code: str) -> None:
+    # Keep browser-facing status and logs free of PIN, TOTP, token, URL, and
+    # provider-specific error details.
+    _STATE["last_error"] = code
+
+
 def shared_market_data_configured() -> bool:
     """True when the dedicated data account is fully configured via env."""
     return bool(
@@ -105,8 +111,8 @@ def _generate_token_locked() -> bool:
     try:
         totp = generate_totp(secret)
     except Exception as exc:
-        _STATE["last_error"] = f"totp_error: {exc}"
-        logger.error("Shared market-data TOTP generation failed: %s", exc)
+        _set_last_error("totp_generation_failed")
+        logger.error("Shared market-data TOTP generation failed (%s).", type(exc).__name__)
         return False
 
     params = {"dhanClientId": client_id, "pin": pin, "totp": totp}
@@ -114,24 +120,25 @@ def _generate_token_locked() -> bool:
         with httpx.Client(timeout=_HTTP_TIMEOUT_SECONDS) as client:
             response = client.post(_GENERATE_TOKEN_URL, params=params)
     except Exception as exc:
-        _STATE["last_error"] = f"request_error: {exc}"
-        logger.warning("Shared market-data token request failed: %s", exc)
+        _set_last_error("token_request_failed")
+        logger.warning("Shared market-data token request failed (%s).", type(exc).__name__)
         return False
 
     if response.status_code != 200:
-        _STATE["last_error"] = f"http_{response.status_code}"
+        _set_last_error(f"token_http_{response.status_code}")
         logger.warning("Shared market-data token HTTP %s", response.status_code)
         return False
 
     try:
         body = response.json()
     except Exception as exc:
-        _STATE["last_error"] = f"bad_json: {exc}"
+        _set_last_error("token_bad_response")
+        logger.warning("Shared market-data token response JSON parse failed (%s).", type(exc).__name__)
         return False
 
     token = str(body.get("accessToken") or "").strip()
     if not token:
-        _STATE["last_error"] = "no_access_token_in_response"
+        _set_last_error("token_missing_in_response")
         logger.warning("Shared market-data token response had no accessToken.")
         return False
 
@@ -161,6 +168,56 @@ def refresh_shared_token(force: bool = False) -> bool:
         return _generate_token_locked()
 
 
+def _looks_like_auth_failure(
+    *,
+    status_code: int | None = None,
+    message: object | None = None,
+    raw_response: object | None = None,
+) -> bool:
+    if status_code in {401, 403}:
+        return True
+    text = " ".join(
+        str(item or "")
+        for item in (message, raw_response)
+        if item not in (None, "")
+    ).lower()
+    return any(
+        term in text
+        for term in (
+            "401",
+            "403",
+            "unauthorized",
+            "unauthorised",
+            "invalid token",
+            "token expired",
+            "access token",
+            "jwt",
+            "authentication",
+            "auth failed",
+        )
+    )
+
+
+def refresh_shared_token_after_auth_failure(
+    *,
+    status_code: int | None = None,
+    message: object | None = None,
+    raw_response: object | None = None,
+) -> bool:
+    """Invalidate and refresh the shared token after a Dhan auth failure."""
+    if not shared_market_data_configured():
+        return False
+    if not _looks_like_auth_failure(
+        status_code=status_code,
+        message=message,
+        raw_response=raw_response,
+    ):
+        return False
+    logger.warning("Shared market-data token auth failure detected; refreshing token.")
+    invalidate_shared_token()
+    return refresh_shared_token(force=True)
+
+
 def get_shared_market_credentials() -> DhanCredentials | None:
     """Return valid shared data credentials, refreshing on demand. None if off."""
     if not shared_market_data_configured():
@@ -186,12 +243,11 @@ def market_data_credentials() -> DhanCredentials | None:
     """Credentials for MARKET-DATA reads (LTP, feed, option chain).
 
     Prefers the shared dedicated account so data is global and users don't need
-    their own Dhan token. Falls back to the request's per-user credentials when
-    the shared feed is not configured.
+    their own Dhan token. Falls back to the request's per-user credentials only
+    when the shared feed is not configured.
     """
-    shared = get_shared_market_credentials()
-    if shared is not None:
-        return shared
+    if shared_market_data_configured():
+        return get_shared_market_credentials()
     from app.services.credential_vault import get_dhan_credentials
 
     return get_dhan_credentials()

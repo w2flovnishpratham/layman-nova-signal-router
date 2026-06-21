@@ -49,7 +49,7 @@ def save_credentials(payload: CredentialPayload, user: CurrentUser = Depends(get
     if not vault.vault_ready():
         raise HTTPException(
             status_code=503,
-            detail="Credential encryption key is not configured (CREDENTIAL_ENCRYPTION_KEY).",
+            detail="Credential storage is not configured.",
         )
     if not any(
         [payload.dhan_client_id, payload.dhan_access_token, payload.dhan_api_secret, payload.webhook_secret]

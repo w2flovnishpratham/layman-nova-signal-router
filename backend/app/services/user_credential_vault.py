@@ -49,13 +49,13 @@ def _encryption_key() -> str:
 def _fernet():
     key = _encryption_key()
     if not key:
-        raise UserVaultError("CREDENTIAL_ENCRYPTION_KEY is missing.")
+        raise UserVaultError("Credential encryption key is missing.")
     if Fernet is None:  # pragma: no cover
-        raise UserVaultError("cryptography is not installed; encrypted vault unavailable.")
+        raise UserVaultError("Encrypted credential vault is unavailable.")
     try:
         return Fernet(key.encode("utf-8"))
     except (ValueError, base64.binascii.Error) as exc:
-        raise UserVaultError("CREDENTIAL_ENCRYPTION_KEY is not a valid Fernet key.") from exc
+        raise UserVaultError("Credential encryption key is invalid.") from exc
 
 
 def vault_ready() -> bool:
@@ -70,8 +70,13 @@ def vault_status() -> dict[str, Any]:
     try:
         _fernet()
         return {"ready": True, "backend": "db", "error": None, "database_configured": database_configured()}
-    except UserVaultError as exc:
-        return {"ready": False, "backend": "db", "error": str(exc), "database_configured": database_configured()}
+    except UserVaultError:
+        return {
+            "ready": False,
+            "backend": "db",
+            "error": "Credential vault is not available.",
+            "database_configured": database_configured(),
+        }
 
 
 def _encrypt(value: str | None) -> str | None:

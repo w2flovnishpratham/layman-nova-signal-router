@@ -6,7 +6,11 @@ from typing import Any
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT
 from app.services.dhan_client import RealDhanClient, get_broker_client
-from app.services.shared_market_data import market_data_credentials
+from app.services.shared_market_data import (
+    market_data_credentials,
+    refresh_shared_token_after_auth_failure,
+    shared_market_data_configured,
+)
 from app.services.dhan_marketfeed_ws import (
     clear_marketfeed_subscription,
     ensure_marketfeed_subscription,
@@ -233,12 +237,17 @@ def _ltp_with_prefer_ws(
 
     creds = market_data_credentials()
     if not creds:
+        shared_configured = shared_market_data_configured()
         return {
-            "status": "credentials_missing",
+            "status": "shared_market_data_unavailable" if shared_configured else "credentials_missing",
             "source": "none",
-            "message": "Dhan credentials are missing.",
+            "message": (
+                "Shared market-data token is unavailable."
+                if shared_configured
+                else "Dhan credentials are missing."
+            ),
             "ltp": None,
-            "error": "credentials_missing",
+            "error": "shared_market_data_unavailable" if shared_configured else "credentials_missing",
         }
 
     try:
@@ -251,6 +260,23 @@ def _ltp_with_prefer_ws(
             exchange_segment=exchange_segment,
             security_id=security_id,
         )
+        if (
+            creds.source == "shared_market_data"
+            and not quote.success
+            and refresh_shared_token_after_auth_failure(
+                status_code=quote.status_code,
+                message=quote.message or quote.error,
+                raw_response=quote.raw_response,
+            )
+        ):
+            refreshed = market_data_credentials()
+            if refreshed is not None:
+                quote = RealDhanClient().get_ltp(
+                    client_id=refreshed.client_id,
+                    access_token=refreshed.access_token,
+                    exchange_segment=exchange_segment,
+                    security_id=security_id,
+                )
     except Exception as exc:
         cached = _cached_ltp(exchange_segment, security_id, max_age_seconds=cache_seconds)
         if cached is not None:

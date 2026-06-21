@@ -12,7 +12,10 @@ from urllib.parse import quote
 
 import websockets
 
-from app.services.shared_market_data import market_data_credentials
+from app.services.shared_market_data import (
+    market_data_credentials,
+    refresh_shared_token_after_auth_failure,
+)
 from app.services.state_store import utc_now
 
 
@@ -302,6 +305,7 @@ class DhanMarketFeedWsManager:
                 backoff_seconds = 1.0
             except Exception as exc:
                 message = str(exc)
+                refresh_shared_token_after_auth_failure(message=message)
                 logger.warning("Dhan market-feed WebSocket disconnected: %s", message)
                 with self._lock:
                     self._connected = False
@@ -370,7 +374,8 @@ class DhanMarketFeedWsManager:
                 if isinstance(message, bytes):
                     self._handle_binary(message)
                 else:
-                    self._handle_text(str(message))
+                    if self._handle_text(str(message)):
+                        return
 
     def _get_desired_targets(self) -> set[tuple[str, str]]:
         with self._lock:
@@ -397,11 +402,12 @@ class DhanMarketFeedWsManager:
             elif packet.response_code == FEED_DISCONNECT_RESPONSE_CODE:
                 self._last_error = f"feed_disconnect_{packet.disconnect_code}"
 
-    def _handle_text(self, message: str) -> None:
+    def _handle_text(self, message: str) -> bool:
         safe_message = message[:500]
         with self._lock:
             self._last_message_at = utc_now()
             self._last_error = safe_message
+        return refresh_shared_token_after_auth_failure(message=safe_message)
 
 
 _MANAGER = DhanMarketFeedWsManager()

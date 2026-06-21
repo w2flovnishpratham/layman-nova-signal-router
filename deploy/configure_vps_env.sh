@@ -71,6 +71,30 @@ for required_key in DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
   set_env "$required_key" "$value"
 done
 
+for optional_key in \
+  DHAN_SHARED_DATA_ENABLED \
+  DHAN_SHARED_CLIENT_ID \
+  DHAN_SHARED_PIN \
+  DHAN_SHARED_TOTP_SECRET
+do
+  value="$(grep -m1 "^${optional_key}=" "$deploy_secrets_file" | cut -d= -f2- || true)"
+  if [[ -n "$value" ]]; then
+    set_env "$optional_key" "$value"
+  fi
+done
+
+shared_data_enabled="$(grep -m1 '^DHAN_SHARED_DATA_ENABLED=' "$env_file" | cut -d= -f2- || true)"
+shared_data_enabled_lc="$(printf '%s' "$shared_data_enabled" | tr '[:upper:]' '[:lower:]')"
+if [[ "$shared_data_enabled_lc" == "true" || "$shared_data_enabled_lc" == "1" || "$shared_data_enabled_lc" == "yes" ]]; then
+  for shared_required_key in DHAN_SHARED_CLIENT_ID DHAN_SHARED_PIN DHAN_SHARED_TOTP_SECRET; do
+    value="$(grep -m1 "^${shared_required_key}=" "$env_file" | cut -d= -f2- || true)"
+    if [[ -z "$value" ]]; then
+      echo "Shared paper market-data setup is enabled but incomplete: ${shared_required_key}" >&2
+      exit 1
+    fi
+  done
+fi
+
 live_trading_armed="$(
   grep -m1 '^LIVE_TRADING_ARMED=' "$deploy_secrets_file" | cut -d= -f2- || true
 )"

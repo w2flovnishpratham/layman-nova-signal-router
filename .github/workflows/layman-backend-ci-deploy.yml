@@ -71,6 +71,10 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DHAN_SHARED_DATA_ENABLED: ${{ secrets.DHAN_SHARED_DATA_ENABLED }}
+          DHAN_SHARED_CLIENT_ID: ${{ secrets.DHAN_SHARED_CLIENT_ID }}
+          DHAN_SHARED_PIN: ${{ secrets.DHAN_SHARED_PIN }}
+          DHAN_SHARED_TOTP_SECRET: ${{ secrets.DHAN_SHARED_TOTP_SECRET }}
           LIVE_TRADING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_trading_mode || 'preserve' }}
           LIVE_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.live_confirmation || '' }}
         run: |
@@ -99,6 +103,16 @@ jobs:
             printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
             printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
             printf 'LIVE_TRADING_ARMED=%s\n' "$live_trading_armed"
+            for optional_name in \
+              DHAN_SHARED_DATA_ENABLED \
+              DHAN_SHARED_CLIENT_ID \
+              DHAN_SHARED_PIN \
+              DHAN_SHARED_TOTP_SECRET
+            do
+              if [ -n "${!optional_name}" ]; then
+                printf '%s=%s\n' "$optional_name" "${!optional_name}"
+              fi
+            done
           } > "$secrets_file"
 
           for attempt in 1 2 3 4 5 6; do

@@ -1,4 +1,6 @@
 from app.services import atm_ltp_service
+from app.services.credential_vault import DhanCredentials
+from app.services.dhan_client import DhanLtpResult
 from app.services.dhan_marketfeed_ws import MarketFeedLtpResult
 from app.services.security_id_resolver import OptionContractSuggestion
 
@@ -141,6 +143,56 @@ def test_ltp_cache_reuses_recent_websocket_tick(monkeypatch):
     assert first["status"] == "websocket"
     assert second["ltp"] == 134.35
     assert second["status"] == "cache:websocket"
+
+
+def test_rest_ltp_refreshes_shared_token_after_auth_failure(monkeypatch):
+    atm_ltp_service._LTP_CACHE.clear()
+    tokens_used = []
+    refresh_calls = []
+    old_creds = DhanCredentials("shared-client", "old-shared-token", "shared_market_data")
+    new_creds = DhanCredentials("shared-client", "new-shared-token", "shared_market_data")
+    credential_reads = 0
+
+    def fake_market_data_credentials():
+        nonlocal credential_reads
+        credential_reads += 1
+        return old_creds if credential_reads == 1 else new_creds
+
+    class RetryClient:
+        def get_ltp(self, **kwargs):
+            token = kwargs["access_token"]
+            tokens_used.append(token)
+            if token == "old-shared-token":
+                return DhanLtpResult(
+                    success=False,
+                    message="Dhan LTP request failed: Unauthorized",
+                    ltp=None,
+                    status_code=401,
+                    error="Unauthorized",
+                )
+            return DhanLtpResult(success=True, message="quote", ltp=101.25)
+
+    def fake_refresh(**kwargs):
+        refresh_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(atm_ltp_service, "_market_is_open", lambda: True)
+    monkeypatch.setattr(atm_ltp_service, "get_runtime_settings", lambda: {"marketfeed_ws_enabled": False})
+    monkeypatch.setattr(atm_ltp_service, "market_data_credentials", fake_market_data_credentials)
+    monkeypatch.setattr(atm_ltp_service, "RealDhanClient", RetryClient)
+    monkeypatch.setattr(atm_ltp_service, "refresh_shared_token_after_auth_failure", fake_refresh)
+
+    result = atm_ltp_service._ltp_with_prefer_ws(
+        exchange_segment="NSE_FNO",
+        security_id="57046",
+        max_age_seconds=5,
+        allow_rest_fallback=True,
+    )
+
+    assert result["status"] == "rest"
+    assert result["ltp"] == 101.25
+    assert tokens_used == ["old-shared-token", "new-shared-token"]
+    assert refresh_calls[0]["status_code"] == 401
 
 
 def test_atm_snapshot_does_not_fetch_when_market_is_closed(monkeypatch):

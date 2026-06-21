@@ -465,8 +465,19 @@ def _error_source_from_reason(reason: str, signal: NormalizedSignal) -> str:
 
 
 def _dhan_token_signal_preflight(signal: NormalizedSignal) -> dict[str, Any] | None:
-    if get_engine_mode() not in {"paper", "live"}:
+    mode = get_engine_mode()
+    if mode not in {"paper", "live"}:
         return None
+
+    # Paper mode reads market data from the shared, auto-refreshed data-only
+    # account (see shared_market_data). It does NOT use the per-user Dhan token,
+    # so paper signals must not be blocked on per-user token expiry when the
+    # shared feed is active. Live mode still requires the user's own fresh token.
+    if mode == "paper":
+        from app.services.shared_market_data import shared_market_data_configured
+
+        if shared_market_data_configured():
+            return None
 
     token_meta = dhan_token_age_metadata()
     age_minutes = token_meta.get("token_age_minutes")
@@ -904,14 +915,40 @@ def _place_order(
         client_id = creds.client_id
         access_token = creds.access_token
     else:
-        if explicit_engine_mode == "paper" and not creds:
+        paper_data_creds = None
+        shared_data_status: dict[str, Any] | None = None
+        if explicit_engine_mode == "paper":
+            from app.services.shared_market_data import (
+                market_data_credentials,
+                shared_market_data_configured,
+                shared_market_data_status,
+            )
+
+            paper_data_creds = market_data_credentials()
+            if shared_market_data_configured():
+                shared_data_status = shared_market_data_status()
+
+        if explicit_engine_mode == "paper" and not paper_data_creds:
+            shared_configured = bool(shared_data_status and shared_data_status.get("configured"))
+            reason = (
+                "Paper mode blocked: shared market-data token unavailable. "
+                "Check DHAN_SHARED_* TOTP setup and Dhan auth status."
+                if shared_configured
+                else "Paper mode blocked: Dhan Client ID or Access Token missing. Real market data is required for paper fills."
+            )
             return _blocked(
                 "BLOCKED",
-                "Paper mode blocked: Dhan Client ID or Access Token missing. Real market data is required for paper fills.",
+                reason,
                 signal,
                 security_id_resolution=security_id_resolution,
                 security_id=request_payload.get("securityId"),
                 trading_symbol=request_payload.get("tradingSymbol"),
+                result_extra={
+                    "block_code": "SHARED_MARKET_DATA_TOKEN_UNAVAILABLE"
+                    if shared_configured
+                    else "DHAN_CREDENTIALS_MISSING",
+                    "shared_market_data": shared_data_status,
+                } if explicit_engine_mode == "paper" else None,
             )
         if explicit_engine_mode == "paper" and (not security_id_resolution.get("ok") or not request_payload.get("securityId")):
             return _blocked(
@@ -923,8 +960,9 @@ def _place_order(
                 trading_symbol=request_payload.get("tradingSymbol"),
             )
         client = get_broker_client(engine_mode)
-        client_id = creds.client_id if creds else "MOCK_CLIENT"
-        access_token = creds.access_token if creds else ""
+        selected_creds = paper_data_creds if explicit_engine_mode == "paper" else creds
+        client_id = selected_creds.client_id if selected_creds else "MOCK_CLIENT"
+        access_token = selected_creds.access_token if selected_creds else ""
 
     if engine_mode == "live" and action == "ENTRY" and not skip_entry_preflight:
         preflight = _dhan_entry_preflight(client, client_id=client_id, access_token=access_token, signal=signal)

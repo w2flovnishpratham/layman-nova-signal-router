@@ -902,10 +902,131 @@ code {
   margin: 22px auto 0;
 }
 
+.engine-shell-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
 /* Transient boot/error notices span the full width above the panels. */
 .engine-shell > .error-banner,
 .engine-shell > .system-chip {
   grid-column: 1 / -1;
+}
+
+.desktop-engine-panel {
+  display: none;
+  min-width: 0;
+}
+
+.engine-panel-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.panel-collapse-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 34px;
+}
+
+.engine-panel-left .panel-collapse-bar {
+  justify-content: flex-end;
+}
+
+.engine-panel-right .panel-collapse-bar {
+  justify-content: flex-start;
+}
+
+.panel-collapse-button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(157, 91, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(18, 15, 28, 0.92);
+  color: rgba(247, 243, 255, 0.74);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition:
+    transform var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-soft),
+    background var(--dur-base) var(--ease-soft),
+    color var(--dur-base) var(--ease-soft);
+}
+
+.panel-collapse-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(157, 91, 255, 0.34);
+  background: rgba(157, 91, 255, 0.12);
+  color: var(--text-1);
+}
+
+.panel-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  opacity: 1;
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+  scrollbar-width: thin;
+  scroll-behavior: smooth;
+  transition:
+    opacity var(--dur-base) var(--ease-soft),
+    transform var(--dur-base) var(--ease-out),
+    visibility 0s linear 0s;
+}
+
+.desktop-engine-panel.is-collapsed .engine-panel-shell {
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+}
+
+.desktop-engine-panel.is-collapsed .panel-collapse-bar {
+  position: relative;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  height: 100%;
+  min-height: 100%;
+  padding-top: 0;
+}
+
+.desktop-engine-panel.is-collapsed .panel-scroll {
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition-delay: 0s, 0s, var(--dur-base);
+}
+
+.engine-panel-left.is-collapsed .panel-scroll {
+  transform: translateX(-12px);
+}
+
+.engine-panel-right.is-collapsed .panel-scroll {
+  transform: translateX(12px);
+}
+
+.panel-rail-label {
+  position: absolute;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  writing-mode: vertical-rl;
+  color: rgba(247, 243, 255, 0.46);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .engine-left {
@@ -2359,6 +2480,41 @@ code {
   gap: 7px;
 }
 
+.manual-advanced-motion {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 1px solid transparent;
+  opacity: 0;
+  transform: translateY(-6px);
+  overflow: hidden;
+  transition:
+    grid-template-rows var(--dur-slow) var(--ease-out),
+    margin-top var(--dur-base) var(--ease-soft),
+    padding-top var(--dur-base) var(--ease-soft),
+    border-color var(--dur-base) var(--ease-soft),
+    opacity var(--dur-base) var(--ease-soft),
+    transform var(--dur-base) var(--ease-out);
+}
+
+.manual-advanced-motion.is-open {
+  grid-template-rows: 1fr;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top-color: rgba(255, 255, 255, 0.05);
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.manual-advanced-content {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+}
+
 .manual-action-button {
   min-height: 36px;
   padding: 0 9px;
@@ -2657,6 +2813,24 @@ code {
 
 /* Below the 3-column threshold: stack panels into one scrollable column.
    Order: chat/execution first, then market + manual, then account + controls. */
+@media (min-width: 1024px) {
+  .engine-shell-grid {
+    grid-template-columns: var(--desktop-grid-columns, minmax(320px, 4fr) minmax(420px, 5fr) minmax(280px, 3fr));
+    transition: grid-template-columns var(--dur-slow) var(--ease-out);
+  }
+
+  .desktop-engine-panel {
+    display: block;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .engine-shell-grid.left-panel-collapsed .engine-main-pane,
+  .engine-shell-grid.right-panel-collapsed .engine-main-pane {
+    transition: border-color var(--dur-base) var(--ease-soft), box-shadow var(--dur-base) var(--ease-soft);
+  }
+}
+
 @media (max-width: 1180px) {
   .engine-shell .chat-log {
     height: 52vh;

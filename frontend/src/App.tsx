@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BarChart3, LineChart, Loader2, Sliders, Wallet } from 'lucide-react'
+import type { CSSProperties } from 'react'
+import { BarChart3, ChevronLeft, ChevronRight, LineChart, Loader2, Sliders, Wallet } from 'lucide-react'
 import { AuthScreen } from './components/AuthScreen'
 import { EngineLeftPanel } from './components/EngineLeftPanel'
 import { EngineListening } from './components/EngineListening'
@@ -27,6 +28,7 @@ import type { ClientCommand, MarketSnapshot, SystemHealth } from './types'
 
 function App() {
   const wsRef = useRef<SessionWS | null>(null)
+  const lastCommandRef = useRef<{ key: string; at: number } | null>(null)
   const [bootNonce, setBootNonce] = useState(0)
   const [view, setView] = useState<NovaView>('trading')
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
@@ -36,6 +38,8 @@ function App() {
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false)
   const [rightDrawerOpen, setRightDrawerOpen] = useState(false)
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false)
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false)
   const [snapshotLoaded, setSnapshotLoaded] = useState(false)
   const session = useSessionStore((state) => state.session)
   const setupFlowStep = useSessionStore((state) => state.setupFlowStep)
@@ -166,6 +170,16 @@ function App() {
   }, [engineMode])
 
   function send(command: ClientCommand) {
+    // Double-click / double-submit guard: ignore an identical command that is
+    // re-fired within a short window while the previous one is still in flight.
+    // Distinct commands (e.g. the next setup step) are never blocked.
+    const key = JSON.stringify(command)
+    const now = Date.now()
+    const last = lastCommandRef.current
+    if (last && last.key === key && now - last.at < 4000) {
+      return
+    }
+    lastCommandRef.current = { key, at: now }
     markCommandSent()
     wsRef.current?.send(command)
   }
@@ -212,6 +226,7 @@ function App() {
   }
 
   const engineLive = setupState === 'LIVE' || setupState === 'PAUSED'
+  const desktopGridColumns = `${leftPanelCollapsed ? '54px' : 'minmax(320px, 4fr)'} minmax(420px, 5fr) ${rightPanelCollapsed ? '54px' : 'minmax(280px, 3fr)'}`
   const setupPanel = (
     <SetupPanel
       state={setupState}
@@ -248,17 +263,41 @@ function App() {
       {view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : (
-        <section className={engineLive ? 'engine-shell grid grid-cols-1 lg:grid-cols-12 gap-5 px-4 w-full max-w-[1480px] mx-auto lg:h-[calc(100vh-120px)] lg:min-h-0 min-h-screen items-stretch' : 'chat-shell'} aria-label="Nova trading session">
+        <section
+          className={
+            engineLive
+              ? `engine-shell engine-shell-grid ${leftPanelCollapsed ? 'left-panel-collapsed' : ''} ${rightPanelCollapsed ? 'right-panel-collapsed' : ''} px-4 w-full max-w-[1480px] mx-auto lg:h-[calc(100vh-120px)] lg:min-h-0 min-h-screen items-stretch`
+              : 'chat-shell'
+          }
+          style={engineLive ? ({ '--desktop-grid-columns': desktopGridColumns } as CSSProperties) : undefined}
+          aria-label="Nova trading session"
+        >
         {bootError ? <div className="error-banner col-span-full">{bootError}</div> : null}
         {!session && !bootError ? <div className="system-chip col-span-full">Starting session</div> : null}
 
         {engineLive ? (
-          <aside className="hidden lg:block lg:col-span-4 lg:h-full lg:overflow-y-auto pr-1">
-            <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
+          <aside className={`desktop-engine-panel engine-panel-left ${leftPanelCollapsed ? 'is-collapsed' : ''}`}>
+            <div className="engine-panel-shell">
+              <div className="panel-collapse-bar">
+                <button
+                  type="button"
+                  className="panel-collapse-button"
+                  aria-label={leftPanelCollapsed ? 'Expand market and manual order panel' : 'Collapse market and manual order panel'}
+                  title={leftPanelCollapsed ? 'Expand panel' : 'Collapse panel'}
+                  onClick={() => setLeftPanelCollapsed((collapsed) => !collapsed)}
+                >
+                  {leftPanelCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+                </button>
+                {leftPanelCollapsed ? <span className="panel-rail-label">Market</span> : null}
+              </div>
+              <div className="panel-scroll" aria-hidden={leftPanelCollapsed}>
+                <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
+              </div>
+            </div>
           </aside>
         ) : null}
 
-        <div className="engine-main-pane col-span-1 lg:col-span-5 lg:h-full flex flex-col min-h-[450px] lg:min-h-0">
+        <div className="engine-main-pane lg:h-full flex flex-col min-h-[450px] lg:min-h-0">
           {!snapshotLoaded && !bootError ? (
             <div className="flex flex-col items-center justify-center flex-grow min-h-[350px] gap-3 text-white/40">
               <Loader2 className="w-8 h-8 animate-spin text-[#9d5bff]" />
@@ -307,18 +346,34 @@ function App() {
         </div>
 
         {engineLive ? (
-          <aside className="hidden lg:block lg:col-span-3 lg:h-full lg:overflow-y-auto pr-1">
-            <EngineSidebar
-              state={setupState}
-              wallet={wallet}
-              marginUtilized={marginUtilized}
-              realizedPnl={realizedPnl}
-              activeTrade={activeTrade}
-              lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
-              side={config.risk?.side ?? 'BOTH'}
-              engineMode={engineMode}
-              onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
-            />
+          <aside className={`desktop-engine-panel engine-panel-right ${rightPanelCollapsed ? 'is-collapsed' : ''}`}>
+            <div className="engine-panel-shell">
+              <div className="panel-collapse-bar">
+                <button
+                  type="button"
+                  className="panel-collapse-button"
+                  aria-label={rightPanelCollapsed ? 'Expand account and controls panel' : 'Collapse account and controls panel'}
+                  title={rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'}
+                  onClick={() => setRightPanelCollapsed((collapsed) => !collapsed)}
+                >
+                  {rightPanelCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+                </button>
+                {rightPanelCollapsed ? <span className="panel-rail-label">Account</span> : null}
+              </div>
+              <div className="panel-scroll" aria-hidden={rightPanelCollapsed}>
+                <EngineSidebar
+                  state={setupState}
+                  wallet={wallet}
+                  marginUtilized={marginUtilized}
+                  realizedPnl={realizedPnl}
+                  activeTrade={activeTrade}
+                  lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
+                  side={config.risk?.side ?? 'BOTH'}
+                  engineMode={engineMode}
+                  onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
+                />
+              </div>
+            </div>
           </aside>
         ) : null}
       </section>
