@@ -35,6 +35,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const advancedToggleRef = useRef<HTMLButtonElement | null>(null)
   const advancedRegionRef = useRef<HTMLDivElement | null>(null)
   const advancedScrollTimerRef = useRef<number | null>(null)
+  const advancedScrollReadyRef = useRef(false)
   const reduceMotion = useAppReducedMotion()
   
   const live = engineMode === 'live'
@@ -70,13 +71,18 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   }, [engineMode, lots, pending, side])
 
   useEffect(() => {
+    if (!advancedScrollReadyRef.current) {
+      advancedScrollReadyRef.current = true
+      return
+    }
+
     if (advancedScrollTimerRef.current !== null) {
       window.clearTimeout(advancedScrollTimerRef.current)
     }
     advancedScrollTimerRef.current = window.setTimeout(() => {
       const target = showAdvanced ? advancedRegionRef.current : advancedToggleRef.current
       target?.scrollIntoView({
-        behavior: 'smooth',
+        behavior: reduceMotion ? 'auto' : 'smooth',
         block: showAdvanced ? 'start' : 'nearest',
       })
     }, showAdvanced ? 140 : 60)
@@ -87,7 +93,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
         advancedScrollTimerRef.current = null
       }
     }
-  }, [showAdvanced])
+  }, [reduceMotion, showAdvanced])
 
   async function runOrder(action: 'entry' | 'exit' | 'reverse', entrySide: 'CE' | 'PE' = side) {
     if (pending) return
