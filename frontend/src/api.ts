@@ -73,6 +73,10 @@ export interface ManualEntryPayload {
   lots: number
   targetProfitPct?: number
   stopLossPct?: number
+  strike?: number | null
+  expiry?: string | null
+  securityId?: string | null
+  tradingSymbol?: string | null
 }
 
 export interface ManualOrderResponse {

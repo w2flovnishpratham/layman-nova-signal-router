@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.api.ws import _apply_production_command
 from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.state_machine import SetupState, validate_command
+from app.routers import orders as orders_router
 from app.routers import setup as setup_router
 from app.routers.webhook import _safe_raw_body_for_log, _valid_webhook_signature
 from app.schemas.signal import NormalizedSignal
@@ -276,6 +277,55 @@ def test_session_pause_resume_commands_are_idempotent_for_running_states():
     state, patch = validate_command(SetupState.PAUSED, "session.pause", {})
     assert state == SetupState.PAUSED
     assert patch == {}
+
+
+def test_manual_paper_entry_auto_selects_contract_with_real_market_data_settings(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+    monkeypatch.setattr(orders_router, "current_nifty_lot_size", lambda: 65)
+    monkeypatch.setattr(
+        orders_router,
+        "get_atm_option_snapshot",
+        lambda **_kwargs: {
+            "marketOpen": True,
+            "niftySpot": 24110.0,
+            "niftySpotSource": "rest",
+            "atmStrike": 24100,
+            "options": {
+                "CE": {
+                    "securityId": "AUTO-CE",
+                    "tradingSymbol": "NIFTY 2026-06-23 24100 CE",
+                    "strike": 24100,
+                    "expiry": "2026-06-23",
+                    "ltp": 120.5,
+                    "ltpSource": "rest",
+                    "autoContract": {
+                        "security_id": "AUTO-CE",
+                        "trading_symbol": "NIFTY 2026-06-23 24100 CE",
+                    },
+                }
+            },
+        },
+    )
+
+    signal = orders_router._manual_entry_signal(
+        option_side="CE",
+        lots=1,
+        strike=None,
+        expiry=None,
+        security_id=None,
+        trading_symbol=None,
+        raw_payload={"manual_order": True},
+    )
+
+    assert signal.security_id == "AUTO-CE"
+    assert signal.trading_symbol == "NIFTY 2026-06-23 24100 CE"
+    assert signal.strike == 24100
+    assert signal.expiry == "2026-06-23"
+    assert signal.qty == 65
+    assert signal.raw_payload["autoAtm"]["atmStrike"] == 24100
 
 
 def test_session_exit_open_routes_exit_without_stopping_engine(tmp_path, monkeypatch):

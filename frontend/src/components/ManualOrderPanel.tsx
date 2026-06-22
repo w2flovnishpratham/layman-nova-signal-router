@@ -113,8 +113,9 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
     setStage('Validating risk')
     await pause(120)
     setStage('Placing order')
+    const quotedContract = quote?.side === entrySide ? quoteContractPayload(quote, entrySide) : {}
     const response = action === 'entry'
-      ? await postManualEntry({ side: entrySide, lots, targetProfitPct, stopLossPct })
+      ? await postManualEntry({ side: entrySide, lots, targetProfitPct, stopLossPct, ...quotedContract })
       : action === 'exit'
         ? await postManualExit()
         : await postManualReverse(lots)
@@ -359,4 +360,14 @@ function quoteSourceLabel(quote: OrderQuote | null): string {
   if (source.includes('rest') || source === 'rest') return 'Dhan REST fallback'
   if (source === 'market_closed') return 'Market closed'
   return source.replace(/_/g, ' ')
+}
+
+function quoteContractPayload(quote: OrderQuote, side: 'CE' | 'PE') {
+  const option = quote.atm?.options?.[side]
+  return {
+    securityId: quote.securityId ?? option?.securityId ?? null,
+    tradingSymbol: quote.tradingSymbol ?? option?.tradingSymbol ?? null,
+    strike: option?.strike ?? quote.atm?.atmStrike ?? null,
+    expiry: option?.expiry ?? null,
+  }
 }

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from app.services.audit_logger import read_jsonl
-from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_PRODUCT_TYPE, DEFAULT_ORDER_TYPE, settings
+from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_PRODUCT_TYPE, DEFAULT_ORDER_TYPE
 from app.routers.setup import current_nifty_lot_size
 from app.schemas.signal import NormalizedSignal
 from app.services.atm_ltp_service import get_atm_option_snapshot
@@ -390,11 +390,7 @@ def _manual_entry_signal(
 
 def _manual_auto_contract_allowed() -> bool:
     mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
-    return (
-        str(mode or "").lower() == "paper"
-        and settings.DHAN_MODE.upper() == "MOCK"
-        and not settings.ENABLE_LIVE_ORDERS
-    )
+    return str(mode or "").lower() == "paper"
 
 
 def _latest_nifty_reference_price() -> float | None:
