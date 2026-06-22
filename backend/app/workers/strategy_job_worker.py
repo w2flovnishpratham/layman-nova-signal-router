@@ -186,6 +186,8 @@ def process_queued_jobs_once(*, limit: int | None = None) -> int:
         thread_name_prefix="nova-strategy-user",
     ) as executor:
         list(executor.map(_execute_job, jobs))
+    for strategy_signal_id in {job["strategy_signal_id"] for job in jobs}:
+        _refresh_signal_summary(strategy_signal_id)
     return len(jobs)
 
 
