@@ -213,6 +213,46 @@ def test_paper_broker_refreshes_shared_token_and_retries_ltp(tmp_path, monkeypat
     assert refresh_calls[0]["status_code"] == 401
 
 
+def test_paper_broker_falls_back_to_local_ltp_after_shared_ltp_failure(tmp_path, monkeypatch):
+    _isolate_paper_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    state_store.update_runtime_settings(paper_starting_balance=100000, paper_slippage_percent=0.0)
+    paper_portfolio.reset_paper_portfolio(100000)
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+    shared_creds = DhanCredentials("shared-client", "old-shared-token", "shared_market_data")
+
+    class FailingClient:
+        def get_ltp(self, **_kwargs) -> DhanLtpResult:
+            return DhanLtpResult(
+                success=False,
+                message="Dhan LTP request failed.",
+                ltp=None,
+                status_code=401,
+                error="Unauthorized",
+            )
+
+    monkeypatch.setattr(paper_broker, "RealDhanClient", FailingClient)
+    monkeypatch.setattr(paper_broker, "market_data_credentials", lambda: shared_creds)
+    monkeypatch.setattr(paper_broker, "refresh_shared_token_after_auth_failure", lambda **_kwargs: False)
+
+    result = PaperBroker().place_order(
+        client_id="user-client",
+        access_token="expired-user-token",
+        payload={
+            "transactionType": "BUY",
+            "quantity": 10,
+            "tradingSymbol": "NIFTY TEST CE",
+            "securityId": "57046",
+            "exchangeSegment": "NSE_FNO",
+        },
+    )
+
+    assert result.success is True
+    assert result.avg_price == 136.0
+    assert result.raw_response["sourceLtp"] == 136.0
+
+
 def test_paper_place_order_runs_without_user_token_when_shared_data_available(tmp_path, monkeypatch):
     _isolate_paper_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("paper")

@@ -99,6 +99,18 @@ export interface ExitLevelsResponse {
   normalizedError?: Record<string, unknown> | null
 }
 
+export interface QuantityPayload {
+  qty: number
+}
+
+export interface QuantityResponse {
+  ok: boolean
+  message: string
+  qty?: number
+  lots?: number
+  normalizedError?: Record<string, unknown> | null
+}
+
 export interface OrderQuote {
   ok: boolean
   message?: string
@@ -223,6 +235,19 @@ export async function patchActiveExitLevels(payload: ExitLevelsPayload): Promise
     throw new Error(body?.message || `Could not update SL/TP: ${response.status}`)
   }
   return body ?? { ok: false, message: 'Could not update SL/TP.' }
+}
+
+export async function patchActiveQuantity(payload: QuantityPayload): Promise<QuantityResponse> {
+  const response = await apiFetch('/api/orders/active-position/quantity', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as QuantityResponse | null
+  if (!response.ok) {
+    throw new Error(body?.message || `Could not update qty: ${response.status}`)
+  }
+  return body ?? { ok: false, message: 'Could not update qty.' }
 }
 
 async function postManualOrder(path: `/${string}`, payload: unknown): Promise<ManualOrderResponse> {

@@ -14,7 +14,7 @@ from app.routers import orders as orders_router
 from app.routers import setup as setup_router
 from app.routers.webhook import _safe_raw_body_for_log, _valid_webhook_signature
 from app.schemas.signal import NormalizedSignal
-from app.services import audit_logger, credential_vault, state_store
+from app.services import audit_logger, credential_vault, paper_portfolio, state_store
 from app.services.chat_event_publisher import publish_chat_result
 from app.services.dhan_client import RealDhanClient
 from app.services.execution_router import _broker_exit_levels, route_entry_signal
@@ -27,6 +27,7 @@ def _isolate_runtime(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
     monkeypatch.setattr(state_store, "OPEN_POSITION_FILE", state_dir / "open_position.json")
     monkeypatch.setattr(state_store, "PAPER_POSITION_FILE", state_dir / "paper_position.json")
+    monkeypatch.setattr(state_store, "PAPER_PORTFOLIO_FILE", state_dir / "paper_portfolio.json")
     monkeypatch.setattr(state_store, "EXTERNAL_POSITIONS_FILE", state_dir / "external_positions.json")
     monkeypatch.setattr(state_store, "SEEN_SIGNALS_FILE", state_dir / "seen_signals.json")
     monkeypatch.setattr(state_store, "SETTINGS_FILE", state_dir / "settings.json")
@@ -39,6 +40,7 @@ def _isolate_runtime(tmp_path, monkeypatch) -> None:
     }
     monkeypatch.setattr(state_store, "LOG_FILES", log_files)
     monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
+    monkeypatch.setattr(paper_portfolio, "PAPER_PORTFOLIO_FILE", state_dir / "paper_portfolio.json")
     monkeypatch.setattr(settings, "APP_ENV", "local")
     monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False)
@@ -381,6 +383,100 @@ def test_active_position_exit_levels_rejects_display_only_dhan_super_position(tm
 
     assert result["ok"] is False
     assert state_store.get_open_position().get("active_exit_levels") is None
+
+
+def test_active_position_quantity_can_be_updated_for_paper_position(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    monkeypatch.setattr(orders_router, "current_nifty_lot_size", lambda: 65)
+    state_store.update_runtime_settings(max_qty_per_order=130)
+    paper_portfolio.reset_paper_portfolio(100000)
+    portfolio = paper_portfolio.get_paper_portfolio()
+    portfolio.available_balance = 93500.0
+    portfolio.utilized_amount = 6500.0
+    portfolio.open_trade = {
+        "symbol": "NIFTY 2026-06-23 24100 CE",
+        "qty": 65,
+        "entry_price": 100.0,
+        "entry_value": 6500.0,
+        "entry_order_id": "PAPER-ENTRY",
+    }
+    paper_portfolio._write(portfolio)
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "symbol": "NIFTY",
+            "trading_symbol": "NIFTY 2026-06-23 24100 CE",
+            "option_side": "CE",
+            "qty": 65,
+            "entry_price": 100.0,
+            "exit_management": "SERVER",
+            "live_pnl": {"entry_price": 100.0, "ltp": 110.0, "qty": 65},
+        }
+    )
+
+    result = orders_router.update_active_position_quantity(orders_router.QuantityRequest(qty=130))
+    position = state_store.get_open_position()
+    resized = paper_portfolio.get_paper_portfolio()
+
+    assert result["ok"] is True
+    assert result["qty"] == 130
+    assert result["lots"] == 2
+    assert position["qty"] == 130
+    assert position["filled_qty"] == 130
+    assert position["live_pnl"]["qty"] == 130
+    assert position["live_pnl"]["unrealized_pnl"] == 1300.0
+    assert position["live_pnl"]["pnl_percent"] == 10.0
+    assert resized.open_trade["qty"] == 130
+    assert resized.open_trade["entry_value"] == 13000.0
+    assert resized.utilized_amount == 13000.0
+    assert resized.available_balance == 87000.0
+
+
+def test_active_position_quantity_rejects_live_position_update(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("live")
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "symbol": "NIFTY",
+            "trading_symbol": "NIFTY 2026-06-23 24100 CE",
+            "option_side": "CE",
+            "qty": 65,
+            "entry_price": 100.0,
+            "exit_management": "DHAN_SUPER",
+            "live_pnl": {"entry_price": 100.0, "ltp": 105.0, "qty": 65},
+        }
+    )
+
+    result = orders_router.update_active_position_quantity(orders_router.QuantityRequest(qty=130))
+
+    assert result["ok"] is False
+    assert state_store.get_open_position()["qty"] == 65
+
+
+def test_active_position_quantity_requires_whole_lot(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    monkeypatch.setattr(orders_router, "current_nifty_lot_size", lambda: 65)
+    state_store.update_runtime_settings(max_qty_per_order=130)
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "symbol": "NIFTY",
+            "trading_symbol": "NIFTY 2026-06-23 24100 CE",
+            "option_side": "CE",
+            "qty": 65,
+            "entry_price": 100.0,
+            "exit_management": "SERVER",
+            "live_pnl": {"entry_price": 100.0, "ltp": 105.0, "qty": 65},
+        }
+    )
+
+    result = orders_router.update_active_position_quantity(orders_router.QuantityRequest(qty=66))
+
+    assert result["ok"] is False
+    assert state_store.get_open_position()["qty"] == 65
 
 
 def test_session_exit_open_routes_exit_without_stopping_engine(tmp_path, monkeypatch):

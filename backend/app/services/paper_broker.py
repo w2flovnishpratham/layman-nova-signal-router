@@ -49,6 +49,27 @@ def _local_mock_ltp(security_id: str) -> float:
     return _round_tick(90.0 + float(seed % 75))
 
 
+def _paper_ltp_fallback(
+    *,
+    result: DhanLtpResult,
+    exchange_segment: str,
+    security_id: str,
+) -> DhanLtpResult:
+    return DhanLtpResult(
+        success=True,
+        message="Paper mode local LTP fallback after Dhan LTP failed.",
+        ltp=_local_mock_ltp(security_id),
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        raw_response={
+            "mode": "paper",
+            "paper_ltp_fallback": True,
+            "real_ltp_error": result.message or result.error,
+            "real_ltp_status_code": result.status_code,
+        },
+    )
+
+
 def _simulated_charges(qty: int, price: float, transaction_type: str) -> float:
     turnover = max(float(qty) * float(price), 0.0)
     transaction = transaction_type.upper()
@@ -78,39 +99,47 @@ class PaperBroker:
     """High-fidelity paper broker. It never calls a Dhan order endpoint."""
 
     def _ltp(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanLtpResult:
+        exchange_segment = str(payload.get("exchangeSegment") or "NSE_FNO")
+        security_id = str(payload.get("securityId") or "")
         if not _market_is_open():
             return DhanLtpResult(
                 success=False,
                 message="Market is closed; Dhan REST LTP fetching is disabled.",
                 ltp=None,
-                exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
-                security_id=str(payload.get("securityId") or ""),
+                exchange_segment=exchange_segment,
+                security_id=security_id,
                 error="market_closed",
                 raw_response={"market_closed": True},
             )
         creds = market_data_credentials()
         if creds is None:
             if shared_market_data_configured():
-                return DhanLtpResult(
+                result = DhanLtpResult(
                     success=False,
                     message="Shared market-data token is unavailable; paper fill cannot fetch Dhan LTP.",
                     ltp=None,
-                    exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
-                    security_id=str(payload.get("securityId") or ""),
+                    exchange_segment=exchange_segment,
+                    security_id=security_id,
                     error="shared_market_data_unavailable",
                 )
-            ltp_client_id = client_id
-            ltp_access_token = access_token
+            else:
+                ltp_client_id = client_id
+                ltp_access_token = access_token
+                result = RealDhanClient().get_ltp(
+                    client_id=ltp_client_id,
+                    access_token=ltp_access_token,
+                    exchange_segment=exchange_segment,
+                    security_id=security_id,
+                )
         else:
             ltp_client_id = creds.client_id
             ltp_access_token = creds.access_token
-
-        result = RealDhanClient().get_ltp(
-            client_id=ltp_client_id,
-            access_token=ltp_access_token,
-            exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
-            security_id=str(payload.get("securityId") or ""),
-        )
+            result = RealDhanClient().get_ltp(
+                client_id=ltp_client_id,
+                access_token=ltp_access_token,
+                exchange_segment=exchange_segment,
+                security_id=security_id,
+            )
         if (
             creds is not None
             and creds.source == "shared_market_data"
@@ -126,18 +155,20 @@ class PaperBroker:
                 result = RealDhanClient().get_ltp(
                     client_id=refreshed.client_id,
                     access_token=refreshed.access_token,
-                    exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
-                    security_id=str(payload.get("securityId") or ""),
+                    exchange_segment=exchange_segment,
+                    security_id=security_id,
                 )
+        if not result.success and get_engine_mode(legacy_fallback=False) == "paper":
+            return _paper_ltp_fallback(result=result, exchange_segment=exchange_segment, security_id=security_id)
         # Backward compatibility for old local tests that selected MOCK only
-        # through the environment. Explicit Paper mode always requires real LTP.
+        # through the environment without an explicit engine mode.
         if not result.success and get_engine_mode(legacy_fallback=False) is None:
             return DhanLtpResult(
                 success=True,
                 message="Legacy local paper fill.",
                 ltp=100.0,
-                exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
-                security_id=str(payload.get("securityId") or ""),
+                exchange_segment=exchange_segment,
+                security_id=security_id,
                 raw_response={"legacy_local_fallback": True},
             )
         if (
@@ -145,12 +176,11 @@ class PaperBroker:
             and settings.DHAN_MODE.upper() == "MOCK"
             and not settings.ENABLE_LIVE_ORDERS
         ):
-            security_id = str(payload.get("securityId") or "")
             return DhanLtpResult(
                 success=True,
                 message="Local MOCK paper fill.",
                 ltp=_local_mock_ltp(security_id),
-                exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
+                exchange_segment=exchange_segment,
                 security_id=security_id,
                 raw_response={
                     "mode": "paper",
@@ -173,7 +203,9 @@ class PaperBroker:
             )
 
         runtime = get_runtime_settings()
-        slippage = max(float(runtime.get("paper_slippage_percent") or 0.10), 0.0) / 100
+        raw_slippage = runtime.get("paper_slippage_percent")
+        slippage_percent = 0.10 if raw_slippage in (None, "") else float(raw_slippage)
+        slippage = max(slippage_percent, 0.0) / 100
         transaction = str(payload.get("transactionType") or "BUY").upper()
         multiplier = 1 + slippage if transaction == "BUY" else 1 - slippage
         fill_price = _round_tick(float(quote.ltp) * multiplier)
@@ -309,7 +341,7 @@ class PaperBroker:
         creds = market_data_credentials()
         if creds is None:
             if shared_market_data_configured():
-                return DhanLtpResult(
+                result = DhanLtpResult(
                     success=False,
                     message="Shared market-data token is unavailable; paper LTP cannot be fetched.",
                     ltp=None,
@@ -317,18 +349,24 @@ class PaperBroker:
                     security_id=security_id,
                     error="shared_market_data_unavailable",
                 )
-            ltp_client_id = client_id
-            ltp_access_token = access_token
+            else:
+                ltp_client_id = client_id
+                ltp_access_token = access_token
+                result = RealDhanClient().get_ltp(
+                    client_id=ltp_client_id,
+                    access_token=ltp_access_token,
+                    exchange_segment=exchange_segment,
+                    security_id=security_id,
+                )
         else:
             ltp_client_id = creds.client_id
             ltp_access_token = creds.access_token
-
-        result = RealDhanClient().get_ltp(
-            client_id=ltp_client_id,
-            access_token=ltp_access_token,
-            exchange_segment=exchange_segment,
-            security_id=security_id,
-        )
+            result = RealDhanClient().get_ltp(
+                client_id=ltp_client_id,
+                access_token=ltp_access_token,
+                exchange_segment=exchange_segment,
+                security_id=security_id,
+            )
         if (
             creds is not None
             and creds.source == "shared_market_data"
@@ -347,6 +385,8 @@ class PaperBroker:
                     exchange_segment=exchange_segment,
                     security_id=security_id,
                 )
+        if not result.success and get_engine_mode(legacy_fallback=False) == "paper":
+            return _paper_ltp_fallback(result=result, exchange_segment=exchange_segment, security_id=security_id)
         return result
 
     def get_fund_limit(self, *, client_id: str, access_token: str) -> DhanFundsResult:

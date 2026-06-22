@@ -100,6 +100,35 @@ def apply_paper_entry(*, qty: int, price: float, charges: float, symbol: str, or
     return _write(portfolio)
 
 
+def resize_paper_open_trade_quantity(*, qty: int) -> PaperPortfolio:
+    portfolio = get_paper_portfolio()
+    trade = dict(portfolio.open_trade or {})
+    if not trade:
+        return portfolio
+
+    new_qty = max(int(qty), 0)
+    old_qty = max(int(trade.get("qty") or 0), 0)
+    entry_price = float(trade.get("entry_price") or 0)
+    old_entry_value = float(trade.get("entry_value") or old_qty * entry_price)
+    new_entry_value = round(new_qty * entry_price, 2)
+    value_delta = round(new_entry_value - old_entry_value, 2)
+    if value_delta > portfolio.available_balance:
+        raise ValueError("Paper quantity update rejected: insufficient virtual balance.")
+
+    portfolio.available_balance = round(portfolio.available_balance - value_delta, 2)
+    portfolio.utilized_amount = round(max(0.0, portfolio.utilized_amount + value_delta), 2)
+    portfolio.session_pnl = round(portfolio.available_balance + portfolio.utilized_amount - portfolio.session_start_balance, 2)
+    trade.update(
+        {
+            "qty": new_qty,
+            "entry_value": new_entry_value,
+            "quantity_adjusted_at": utc_now(),
+        }
+    )
+    portfolio.open_trade = trade
+    return _write(portfolio)
+
+
 def apply_paper_exit(*, qty: int, exit_price: float, charges: float, symbol: str, order_id: str) -> PaperPortfolio:
     portfolio = get_paper_portfolio()
     trade = dict(portfolio.open_trade or {})

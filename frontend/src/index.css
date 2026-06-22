@@ -835,6 +835,10 @@ code {
   overflow: hidden;
 }
 
+.trade-edit-panel.quantity-edit-panel {
+  grid-template-columns: minmax(0, 1fr) 34px 34px;
+}
+
 .trade-edit-panel label {
   display: grid;
   gap: 4px;

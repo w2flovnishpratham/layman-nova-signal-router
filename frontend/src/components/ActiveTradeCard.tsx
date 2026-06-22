@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { patchActiveExitLevels } from '../api'
+import { patchActiveExitLevels, patchActiveQuantity } from '../api'
 import { formatCurrency, formatPercent } from '../lib/format'
 import { TickingNumber } from './TickingNumber'
 import { MotionSpinner, softEase, useAppReducedMotion } from './MotionPrimitives'
@@ -25,6 +25,11 @@ export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSugg
   const [savingExitLevels, setSavingExitLevels] = useState(false)
   const [exitLevelStatus, setExitLevelStatus] = useState('')
   const [savedExitLevels, setSavedExitLevels] = useState<ActiveExitLevels | null>(null)
+  const [editingQuantity, setEditingQuantity] = useState(false)
+  const [draftLots, setDraftLots] = useState('')
+  const [savingQuantity, setSavingQuantity] = useState(false)
+  const [quantityStatus, setQuantityStatus] = useState('')
+  const [savedQty, setSavedQty] = useState<number | null>(null)
   const reduceMotion = useAppReducedMotion()
   const tone = trade.pnl > 0 ? 'up' : trade.pnl < 0 ? 'down' : 'flat'
   const pnlPct = trade.pnlPct ?? 0
@@ -33,6 +38,8 @@ export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSugg
   const srTarget = srSuggestion?.targetPrice
   const srReady = trade.mode === 'paper' && Boolean(srSuggestion?.available) && srStop !== undefined && srTarget !== undefined
   const activeExitLevels = savedExitLevels ?? trade.activeExitLevels ?? null
+  const displayQty = savedQty ?? trade.qty
+  const displayLots = lotsForQuantity(displayQty, lotSize)
   const srAccepted = Boolean(srSuggestion?.accepted || activeExitLevels?.source === 'sr_suggestion')
   const exitLevelText = activeExitLevels?.stopLossPrice && activeExitLevels?.targetPrice
     ? `${formatCurrency(activeExitLevels.stopLossPrice, { decimals: 2 })} / ${formatCurrency(activeExitLevels.targetPrice, { decimals: 2 })}`
@@ -40,9 +47,19 @@ export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSugg
 
   useEffect(() => {
     setSavedExitLevels(null)
+    setSavedQty(null)
     setEditingExitLevels(false)
+    setEditingQuantity(false)
     setExitLevelStatus('')
+    setQuantityStatus('')
   }, [trade.orderId])
+
+  function openQuantityEditor() {
+    setDraftLots(String(Math.max(displayLots, 1)))
+    setQuantityStatus('')
+    setEditingExitLevels(false)
+    setEditingQuantity(true)
+  }
 
   function openExitLevelEditor() {
     const stop = activeExitLevels?.stopLossPrice ?? Math.max(trade.ltp * 0.9, 0.05)
@@ -50,7 +67,34 @@ export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSugg
     setDraftStopLoss(stop.toFixed(2))
     setDraftTarget(target.toFixed(2))
     setExitLevelStatus('')
+    setEditingQuantity(false)
     setEditingExitLevels(true)
+  }
+
+  async function saveQuantity() {
+    if (savingQuantity) return
+    const lots = Number(draftLots)
+    if (!Number.isInteger(lots) || lots < 1 || lotSize < 1) {
+      setQuantityStatus('Enter a valid whole lot count.')
+      return
+    }
+    const qty = lots * lotSize
+    setSavingQuantity(true)
+    setQuantityStatus('')
+    try {
+      const response = await patchActiveQuantity({ qty })
+      if (!response.ok) {
+        setQuantityStatus(response.message || 'Could not update qty.')
+        return
+      }
+      setSavedQty(response.qty ?? qty)
+      setEditingQuantity(false)
+      setQuantityStatus(response.message || 'Qty updated.')
+    } catch (error) {
+      setQuantityStatus(error instanceof Error ? error.message : 'Could not update qty.')
+    } finally {
+      setSavingQuantity(false)
+    }
   }
 
   async function saveExitLevels() {
@@ -123,8 +167,8 @@ export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSugg
           </motion.div>
           <TradeCell
             label="Qty"
-            value={`${trade.qty} (${lotsForQuantity(trade.qty, lotSize)} lot)`}
-            action={<button type="button" className="trade-cell-action" disabled title="Lot add/reduce order flow is next"><Pencil size={12} /></button>}
+            value={`${displayQty} (${displayLots} lot)`}
+            action={<button type="button" className="trade-cell-action" onClick={openQuantityEditor} title="Edit lots"><Pencil size={12} /></button>}
           />
           <TradeCell
             label="SL / TP"
@@ -132,6 +176,38 @@ export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSugg
             action={<button type="button" className="trade-cell-action" onClick={openExitLevelEditor} title="Edit SL/TP levels"><Pencil size={12} /></button>}
           />
         </div>
+
+        <AnimatePresence initial={false}>
+          {editingQuantity ? (
+            <motion.div
+              className="trade-edit-panel quantity-edit-panel"
+              initial={{ height: 0, opacity: 0, y: -4 }}
+              animate={{ height: 'auto', opacity: 1, y: 0 }}
+              exit={{ height: 0, opacity: 0, y: -4 }}
+              transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: softEase }}
+            >
+              <label>
+                <span>Lots</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={draftLots}
+                  disabled={savingQuantity}
+                  onChange={(event) => setDraftLots(event.target.value)}
+                  aria-label="Lot count"
+                />
+              </label>
+              <button type="button" onClick={() => void saveQuantity()} disabled={savingQuantity}>
+                {savingQuantity ? <MotionSpinner><Loader2 size={13} /></MotionSpinner> : <Check size={13} />}
+              </button>
+              <button type="button" onClick={() => setEditingQuantity(false)} disabled={savingQuantity} aria-label="Cancel qty edit">
+                <X size={13} />
+              </button>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+        {quantityStatus ? <p className="trade-edit-status">{quantityStatus}</p> : null}
 
         <AnimatePresence initial={false}>
           {editingExitLevels ? (

@@ -15,9 +15,10 @@ from app.services.credential_vault import get_dhan_credentials, get_webhook_secr
 from app.services.dhan_client import get_broker_client
 from app.services.execution_router import route_signal
 from app.services.normalized_errors import classify_failure
+from app.services.paper_portfolio import resize_paper_open_trade_quantity
 from app.services.risk_manager import _market_is_open
 from app.services.security_id_resolver import resolve_security_id, suggest_option_contract
-from app.services.state_store import get_app_state, get_engine_mode, get_open_position, set_open_position, utc_now
+from app.services.state_store import get_app_state, get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
 
 
 router = APIRouter()
@@ -45,6 +46,10 @@ class ManualReverseRequest(BaseModel):
 class ExitLevelsRequest(BaseModel):
     stopLossPrice: float = Field(gt=0)
     targetPrice: float = Field(gt=0)
+
+
+class QuantityRequest(BaseModel):
+    qty: int = Field(ge=1)
 
 
 class QuoteRequest(BaseModel):
@@ -184,6 +189,81 @@ def manual_reverse(body: ManualReverseRequest) -> dict[str, Any]:
     )
     execution_result = route_signal(signal)
     return _manual_response(execution_result)
+
+
+@router.patch("/orders/active-position/quantity")
+def update_active_position_quantity(body: QuantityRequest) -> dict[str, Any]:
+    position = get_open_position()
+    mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
+    if not position.get("has_open_position"):
+        error = classify_failure(
+            "Quantity update blocked: no open position exists.",
+            source="RISK_ENGINE",
+            mode=mode,
+            order_sent_to_broker=False,
+            money_at_risk=False,
+        )
+        return {"ok": False, "message": error["userMessage"], "normalizedError": error}
+
+    if mode != "paper":
+        error = classify_failure(
+            "Quantity update blocked: live position quantity changes require broker add/reduce order flow.",
+            source="RISK_ENGINE",
+            mode=mode,
+            order_sent_to_broker=False,
+            money_at_risk=True,
+        )
+        return {"ok": False, "message": error["userMessage"], "normalizedError": error}
+
+    lot_size = max(int(current_nifty_lot_size() or 1), 1)
+    qty = int(body.qty)
+    if qty % lot_size != 0:
+        return _quantity_error(f"Qty must be a whole lot of {lot_size}.", mode=mode)
+
+    runtime = get_runtime_settings()
+    max_qty = max(int(runtime.get("max_qty_per_order") or lot_size), 1)
+    if qty > max_qty:
+        return _quantity_error("Qty exceeds MAX_QTY_PER_ORDER.", mode=mode)
+
+    updated = dict(position)
+    current_qty = int(updated.get("qty") or 0)
+    updated["qty"] = qty
+    updated["requested_qty"] = qty
+    updated["filled_qty"] = qty
+    updated["quantity_adjustment"] = {
+        "source": "manual",
+        "previousQty": current_qty,
+        "qty": qty,
+        "lots": qty // lot_size,
+        "acceptedAt": utc_now(),
+    }
+
+    live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
+    updated_live_pnl = dict(live_pnl)
+    updated_live_pnl["qty"] = qty
+    entry_price = _number(position.get("entry_price") or live_pnl.get("entry_price"))
+    ltp = _number(live_pnl.get("ltp") or entry_price)
+    if entry_price is not None and ltp is not None:
+        unrealized = round((ltp - entry_price) * qty, 2)
+        exposure = entry_price * qty
+        updated_live_pnl["unrealized_pnl"] = unrealized
+        updated_live_pnl["pnl_percent"] = round((unrealized / exposure) * 100, 2) if exposure else 0.0
+    updated_live_pnl["message"] = "Manual paper quantity is applied."
+    updated_live_pnl["last_checked_at"] = utc_now()
+    updated["live_pnl"] = updated_live_pnl
+
+    try:
+        resize_paper_open_trade_quantity(qty=qty)
+    except ValueError as exc:
+        return _quantity_error(str(exc), mode=mode)
+
+    set_open_position(updated)
+    return {
+        "ok": True,
+        "message": "Qty updated.",
+        "qty": qty,
+        "lots": qty // lot_size,
+    }
 
 
 @router.patch("/orders/active-position/exit-levels")
@@ -527,6 +607,17 @@ def _market_closed_quote(*, side: str, lots: int, atm: dict[str, Any]) -> dict[s
 
 
 def _exit_level_error(message: str, *, mode: str | None) -> dict[str, Any]:
+    error = classify_failure(
+        message,
+        source="RISK_ENGINE",
+        mode=mode,
+        order_sent_to_broker=False,
+        money_at_risk=False,
+    )
+    return {"ok": False, "message": error["userMessage"], "normalizedError": error}
+
+
+def _quantity_error(message: str, *, mode: str | None) -> dict[str, Any]:
     error = classify_failure(
         message,
         source="RISK_ENGINE",
