@@ -1,6 +1,6 @@
 import { Activity } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { MotionPing, softEase, useAppReducedMotion } from './MotionPrimitives'
+import { softEase, useAppReducedMotion } from './MotionPrimitives'
 import type { ActiveTrade, EngineMode, SideFilter } from '../types'
 
 interface Props {
@@ -22,8 +22,7 @@ export function EngineListening({ paused, activeTrade, side, engineMode }: Props
       transition={reduceMotion ? { duration: 0 } : { duration: 0.24, ease: softEase }}
     >
       <div className="engine-orb">
-        <span className="engine-pulse">
-          <MotionPing className="engine-ping" />
+        <span className="engine-pulse" aria-hidden="true">
           <Activity size={28} />
         </span>
       </div>

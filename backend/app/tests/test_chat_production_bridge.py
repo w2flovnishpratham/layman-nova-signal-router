@@ -14,9 +14,11 @@ from app.routers import orders as orders_router
 from app.routers import setup as setup_router
 from app.routers.webhook import _safe_raw_body_for_log, _valid_webhook_signature
 from app.schemas.signal import NormalizedSignal
-from app.services import audit_logger, credential_vault, paper_portfolio, state_store
+from app.services import audit_logger, credential_vault, paper_broker, paper_portfolio, shared_market_data, state_store
 from app.services.chat_event_publisher import publish_chat_result
+from app.services.credential_vault import DhanCredentials
 from app.services.dhan_client import RealDhanClient
+from app.services.dhan_client import DhanLtpResult
 from app.services.execution_router import _broker_exit_levels, route_entry_signal
 from app.store.redis_session import session_store
 
@@ -47,6 +49,24 @@ def _isolate_runtime(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
     monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
+    monkeypatch.setattr(settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(settings, "DHAN_SHARED_CLIENT_ID", "shared-client", raising=False)
+    monkeypatch.setattr(settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(settings, "DHAN_SHARED_TOTP_SECRET", "GEZDGNBVGY3TQOJQ", raising=False)
+    shared_creds = DhanCredentials("shared-client", "shared-token", "shared_market_data")
+
+    class FakeSharedLtpClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_ltp(self, **_kwargs) -> DhanLtpResult:
+            return DhanLtpResult(success=True, message="quote", ltp=100.0)
+
+    monkeypatch.setattr(shared_market_data, "shared_market_data_configured", lambda: True)
+    monkeypatch.setattr(shared_market_data, "get_shared_market_credentials", lambda: shared_creds)
+    monkeypatch.setattr(paper_broker, "shared_market_data_configured", lambda: True)
+    monkeypatch.setattr(paper_broker, "get_shared_market_credentials", lambda: shared_creds)
+    monkeypatch.setattr(paper_broker, "RealDhanClient", FakeSharedLtpClient)
     credential_vault._LOCAL_MEMORY_PAYLOAD.clear()
     credential_vault._LOCAL_MEMORY_PAYLOAD.update({"version": 1, "dhan": None, "webhook_secret": None})
     state_store.init_runtime_files()
@@ -117,6 +137,32 @@ def test_production_configuration_rejects_mock_routing(monkeypatch):
     monkeypatch.setattr(settings, "SESSION_TOKEN_SECRET", "s" * 32)
 
     with pytest.raises(RuntimeError, match="DHAN_MODE=REAL"):
+        validate_production_configuration()
+
+
+def test_production_configuration_rejects_debug_mode(monkeypatch):
+    from app.main import validate_production_configuration
+
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+    monkeypatch.setattr(settings, "SESSION_TOKEN_SECRET", "s" * 32)
+    monkeypatch.setattr(settings, "DEBUG_ENABLED", True)
+
+    with pytest.raises(RuntimeError, match="DEBUG_ENABLED"):
+        validate_production_configuration()
+
+
+def test_production_configuration_rejects_default_security_id_override(monkeypatch):
+    from app.main import validate_production_configuration
+
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+    monkeypatch.setattr(settings, "SESSION_TOKEN_SECRET", "s" * 32)
+    monkeypatch.setattr(settings, "DEBUG_ENABLED", False)
+    monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", True)
+    monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "123456")
+
+    with pytest.raises(RuntimeError, match="DEFAULT_SECURITY_ID"):
         validate_production_configuration()
 
 

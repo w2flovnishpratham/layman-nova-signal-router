@@ -67,6 +67,9 @@ def _paper_signal(signal_id: str = "paper-shared-001") -> NormalizedSignal:
 class _QuoteClient:
     ltp = 100.0
 
+    def __init__(self, *_args, **_kwargs) -> None:
+        pass
+
     def get_ltp(self, **_kwargs) -> DhanLtpResult:
         return DhanLtpResult(success=True, message="quote", ltp=self.ltp)
 
@@ -74,6 +77,11 @@ class _QuoteClient:
 def test_paper_broker_applies_slippage_charges_and_updates_portfolio(tmp_path, monkeypatch):
     _isolate_paper_runtime(tmp_path, monkeypatch)
     monkeypatch.setattr(paper_broker, "RealDhanClient", _QuoteClient)
+    monkeypatch.setattr(
+        paper_broker,
+        "get_shared_market_credentials",
+        lambda: DhanCredentials("shared-client", "shared-token", "shared_market_data"),
+    )
     state_store.set_engine_mode("paper")
     state_store.update_runtime_settings(paper_starting_balance=100000, paper_slippage_percent=0.10)
     paper_portfolio.reset_paper_portfolio(100000)
@@ -130,6 +138,9 @@ def test_paper_broker_uses_shared_market_data_credentials_for_ltp(tmp_path, monk
     captured: list[dict[str, object]] = []
 
     class CaptureClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
         def get_ltp(self, **kwargs) -> DhanLtpResult:
             captured.append(kwargs)
             return DhanLtpResult(success=True, message="quote", ltp=100.0)
@@ -137,7 +148,7 @@ def test_paper_broker_uses_shared_market_data_credentials_for_ltp(tmp_path, monk
     monkeypatch.setattr(paper_broker, "RealDhanClient", CaptureClient)
     monkeypatch.setattr(
         paper_broker,
-        "market_data_credentials",
+        "get_shared_market_credentials",
         lambda: DhanCredentials("shared-client", "shared-token", "shared_market_data"),
     )
 
@@ -175,6 +186,9 @@ def test_paper_broker_refreshes_shared_token_and_retries_ltp(tmp_path, monkeypat
         return old_creds if credential_reads == 1 else new_creds
 
     class RetryClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
         def get_ltp(self, **kwargs) -> DhanLtpResult:
             token = str(kwargs["access_token"])
             tokens_used.append(token)
@@ -193,7 +207,7 @@ def test_paper_broker_refreshes_shared_token_and_retries_ltp(tmp_path, monkeypat
         return True
 
     monkeypatch.setattr(paper_broker, "RealDhanClient", RetryClient)
-    monkeypatch.setattr(paper_broker, "market_data_credentials", fake_market_data_credentials)
+    monkeypatch.setattr(paper_broker, "get_shared_market_credentials", fake_market_data_credentials)
     monkeypatch.setattr(paper_broker, "refresh_shared_token_after_auth_failure", fake_refresh)
 
     result = PaperBroker().place_order(
@@ -213,7 +227,7 @@ def test_paper_broker_refreshes_shared_token_and_retries_ltp(tmp_path, monkeypat
     assert refresh_calls[0]["status_code"] == 401
 
 
-def test_paper_broker_falls_back_to_local_ltp_after_shared_ltp_failure(tmp_path, monkeypatch):
+def test_paper_broker_rejects_when_shared_ltp_remains_unavailable(tmp_path, monkeypatch):
     _isolate_paper_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("paper")
     state_store.update_runtime_settings(paper_starting_balance=100000, paper_slippage_percent=0.0)
@@ -223,6 +237,9 @@ def test_paper_broker_falls_back_to_local_ltp_after_shared_ltp_failure(tmp_path,
     shared_creds = DhanCredentials("shared-client", "old-shared-token", "shared_market_data")
 
     class FailingClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
         def get_ltp(self, **_kwargs) -> DhanLtpResult:
             return DhanLtpResult(
                 success=False,
@@ -233,7 +250,7 @@ def test_paper_broker_falls_back_to_local_ltp_after_shared_ltp_failure(tmp_path,
             )
 
     monkeypatch.setattr(paper_broker, "RealDhanClient", FailingClient)
-    monkeypatch.setattr(paper_broker, "market_data_credentials", lambda: shared_creds)
+    monkeypatch.setattr(paper_broker, "get_shared_market_credentials", lambda: shared_creds)
     monkeypatch.setattr(paper_broker, "refresh_shared_token_after_auth_failure", lambda **_kwargs: False)
 
     result = PaperBroker().place_order(
@@ -248,9 +265,10 @@ def test_paper_broker_falls_back_to_local_ltp_after_shared_ltp_failure(tmp_path,
         },
     )
 
-    assert result.success is True
-    assert result.avg_price == 136.0
-    assert result.raw_response["sourceLtp"] == 136.0
+    assert result.success is False
+    assert result.status == "REJECTED"
+    assert result.error == "Dhan LTP request failed."
+    assert result.raw_response["ltp"] is None
 
 
 def test_paper_place_order_runs_without_user_token_when_shared_data_available(tmp_path, monkeypatch):
@@ -265,23 +283,80 @@ def test_paper_place_order_runs_without_user_token_when_shared_data_available(tm
     captured: list[dict[str, object]] = []
 
     class CaptureClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
         def get_ltp(self, **kwargs) -> DhanLtpResult:
             captured.append(kwargs)
             return DhanLtpResult(success=True, message="quote", ltp=100.0)
 
     shared_creds = DhanCredentials("shared-client", "shared-token", "shared_market_data")
+    monkeypatch.setattr(settings, "DHAN_SHARED_CLIENT_ID", "shared-client", raising=False)
     monkeypatch.setattr(execution_router, "get_dhan_credentials", lambda: None)
     monkeypatch.setattr(shared_market_data, "shared_market_data_configured", lambda: True)
-    monkeypatch.setattr(shared_market_data, "market_data_credentials", lambda: shared_creds)
+    monkeypatch.setattr(shared_market_data, "get_shared_market_credentials", lambda: shared_creds)
     monkeypatch.setattr(shared_market_data, "shared_market_data_status", lambda: {"configured": True, "has_token": True})
-    monkeypatch.setattr(paper_broker, "market_data_credentials", lambda: shared_creds)
+    monkeypatch.setattr(paper_broker, "get_shared_market_credentials", lambda: shared_creds)
     monkeypatch.setattr(paper_broker, "RealDhanClient", CaptureClient)
     monkeypatch.setattr(execution_router, "refresh_wallet_snapshot", lambda **_kwargs: {})
 
     result = execution_router._place_order(_paper_signal(), 10, "ENTRY")
+    payload, _resolution = execution_router._build_dhan_payload_and_resolution(_paper_signal(), 10, "ENTRY")
 
     assert result["success"] is True
     assert result["status"] == "TRADED"
+    assert payload["dhanClientId"] == "shared-client"
+    assert captured[0]["client_id"] == "shared-client"
+    assert captured[0]["access_token"] == "shared-token"
+
+
+def test_paper_quote_uses_shared_data_without_user_token(tmp_path, monkeypatch):
+    _isolate_paper_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    state_store.update_runtime_settings(paper_starting_balance=100000)
+    paper_portfolio.reset_paper_portfolio(100000)
+
+    from app.routers import orders as orders_router
+    from app.services import shared_market_data
+
+    captured: list[dict[str, object]] = []
+
+    class CaptureClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_ltp(self, **kwargs) -> DhanLtpResult:
+            captured.append(kwargs)
+            return DhanLtpResult(success=True, message="quote", ltp=123.45)
+
+    class Resolution:
+        ok = True
+        security_id = "57046"
+        trading_symbol = "NIFTY TEST CE"
+        reason = "test"
+
+        def model_dump(self) -> dict[str, object]:
+            return {"ok": True, "security_id": self.security_id, "trading_symbol": self.trading_symbol}
+
+    shared_creds = DhanCredentials("shared-client", "shared-token", "shared_market_data")
+    monkeypatch.setattr(orders_router, "_market_is_open", lambda: True)
+    monkeypatch.setattr(orders_router, "resolve_security_id", lambda _signal: Resolution())
+    monkeypatch.setattr(orders_router, "get_dhan_credentials", lambda: (_ for _ in ()).throw(AssertionError("user creds should not be read")))
+    monkeypatch.setattr(shared_market_data, "shared_market_data_configured", lambda: True)
+    monkeypatch.setattr(shared_market_data, "get_shared_market_credentials", lambda: shared_creds)
+    monkeypatch.setattr(shared_market_data, "shared_market_data_status", lambda: {"configured": True, "has_token": True})
+    monkeypatch.setattr(paper_broker, "get_shared_market_credentials", lambda: shared_creds)
+    monkeypatch.setattr(paper_broker, "RealDhanClient", CaptureClient)
+
+    result = orders_router.order_quote(
+        side="CE",
+        lots=1,
+        security_id="57046",
+        trading_symbol="NIFTY TEST CE",
+    )
+
+    assert result["ok"] is True
+    assert result["estimatedPremium"] == 123.45
     assert captured[0]["client_id"] == "shared-client"
     assert captured[0]["access_token"] == "shared-token"
 
@@ -346,6 +421,29 @@ def test_configuring_paper_mode_starts_fresh_portfolio(tmp_path, monkeypatch):
     assert refreshed.session_pnl == 0
     assert refreshed.closed_trades == []
     assert state_store.get_paper_position()["has_open_position"] is False
+
+
+def test_paper_quantity_update_rejects_when_portfolio_trade_is_missing(tmp_path, monkeypatch):
+    _isolate_paper_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    paper_portfolio.reset_paper_portfolio(100000)
+    state_store.set_paper_position(
+        {
+            "has_open_position": True,
+            "trading_symbol": "NIFTY TEST CE",
+            "qty": 65,
+            "entry_price": 100.0,
+            "live_pnl": {"ltp": 100.0},
+        }
+    )
+
+    from app.routers.orders import QuantityRequest, update_active_position_quantity
+
+    result = update_active_position_quantity(QuantityRequest(qty=130))
+
+    assert result["ok"] is False
+    assert "paper open trade" in result["normalizedError"]["technicalMessage"].lower()
+    assert state_store.get_paper_position()["qty"] == 65
 
 
 def test_mode_switch_is_blocked_with_open_position_or_running_engine(tmp_path, monkeypatch):

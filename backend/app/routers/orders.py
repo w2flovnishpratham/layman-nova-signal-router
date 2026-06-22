@@ -414,13 +414,26 @@ def order_quote(
         )
         return {**base, "ok": False, "message": error["userMessage"], "normalizedError": error}
 
-    creds = get_dhan_credentials()
+    mode = base["mode"]
+    if mode == "paper":
+        from app.services.shared_market_data import get_shared_market_credentials, shared_market_data_configured
+
+        creds = get_shared_market_credentials()
+        missing_reason = (
+            "Shared market-data token is unavailable; paper quote cannot fetch Dhan LTP."
+            if shared_market_data_configured()
+            else "Shared market-data credentials are not configured; set DHAN_SHARED_CLIENT_ID, DHAN_SHARED_PIN, and DHAN_SHARED_TOTP_SECRET for free paper mode."
+        )
+    else:
+        creds = get_dhan_credentials()
+        missing_reason = "Dhan Client ID or Access Token missing."
+
     if not creds:
         error = classify_failure(
-            "Dhan Client ID or Access Token missing.",
+            missing_reason,
             source="DHAN",
             signal=signal,
-            mode=base["mode"],
+            mode=mode,
             order_sent_to_broker=False,
             money_at_risk=False,
         )

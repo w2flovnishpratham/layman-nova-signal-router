@@ -35,6 +35,8 @@
   --dur-fast: 120ms;
   --dur-base: 240ms;
   --dur-slow: 400ms;
+  --engine-sidebar-width: clamp(300px, 22vw, 380px);
+  --engine-sidebar-collapsed-width: 54px;
   font-family: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
   font-feature-settings: "cv11", "ss01", "ss03";
   background: var(--bg-0);
@@ -1066,29 +1068,21 @@ code {
 }
 
 .engine-panel-shell {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 10px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 
-.panel-collapse-bar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-height: 34px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
-  padding-bottom: 8px;
-}
-
-.engine-panel-left .panel-collapse-bar {
-  justify-content: flex-end;
-}
-
-.engine-panel-right .panel-collapse-bar {
-  justify-content: flex-start;
+.panel-collapse-rail {
+  position: relative;
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 100%;
+  align-content: start;
+  justify-items: center;
 }
 
 .panel-collapse-button {
@@ -1116,6 +1110,7 @@ code {
 }
 
 .panel-scroll {
+  flex: 1 1 auto;
   width: 100%;
   min-height: 0;
   overflow-y: auto;
@@ -1130,23 +1125,6 @@ code {
 
 .engine-panel-right .panel-scroll {
   min-width: 0;
-}
-
-.desktop-engine-panel.is-collapsed .engine-panel-shell {
-  grid-template-rows: minmax(0, 1fr);
-  gap: 0;
-}
-
-.desktop-engine-panel.is-collapsed .panel-collapse-bar {
-  position: relative;
-  display: grid;
-  align-content: start;
-  justify-items: center;
-  height: 100%;
-  min-height: 100%;
-  border-bottom: 0;
-  padding-top: 0;
-  padding-bottom: 0;
 }
 
 .panel-rail-label {
@@ -1166,7 +1144,7 @@ code {
 .engine-left {
   display: grid;
   grid-auto-rows: max-content;
-  gap: 18px;
+  gap: 20px;
   align-content: start;
   width: 100%;
 }
@@ -2224,17 +2202,41 @@ code {
   place-items: center;
   border-radius: 999px;
   color: var(--success);
+  line-height: 0;
+}
+
+.engine-pulse::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid currentColor;
+  border-radius: inherit;
+  opacity: 0.28;
+  transform-origin: center;
+  animation: enginePulseRing 1.65s var(--ease-out) infinite;
+}
+
+.engine-pulse svg {
+  position: relative;
+  z-index: 1;
+  display: block;
 }
 
 .paused .engine-pulse {
   color: var(--warning);
 }
 
-.engine-ping {
-  position: absolute;
-  width: 22px;
-  height: 22px;
-  color: currentColor;
+@keyframes enginePulseRing {
+  0% {
+    transform: scale(0.82);
+    opacity: 0.28;
+  }
+
+  72%,
+  100% {
+    transform: scale(1.62);
+    opacity: 0;
+  }
 }
 
 .engine-sidebar {
@@ -2289,6 +2291,33 @@ code {
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.market-panel-header,
+.sidebar-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.market-title-group {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.market-title-group > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-header-action,
+.sidebar-panel-header .panel-collapse-button {
+  flex: 0 0 auto;
 }
 
 .atm-strip,
@@ -2805,16 +2834,13 @@ code {
     overflow: hidden;
   }
 
+  .engine-panel-right:not(.is-collapsed),
   .engine-panel-left:not(.is-collapsed) {
-    width: clamp(340px, 30vw, 500px);
-  }
-
-  .engine-panel-right:not(.is-collapsed) {
-    width: clamp(300px, 22vw, 380px);
+    width: var(--engine-sidebar-width);
   }
 
   .desktop-engine-panel.is-collapsed {
-    width: 54px;
+    width: var(--engine-sidebar-collapsed-width);
   }
 
   .engine-shell-grid.left-panel-collapsed .engine-main-pane,
@@ -2921,5 +2947,11 @@ code {
   :root:not([data-motion="full"]) *::after {
     animation-duration: 0ms !important;
     transition-duration: 0ms !important;
+  }
+
+  :root:not([data-motion="full"]) .engine-pulse::before {
+    animation: none !important;
+    opacity: 0.18;
+    transform: scale(1.18);
   }
 }

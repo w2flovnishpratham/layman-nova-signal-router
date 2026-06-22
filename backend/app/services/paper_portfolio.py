@@ -104,9 +104,11 @@ def resize_paper_open_trade_quantity(*, qty: int) -> PaperPortfolio:
     portfolio = get_paper_portfolio()
     trade = dict(portfolio.open_trade or {})
     if not trade:
-        return portfolio
+        raise ValueError("Paper quantity update rejected: no paper open trade exists.")
 
     new_qty = max(int(qty), 0)
+    if new_qty <= 0:
+        raise ValueError("Paper quantity update rejected: quantity must be positive.")
     old_qty = max(int(trade.get("qty") or 0), 0)
     entry_price = float(trade.get("entry_price") or 0)
     old_entry_value = float(trade.get("entry_value") or old_qty * entry_price)

@@ -253,7 +253,7 @@ def _ltp_with_prefer_ws(
     try:
         # Shared data token reads market data directly (no per-user egress proxy);
         # per-user creds keep the existing broker-client routing.
-        client = RealDhanClient() if creds.source == "shared_market_data" else get_broker_client(get_engine_mode())
+        client = RealDhanClient(proxy_url="") if creds.source == "shared_market_data" else get_broker_client(get_engine_mode())
         quote = client.get_ltp(
             client_id=creds.client_id,
             access_token=creds.access_token,
@@ -271,7 +271,7 @@ def _ltp_with_prefer_ws(
         ):
             refreshed = market_data_credentials()
             if refreshed is not None:
-                quote = RealDhanClient().get_ltp(
+                quote = RealDhanClient(proxy_url="").get_ltp(
                     client_id=refreshed.client_id,
                     access_token=refreshed.access_token,
                     exchange_segment=exchange_segment,

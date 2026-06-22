@@ -246,6 +246,28 @@ function App() {
   const rightPanelContentMotion = rightPanelCollapsed
     ? { opacity: 0, x: 14, filter: 'blur(2px)', transitionEnd: { visibility: 'hidden' as const } }
     : { opacity: 1, x: 0, filter: 'blur(0px)', visibility: 'visible' as const }
+  const renderLeftCollapseButton = () => (
+    <button
+      type="button"
+      className="panel-collapse-button"
+      aria-label={leftPanelCollapsed ? 'Expand market and manual order panel' : 'Collapse market and manual order panel'}
+      title={leftPanelCollapsed ? 'Expand panel' : 'Collapse panel'}
+      onClick={() => setLeftPanelCollapsed((collapsed) => !collapsed)}
+    >
+      {leftPanelCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+    </button>
+  )
+  const renderRightCollapseButton = () => (
+    <button
+      type="button"
+      className="panel-collapse-button"
+      aria-label={rightPanelCollapsed ? 'Expand account and controls panel' : 'Collapse account and controls panel'}
+      title={rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'}
+      onClick={() => setRightPanelCollapsed((collapsed) => !collapsed)}
+    >
+      {rightPanelCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+    </button>
+  )
   const setupPanel = (
     <SetupPanel
       state={effectiveSetupState}
@@ -302,17 +324,14 @@ function App() {
             className={`desktop-engine-panel engine-panel-left ${leftPanelCollapsed ? 'is-collapsed' : ''}`}
           >
             <div className="engine-panel-shell">
-              <div className="panel-collapse-bar">
-                <button
-                  type="button"
-                  className="panel-collapse-button"
-                  aria-label={leftPanelCollapsed ? 'Expand market and manual order panel' : 'Collapse market and manual order panel'}
-                  title={leftPanelCollapsed ? 'Expand panel' : 'Collapse panel'}
-                  onClick={() => setLeftPanelCollapsed((collapsed) => !collapsed)}
+              {leftPanelCollapsed ? (
+                <motion.div
+                  className="panel-collapse-rail"
+                  initial={false}
+                  animate={{ opacity: 1 }}
+                  transition={panelContentTransition}
                 >
-                  {leftPanelCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-                </button>
-                {leftPanelCollapsed ? (
+                  {renderLeftCollapseButton()}
                   <motion.span
                     className="panel-rail-label"
                     initial={{ opacity: 0, y: -4 }}
@@ -321,18 +340,22 @@ function App() {
                   >
                     Market
                   </motion.span>
-                ) : null}
-              </div>
-              <motion.div
-                className="panel-scroll"
-                aria-hidden={leftPanelCollapsed}
-                animate={leftPanelContentMotion}
-                initial={false}
-                transition={panelContentTransition}
-                style={{ pointerEvents: leftPanelCollapsed ? 'none' : 'auto' }}
-              >
-                <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
-              </motion.div>
+                </motion.div>
+              ) : (
+                <motion.div
+                  className="panel-scroll"
+                  animate={leftPanelContentMotion}
+                  initial={reduceMotion ? false : { opacity: 0, x: -10, filter: 'blur(2px)' }}
+                  transition={panelContentTransition}
+                >
+                  <EngineLeftPanel
+                    marketSnapshot={marketSnapshot}
+                    engineMode={engineMode}
+                    activeTrade={activeTrade}
+                    collapseControl={renderLeftCollapseButton()}
+                  />
+                </motion.div>
+              )}
             </div>
           </motion.aside>
         ) : null}
@@ -394,17 +417,14 @@ function App() {
             className={`desktop-engine-panel engine-panel-right ${rightPanelCollapsed ? 'is-collapsed' : ''}`}
           >
             <div className="engine-panel-shell">
-              <div className="panel-collapse-bar">
-                <button
-                  type="button"
-                  className="panel-collapse-button"
-                  aria-label={rightPanelCollapsed ? 'Expand account and controls panel' : 'Collapse account and controls panel'}
-                  title={rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'}
-                  onClick={() => setRightPanelCollapsed((collapsed) => !collapsed)}
+              {rightPanelCollapsed ? (
+                <motion.div
+                  className="panel-collapse-rail"
+                  initial={false}
+                  animate={{ opacity: 1 }}
+                  transition={panelContentTransition}
                 >
-                  {rightPanelCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-                </button>
-                {rightPanelCollapsed ? (
+                  {renderRightCollapseButton()}
                   <motion.span
                     className="panel-rail-label"
                     initial={{ opacity: 0, y: -4 }}
@@ -413,28 +433,28 @@ function App() {
                   >
                     Account
                   </motion.span>
-                ) : null}
-              </div>
-              <motion.div
-                className="panel-scroll"
-                aria-hidden={rightPanelCollapsed}
-                animate={rightPanelContentMotion}
-                initial={false}
-                transition={panelContentTransition}
-                style={{ pointerEvents: rightPanelCollapsed ? 'none' : 'auto' }}
-              >
-                <EngineSidebar
-                  state={effectiveSetupState}
-                  wallet={wallet}
-                  marginUtilized={marginUtilized}
-                  realizedPnl={realizedPnl}
-                  activeTrade={activeTrade}
-                  lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
-                  side={config.risk?.side ?? 'BOTH'}
-                  engineMode={engineMode}
-                  onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
-                />
-              </motion.div>
+                </motion.div>
+              ) : (
+                <motion.div
+                  className="panel-scroll"
+                  animate={rightPanelContentMotion}
+                  initial={reduceMotion ? false : { opacity: 0, x: 10, filter: 'blur(2px)' }}
+                  transition={panelContentTransition}
+                >
+                  <EngineSidebar
+                    state={effectiveSetupState}
+                    wallet={wallet}
+                    marginUtilized={marginUtilized}
+                    realizedPnl={realizedPnl}
+                    activeTrade={activeTrade}
+                    lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
+                    side={config.risk?.side ?? 'BOTH'}
+                    engineMode={engineMode}
+                    onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
+                    collapseControl={renderRightCollapseButton()}
+                  />
+                </motion.div>
+              )}
             </div>
           </motion.aside>
         ) : null}

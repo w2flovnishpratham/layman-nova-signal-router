@@ -100,7 +100,11 @@ def _build_dhan_payload_and_resolution(signal: NormalizedSignal, qty: int, actio
     """
     resolution = resolve_security_id(signal)
     creds = get_dhan_credentials()
-    client_id = creds.client_id if creds else "MOCK_CLIENT"
+    shared_paper_client_id = (settings.DHAN_SHARED_CLIENT_ID or "").strip()
+    if get_engine_mode(legacy_fallback=False) == "paper" and shared_paper_client_id:
+        client_id = shared_paper_client_id
+    else:
+        client_id = creds.client_id if creds else ""
     transaction_type = signal.side
     if action == "EXIT":
         transaction_type = signal.side or "SELL"
@@ -335,7 +339,7 @@ def _cancel_super_order_exit_legs(position: dict[str, Any]) -> dict[str, Any] | 
         access_token = creds.access_token
     else:
         client = get_broker_client(engine_mode)
-        client_id = creds.client_id if creds else "MOCK_CLIENT"
+        client_id = creds.client_id if creds else ""
         access_token = creds.access_token if creds else ""
 
     results = {}
@@ -919,12 +923,12 @@ def _place_order(
         shared_data_status: dict[str, Any] | None = None
         if explicit_engine_mode == "paper":
             from app.services.shared_market_data import (
-                market_data_credentials,
+                get_shared_market_credentials,
                 shared_market_data_configured,
                 shared_market_data_status,
             )
 
-            paper_data_creds = market_data_credentials()
+            paper_data_creds = get_shared_market_credentials()
             if shared_market_data_configured():
                 shared_data_status = shared_market_data_status()
 
@@ -934,7 +938,7 @@ def _place_order(
                 "Paper mode blocked: shared market-data token unavailable. "
                 "Check DHAN_SHARED_* TOTP setup and Dhan auth status."
                 if shared_configured
-                else "Paper mode blocked: Dhan Client ID or Access Token missing. Real market data is required for paper fills."
+                else "Paper mode blocked: shared market-data credentials are not configured. Set DHAN_SHARED_CLIENT_ID, DHAN_SHARED_PIN, and DHAN_SHARED_TOTP_SECRET for free paper mode."
             )
             return _blocked(
                 "BLOCKED",
@@ -946,7 +950,7 @@ def _place_order(
                 result_extra={
                     "block_code": "SHARED_MARKET_DATA_TOKEN_UNAVAILABLE"
                     if shared_configured
-                    else "DHAN_CREDENTIALS_MISSING",
+                    else "SHARED_MARKET_DATA_NOT_CONFIGURED",
                     "shared_market_data": shared_data_status,
                 } if explicit_engine_mode == "paper" else None,
             )
@@ -960,9 +964,12 @@ def _place_order(
                 trading_symbol=request_payload.get("tradingSymbol"),
             )
         client = get_broker_client(engine_mode)
-        selected_creds = paper_data_creds if explicit_engine_mode == "paper" else creds
-        client_id = selected_creds.client_id if selected_creds else "MOCK_CLIENT"
-        access_token = selected_creds.access_token if selected_creds else ""
+        if explicit_engine_mode == "paper":
+            client_id = paper_data_creds.client_id
+            access_token = paper_data_creds.access_token
+        else:
+            client_id = creds.client_id if creds else ""
+            access_token = creds.access_token if creds else ""
 
     if engine_mode == "live" and action == "ENTRY" and not skip_entry_preflight:
         preflight = _dhan_entry_preflight(client, client_id=client_id, access_token=access_token, signal=signal)

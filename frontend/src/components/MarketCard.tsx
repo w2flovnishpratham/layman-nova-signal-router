@@ -1,19 +1,23 @@
 import { Activity, Clock, TrendingDown, TrendingUp } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { formatCurrency } from '../lib/format'
 import type { MarketSnapshot } from '../types'
 
-export function MarketCard({ snapshot }: { snapshot: MarketSnapshot | null }) {
+export function MarketCard({ snapshot, collapseControl }: { snapshot: MarketSnapshot | null; collapseControl?: ReactNode }) {
   const change = snapshot?.dayChangePct ?? null
   const atm = snapshot?.atm ?? null
   const ce = atm?.options?.CE
   const pe = atm?.options?.PE
   return (
     <section className="sidebar-card market-card">
-      <div className="sidebar-title">
-        <span>NIFTY Market</span>
-        <span className={`market-status ${snapshot?.marketStatus === 'open' ? 'open' : 'closed'}`}>
-          {snapshot?.marketStatus === 'open' ? 'Open' : 'Closed'}
-        </span>
+      <div className="sidebar-title market-panel-header">
+        <div className="market-title-group">
+          <span>NIFTY Market</span>
+          <span className={`market-status ${snapshot?.marketStatus === 'open' ? 'open' : 'closed'}`}>
+            {snapshot?.marketStatus === 'open' ? 'Open' : 'Closed'}
+          </span>
+        </div>
+        {collapseControl ? <div className="panel-header-action">{collapseControl}</div> : null}
       </div>
       <div className="market-main-row">
         <div>
@@ -83,4 +87,3 @@ function shortTime(value: string): string {
   if (Number.isNaN(parsed.getTime())) return 'Pending'
   return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
-

@@ -22,8 +22,9 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.routers import setup as setup_router
 from app.schemas.signal import NormalizedSignal
-from app.services import audit_logger, credential_vault, state_store
+from app.services import audit_logger, credential_vault, paper_broker, shared_market_data, state_store
 from app.services import risk_manager
+from app.services.credential_vault import DhanCredentials
 from app.services.dhan_client import DhanListResult, DhanLtpResult, DhanOrderResult, DhanOrderStatusResult
 from app.services.dhan_debugger import validate_dhan_payload
 from app.services.execution_router import (
@@ -77,6 +78,24 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "WEBHOOK_TRADING_ENABLED", True)
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
     monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
+    monkeypatch.setattr(settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(settings, "DHAN_SHARED_CLIENT_ID", "shared-client", raising=False)
+    monkeypatch.setattr(settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(settings, "DHAN_SHARED_TOTP_SECRET", "GEZDGNBVGY3TQOJQ", raising=False)
+    shared_creds = DhanCredentials("shared-client", "shared-token", "shared_market_data")
+
+    class FakeSharedLtpClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_ltp(self, **_kwargs) -> DhanLtpResult:
+            return DhanLtpResult(success=True, message="quote", ltp=100.0)
+
+    monkeypatch.setattr(shared_market_data, "shared_market_data_configured", lambda: True)
+    monkeypatch.setattr(shared_market_data, "get_shared_market_credentials", lambda: shared_creds)
+    monkeypatch.setattr(paper_broker, "shared_market_data_configured", lambda: True)
+    monkeypatch.setattr(paper_broker, "get_shared_market_credentials", lambda: shared_creds)
+    monkeypatch.setattr(paper_broker, "RealDhanClient", FakeSharedLtpClient)
     setup_router._DHAN_CONNECT_RATE_LIMIT.clear()
 
     from app.main import app

@@ -54,6 +54,10 @@ def validate_production_configuration() -> None:
         raise RuntimeError("SESSION_TOKEN_SECRET must be overridden with at least 32 random characters in production.")
     if settings.DHAN_MODE.upper() != "REAL":
         raise RuntimeError("Production requires DHAN_MODE=REAL; mock routing is only allowed for local development and tests.")
+    if settings.DEBUG_ENABLED:
+        raise RuntimeError("DEBUG_ENABLED must be false in production.")
+    if settings.ALLOW_DEFAULT_SECURITY_ID or (settings.DEFAULT_SECURITY_ID or "").strip():
+        raise RuntimeError("DEFAULT_SECURITY_ID overrides are not allowed in production.")
 
     # Multi-user SaaS layer requirements in production.
     if len(settings.app_secret) < 32:

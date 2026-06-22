@@ -159,6 +159,9 @@ def test_rest_ltp_refreshes_shared_token_after_auth_failure(monkeypatch):
         return old_creds if credential_reads == 1 else new_creds
 
     class RetryClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
         def get_ltp(self, **kwargs):
             token = kwargs["access_token"]
             tokens_used.append(token)

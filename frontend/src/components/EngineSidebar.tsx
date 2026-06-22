@@ -15,6 +15,7 @@ interface Props {
   side: SideFilter
   engineMode: EngineMode | null
   onSend: (command: ClientCommand) => void
+  collapseControl?: ReactNode
 }
 
 export function EngineSidebar({
@@ -27,6 +28,7 @@ export function EngineSidebar({
   side,
   engineMode,
   onSend,
+  collapseControl,
   onlyMargin = false,
   hideMargin = false
 }: Props & { onlyMargin?: boolean; hideMargin?: boolean }) {
@@ -36,7 +38,14 @@ export function EngineSidebar({
     <div className="engine-sidebar flex flex-col gap-4" aria-label={`${paper ? 'Paper' : 'Live'} account data`}>
       {!hideMargin && (
         <section className="sidebar-card account-card">
-          <span className={`sidebar-mode-chip ${engineMode ?? 'unset'}`}>{paper ? 'paper' : 'live'}</span>
+          {collapseControl ? (
+            <div className="sidebar-panel-header">
+              {collapseControl}
+              <span className={`sidebar-mode-chip ${engineMode ?? 'unset'}`}>{paper ? 'paper' : 'live'}</span>
+            </div>
+          ) : (
+            <span className={`sidebar-mode-chip ${engineMode ?? 'unset'}`}>{paper ? 'paper' : 'live'}</span>
+          )}
           <MetricRow label={paper ? 'Virtual Balance' : 'Margin Available'}>{wallet === null ? 'Pending' : <TickingNumber value={wallet} decimals={2} />}</MetricRow>
           <MetricRow label={paper ? 'Margin Utilized (sim)' : 'Margin Utilized'}>{marginUtilized === null ? 'Pending' : formatCurrency(marginUtilized)}</MetricRow>
           <MetricRow label={paper ? 'Paper P&L' : 'Realized Session P&L'}><TickingNumber value={realizedPnl} decimals={0} signed /></MetricRow>
