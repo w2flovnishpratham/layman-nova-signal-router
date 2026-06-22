@@ -90,8 +90,8 @@ def _build_dhan_payload_and_resolution(signal: NormalizedSignal, qty: int, actio
     """
     Build the final Dhan v2 order payload.
 
-    QTY_MODE=ABSOLUTE: TradingView qty is sent directly as Dhan quantity after
-    MAX_QTY_PER_ORDER checks. Lot conversion requires QTY_MODE=LOTS (phase 2).
+    QTY_MODE=ABSOLUTE: TradingView qty is sent directly as Dhan quantity.
+    Lot conversion requires QTY_MODE=LOTS (phase 2).
 
     Required Dhan v2 fields per POST /orders:
       dhanClientId, correlationId (optional but recommended), transactionType,

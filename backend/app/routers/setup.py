@@ -149,24 +149,6 @@ def current_nifty_lot_size() -> int:
     return _current_nifty_lot_size_from_scrip_master() or DEFAULT_NIFTY_LOT_SIZE
 
 
-def _minimum_real_nifty_order_qty() -> int | None:
-    if settings.DHAN_MODE.upper() != "REAL":
-        return None
-    return current_nifty_lot_size()
-
-
-def _validate_max_qty_per_order(value: int | None) -> int | None:
-    if value is None:
-        return value
-    minimum = _minimum_real_nifty_order_qty()
-    if minimum and int(value) < minimum:
-        raise ValueError(
-            f"Max quantity per order must be at least current NIFTY lot size ({minimum}) in REAL mode. "
-            f"Signal qty is absolute Dhan quantity, not lot count."
-        )
-    return value
-
-
 class DhanConnectRequest(BaseModel):
     client_id: str | None = None
     access_token: str | None = None
@@ -206,7 +188,6 @@ class RiskSetupRequest(BaseModel):
     # and write unconditionally (legacy / system-initiated saves).
     expected_version: int | None = Field(default=None, ge=0)
 
-    _max_qty_business_rule = field_validator("max_qty_per_order")(_validate_max_qty_per_order)
     _sl_business_rule = field_validator("option_sl_percent")(_validate_sl_percent)
     _tp_business_rule = field_validator("option_tp_percent")(_validate_tp_percent)
 
@@ -239,7 +220,6 @@ class RiskSettingsPatchRequest(BaseModel):
     # H8 — See RiskSetupRequest.expected_version.
     expected_version: int | None = Field(default=None, ge=0)
 
-    _max_qty_business_rule = field_validator("max_qty_per_order")(_validate_max_qty_per_order)
     _sl_business_rule = field_validator("option_sl_percent")(_validate_sl_percent)
     _tp_business_rule = field_validator("option_tp_percent")(_validate_tp_percent)
 
@@ -444,8 +424,6 @@ def validate_dhan_credentials(client_id: str, access_token: str) -> tuple[bool, 
 def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, list[str]]:
     runtime = runtime or get_runtime_settings()
     issues: list[str] = []
-    if int(runtime.get("max_qty_per_order") or 0) <= 0:
-        issues.append("Max quantity per order must be greater than zero.")
     if str(runtime.get("allowed_option_side") or "BOTH").upper() not in {"CE", "PE", "BOTH"}:
         issues.append("Allowed option side must be CE, PE, or BOTH.")
     option_sl_percent = float(runtime.get("option_sl_percent") or 0)
@@ -470,11 +448,6 @@ def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, li
         issues.append("Option LTP source must be WEBSOCKET, REST, or AUTO.")
     if str(runtime.get("option_exit_mode") or "DHAN_SUPER").upper() not in {"DHAN_SUPER", "SERVER"}:
         issues.append("Option exit mode must be DHAN_SUPER or SERVER.")
-    minimum_qty = _minimum_real_nifty_order_qty()
-    if minimum_qty and int(runtime.get("max_qty_per_order") or 0) < minimum_qty:
-        issues.append(
-            f"Max quantity per order must be at least current NIFTY lot size ({minimum_qty}) in REAL mode."
-        )
     return not issues, issues
 
 

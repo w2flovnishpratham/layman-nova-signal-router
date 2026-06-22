@@ -79,13 +79,12 @@ def test_unsupported_payload_format_rejected(client):
     assert response.json()["status"] == "UNSUPPORTED_PAYLOAD_FORMAT"
 
 
-def test_backend_max_qty_blocks_oversized_pine_alert(client):
+def test_backend_no_longer_caps_oversized_pine_alert(client):
     response = client.post("/webhook/tradingview", json=pine_payload("B", quantity="2"))
 
     assert response.status_code == 200
     body = response.json()
-    assert body["accepted"] is False
-    assert body["message"] == "Quantity exceeds MAX_QTY_PER_ORDER."
+    assert body["accepted"] is True
     assert body["payload_format"] == "PINE_MULTI_LEG"
 
 

@@ -134,10 +134,6 @@ def evaluate_entry(payload: NormalizedSignal, runtime: dict | None = None) -> Ri
             f"Trade blocked: open position already exists for {open_position.get('trading_symbol')}.",
         )
 
-    max_qty = _setting_int(runtime, "max_qty_per_order", 1)
-    if payload.qty > max_qty:
-        return RiskDecision(False, "Quantity exceeds MAX_QTY_PER_ORDER.")
-
     # Strategy uses opposite-side Supertrend flips for exits; trade-count
     # and daily-loss ceilings were removed per the live-strategy direction.
     return RiskDecision(True, "All entry risk checks passed.", final_qty=payload.qty)
@@ -185,10 +181,6 @@ def evaluate_reversal_entry(payload: NormalizedSignal, runtime: dict | None = No
             False,
             f"Trade blocked: open position already exists for {open_position.get('trading_symbol')}.",
         )
-
-    max_qty = _setting_int(runtime, "max_qty_per_order", 1)
-    if payload.qty > max_qty:
-        return RiskDecision(False, "Quantity exceeds MAX_QTY_PER_ORDER.")
 
     # Trade-count + daily-loss ceilings removed (strategy uses opposite-side
     # Supertrend flips as the natural exit signal).

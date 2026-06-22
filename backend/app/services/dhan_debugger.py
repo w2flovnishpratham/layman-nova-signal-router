@@ -64,9 +64,6 @@ def validate_dhan_env() -> dict[str, Any]:
         issues.append("Dhan Access Token is missing while DHAN_MODE=REAL.")
     if not public_webhook_url:
         issues.append("BACKEND_PUBLIC_BASE_URL is missing.")
-    if int(DEFAULT_RUNTIME_SETTINGS["max_qty_per_order"]) <= 0:
-        issues.append("MAX_QTY_PER_ORDER must be greater than zero.")
-
     if settings.ENABLE_LIVE_ORDERS and dhan_mode != "REAL":
         warnings.append("ENABLE_LIVE_ORDERS=true but DHAN_MODE is not REAL.")
     if public_webhook_url and "yourdomain.com" in public_webhook_url:
@@ -92,7 +89,6 @@ def validate_dhan_env() -> dict[str, Any]:
             "client_id_masked": meta["client_id_masked"],
             "access_token_masked": meta["access_token_masked"],
             "public_webhook_url": public_webhook_url,
-            "max_qty_per_order": DEFAULT_RUNTIME_SETTINGS["max_qty_per_order"],
             "allow_default_security_id": settings.ALLOW_DEFAULT_SECURITY_ID,
             "default_security_id_present": bool(settings.DEFAULT_SECURITY_ID),
             "dhan_scrip_master_path": settings.DHAN_SCRIP_MASTER_PATH,

@@ -6,7 +6,7 @@ Covers all gaps identified in the DHAN_V2_COMPLIANCE_AUDIT.md:
 - Webhook secret: no-secret blocks, wrong secret blocks, correct secret accepts
 - Signal parser: invalid qty, missing order_legs, missing secret, unsupported payload
 - Security ID: NIFTY underlying ID=13 blocked, resolver order, scrip-master lookup
-- Quantity: ABSOLUTE mode, max qty blocks final quantity
+- Quantity: ABSOLUTE mode, signal qty passes through as absolute contracts
 - Order gating: MOCK never calls Dhan, REAL+disabled never calls Dhan,
                 missing securityId blocks, emergency stop blocks entry
 - Engine start: fails if Dhan not connected, fails if webhook secret not set,
@@ -361,14 +361,12 @@ class TestQuantityMode:
         payload, _ = _build_dhan_payload_and_resolution(signal, 1, "ENTRY")
         assert payload["quantity"] == 1
 
-    def test_max_qty_blocks_oversized_order(self, client):
-        """max_qty_per_order=1 must block qty=2 in the ABSOLUTE mode."""
-        # risk config in fixture sets max_qty_per_order=1
+    def test_max_qty_no_longer_blocks_oversized_order(self, client):
+        """Signal qty is absolute contracts and is not capped by backend max_qty_per_order."""
         response = client.post("/webhook/tradingview", json=pine_payload("B", quantity="2"))
         assert response.status_code == 200
         body = response.json()
-        assert body["accepted"] is False
-        assert "MAX_QTY_PER_ORDER" in body["message"]
+        assert body["accepted"] is True
 
 
 # ===========================================================================
@@ -1444,8 +1442,6 @@ class TestEngineStartReadiness:
             "validate_dhan_credentials",
             lambda *_args, **_kwargs: (True, "Dhan connected successfully.", None, {}),
         )
-        monkeypatch.setattr(setup_router, "_minimum_real_nifty_order_qty", lambda: None)
-
         from app.main import app
         with TestClient(app) as c:
             # Dhan connected (mock), but no webhook secret
@@ -1513,7 +1509,6 @@ class TestEngineStartReadiness:
             "validate_dhan_credentials",
             lambda *_args, **_kwargs: (True, "Dhan connected successfully.", None, {}),
         )
-        monkeypatch.setattr(setup_router, "_minimum_real_nifty_order_qty", lambda: None)
         # Connect credentials before selecting Paper so the legacy local setup
         # fixture does not make a network request.
         client.post("/api/setup/dhan/connect", json={"client_id": "MOCK123", "access_token": "mock-token"})
@@ -1684,15 +1679,15 @@ class TestSetupSecurity:
         assert "less than 80" in str(sl_response.json())
         assert "less than 500" in str(tp_response.json())
 
-    def test_real_mode_risk_settings_require_current_nifty_lot_size(self, client, monkeypatch):
+    def test_real_mode_risk_settings_do_not_cap_current_nifty_lot_size(self, client, monkeypatch):
         monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
         monkeypatch.setattr(setup_router, "_current_nifty_lot_size_from_scrip_master", lambda: 65)
 
-        too_small = client.patch("/api/setup/risk", json={"max_qty_per_order": 1})
+        small = client.patch("/api/setup/risk", json={"max_qty_per_order": 1})
         valid = client.patch("/api/setup/risk", json={"max_qty_per_order": 65})
 
-        assert too_small.status_code == 422
-        assert "current NIFTY lot size (65)" in str(too_small.json())
+        assert small.status_code == 200
+        assert small.json()["settings"]["max_qty_per_order"] == 1
         assert valid.status_code == 200
         assert valid.json()["settings"]["max_qty_per_order"] == 65
 

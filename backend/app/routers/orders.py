@@ -18,7 +18,7 @@ from app.services.normalized_errors import classify_failure
 from app.services.paper_portfolio import resize_paper_open_trade_quantity
 from app.services.risk_manager import _market_is_open
 from app.services.security_id_resolver import resolve_security_id, suggest_option_contract
-from app.services.state_store import get_app_state, get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
+from app.services.state_store import get_app_state, get_engine_mode, get_open_position, set_open_position, utc_now
 
 
 router = APIRouter()
@@ -219,11 +219,6 @@ def update_active_position_quantity(body: QuantityRequest) -> dict[str, Any]:
     qty = int(body.qty)
     if qty % lot_size != 0:
         return _quantity_error(f"Qty must be a whole lot of {lot_size}.", mode=mode)
-
-    runtime = get_runtime_settings()
-    max_qty = max(int(runtime.get("max_qty_per_order") or lot_size), 1)
-    if qty > max_qty:
-        return _quantity_error("Qty exceeds MAX_QTY_PER_ORDER.", mode=mode)
 
     updated = dict(position)
     current_qty = int(updated.get("qty") or 0)
