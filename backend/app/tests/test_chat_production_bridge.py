@@ -358,6 +358,7 @@ def test_active_position_exit_levels_can_be_updated_for_server_managed_position(
     assert position["live_pnl"]["tp_price"] == 125.0
 
 
+# Dhan Super positions are display-only until broker leg modification is wired.
 def test_active_position_exit_levels_rejects_display_only_dhan_super_position(tmp_path, monkeypatch):
     _isolate_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("live")
