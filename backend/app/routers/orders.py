@@ -17,7 +17,7 @@ from app.services.execution_router import route_signal
 from app.services.normalized_errors import classify_failure
 from app.services.risk_manager import _market_is_open
 from app.services.security_id_resolver import resolve_security_id, suggest_option_contract
-from app.services.state_store import get_app_state, get_engine_mode, get_open_position, utc_now
+from app.services.state_store import get_app_state, get_engine_mode, get_open_position, set_open_position, utc_now
 
 
 router = APIRouter()
@@ -40,6 +40,11 @@ class ManualExitRequest(BaseModel):
 
 class ManualReverseRequest(BaseModel):
     lots: int | None = Field(default=None, ge=1, le=20)
+
+
+class ExitLevelsRequest(BaseModel):
+    stopLossPrice: float = Field(gt=0)
+    targetPrice: float = Field(gt=0)
 
 
 class QuoteRequest(BaseModel):
@@ -179,6 +184,67 @@ def manual_reverse(body: ManualReverseRequest) -> dict[str, Any]:
     )
     execution_result = route_signal(signal)
     return _manual_response(execution_result)
+
+
+@router.patch("/orders/active-position/exit-levels")
+def update_active_position_exit_levels(body: ExitLevelsRequest) -> dict[str, Any]:
+    position = get_open_position()
+    if not position.get("has_open_position"):
+        error = classify_failure(
+            "SL/TP update blocked: no open position exists.",
+            source="RISK_ENGINE",
+            mode=get_engine_mode(legacy_fallback=False) or get_engine_mode(),
+            order_sent_to_broker=False,
+            money_at_risk=False,
+        )
+        return {"ok": False, "message": error["userMessage"], "normalizedError": error}
+
+    mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
+    if str(position.get("exit_management") or "").upper() == "DHAN_SUPER":
+        error = classify_failure(
+            "SL/TP update blocked: Dhan Super Order leg modification is not enabled from this panel yet.",
+            source="RISK_ENGINE",
+            mode=mode,
+            order_sent_to_broker=False,
+            money_at_risk=mode == "live",
+        )
+        return {"ok": False, "message": error["userMessage"], "normalizedError": error}
+
+    stop_loss = round(float(body.stopLossPrice), 2)
+    target = round(float(body.targetPrice), 2)
+    live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
+    entry_price = _number(position.get("entry_price") or live_pnl.get("entry_price"))
+    ltp = _number(live_pnl.get("ltp") or entry_price)
+    if stop_loss >= target:
+        return _exit_level_error("Stop loss must be below target price.", mode=mode)
+    if ltp is not None and (stop_loss >= ltp or target <= ltp):
+        return _exit_level_error("SL must be below current LTP and TP must be above current LTP.", mode=mode)
+
+    levels = {
+        "source": "manual",
+        "stopLossPrice": stop_loss,
+        "targetPrice": target,
+        "acceptedAt": utc_now(),
+    }
+    updated = dict(position)
+    updated["active_exit_levels"] = levels
+    updated_live_pnl = dict(live_pnl)
+    updated_live_pnl.update(
+        {
+            "sl_price": stop_loss,
+            "tp_price": target,
+            "exit_management": str(position.get("exit_management") or "SERVER").upper(),
+            "message": "Manual SL/TP levels are armed.",
+            "last_checked_at": utc_now(),
+        }
+    )
+    updated["live_pnl"] = updated_live_pnl
+    set_open_position(updated)
+    return {
+        "ok": True,
+        "message": "SL/TP levels updated.",
+        "activeExitLevels": levels,
+    }
 
 
 @router.get("/orders/quote")
@@ -458,6 +524,17 @@ def _market_closed_quote(*, side: str, lots: int, atm: dict[str, Any]) -> dict[s
         "message": error["userMessage"],
         "normalizedError": error,
     }
+
+
+def _exit_level_error(message: str, *, mode: str | None) -> dict[str, Any]:
+    error = classify_failure(
+        message,
+        source="RISK_ENGINE",
+        mode=mode,
+        order_sent_to_broker=False,
+        money_at_risk=False,
+    )
+    return {"ok": False, "message": error["userMessage"], "normalizedError": error}
 
 
 def _number(value: Any) -> float | None:

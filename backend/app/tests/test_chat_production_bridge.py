@@ -328,6 +328,59 @@ def test_manual_paper_entry_auto_selects_contract_with_real_market_data_settings
     assert signal.raw_payload["autoAtm"]["atmStrike"] == 24100
 
 
+def test_active_position_exit_levels_can_be_updated_for_server_managed_position(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("paper")
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "symbol": "NIFTY",
+            "trading_symbol": "NIFTY 2026-06-23 24100 CE",
+            "option_side": "CE",
+            "qty": 65,
+            "entry_price": 100.0,
+            "exit_management": "SERVER",
+            "live_pnl": {"entry_price": 100.0, "ltp": 105.0},
+        }
+    )
+
+    result = orders_router.update_active_position_exit_levels(
+        orders_router.ExitLevelsRequest(stopLossPrice=95.0, targetPrice=125.0)
+    )
+    position = state_store.get_open_position()
+
+    assert result["ok"] is True
+    assert position["active_exit_levels"]["source"] == "manual"
+    assert position["active_exit_levels"]["stopLossPrice"] == 95.0
+    assert position["active_exit_levels"]["targetPrice"] == 125.0
+    assert position["live_pnl"]["sl_price"] == 95.0
+    assert position["live_pnl"]["tp_price"] == 125.0
+
+
+def test_active_position_exit_levels_rejects_display_only_dhan_super_position(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("live")
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "symbol": "NIFTY",
+            "trading_symbol": "NIFTY 2026-06-23 24100 CE",
+            "option_side": "CE",
+            "qty": 65,
+            "entry_price": 100.0,
+            "exit_management": "DHAN_SUPER",
+            "live_pnl": {"entry_price": 100.0, "ltp": 105.0},
+        }
+    )
+
+    result = orders_router.update_active_position_exit_levels(
+        orders_router.ExitLevelsRequest(stopLossPrice=95.0, targetPrice=125.0)
+    )
+
+    assert result["ok"] is False
+    assert state_store.get_open_position().get("active_exit_levels") is None
+
+
 def test_session_exit_open_routes_exit_without_stopping_engine(tmp_path, monkeypatch):
     _isolate_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("live")

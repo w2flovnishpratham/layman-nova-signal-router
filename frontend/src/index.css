@@ -783,8 +783,103 @@ code {
 }
 
 .trade-cell strong {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   margin-top: 5px;
   font-size: 15px;
+}
+
+.trade-cell-action-wrap {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.trade-cell-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-soft), border-color var(--dur-fast) var(--ease-soft), background var(--dur-fast) var(--ease-soft);
+}
+
+.trade-cell:hover .trade-cell-action,
+.trade-cell:focus-within .trade-cell-action {
+  opacity: 1;
+}
+
+.trade-cell-action:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.trade-cell-action:disabled {
+  cursor: not-allowed;
+  color: var(--text-3);
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.trade-edit-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px 34px;
+  gap: 8px;
+  margin-top: 10px;
+  overflow: hidden;
+}
+
+.trade-edit-panel label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.trade-edit-panel label span {
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.trade-edit-panel input {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  padding: 0 9px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trade-edit-panel button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: end;
+  height: 34px;
+  border-radius: 8px;
+  color: var(--text-1);
+}
+
+.trade-edit-panel button:first-of-type {
+  border-color: color-mix(in srgb, var(--success) 38%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+}
+
+.trade-edit-status {
+  margin: 8px 0 0;
+  color: var(--text-3);
+  font-size: 11px;
 }
 
 .ltp-cell {

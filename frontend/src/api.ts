@@ -1,4 +1,4 @@
-import type { AtmLtpSnapshot, MarketSnapshot, SessionBootstrap, SessionSnapshot, SystemHealth } from './types'
+import type { ActiveExitLevels, AtmLtpSnapshot, MarketSnapshot, SessionBootstrap, SessionSnapshot, SystemHealth } from './types'
 import { backendHttpUrl } from './lib/backend'
 
 export interface AuthUser {
@@ -85,6 +85,18 @@ export interface ManualOrderResponse {
   executionResult?: Record<string, unknown>
   normalizedError?: Record<string, unknown> | null
   orderJourney?: Array<Record<string, unknown>>
+}
+
+export interface ExitLevelsPayload {
+  stopLossPrice: number
+  targetPrice: number
+}
+
+export interface ExitLevelsResponse {
+  ok: boolean
+  message: string
+  activeExitLevels?: ActiveExitLevels
+  normalizedError?: Record<string, unknown> | null
 }
 
 export interface OrderQuote {
@@ -198,6 +210,19 @@ export async function postManualExit(): Promise<ManualOrderResponse> {
 
 export async function postManualReverse(lots: number): Promise<ManualOrderResponse> {
   return postManualOrder('/api/orders/manual-reverse', { lots })
+}
+
+export async function patchActiveExitLevels(payload: ExitLevelsPayload): Promise<ExitLevelsResponse> {
+  const response = await apiFetch('/api/orders/active-position/exit-levels', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as ExitLevelsResponse | null
+  if (!response.ok) {
+    throw new Error(body?.message || `Could not update SL/TP: ${response.status}`)
+  }
+  return body ?? { ok: false, message: 'Could not update SL/TP.' }
 }
 
 async function postManualOrder(path: `/${string}`, payload: unknown): Promise<ManualOrderResponse> {
