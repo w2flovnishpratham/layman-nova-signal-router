@@ -350,6 +350,7 @@ def test_active_position_exit_levels_can_be_updated_for_server_managed_position(
     position = state_store.get_open_position()
 
     assert result["ok"] is True
+    assert result["message"] == "SL/TP levels updated."
     assert position["active_exit_levels"]["source"] == "manual"
     assert position["active_exit_levels"]["stopLossPrice"] == 95.0
     assert position["active_exit_levels"]["targetPrice"] == 125.0
