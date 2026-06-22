@@ -189,7 +189,7 @@ def classify_failure(
             debug_pack=debug_pack,
         )
 
-    if any(term in lowered for term in ("insufficient fund", "insufficient balance", "available balance", "funds")):
+    if any(term in lowered for term in ("insufficient fund", "insufficient balance", "available balance", "virtual balance", "funds")) or ("insufficient" in lowered and "balance" in lowered):
         return build_error(
             source=source,
             category="FUNDS",
@@ -365,7 +365,7 @@ def classify_failure(
             debug_pack=debug_pack,
         )
 
-    if any(term in lowered for term in ("invalid json", "invalid payload", "payload", "missing", "invalid quantity", "quantity", "securityid", "security id", "instrument")):
+    if any(term in lowered for term in ("invalid json", "invalid payload", "payload", "missing", "invalid quantity", "quantity", "qty", "whole lot", "lot count", "securityid", "security id", "instrument")):
         return build_error(
             source=source,
             category="PAYLOAD_INVALID",

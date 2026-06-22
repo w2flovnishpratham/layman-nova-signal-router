@@ -35,6 +35,20 @@ def test_dhan_error_classifies_funds_margin_ltp_and_unknown_order():
     assert unknown["moneyAtRisk"] is True
 
 
+def test_quantity_update_errors_are_classified():
+    invalid_qty = classify_failure("Qty must be a whole lot of 65.", source="RISK_ENGINE", mode="paper")
+    insufficient_balance = classify_failure(
+        "Paper quantity update rejected: insufficient virtual balance.",
+        source="RISK_ENGINE",
+        mode="paper",
+    )
+
+    assert invalid_qty["category"] == "PAYLOAD_INVALID"
+    assert invalid_qty["orderSentToBroker"] is False
+    assert insufficient_balance["category"] == "FUNDS"
+    assert insufficient_balance["moneyAtRisk"] is False
+
+
 def test_debug_pack_redacts_sensitive_values():
     error = classify_failure(
         "access-token=raw-token secret=webhook-secret",

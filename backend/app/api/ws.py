@@ -11,7 +11,7 @@ from app.domain.events import event
 from app.domain.state_machine import SetupState, StateTransitionError, validate_command
 from app.routers.control import panic_exit
 from app.routers.engine import StartEngineRequest, start_engine, stop_engine
-from app.routers.setup import EngineModeRequest, configure_engine_mode, current_nifty_lot_size, validate_dhan_credentials
+from app.routers.setup import EngineModeRequest, configure_engine_mode, validate_dhan_credentials
 from app.services.credential_vault import save_dhan_credentials
 from app.services.chat_event_publisher import active_trade_from_position
 from app.services.execution_context import bind_user_execution_context
@@ -217,11 +217,8 @@ async def _apply_production_command(
         return
 
     if command_type == "setup.risk":
-        lots = max(int(data.get("lots") or 1), 1)
-        lot_size = await asyncio.to_thread(current_nifty_lot_size)
         await asyncio.to_thread(
             update_runtime_settings,
-            max_qty_per_order=lots * lot_size,
             allowed_option_side=str(data.get("side") or "BOTH").upper(),
             max_trades_per_day=int(data.get("maxTrades") or 0),
             max_daily_loss=float(data.get("maxLoss") or 0),

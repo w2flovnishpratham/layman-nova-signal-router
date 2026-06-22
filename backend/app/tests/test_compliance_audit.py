@@ -1679,7 +1679,7 @@ class TestSetupSecurity:
         assert "less than 80" in str(sl_response.json())
         assert "less than 500" in str(tp_response.json())
 
-    def test_real_mode_risk_settings_do_not_cap_current_nifty_lot_size(self, client, monkeypatch):
+    def test_risk_settings_ignore_removed_max_quantity_cap(self, client, monkeypatch):
         monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
         monkeypatch.setattr(setup_router, "_current_nifty_lot_size_from_scrip_master", lambda: 65)
 
@@ -1687,9 +1687,9 @@ class TestSetupSecurity:
         valid = client.patch("/api/setup/risk", json={"max_qty_per_order": 65})
 
         assert small.status_code == 200
-        assert small.json()["settings"]["max_qty_per_order"] == 1
         assert valid.status_code == 200
-        assert valid.json()["settings"]["max_qty_per_order"] == 65
+        assert "max_qty_per_order" not in small.json()["settings"]
+        assert "max_qty_per_order" not in valid.json()["settings"]
 
     def test_fresh_start_requires_typed_confirmation(self, client):
         missing = client.post("/api/control/fresh-start", json={})

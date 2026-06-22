@@ -177,10 +177,14 @@ def _production_chat_snapshot() -> tuple[SetupState, dict[str, object]]:
     if not is_live:
         return SetupState.IDLE, {}
 
+    mode = get_engine_mode(legacy_fallback=False)
+    position = get_open_position()
+    active_trade = active_trade_from_position(position, mode)
     state = SetupState.LIVE if bool(runtime.get("allow_entry", True)) else SetupState.PAUSED
     creds = get_dhan_credentials()
     lot_size = current_nifty_lot_size()
-    max_qty = max(int(runtime.get("max_qty_per_order") or lot_size), 1)
+    position_qty = int(position.get("qty") or 0) if active_trade else 0
+    lots = max(1, (position_qty + lot_size - 1) // lot_size) if position_qty else 1
     target_pct = float(runtime.get("option_tp_percent") or 20)
     stop_loss_pct = float(runtime.get("option_sl_percent") or DISABLED_OPTION_SL_PERCENT)
     exit_mode = str(runtime.get("option_exit_mode") or "DHAN_SUPER").upper()
@@ -202,7 +206,7 @@ def _production_chat_snapshot() -> tuple[SetupState, dict[str, object]]:
         "risk": {
             "maxTrades": int(runtime.get("max_trades_per_day") or 0) or None,
             "maxLoss": float(runtime.get("max_daily_loss") or 0) or None,
-            "lots": max(1, (max_qty + lot_size - 1) // lot_size),
+            "lots": lots,
             "side": str(runtime.get("allowed_option_side") or "BOTH").upper(),
         },
         "exits": {

@@ -136,7 +136,6 @@ def test_chat_session_recovers_persisted_paused_engine_state(tmp_path, monkeypat
     state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
     state_store.update_runtime_settings(
         allow_entry=False,
-        max_qty_per_order=130,
         allowed_option_side="PE",
         max_trades_per_day=7,
         max_daily_loss=4500,
@@ -155,7 +154,7 @@ def test_chat_session_recovers_persisted_paused_engine_state(tmp_path, monkeypat
     assert snapshot["config"]["risk"] == {
         "maxTrades": 7,
         "maxLoss": 4500.0,
-        "lots": 2,
+        "lots": 1,
         "side": "PE",
     }
     assert snapshot["config"]["exits"]["mode"] == "custom"
@@ -738,9 +737,8 @@ def test_disabled_sl_level_ignores_stale_regular_sl_percent():
     assert stop_loss_price == 0.5
 
 
-def test_chat_risk_command_uses_current_scrip_master_lot_size(tmp_path, monkeypatch):
+def test_chat_risk_command_does_not_write_backend_quantity_cap(tmp_path, monkeypatch):
     _isolate_runtime(tmp_path, monkeypatch)
-    monkeypatch.setattr("app.api.ws.current_nifty_lot_size", lambda: 75)
 
     asyncio.run(
         _apply_production_command(
@@ -749,7 +747,11 @@ def test_chat_risk_command_uses_current_scrip_master_lot_size(tmp_path, monkeypa
         )
     )
 
-    assert state_store.get_runtime_settings()["max_qty_per_order"] == 150
+    runtime = state_store.get_runtime_settings()
+    assert "max_qty_per_order" not in runtime
+    assert runtime["allowed_option_side"] == "BOTH"
+    assert runtime["max_trades_per_day"] == 5
+    assert runtime["max_daily_loss"] == 3000
 
 
 def test_successful_server_exit_publishes_exact_trade_exit_event(tmp_path, monkeypatch):

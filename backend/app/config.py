@@ -32,7 +32,6 @@ DEFAULT_RUNTIME_SETTINGS = {
     # H8 — Optimistic-locking counter; incremented on every settings write.
     # Clients pass the version they last read; mismatched writes return 409.
     "_version": 0,
-    "max_qty_per_order": DEFAULT_NIFTY_LOT_SIZE,
     "allowed_option_side": "BOTH",
     "max_trades_per_day": 0,
     "max_daily_loss": 0.0,

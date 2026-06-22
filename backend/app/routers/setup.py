@@ -164,7 +164,6 @@ class EngineModeRequest(BaseModel):
 
 
 class RiskSetupRequest(BaseModel):
-    max_qty_per_order: int = Field(default=DEFAULT_NIFTY_LOT_SIZE, ge=1)
     allowed_option_side: str = "BOTH"
     max_trades_per_day: int = Field(default=0, ge=0)
     max_daily_loss: float = Field(default=0.0, ge=0)
@@ -199,7 +198,6 @@ class RiskSetupRequest(BaseModel):
 
 
 class RiskSettingsPatchRequest(BaseModel):
-    max_qty_per_order: int | None = Field(default=None, ge=1)
     allowed_option_side: str | None = None
     max_trades_per_day: int | None = Field(default=None, ge=0)
     max_daily_loss: float | None = Field(default=None, ge=0)
@@ -548,7 +546,6 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
         },
         "settings": {
             "_version": runtime.get("_version"),
-            "max_qty_per_order": runtime.get("max_qty_per_order"),
             "allowed_option_side": runtime.get("allowed_option_side"),
             "max_trades_per_day": runtime.get("max_trades_per_day"),
             "max_daily_loss": runtime.get("max_daily_loss"),
