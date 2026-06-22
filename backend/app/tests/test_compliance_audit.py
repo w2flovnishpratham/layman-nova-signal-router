@@ -1491,7 +1491,7 @@ class TestEngineStartReadiness:
 
         from app.main import app
         with TestClient(app) as c:
-            state_store.set_engine_mode("paper")
+            c.post("/api/setup/mode", json={"engine_mode": "paper", "paper_starting_balance": 100000})
             c.post("/api/setup/risk", json={
                 "max_qty_per_order": 1,
                 "allow_entry": True, "allow_exit": True,
