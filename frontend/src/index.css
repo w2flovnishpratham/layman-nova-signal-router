@@ -66,6 +66,17 @@
   box-sizing: border-box;
 }
 
+* {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+*::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
 ::selection {
   background: color-mix(in srgb, var(--accent) 36%, transparent);
   color: var(--text-1);
@@ -346,6 +357,51 @@ code {
   font-size: 12px;
   text-transform: capitalize;
 }
+.motion-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.motion-ping {
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--success);
+}
+
+.motion-ping-ring,
+.motion-ping-dot {
+  border-radius: inherit;
+  background: currentColor;
+}
+
+.motion-ping-ring {
+  position: absolute;
+  inset: -4px;
+}
+
+.motion-ping-dot {
+  width: 100%;
+  height: 100%;
+}
+
+.mode-status-ok {
+  color: var(--success);
+}
+
+.mode-status-warn {
+  color: var(--warning);
+}
+
+.nv-open-ping {
+  color: var(--accent);
+}
 
 .status-dot {
   position: relative;
@@ -370,16 +426,6 @@ code {
 
 .status-verified .status-dot {
   background: var(--accent);
-}
-
-.status-live .status-dot::after {
-  position: absolute;
-  inset: -5px;
-  border-radius: inherit;
-  background: var(--success);
-  opacity: 0.2;
-  animation: status-pulse 1.5s var(--ease-soft) infinite;
-  content: "";
 }
 
 .header-actions {
@@ -571,16 +617,6 @@ code {
   background: color-mix(in srgb, var(--warning) 12%, transparent);
 }
 
-.reconnect-bar::after {
-  display: block;
-  width: 36%;
-  height: 100%;
-  transform: translateX(-100%);
-  background: var(--warning);
-  animation: reconnect-slide var(--dur-slow) linear infinite;
-  content: "";
-}
-
 .squareoff-chip {
   position: absolute;
   right: 20px;
@@ -612,7 +648,6 @@ code {
   background: color-mix(in srgb, var(--bg-1) 96%, transparent);
   padding: 14px;
   backdrop-filter: blur(14px);
-  animation: message-in var(--dur-base) var(--ease-out);
 }
 
 .active-trade-card.trade-up {
@@ -753,8 +788,22 @@ code {
 }
 
 .ltp-cell {
-  animation-duration: 320ms;
-  animation-fill-mode: both;
+  position: relative;
+  overflow: hidden;
+}
+
+.ltp-flash-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ltp-flash-overlay.up {
+  background: var(--tick-up);
+}
+
+.ltp-flash-overlay.down {
+  background: var(--tick-down);
 }
 
 .sr-suggestion-panel {
@@ -818,14 +867,6 @@ code {
 .sr-suggestion-armed {
   border-color: color-mix(in srgb, var(--success) 38%, transparent);
   background: color-mix(in srgb, var(--success) 8%, var(--bg-2));
-}
-
-.nv-ltp-flash-up {
-  animation-name: ltp-flash-up;
-}
-
-.nv-ltp-flash-down {
-  animation-name: ltp-flash-down;
 }
 
 .trade-actions {
@@ -917,6 +958,12 @@ code {
 .desktop-engine-panel {
   display: none;
   min-width: 0;
+  width: 100%;
+  border: 1px solid rgba(157, 91, 255, 0.12);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(12, 10, 18, 0.9), rgba(8, 7, 13, 0.86));
+  box-shadow: var(--shadow-card);
+  padding: 10px;
 }
 
 .engine-panel-shell {
@@ -933,6 +980,8 @@ code {
   align-items: center;
   justify-content: flex-end;
   min-height: 34px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  padding-bottom: 8px;
 }
 
 .engine-panel-left .panel-collapse-bar {
@@ -968,20 +1017,20 @@ code {
 }
 
 .panel-scroll {
+  width: 100%;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 4px;
-  opacity: 1;
-  transform: translateX(0);
-  visibility: visible;
-  pointer-events: auto;
-  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
-  scrollbar-width: thin;
+  padding-right: 0;
   scroll-behavior: smooth;
-  transition:
-    opacity var(--dur-base) var(--ease-soft),
-    transform var(--dur-base) var(--ease-out),
-    visibility 0s linear 0s;
+  will-change: opacity, transform, filter;
+}
+
+.engine-panel-left .panel-scroll {
+  min-width: 0;
+}
+
+.engine-panel-right .panel-scroll {
+  min-width: 0;
 }
 
 .desktop-engine-panel.is-collapsed .engine-panel-shell {
@@ -996,23 +1045,9 @@ code {
   justify-items: center;
   height: 100%;
   min-height: 100%;
+  border-bottom: 0;
   padding-top: 0;
-}
-
-.desktop-engine-panel.is-collapsed .panel-scroll {
-  overflow: hidden;
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition-delay: 0s, 0s, var(--dur-base);
-}
-
-.engine-panel-left.is-collapsed .panel-scroll {
-  transform: translateX(-12px);
-}
-
-.engine-panel-right.is-collapsed .panel-scroll {
-  transform: translateX(12px);
+  padding-bottom: 0;
 }
 
 .panel-rail-label {
@@ -1035,8 +1070,6 @@ code {
   gap: 18px;
   align-content: start;
   width: 100%;
-  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
-  scrollbar-width: thin;
 }
 
 .engine-main-pane {
@@ -1060,16 +1093,6 @@ code {
   height: 432px;
   overflow-y: auto;
   padding: 0 0 14px;
-  scrollbar-width: none !important; /* Firefox */
-  -ms-overflow-style: none !important; /* IE and Edge */
-}
-
-.chat-log::-webkit-scrollbar,
-.engine-shell .chat-log::-webkit-scrollbar,
-.chat-shell .chat-log::-webkit-scrollbar {
-  display: none !important; /* Chrome, Safari and Opera */
-  width: 0 !important;
-  height: 0 !important;
 }
 
 .engine-shell .chat-log {
@@ -1078,8 +1101,6 @@ code {
   min-height: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   padding-top: 0;
-  scrollbar-width: none !important;
-  -ms-overflow-style: none !important;
 }
 
 .chat-shell .engine-main-pane {
@@ -1094,8 +1115,6 @@ code {
   height: auto;
   min-height: 0;
   padding-bottom: 28px;
-  scrollbar-width: none !important;
-  -ms-overflow-style: none !important;
 }
 
 .app-footer {
@@ -1141,14 +1160,6 @@ code {
   transform-origin: left bottom;
 }
 
-.message-motion .bot-row,
-.message-motion .typing-row,
-.message-motion .user-row,
-.message-motion .setup-card,
-.message-motion .engine-listening {
-  animation: none;
-}
-
 .chat-bottom-anchor {
   min-height: 1px;
 }
@@ -1160,7 +1171,6 @@ code {
   align-items: flex-start;
   gap: 10px;
   width: 100%;
-  animation: message-in var(--dur-base) var(--ease-out);
 }
 
 .user-row {
@@ -1250,7 +1260,6 @@ code {
   padding: 7px 11px;
   color: var(--text-2);
   font-size: 12px;
-  animation: chip-in var(--dur-fast) var(--ease-out);
 }
 
 .summary-chip {
@@ -1274,7 +1283,6 @@ code {
   height: 5px;
   border-radius: 999px;
   background: var(--text-3);
-  animation: none;
 }
 
 .setup-card {
@@ -1290,7 +1298,6 @@ code {
   border-radius: 0;
   background: transparent;
   padding: 14px 0 0;
-  animation: message-in var(--dur-base) var(--ease-out);
 }
 
 .mode-step {
@@ -1511,15 +1518,6 @@ code {
   color: rgba(248, 113, 113, 0.76);
   padding: 10px 12px;
   font-size: 11px;
-}
-
-.button-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: #ffffff;
-  border-radius: 999px;
-  animation: spin 800ms linear infinite;
 }
 
 .form-hint {
@@ -2069,7 +2067,6 @@ code {
   margin-top: 0;
   padding: 31px 14px 29px;
   text-align: center;
-  animation: message-in var(--dur-base) var(--ease-out);
 }
 
 .live-engine-stack {
@@ -2134,14 +2131,11 @@ code {
   color: var(--warning);
 }
 
-.engine-pulse::after {
+.engine-ping {
   position: absolute;
-  inset: -7px;
-  border-radius: inherit;
-  background: currentColor;
-  opacity: 0.18;
-  animation: status-pulse 1.5s var(--ease-soft) infinite;
-  content: "";
+  width: 22px;
+  height: 22px;
+  color: currentColor;
 }
 
 .engine-sidebar {
@@ -2152,8 +2146,6 @@ code {
   align-content: start;
   padding-top: 0;
   width: 100%;
-  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
-  scrollbar-width: thin;
 }
 
 .sidebar-card {
@@ -2481,30 +2473,13 @@ code {
 }
 
 .manual-advanced-motion {
-  display: grid;
-  grid-template-rows: 0fr;
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 1px solid transparent;
-  opacity: 0;
-  transform: translateY(-6px);
   overflow: hidden;
-  transition:
-    grid-template-rows var(--dur-slow) var(--ease-out),
-    margin-top var(--dur-base) var(--ease-soft),
-    padding-top var(--dur-base) var(--ease-soft),
-    border-color var(--dur-base) var(--ease-soft),
-    opacity var(--dur-base) var(--ease-soft),
-    transform var(--dur-base) var(--ease-out);
 }
 
 .manual-advanced-motion.is-open {
-  grid-template-rows: 1fr;
   margin-top: 16px;
   padding-top: 16px;
-  border-top-color: rgba(255, 255, 255, 0.05);
-  opacity: 1;
-  transform: translateY(0);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .manual-advanced-content {
@@ -2531,13 +2506,29 @@ code {
   color: var(--accent-live);
 }
 
-.manual-action-button.hold-live.holding::after {
+.motion-progress-fill {
   position: absolute;
   inset: 0;
-  transform-origin: left;
+  z-index: 0;
+  transform-origin: left center;
+  pointer-events: none;
+}
+
+.motion-progress-fill.tone-live {
   background: color-mix(in srgb, var(--accent-live) 20%, transparent);
-  animation: hold-fill 900ms linear forwards;
-  content: "";
+}
+
+.motion-progress-fill.tone-danger {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+.hold-button-content {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: inherit;
 }
 
 .manual-progress {
@@ -2656,120 +2647,11 @@ code {
   display: grid;
   place-items: center;
   background: rgba(0, 0, 0, 0.58);
-  animation: fade-in var(--dur-fast) var(--ease-soft);
-}
-
-.kill-dialog {
-  animation: dialog-in var(--dur-base) var(--ease-out);
 }
 
 .hold-confirm {
   position: relative;
   overflow: hidden;
-}
-
-.hold-confirm:active::after {
-  position: absolute;
-  inset: 0;
-  transform-origin: left;
-  background: color-mix(in srgb, var(--danger) 22%, transparent);
-  animation: hold-fill 800ms linear forwards;
-  content: "";
-}
-
-@keyframes message-in {
-  from {
-    transform: translateY(8px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes chip-in {
-  from {
-    transform: scale(0.96);
-    opacity: 0;
-  }
-  to {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-@keyframes status-pulse {
-  to {
-    transform: scale(1.8);
-    opacity: 0;
-  }
-}
-
-@keyframes reconnect-slide {
-  to {
-    transform: translateX(280%);
-  }
-}
-
-@keyframes typing-dot {
-  50% {
-    transform: translateY(-2px);
-    opacity: 0.45;
-  }
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes ltp-flash-up {
-  0% {
-    background: var(--tick-up);
-  }
-  100% {
-    background: var(--bg-2);
-  }
-}
-
-@keyframes ltp-flash-down {
-  0% {
-    background: var(--tick-down);
-  }
-  100% {
-    background: var(--bg-2);
-  }
-}
-
-@keyframes dialog-in {
-  from {
-    transform: translateY(8px) scale(0.96);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0) scale(1);
-    opacity: 1;
-  }
-}
-
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes hold-fill {
-  from {
-    transform: scaleX(0);
-  }
-  to {
-    transform: scaleX(1);
-  }
 }
 
 .shared-data-step {
@@ -2815,14 +2697,25 @@ code {
    Order: chat/execution first, then market + manual, then account + controls. */
 @media (min-width: 1024px) {
   .engine-shell-grid {
-    grid-template-columns: var(--desktop-grid-columns, minmax(320px, 4fr) minmax(420px, 5fr) minmax(280px, 3fr));
-    transition: grid-template-columns var(--dur-slow) var(--ease-out);
+    grid-template-columns: auto minmax(420px, 1fr) auto;
   }
 
   .desktop-engine-panel {
     display: block;
     height: 100%;
     overflow: hidden;
+  }
+
+  .engine-panel-left:not(.is-collapsed) {
+    width: clamp(340px, 30vw, 500px);
+  }
+
+  .engine-panel-right:not(.is-collapsed) {
+    width: clamp(300px, 22vw, 380px);
+  }
+
+  .desktop-engine-panel.is-collapsed {
+    width: 54px;
   }
 
   .engine-shell-grid.left-panel-collapsed .engine-main-pane,
@@ -2930,33 +2823,4 @@ code {
     animation-duration: 0ms !important;
     transition-duration: 0ms !important;
   }
-}
-
-/* Bottom Sheet / Drawer Animations (shadcn style) */
-@keyframes slide-up {
-  from {
-    transform: translateY(100%);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-
-@keyframes fade-in-backdrop {
-  from {
-    opacity: 0;
-    backdrop-filter: blur(0px);
-  }
-  to {
-    opacity: 1;
-    backdrop-filter: blur(4px);
-  }
-}
-
-.drawer-backdrop {
-  animation: fade-in-backdrop 0.3s cubic-bezier(0.32, 0.94, 0.6, 1) forwards;
-}
-
-.drawer-content {
-  animation: slide-up 0.38s cubic-bezier(0.32, 0.94, 0.6, 1) forwards;
 }

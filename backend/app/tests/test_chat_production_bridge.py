@@ -268,6 +268,19 @@ def test_block_entry_requests_rejects_entries_before_order_routing(tmp_path, mon
     assert result["block_code"] == "ENTRY_REQUEST_BLOCKED"
 
 
+def test_session_resume_from_stale_live_state_restores_entry_requests(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
+    state_store.update_runtime_settings(allow_entry=False)
+
+    state, patch = validate_command(SetupState.LIVE, "session.resume", {})
+    asyncio.run(_apply_production_command("session.resume", {}))
+
+    assert state == SetupState.LIVE
+    assert patch == {}
+    assert state_store.get_runtime_settings()["allow_entry"] is True
+
+
 def test_session_exit_open_routes_exit_without_stopping_engine(tmp_path, monkeypatch):
     _isolate_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("live")

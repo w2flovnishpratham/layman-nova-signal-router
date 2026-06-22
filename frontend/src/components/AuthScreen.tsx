@@ -1,4 +1,5 @@
 import { LogIn, ShieldCheck, Loader2 } from 'lucide-react'
+import { MotionPulseText, MotionSpinner } from './MotionPrimitives'
 
 interface Props {
   loading: boolean
@@ -24,8 +25,10 @@ export function AuthScreen({ loading, error, onLogin, onRetry }: Props) {
         {error ? <div className="error-banner">{error}</div> : null}
         {loading ? (
           <div className="flex flex-col items-center gap-3 mt-4">
-            <Loader2 className="animate-spin text-purple-400" size={32} />
-            <div className="text-xs text-white/50 animate-pulse font-medium">Verifying login, please wait...</div>
+            <MotionSpinner className="text-purple-400">
+              <Loader2 size={32} />
+            </MotionSpinner>
+            <MotionPulseText className="text-xs text-white/50 font-medium">Verifying login, please wait...</MotionPulseText>
           </div>
         ) : (
           <div className="auth-actions">

@@ -2,6 +2,7 @@ import { ChevronDown, Copy, ExternalLink, RotateCcw, ShieldCheck, Wifi } from 'l
 import { useState } from 'react'
 import { verifyEgressIp } from '../../api'
 import { formatCurrency } from '../../lib/format'
+import { MotionSpinner } from '../MotionPrimitives'
 import { useSessionStore } from '../../state/sessionStore'
 import type { NormalizedError, OrderJourneyStep, RenderableMessage } from '../../types'
 
@@ -295,7 +296,7 @@ function actionLabel(action: string): string {
 }
 
 function actionIcon(action: string, busy: boolean) {
-  if (busy) return <span className="button-spinner" />
+  if (busy) return <MotionSpinner><RotateCcw size={13} /></MotionSpinner>
   if (action === 'reconnect_dhan' || action === 'retry') return <RotateCcw size={13} />
   if (action === 'verify_static_ip') return <Wifi size={13} />
   if (action === 'open_dhan') return <ExternalLink size={13} />

@@ -1,6 +1,7 @@
-import { FlaskConical, Zap } from 'lucide-react'
+import { FlaskConical, Loader2, Zap } from 'lucide-react'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
+import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
 import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
@@ -212,7 +213,11 @@ function BrokerStep({
       </label>
       {error ? <p className="form-error">{error}</p> : null}
       <button type="submit" disabled={pending}>
-        {pending ? <span className="button-spinner" aria-hidden="true" /> : null}
+        {pending ? (
+          <MotionSpinner>
+            <Loader2 size={14} />
+          </MotionSpinner>
+        ) : null}
         {pending ? 'Verifying Dhan Account' : 'Connect & Verify Dhan Account'}
       </button>
     </form>

@@ -1,7 +1,9 @@
 import { BarChart3, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { useRef, useState } from 'react'
 import type { AuthUser } from '../api'
 import { modeBadgeText } from '../lib/mode'
+import { MotionPing, MotionProgressFill, softEase, useAppReducedMotion } from './MotionPrimitives'
 import type { EngineMode, NovaView, SetupState, SystemHealth, WsStatus } from '../types'
 
 interface Props {
@@ -35,19 +37,25 @@ export function Header({
 }: Props) {
   const [killDialogOpen, setKillDialogOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [holdingKill, setHoldingKill] = useState(false)
   const holdTimer = useRef<number | null>(null)
+  const reduceMotion = useAppReducedMotion()
+  const popTransition = reduceMotion ? { duration: 0 } : { duration: 0.18, ease: softEase }
 
   function cancelHold() {
     if (holdTimer.current !== null) {
       window.clearTimeout(holdTimer.current)
       holdTimer.current = null
     }
+    setHoldingKill(false)
   }
 
   function startHold() {
     cancelHold()
+    setHoldingKill(true)
     holdTimer.current = window.setTimeout(() => {
       holdTimer.current = null
+      setHoldingKill(false)
       setKillDialogOpen(false)
       onKill()
     }, 800)
@@ -89,7 +97,7 @@ export function Header({
         <div className="header-actions relative flex items-center gap-3">
           <div className={`mode-badge mode-badge-${engineMode ?? 'unset'}`}>
             {engineMode === 'paper' ? <FlaskConical size={13} /> : engineMode === 'live' ? <Zap size={13} /> : null}
-            <span className="status-dot" />
+            <MotionPing className={status === 'live' ? 'mode-status-ok' : 'mode-status-warn'} />
             {modeBadgeText(engineMode)}{engineLive ? ` - ${statusLabel(status, setupState)}` : ''}
           </div>
 
@@ -103,10 +111,26 @@ export function Header({
             <MoreVertical size={18} />
           </button>
 
-          {menuOpen && (
-            <>
-              <div className="fixed inset-0 z-30 cursor-default" onClick={() => setMenuOpen(false)} />
-              <div className="absolute right-0 top-full mt-2 w-72 bg-[#12111b] border border-white/10 rounded-xl shadow-2xl p-4 flex flex-col gap-4 z-40 animate-in fade-in slide-in-from-top-2 duration-150">
+          <AnimatePresence initial={false}>
+            {menuOpen ? (
+              <>
+                <motion.div
+                  key="header-menu-backdrop"
+                  className="fixed inset-0 z-30 cursor-default"
+                  onClick={() => setMenuOpen(false)}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={popTransition}
+                />
+                <motion.div
+                  key="header-menu"
+                  className="absolute right-0 top-full mt-2 w-72 bg-[#12111b] border border-white/10 rounded-xl shadow-2xl p-4 flex flex-col gap-4 z-40"
+                  initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                  transition={popTransition}
+                >
                 <div className="flex items-center gap-3 pb-3 border-b border-white/5">
                   {user.picture_url ? (
                     <img src={user.picture_url} alt="" referrerPolicy="no-referrer" className="w-10 h-10 rounded-full border border-white/10 object-cover" />
@@ -170,17 +194,36 @@ export function Header({
                     Log Out
                   </button>
                 </div>
-              </div>
-            </>
-          )}
+                </motion.div>
+              </>
+            ) : null}
+          </AnimatePresence>
         </div>
       </header>
 
-      {killDialogOpen ? (
-        <div className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200" role="presentation" onPointerDown={(event) => {
-          if (event.currentTarget === event.target) closeDialog()
-        }}>
-          <section className="relative w-full max-w-[380px] bg-[#12101c] border border-red-500/20 rounded-2xl shadow-2xl p-6 flex flex-col items-center text-center gap-4 animate-in zoom-in-95 duration-200" role="dialog" aria-modal="true" aria-labelledby="kill-dialog-title">
+      <AnimatePresence initial={false}>
+        {killDialogOpen ? (
+          <motion.div
+            className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            role="presentation"
+            onPointerDown={(event) => {
+              if (event.currentTarget === event.target) closeDialog()
+            }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={popTransition}
+          >
+            <motion.section
+              className="kill-dialog relative w-full max-w-[380px] bg-[#12101c] border border-red-500/20 rounded-2xl shadow-2xl p-6 flex flex-col items-center text-center gap-4"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="kill-dialog-title"
+              initial={{ opacity: 0, y: 10, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.98 }}
+              transition={popTransition}
+            >
             <button
               className="absolute right-4 top-4 text-white/40 hover:text-white hover:bg-white/5 p-1.5 rounded-lg transition-colors border-0 cursor-pointer"
               type="button"
@@ -218,7 +261,8 @@ export function Header({
                   if (event.key === 'Enter' || event.key === ' ') cancelHold()
                 }}
               >
-                Hold to Stop & Square Off
+                {holdingKill ? <MotionProgressFill durationSeconds={0.8} tone="danger" /> : null}
+                <span className="hold-button-content">Hold to Stop & Square Off</span>
               </button>
               <button
                 className="w-full py-2.5 px-4 rounded-xl text-white/50 hover:text-white bg-transparent hover:bg-white/5 transition-all text-xs font-semibold cursor-pointer border-0"
@@ -228,9 +272,10 @@ export function Header({
                 Cancel
               </button>
             </div>
-          </section>
-        </div>
-      ) : null}
+            </motion.section>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </>
   )
 }

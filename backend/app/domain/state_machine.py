@@ -133,11 +133,13 @@ def validate_command(state: SetupState, command_type: str, data: dict[str, Any])
             return SetupState.LIVE, {"live": {"confirmed": True}}
 
         if command_type == "session.pause":
-            _require_state(state, SetupState.LIVE, command_type)
+            if state not in {SetupState.LIVE, SetupState.PAUSED}:
+                raise StateTransitionError(f"{command_type} is not allowed while session state is {state}.")
             return SetupState.PAUSED, {}
 
         if command_type == "session.resume":
-            _require_state(state, SetupState.PAUSED, command_type)
+            if state not in {SetupState.LIVE, SetupState.PAUSED}:
+                raise StateTransitionError(f"{command_type} is not allowed while session state is {state}.")
             return SetupState.LIVE, {}
 
         if command_type == "session.exit_open":

@@ -1,4 +1,6 @@
 import { Activity } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { MotionPing, softEase, useAppReducedMotion } from './MotionPrimitives'
 import type { ActiveTrade, EngineMode, SideFilter } from '../types'
 
 interface Props {
@@ -10,18 +12,27 @@ interface Props {
 
 export function EngineListening({ paused, activeTrade, side, engineMode }: Props) {
   const status = listeningStatus(paused, activeTrade, side)
+  const reduceMotion = useAppReducedMotion()
 
   return (
-    <div className={`engine-listening ${paused ? 'paused' : ''}`}>
+    <motion.div
+      className={`engine-listening ${paused ? 'paused' : ''}`}
+      initial={reduceMotion ? { opacity: 1 } : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={reduceMotion ? { duration: 0 } : { duration: 0.24, ease: softEase }}
+    >
       <div className="engine-orb">
-        <span className="engine-pulse"><Activity size={28} /></span>
+        <span className="engine-pulse">
+          <MotionPing className="engine-ping" />
+          <Activity size={28} />
+        </span>
       </div>
       <div>
         <strong>{status.title}</strong>
         <p>{status.detail}</p>
         <p className="engine-mode-detail">{engineMode === 'paper' ? 'Paper simulator listening for TradingView signals.' : 'Live router listening for TradingView signals.'}</p>
       </div>
-    </div>
+    </motion.div>
   )
 }
 

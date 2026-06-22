@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { BarChart3, ChevronLeft, ChevronRight, LineChart, Loader2, Sliders, Wallet } from 'lucide-react'
 import { AuthScreen } from './components/AuthScreen'
 import { EngineLeftPanel } from './components/EngineLeftPanel'
 import { EngineListening } from './components/EngineListening'
 import { EngineSidebar } from './components/EngineSidebar'
 import { Header } from './components/Header'
+import { MotionPulseText, MotionSpinner, softEase, useAppReducedMotion } from './components/MotionPrimitives'
 import { ChatLog } from './components/messages/ChatLog'
 import { SetupPanel } from './components/setup/SetupPanel'
 import { PortfolioDashboard } from './dashboard/PortfolioDashboard'
@@ -41,6 +42,7 @@ function App() {
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false)
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false)
   const [snapshotLoaded, setSnapshotLoaded] = useState(false)
+  const reduceMotion = useAppReducedMotion()
   const session = useSessionStore((state) => state.session)
   const setupFlowStep = useSessionStore((state) => state.setupFlowStep)
   const setupDraft = useSessionStore((state) => state.setupDraft)
@@ -225,11 +227,28 @@ function App() {
     )
   }
 
-  const engineLive = setupState === 'LIVE' || setupState === 'PAUSED'
-  const desktopGridColumns = `${leftPanelCollapsed ? '54px' : 'minmax(320px, 4fr)'} minmax(420px, 5fr) ${rightPanelCollapsed ? '54px' : 'minmax(280px, 3fr)'}`
+  const sessionEngineLive = setupState === 'LIVE' || setupState === 'PAUSED'
+  const runtimeEntriesBlocked = sessionEngineLive && systemHealth?.engine === 'paused'
+  const effectiveSetupState = runtimeEntriesBlocked || setupState === 'PAUSED' ? 'PAUSED' : setupState
+  const engineLive = sessionEngineLive
+  const panelLayoutTransition = reduceMotion
+    ? { duration: 0 }
+    : { type: 'spring' as const, stiffness: 380, damping: 42, mass: 0.8 }
+  const panelContentTransition = reduceMotion
+    ? { duration: 0 }
+    : { duration: 0.18, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] }
+  const drawerTransition = reduceMotion
+    ? { duration: 0 }
+    : { duration: 0.32, ease: softEase }
+  const leftPanelContentMotion = leftPanelCollapsed
+    ? { opacity: 0, x: -14, filter: 'blur(2px)', transitionEnd: { visibility: 'hidden' as const } }
+    : { opacity: 1, x: 0, filter: 'blur(0px)', visibility: 'visible' as const }
+  const rightPanelContentMotion = rightPanelCollapsed
+    ? { opacity: 0, x: 14, filter: 'blur(2px)', transitionEnd: { visibility: 'hidden' as const } }
+    : { opacity: 1, x: 0, filter: 'blur(0px)', visibility: 'visible' as const }
   const setupPanel = (
     <SetupPanel
-      state={setupState}
+      state={effectiveSetupState}
       flowStep={setupFlowStep}
       draft={setupDraft}
       lastError={lastSetupError}
@@ -250,7 +269,7 @@ function App() {
         clientId={config.broker?.clientId}
         engineLive={engineLive}
         engineMode={engineMode}
-        setupState={setupState}
+        setupState={effectiveSetupState}
         health={systemHealth}
         user={authUser}
         view={view}
@@ -263,20 +282,25 @@ function App() {
       {view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : (
-        <section
+        <motion.section
+          layout
+          transition={panelLayoutTransition}
           className={
             engineLive
               ? `engine-shell engine-shell-grid ${leftPanelCollapsed ? 'left-panel-collapsed' : ''} ${rightPanelCollapsed ? 'right-panel-collapsed' : ''} px-4 w-full max-w-[1480px] mx-auto lg:h-[calc(100vh-120px)] lg:min-h-0 min-h-screen items-stretch`
               : 'chat-shell'
           }
-          style={engineLive ? ({ '--desktop-grid-columns': desktopGridColumns } as CSSProperties) : undefined}
           aria-label="Nova trading session"
         >
         {bootError ? <div className="error-banner col-span-full">{bootError}</div> : null}
         {!session && !bootError ? <div className="system-chip col-span-full">Starting session</div> : null}
 
         {engineLive ? (
-          <aside className={`desktop-engine-panel engine-panel-left ${leftPanelCollapsed ? 'is-collapsed' : ''}`}>
+          <motion.aside
+            layout
+            transition={panelLayoutTransition}
+            className={`desktop-engine-panel engine-panel-left ${leftPanelCollapsed ? 'is-collapsed' : ''}`}
+          >
             <div className="engine-panel-shell">
               <div className="panel-collapse-bar">
                 <button
@@ -288,27 +312,45 @@ function App() {
                 >
                   {leftPanelCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
                 </button>
-                {leftPanelCollapsed ? <span className="panel-rail-label">Market</span> : null}
+                {leftPanelCollapsed ? (
+                  <motion.span
+                    className="panel-rail-label"
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={panelContentTransition}
+                  >
+                    Market
+                  </motion.span>
+                ) : null}
               </div>
-              <div className="panel-scroll" aria-hidden={leftPanelCollapsed}>
+              <motion.div
+                className="panel-scroll"
+                aria-hidden={leftPanelCollapsed}
+                animate={leftPanelContentMotion}
+                initial={false}
+                transition={panelContentTransition}
+                style={{ pointerEvents: leftPanelCollapsed ? 'none' : 'auto' }}
+              >
                 <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
-              </div>
+              </motion.div>
             </div>
-          </aside>
+          </motion.aside>
         ) : null}
 
-        <div className="engine-main-pane lg:h-full flex flex-col min-h-[450px] lg:min-h-0">
+        <motion.div layout transition={panelLayoutTransition} className="engine-main-pane lg:h-full flex flex-col min-h-[450px] lg:min-h-0">
           {!snapshotLoaded && !bootError ? (
             <div className="flex flex-col items-center justify-center flex-grow min-h-[350px] gap-3 text-white/40">
-              <Loader2 className="w-8 h-8 animate-spin text-[#9d5bff]" />
-              <span className="text-xs font-semibold tracking-widest uppercase animate-pulse">Initializing Session...</span>
+              <MotionSpinner className="text-[#9d5bff]">
+                <Loader2 className="w-8 h-8" />
+              </MotionSpinner>
+              <MotionPulseText className="text-xs font-semibold tracking-widest uppercase">Initializing Session...</MotionPulseText>
             </div>
           ) : (
             <>
               <ChatLog
                 messages={messages}
                 typing={typing}
-                panelKey={`${setupState}-${setupFlowStep}-${engineLive ? 'engine' : 'setup'}`}
+                panelKey={`${effectiveSetupState}-${setupFlowStep}-${engineLive ? 'engine' : 'setup'}`}
                 inlinePanel={setupFlowStep === 'mode' || setupFlowStep === 'strategy' ? setupPanel : null}
               >
                 {setupFlowStep === 'mode' || setupFlowStep === 'strategy' ? null : setupPanel}
@@ -316,7 +358,7 @@ function App() {
               {engineLive ? (
                 <div className="live-engine-stack">
                   <EngineListening
-                    paused={setupState === 'PAUSED'}
+                    paused={effectiveSetupState === 'PAUSED'}
                     activeTrade={activeTrade}
                     side={config.risk?.side ?? 'BOTH'}
                     engineMode={engineMode}
@@ -328,7 +370,7 @@ function App() {
               {engineLive ? (
                 <div className="block lg:hidden mt-6">
                   <EngineSidebar
-                    state={setupState}
+                    state={effectiveSetupState}
                     wallet={wallet}
                     marginUtilized={marginUtilized}
                     realizedPnl={realizedPnl}
@@ -343,10 +385,14 @@ function App() {
               ) : null}
             </>
           )}
-        </div>
+        </motion.div>
 
         {engineLive ? (
-          <aside className={`desktop-engine-panel engine-panel-right ${rightPanelCollapsed ? 'is-collapsed' : ''}`}>
+          <motion.aside
+            layout
+            transition={panelLayoutTransition}
+            className={`desktop-engine-panel engine-panel-right ${rightPanelCollapsed ? 'is-collapsed' : ''}`}
+          >
             <div className="engine-panel-shell">
               <div className="panel-collapse-bar">
                 <button
@@ -358,11 +404,27 @@ function App() {
                 >
                   {rightPanelCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
                 </button>
-                {rightPanelCollapsed ? <span className="panel-rail-label">Account</span> : null}
+                {rightPanelCollapsed ? (
+                  <motion.span
+                    className="panel-rail-label"
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={panelContentTransition}
+                  >
+                    Account
+                  </motion.span>
+                ) : null}
               </div>
-              <div className="panel-scroll" aria-hidden={rightPanelCollapsed}>
+              <motion.div
+                className="panel-scroll"
+                aria-hidden={rightPanelCollapsed}
+                animate={rightPanelContentMotion}
+                initial={false}
+                transition={panelContentTransition}
+                style={{ pointerEvents: rightPanelCollapsed ? 'none' : 'auto' }}
+              >
                 <EngineSidebar
-                  state={setupState}
+                  state={effectiveSetupState}
                   wallet={wallet}
                   marginUtilized={marginUtilized}
                   realizedPnl={realizedPnl}
@@ -372,25 +434,41 @@ function App() {
                   engineMode={engineMode}
                   onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
                 />
-              </div>
+              </motion.div>
             </div>
-          </aside>
+          </motion.aside>
         ) : null}
-      </section>
+      </motion.section>
       )}
 
       {/* Mobile-only sliding drawers and floating action bar */}
       {engineLive && (
         <>
           {/* Bottom-to-Top Drawer: Market LTP & Manual Order */}
-          <div className={`fixed inset-0 z-[110] block lg:hidden transition-all duration-300 ${leftDrawerOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}>
-            <div
-              className={`fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${leftDrawerOpen ? 'opacity-100' : 'opacity-0'}`}
-              onClick={() => setLeftDrawerOpen(false)}
-            />
-            <div
-              className={`fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 z-[120] transform transition-transform duration-300 ease-[cubic-bezier(0.32,0.94,0.6,1)] ${leftDrawerOpen ? 'translate-y-0' : 'translate-y-full'}`}
-            >
+          <AnimatePresence initial={false}>
+            {leftDrawerOpen ? (
+              <motion.div
+                className="fixed inset-0 z-[110] block lg:hidden"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={drawerTransition}
+              >
+                <motion.div
+                  className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+                  onClick={() => setLeftDrawerOpen(false)}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={drawerTransition}
+                />
+                <motion.div
+                  className="fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 z-[120]"
+                  initial={{ y: '100%' }}
+                  animate={{ y: 0 }}
+                  exit={{ y: '100%' }}
+                  transition={drawerTransition}
+                >
               <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
               <div className="flex justify-between items-center pb-3 border-b border-white/5">
                 <span className="font-bold text-sm text-white tracking-wide">Market & Order</span>
@@ -403,18 +481,36 @@ function App() {
                 </button>
               </div>
               <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
-            </div>
-          </div>
+                </motion.div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
 
           {/* Bottom-to-Top Drawer: Margin & Balance */}
-          <div className={`fixed inset-0 z-[110] block lg:hidden transition-all duration-300 ${rightDrawerOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}>
-            <div
-              className={`fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${rightDrawerOpen ? 'opacity-100' : 'opacity-0'}`}
-              onClick={() => setRightDrawerOpen(false)}
-            />
-            <div
-              className={`fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 z-[120] transform transition-transform duration-300 ease-[cubic-bezier(0.32,0.94,0.6,1)] ${rightDrawerOpen ? 'translate-y-0' : 'translate-y-full'}`}
-            >
+          <AnimatePresence initial={false}>
+            {rightDrawerOpen ? (
+              <motion.div
+                className="fixed inset-0 z-[110] block lg:hidden"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={drawerTransition}
+              >
+                <motion.div
+                  className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+                  onClick={() => setRightDrawerOpen(false)}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={drawerTransition}
+                />
+                <motion.div
+                  className="fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 z-[120]"
+                  initial={{ y: '100%' }}
+                  animate={{ y: 0 }}
+                  exit={{ y: '100%' }}
+                  transition={drawerTransition}
+                >
               <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
               <div className="flex justify-between items-center pb-3 border-b border-white/5">
                 <span className="font-bold text-sm text-white tracking-wide">Account & Balance</span>
@@ -427,7 +523,7 @@ function App() {
                 </button>
               </div>
               <EngineSidebar
-                state={setupState}
+                state={effectiveSetupState}
                 wallet={wallet}
                 marginUtilized={marginUtilized}
                 realizedPnl={realizedPnl}
@@ -438,8 +534,10 @@ function App() {
                 onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
                 onlyMargin={true}
               />
-            </div>
-          </div>
+                </motion.div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
 
           {/* Sticky Bottom Navigation Bar on Mobile */}
           <div className="fixed bottom-0 left-0 right-0 h-16 bg-[#0c0a14]/95 backdrop-blur-md border-t border-white/10 flex items-center justify-around z-[90] lg:hidden px-2">

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { TickingNumber } from '../components/TickingNumber'
+import { MotionPing, MotionPulseText, MotionSpinner } from '../components/MotionPrimitives'
 import { formatCurrency } from '../lib/format'
 import { DailyPnlBars, EquityCurveChart, SideSplit, WinLossDonut } from './charts'
 import { getPortfolioAnalytics, type PortfolioAnalytics, type PortfolioTrade } from './portfolioApi'
@@ -67,8 +68,10 @@ export function PortfolioDashboard() {
   if (loading && !data) {
     return (
       <div className="nv-dash-state flex flex-col items-center justify-center gap-4 py-20">
-        <Loader2 className="animate-spin text-purple-400" size={40} />
-        <p className="text-sm text-white/60 animate-pulse font-medium">Crunching your tracked trades…</p>
+        <MotionSpinner className="text-purple-400">
+          <Loader2 size={40} />
+        </MotionSpinner>
+        <MotionPulseText className="text-sm text-white/60 font-medium">Crunching your tracked trades…</MotionPulseText>
       </div>
     )
   }
@@ -97,12 +100,18 @@ export function PortfolioDashboard() {
         <p>Real-money round-trips NOVA executed on your live account · paper excluded</p>
       </div>
       <button
-        className={`secondary-button nv-refresh${refreshing ? ' spin' : ''}`}
+        className="secondary-button nv-refresh"
         type="button"
         onClick={() => void load(true)}
         aria-label="Refresh analytics"
       >
-        {refreshing ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+        {refreshing ? (
+          <MotionSpinner>
+            <Loader2 size={14} />
+          </MotionSpinner>
+        ) : (
+          <RefreshCw size={14} />
+        )}
         {refreshing ? 'Refreshing' : 'Refresh'}
       </button>
     </div>
@@ -207,7 +216,7 @@ export function PortfolioDashboard() {
 
       {data.open_position ? (
         <motion.div className="nv-open-banner" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-          <span className="nv-pulse" />
+          <MotionPing className="nv-open-ping" />
           <strong>Open position</strong>
           <span>
             {data.open_position.qty} × {data.open_position.symbol ?? '—'} ({data.open_position.option_side}) @{' '}

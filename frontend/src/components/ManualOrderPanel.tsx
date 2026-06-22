@@ -1,4 +1,5 @@
 import { LogOut, Repeat2, ShoppingCart, Sliders } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
@@ -10,6 +11,7 @@ import {
   type OrderQuote,
 } from '../api'
 import { formatCurrency } from '../lib/format'
+import { MotionProgressFill, softEase, useAppReducedMotion } from './MotionPrimitives'
 import type { ActiveTrade, EngineMode } from '../types'
 
 interface Props {
@@ -33,9 +35,11 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const advancedToggleRef = useRef<HTMLButtonElement | null>(null)
   const advancedRegionRef = useRef<HTMLDivElement | null>(null)
   const advancedScrollTimerRef = useRef<number | null>(null)
+  const reduceMotion = useAppReducedMotion()
   
   const live = engineMode === 'live'
   const marketClosed = quote?.atm?.marketOpen === false
+  const advancedTransition = reduceMotion ? { duration: 0 } : { duration: 0.26, ease: softEase }
 
   useEffect(() => {
     if (!engineMode || pending) return
@@ -188,66 +192,74 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
       </button>
 
       {/* Collapsible Content */}
-      <div
-        id="manual-order-advanced"
-        ref={advancedRegionRef}
-        className={`manual-advanced-motion ${showAdvanced ? 'is-open' : ''}`}
-        aria-hidden={!showAdvanced}
-      >
-        <div className="manual-advanced-content">
-          <div className="manual-controls-grid">
-            <label>
-              <span>Side</span>
-              <select value={side} disabled={pending || !showAdvanced} onChange={(event) => setSide(event.target.value as 'CE' | 'PE')} aria-label="Manual order side">
-                <option value="CE">CE</option>
-                <option value="PE">PE</option>
-              </select>
-            </label>
-            <label>
-              <span>Target %</span>
-              <input type="number" min={0} value={targetProfitPct} disabled={pending || !showAdvanced} onChange={(event) => setTargetProfitPct(Number(event.target.value) || 0)} aria-label="Manual target profit percent" />
-            </label>
-            <label>
-              <span>Stop %</span>
-              <input type="number" min={0} value={stopLossPct} disabled={pending || !showAdvanced} onChange={(event) => setStopLossPct(Number(event.target.value) || 0)} aria-label="Manual stop loss percent" />
-            </label>
-          </div>
+      <AnimatePresence initial={false}>
+        {showAdvanced ? (
+          <motion.div
+            id="manual-order-advanced"
+            ref={advancedRegionRef}
+            className="manual-advanced-motion is-open"
+            initial={{ height: 0, opacity: 0, y: -6 }}
+            animate={{ height: 'auto', opacity: 1, y: 0 }}
+            exit={{ height: 0, opacity: 0, y: -6 }}
+            transition={advancedTransition}
+            aria-hidden={false}
+          >
+            <div className="manual-advanced-content">
+              <div className="manual-controls-grid">
+                <label>
+                  <span>Side</span>
+                  <select value={side} disabled={pending} onChange={(event) => setSide(event.target.value as 'CE' | 'PE')} aria-label="Manual order side">
+                    <option value="CE">CE</option>
+                    <option value="PE">PE</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Target %</span>
+                  <input type="number" min={0} value={targetProfitPct} disabled={pending} onChange={(event) => setTargetProfitPct(Number(event.target.value) || 0)} aria-label="Manual target profit percent" />
+                </label>
+                <label>
+                  <span>Stop %</span>
+                  <input type="number" min={0} value={stopLossPct} disabled={pending} onChange={(event) => setStopLossPct(Number(event.target.value) || 0)} aria-label="Manual stop loss percent" />
+                </label>
+              </div>
 
-          <div className="manual-estimate-grid">
-            <div><span>Premium</span><strong>{quote?.estimatedPremium ? formatCurrency(quote.estimatedPremium, { decimals: 2 }) : 'Pending'}</strong></div>
-            <div><span>Cost/Margin</span><strong>{quote?.estimatedCost ? formatCurrency(quote.estimatedCost, { decimals: 0 }) : 'Pending'}</strong></div>
-          </div>
-          
-          <div className="manual-atm-row">
-            <span>{quote?.atm?.marketOpen === false ? 'Market closed' : quote?.atm?.atmStrike ? `ATM ${quote.atm.atmStrike.toLocaleString()} ${side}` : 'ATM calculating'}</span>
-            <strong>{quote?.tradingSymbol ?? 'Waiting for contract'}</strong>
-            <small>{quoteSourceLabel(quote)}{quotePending ? ' - updating' : ''}</small>
-          </div>
+              <div className="manual-estimate-grid">
+                <div><span>Premium</span><strong>{quote?.estimatedPremium ? formatCurrency(quote.estimatedPremium, { decimals: 2 }) : 'Pending'}</strong></div>
+                <div><span>Cost/Margin</span><strong>{quote?.estimatedCost ? formatCurrency(quote.estimatedCost, { decimals: 0 }) : 'Pending'}</strong></div>
+              </div>
 
-          <div className="flex gap-2">
-            <ActionButton
-              live={live}
-              disabled={pending || marketClosed || !activeTrade || !showAdvanced}
-              onConfirm={() => void runOrder('exit')}
-              ariaLabel="Exit current position"
-              className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            >
-              <LogOut size={12} />
-              Exit Position
-            </ActionButton>
-            <ActionButton
-              live={live}
-              disabled={pending || marketClosed || !activeTrade || !showAdvanced}
-              onConfirm={() => void runOrder('reverse')}
-              ariaLabel="Reverse position"
-              className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            >
-              <Repeat2 size={12} />
-              Reverse Position
-            </ActionButton>
-          </div>
-        </div>
-      </div>
+              <div className="manual-atm-row">
+                <span>{quote?.atm?.marketOpen === false ? 'Market closed' : quote?.atm?.atmStrike ? `ATM ${quote.atm.atmStrike.toLocaleString()} ${side}` : 'ATM calculating'}</span>
+                <strong>{quote?.tradingSymbol ?? 'Waiting for contract'}</strong>
+                <small>{quoteSourceLabel(quote)}{quotePending ? ' - updating' : ''}</small>
+              </div>
+
+              <div className="flex gap-2">
+                <ActionButton
+                  live={live}
+                  disabled={pending || marketClosed || !activeTrade}
+                  onConfirm={() => void runOrder('exit')}
+                  ariaLabel="Exit current position"
+                  className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <LogOut size={12} />
+                  Exit Position
+                </ActionButton>
+                <ActionButton
+                  live={live}
+                  disabled={pending || marketClosed || !activeTrade}
+                  onConfirm={() => void runOrder('reverse')}
+                  ariaLabel="Reverse position"
+                  className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <Repeat2 size={12} />
+                  Reverse Position
+                </ActionButton>
+              </div>
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
       {/* Progress and status message */}
       {stage !== 'idle' && (
@@ -329,7 +341,8 @@ function HoldButton({ disabled, onConfirm, ariaLabel, className, children }: {
       aria-label={ariaLabel}
       title="Hold to confirm live action"
     >
-      {children}
+      {holding ? <MotionProgressFill durationSeconds={0.9} tone="live" /> : null}
+      <span className="hold-button-content">{children}</span>
     </button>
   )
 }
