@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from typing import Any
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE, DISABLED_OPTION_SL_PRICE_FRACTION
@@ -21,6 +22,7 @@ from app.services.dhan_marketfeed_ws import (
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import market_data_credentials, shared_market_data_configured
 from app.services.state_store import get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
+from app.store.redis_session import session_store
 
 
 logger = logging.getLogger("option_position_monitor")
@@ -756,6 +758,26 @@ def monitor_once(*, force_rest: bool = False) -> None:
         _route_server_exit(updated, exit_reason, snapshot)
 
 
+def _active_monitor_user_ids(active_routing_user_ids: Any) -> list[uuid.UUID]:
+    raw_ids: list[Any] = list(active_routing_user_ids())
+    active_session_user_ids = getattr(session_store, "active_user_ids_sync", None)
+    if callable(active_session_user_ids):
+        raw_ids.extend(active_session_user_ids())
+
+    users: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for raw_id in raw_ids:
+        try:
+            user_id = raw_id if isinstance(raw_id, uuid.UUID) else uuid.UUID(str(raw_id))
+        except (TypeError, ValueError):
+            continue
+        if user_id in seen:
+            continue
+        seen.add(user_id)
+        users.append(user_id)
+    return users
+
+
 def _monitor_loop() -> None:
     log_audit_event("OPTION_POSITION_MONITOR_STARTED", "Server-side option premium monitor started.")
     while not _STOP_EVENT.is_set():
@@ -771,7 +793,7 @@ def _monitor_loop() -> None:
                     load_user_context,
                 )
 
-                for user_id in active_routing_user_ids():
+                for user_id in _active_monitor_user_ids(active_routing_user_ids):
                     user = load_user_context(user_id)
                     if user is None:
                         continue

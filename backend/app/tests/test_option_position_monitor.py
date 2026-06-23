@@ -530,3 +530,32 @@ def test_multi_user_monitor_loop_uses_websocket_first(monkeypatch):
     option_position_monitor._monitor_loop()
 
     assert calls == [{}]
+
+
+def test_multi_user_monitor_loop_includes_active_session_users(monkeypatch):
+    calls = []
+
+    class StopAfterOne:
+        def __init__(self):
+            self.waited = False
+
+        def is_set(self):
+            return self.waited
+
+        def wait(self, _seconds):
+            self.waited = True
+
+    user = dev_user()
+    monkeypatch.setattr(option_position_monitor, "_STOP_EVENT", StopAfterOne())
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", True)
+    monkeypatch.setattr("app.db.engine.database_configured", lambda: True)
+    monkeypatch.setattr("app.services.strategy_fanout.active_routing_user_ids", lambda: [])
+    monkeypatch.setattr("app.services.strategy_fanout.load_user_context", lambda user_id: user if user_id == user.id else None)
+    monkeypatch.setattr(option_position_monitor.session_store, "active_user_ids_sync", lambda: [user.id_str])
+    monkeypatch.setattr(option_position_monitor, "monitor_once", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(option_position_monitor, "_poll_seconds", lambda _runtime: 0.0)
+    monkeypatch.setattr(option_position_monitor, "log_audit_event", lambda *_args, **_kwargs: None)
+
+    option_position_monitor._monitor_loop()
+
+    assert calls == [{}]
