@@ -19,6 +19,7 @@ from app.services.dhan_marketfeed_ws import (
     stop_marketfeed_ws,
 )
 from app.services.risk_manager import _market_is_open
+from app.services.shared_market_data import get_shared_market_credentials, shared_market_data_configured
 from app.services.state_store import get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
 
 
@@ -187,6 +188,12 @@ def _client() -> Any:
     return get_broker_client(get_engine_mode())
 
 
+def _market_data_credentials() -> Any:
+    if get_engine_mode() == "paper" and shared_market_data_configured():
+        return get_shared_market_credentials()
+    return get_dhan_credentials()
+
+
 def _ltp_error_snapshot(*, quote: Any, status: str, ws_status: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "source": getattr(quote, "source", "dhan_marketfeed_ws"),
@@ -197,6 +204,88 @@ def _ltp_error_snapshot(*, quote: Any, status: str, ws_status: dict[str, Any] | 
         "last_checked_at": utc_now(),
         "ws_status": ws_status,
     }
+
+
+def _exit_trigger_for_ltp(ltp: float, sl_price: float, tp_price: float) -> tuple[str | None, str]:
+    if ltp <= sl_price:
+        return "SL", "sl_hit"
+    if ltp >= tp_price:
+        return "TP", "tp_hit"
+    return None, "tracking"
+
+
+def _confirm_exit_trigger(
+    *,
+    client: Any,
+    creds: Any,
+    position: dict[str, Any],
+    exchange_segment: str,
+    security_id: str,
+    entry_price: float,
+    sl_price: float,
+    tp_price: float,
+    trigger_reason: str,
+    trigger_snapshot: dict[str, Any],
+) -> tuple[str | None, dict[str, Any] | None]:
+    quote = client.get_ltp(
+        client_id=creds.client_id,
+        access_token=creds.access_token,
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+    )
+    if not quote.success or quote.ltp is None:
+        log_order_event(
+            {
+                "event": "SERVER_SIDE_OPTION_EXIT_CONFIRMATION_FAILED",
+                "reason": trigger_reason,
+                "message": quote.message,
+                "error": quote.error,
+                "security_id": security_id,
+                "exchange_segment": exchange_segment,
+                "trigger_ltp": trigger_snapshot.get("ltp"),
+                "trigger_source": trigger_snapshot.get("source"),
+            }
+        )
+        return None, {
+            **trigger_snapshot,
+            "status": "exit_confirmation_failed",
+            "exit_reason": None,
+            "confirmation_error": quote.error or quote.message,
+        }
+
+    confirmed_ltp = float(quote.ltp)
+    confirmed_reason, confirmed_status = _exit_trigger_for_ltp(confirmed_ltp, sl_price, tp_price)
+    confirmed_snapshot = _pnl_snapshot(
+        position=position,
+        ltp=confirmed_ltp,
+        entry_price=entry_price,
+        sl_price=sl_price,
+        tp_price=tp_price,
+        status=confirmed_status,
+        exit_reason=confirmed_reason,
+        source="dhan_ltp_exit_confirmation",
+    )
+    confirmed_snapshot["trigger_ltp"] = trigger_snapshot.get("ltp")
+    confirmed_snapshot["trigger_source"] = trigger_snapshot.get("source")
+
+    if confirmed_reason:
+        return confirmed_reason, confirmed_snapshot
+
+    confirmed_snapshot["rejected_exit_reason"] = trigger_reason
+    log_order_event(
+        {
+            "event": "SERVER_SIDE_OPTION_EXIT_CONFIRMATION_REJECTED",
+            "reason": trigger_reason,
+            "security_id": security_id,
+            "exchange_segment": exchange_segment,
+            "trigger_ltp": trigger_snapshot.get("ltp"),
+            "trigger_source": trigger_snapshot.get("source"),
+            "confirmed_ltp": confirmed_ltp,
+            "sl_price": sl_price,
+            "tp_price": tp_price,
+        }
+    )
+    return None, confirmed_snapshot
 
 
 def _pick(row: dict[str, Any], *keys: str) -> Any:
@@ -509,8 +598,9 @@ def monitor_once(*, force_rest: bool = False) -> None:
             set_open_position(current)
         return
 
-    creds = get_dhan_credentials()
-    if not creds:
+    order_creds = get_dhan_credentials()
+    market_creds = _market_data_credentials()
+    if not market_creds:
         return
 
     security_id = str(position.get("security_id") or "").strip()
@@ -520,7 +610,10 @@ def monitor_once(*, force_rest: bool = False) -> None:
 
     client = _client()
     entry_price_before_sync = _as_float(position.get("entry_price"))
-    position = _sync_entry_fill_if_needed(position, client, creds.client_id, creds.access_token)
+    if entry_price_before_sync is None and not order_creds:
+        return
+    sync_creds = order_creds or market_creds
+    position = _sync_entry_fill_if_needed(position, client, sync_creds.client_id, sync_creds.access_token)
     entry_price = _as_float(position.get("entry_price"))
     if entry_price is None or entry_price <= 0:
         return
@@ -540,8 +633,8 @@ def monitor_once(*, force_rest: bool = False) -> None:
     if quote is None or not quote.success:
         if _rest_fallback_allowed(runtime, exchange_segment, security_id):
             quote = client.get_ltp(
-                client_id=creds.client_id,
-                access_token=creds.access_token,
+                client_id=market_creds.client_id,
+                access_token=market_creds.access_token,
                 exchange_segment=exchange_segment,
                 security_id=security_id,
             )
@@ -582,14 +675,7 @@ def monitor_once(*, force_rest: bool = False) -> None:
 
     _sl_percent, _tp_percent, sl_price, tp_price = _display_exit_levels(position, entry_price, runtime)
     ltp = float(quote.ltp)
-    exit_reason: str | None = None
-    status = "tracking"
-    if ltp <= sl_price:
-        exit_reason = "SL"
-        status = "sl_hit"
-    elif ltp >= tp_price:
-        exit_reason = "TP"
-        status = "tp_hit"
+    exit_reason, status = _exit_trigger_for_ltp(ltp, sl_price, tp_price)
 
     snapshot = _pnl_snapshot(
         position=position,
@@ -602,20 +688,43 @@ def monitor_once(*, force_rest: bool = False) -> None:
         source=getattr(quote, "source", "dhan_marketfeed_ltp"),
         quote_age_seconds=getattr(quote, "age_seconds", None),
     )
+
+    accepted_position_levels = _active_exit_levels(position) is not None
+    should_route_exit = (
+        exit_reason
+        and (_runtime_bool(runtime, "server_side_exit_enabled", True) or accepted_position_levels)
+        and (get_engine_mode() == "paper" or not _broker_managed_exit(position))
+    )
+    if should_route_exit:
+        confirmed_reason, confirmed_snapshot = _confirm_exit_trigger(
+            client=client,
+            creds=market_creds,
+            position=position,
+            exchange_segment=exchange_segment,
+            security_id=security_id,
+            entry_price=entry_price,
+            sl_price=sl_price,
+            tp_price=tp_price,
+            trigger_reason=exit_reason,
+            trigger_snapshot=snapshot,
+        )
+        if confirmed_snapshot is not None:
+            snapshot = confirmed_snapshot
+        exit_reason = confirmed_reason
+
     updated = _with_live_pnl(position, snapshot)
     publish_tick_pnl_from_sync(
         symbol=str(position.get("trading_symbol") or position.get("symbol") or "NIFTY option"),
         security_id=security_id,
-        ltp=ltp,
+        ltp=float(snapshot.get("ltp") or ltp),
         pnl=snapshot["unrealized_pnl"],
         pnl_pct=snapshot["pnl_percent"],
         mode=get_engine_mode(),
     )
 
-    accepted_position_levels = _active_exit_levels(updated) is not None
     if (
         exit_reason
-        and (_runtime_bool(runtime, "server_side_exit_enabled", True) or accepted_position_levels)
+        and (_runtime_bool(runtime, "server_side_exit_enabled", True) or _active_exit_levels(updated) is not None)
         and (get_engine_mode() == "paper" or not _broker_managed_exit(updated))
     ):
         _route_server_exit(updated, exit_reason, snapshot)

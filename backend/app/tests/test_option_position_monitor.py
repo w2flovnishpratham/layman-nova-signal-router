@@ -1,7 +1,7 @@
 from app.config import settings
 from app.services import audit_logger, option_position_monitor, state_store
 from app.services.credential_vault import DhanCredentials
-from app.services.dhan_client import DhanListResult, DhanOrderStatusResult
+from app.services.dhan_client import DhanListResult, DhanLtpResult, DhanOrderStatusResult
 from app.services.dhan_marketfeed_ws import MarketFeedLtpResult
 
 
@@ -31,11 +31,25 @@ class FakeClient:
         raise AssertionError("REST LTP fallback should be disabled by default")
 
 
+class ConfirmingClient(FakeClient):
+    def __init__(self, ltp: float):
+        self.ltp = ltp
+
+    def get_ltp(self, **kwargs):
+        return DhanLtpResult(
+            success=True,
+            message="confirmed",
+            ltp=self.ltp,
+            exchange_segment=kwargs["exchange_segment"],
+            security_id=kwargs["security_id"],
+        )
+
+
 def test_monitor_triggers_tp_exit_from_option_ltp(tmp_path, monkeypatch):
     setup_runtime(tmp_path, monkeypatch)
     monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
-    monkeypatch.setattr(option_position_monitor, "_client", lambda: FakeClient())
+    monkeypatch.setattr(option_position_monitor, "_client", lambda: ConfirmingClient(121.5))
     monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **kwargs: None)
     monkeypatch.setattr(
         option_position_monitor,
@@ -103,10 +117,84 @@ def test_monitor_triggers_tp_exit_from_option_ltp(tmp_path, monkeypatch):
     assert routed[0].security_id == "49081"
     assert routed[0].raw_payload["exit_reason"] == "TP"
     position = state_store.get_open_position()
-    assert position["live_pnl"]["ltp"] == 121.0
-    assert position["live_pnl"]["source"] == "dhan_marketfeed_ws"
+    assert position["live_pnl"]["ltp"] == 121.5
+    assert position["live_pnl"]["source"] == "dhan_ltp_exit_confirmation"
+    assert position["live_pnl"]["trigger_ltp"] == 121.0
+    assert position["live_pnl"]["trigger_source"] == "dhan_marketfeed_ws"
     assert position["live_pnl"]["tp_price"] == 120.0
     assert position["server_exit"]["reason"] == "TP"
+
+
+def test_monitor_rejects_unconfirmed_tp_spike(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+    monkeypatch.setattr(option_position_monitor, "_client", lambda: ConfirmingClient(105.0))
+    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **kwargs: None)
+    monkeypatch.setattr(
+        option_position_monitor,
+        "get_marketfeed_ltp",
+        lambda **kwargs: MarketFeedLtpResult(
+            success=True,
+            message="bad spike",
+            ltp=141.0,
+            exchange_segment=kwargs["exchange_segment"],
+            security_id=kwargs["security_id"],
+            source="dhan_marketfeed_ws",
+        ),
+    )
+    monkeypatch.setattr(
+        option_position_monitor,
+        "get_dhan_credentials",
+        lambda: DhanCredentials(client_id="1000000001", access_token="token"),
+    )
+    monkeypatch.setattr(option_position_monitor, "get_webhook_secret", lambda: "test-secret")
+
+    state_store.update_runtime_settings(
+        server_side_exit_enabled=True,
+        marketfeed_ws_enabled=True,
+        option_ltp_source="WEBSOCKET",
+        option_rest_fallback_enabled=False,
+        option_sl_percent=10.0,
+        option_tp_percent=20.0,
+        option_ltp_poll_seconds=1.0,
+        allow_exit=True,
+    )
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "strategy_code": "TRADINGVIEW_NIFTY_V1",
+            "symbol": "NIFTY",
+            "instrument_type": "OPTIDX",
+            "exchange_segment": "NSE_FNO",
+            "security_id": "49081",
+            "trading_symbol": "NIFTY 2026-05-28 22500 CE",
+            "option_side": "CE",
+            "strike": 22500.0,
+            "expiry": "2026-05-28",
+            "qty": 65,
+            "entry_order_id": "ENTRY1",
+            "entry_price": 100.0,
+            "order_type": "MARKET",
+            "product_type": "INTRADAY",
+            "opened_at": state_store.utc_now(),
+        }
+    )
+
+    routed = []
+    monkeypatch.setattr("app.services.execution_router.route_signal", lambda signal: routed.append(signal))
+
+    option_position_monitor.monitor_once()
+
+    assert routed == []
+    position = state_store.get_open_position()
+    assert position["has_open_position"] is True
+    assert position["live_pnl"]["ltp"] == 105.0
+    assert position["live_pnl"]["status"] == "tracking"
+    assert position["live_pnl"]["exit_reason"] is None
+    assert position["live_pnl"]["rejected_exit_reason"] == "TP"
+    assert position["live_pnl"]["trigger_ltp"] == 141.0
+    assert "server_exit" not in position
 
 
 def test_monitor_display_only_for_dhan_super_order_exit_levels(tmp_path, monkeypatch):

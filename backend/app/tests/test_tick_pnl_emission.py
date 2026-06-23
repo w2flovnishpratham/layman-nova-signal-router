@@ -6,6 +6,7 @@ from typing import Any
 from app.domain.state_machine import SetupState
 from app.services import audit_logger, chat_event_publisher, option_position_monitor, state_store
 from app.services.credential_vault import DhanCredentials
+from app.services.dhan_client import DhanLtpResult
 from app.services.dhan_marketfeed_ws import MarketFeedLtpResult
 from app.store.redis_session import session_store
 
@@ -14,11 +15,22 @@ TICK_EVENT_KEYS = {"symbol", "securityId", "ltp", "pnl", "pnlPct", "mode"}
 
 
 class _FakeClient:
+    def __init__(self, confirmation_ltp: float | None = None):
+        self.confirmation_ltp = confirmation_ltp
+
     def poll_order_status(self, **_kwargs: Any) -> None:
         raise AssertionError("entry fill polling should not run when entry_price is already present")
 
-    def get_ltp(self, **_kwargs: Any) -> None:
-        raise AssertionError("REST LTP fallback should not run when the websocket quote succeeds")
+    def get_ltp(self, **kwargs: Any) -> DhanLtpResult:
+        if self.confirmation_ltp is None:
+            raise AssertionError("Dhan REST LTP should only run for exit confirmation in this test")
+        return DhanLtpResult(
+            success=True,
+            message="confirmed",
+            ltp=self.confirmation_ltp,
+            exchange_segment=kwargs["exchange_segment"],
+            security_id=kwargs["security_id"],
+        )
 
 
 def _isolate_runtime(tmp_path, monkeypatch) -> None:
@@ -207,7 +219,7 @@ def test_accepted_sr_levels_trigger_paper_exit_when_global_server_exit_disabled(
     )
     exits: list[tuple[str, dict[str, Any]]] = []
 
-    monkeypatch.setattr(option_position_monitor, "_client", lambda: _FakeClient())
+    monkeypatch.setattr(option_position_monitor, "_client", lambda: _FakeClient(111.0))
     monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **_kwargs: None)
     monkeypatch.setattr(
         option_position_monitor,
@@ -235,3 +247,7 @@ def test_accepted_sr_levels_trigger_paper_exit_when_global_server_exit_disabled(
     assert reason == "TP"
     assert snapshot["tp_price"] == 110.0
     assert snapshot["sl_price"] == 92.0
+    assert snapshot["ltp"] == 111.0
+    assert snapshot["source"] == "dhan_ltp_exit_confirmation"
+    assert snapshot["trigger_ltp"] == 111.0
+    assert snapshot["trigger_source"] == "test_marketfeed"
