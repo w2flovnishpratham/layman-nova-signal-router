@@ -79,8 +79,8 @@ def _monitor_should_run(runtime: dict[str, Any]) -> bool:
 
 
 def _poll_seconds(runtime: dict[str, Any]) -> float:
-    value = _as_positive_float(runtime.get("option_ltp_poll_seconds"), 1.0)
-    return max(1.0, value)
+    value = _as_positive_float(runtime.get("option_ltp_poll_seconds"), 0.5)
+    return max(0.25, value)
 
 
 def _ws_stale_seconds(runtime: dict[str, Any]) -> float:
@@ -766,7 +766,12 @@ def monitor_once(*, force_rest: bool = False) -> None:
 
 def _publish_market_snapshot_from_monitor() -> bool:
     try:
-        return publish_market_snapshot_from_sync(snapshot_factory=build_nifty_snapshot)
+        # WS-only build: the fast (sub-second) push loop must never call the Dhan
+        # REST quote API (1 req/sec limit). It reads only cached WebSocket ticks,
+        # so it can fan out as fast as the loop runs with zero REST load.
+        return publish_market_snapshot_from_sync(
+            snapshot_factory=lambda: build_nifty_snapshot(allow_rest_fallback=False)
+        )
     except Exception as exc:
         logger.warning("Market snapshot push failed: %s", exc)
         log_error_event("MARKET_SNAPSHOT_PUSH_FAILED", str(exc))

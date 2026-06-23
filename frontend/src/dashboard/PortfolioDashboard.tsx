@@ -129,11 +129,7 @@ export function PortfolioDashboard() {
             later placed on your live Dhan account. Paper trades are excluded because the paper wallet can be
             reset at any time.
           </p>
-          <p className="nv-empty-note">
-            {data.funds_connected
-              ? `Live funds connected${wallet.available_balance != null ? ` · ${formatCurrency(wallet.available_balance)} available` : ''}. Your first live exit will appear here.`
-              : 'Switch the engine to Live mode and connect your Dhan credentials to start tracking.'}
-          </p>
+
         </motion.div>
       </div>
     )

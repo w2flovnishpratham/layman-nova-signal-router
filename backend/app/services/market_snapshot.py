@@ -7,14 +7,14 @@ from app.services.risk_manager import _market_is_open
 from app.services.state_store import get_app_state, get_open_position, utc_now
 
 
-def build_nifty_snapshot() -> dict[str, Any]:
+def build_nifty_snapshot(*, allow_rest_fallback: bool = True) -> dict[str, Any]:
     app_state = get_app_state()
     position = get_open_position()
     latest_signal = app_state.get("last_signal") if isinstance(app_state.get("last_signal"), dict) else {}
     live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
     active_ltp = _number(live_pnl.get("ltp") or position.get("entry_price"))
     nifty_spot = _number(latest_signal.get("niftyPrice") or latest_signal.get("niftySpot"))
-    atm = get_atm_option_snapshot(option_side="BOTH", lots=1, allow_rest_fallback=True)
+    atm = get_atm_option_snapshot(option_side="BOTH", lots=1, allow_rest_fallback=allow_rest_fallback)
     if atm.get("niftySpot") is not None:
         nifty_spot = _number(atm.get("niftySpot"))
     return {

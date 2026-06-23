@@ -49,7 +49,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "option_ltp_cache_seconds": 1.0,
     "option_sl_percent": DISABLED_OPTION_SL_PERCENT,
     "option_tp_percent": 20.0,
-    "option_ltp_poll_seconds": 1.0,
+    "option_ltp_poll_seconds": 0.5,
     "eod_squareoff_enabled": True,
     "allow_entry": True,
     "allow_exit": True,
