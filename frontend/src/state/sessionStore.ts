@@ -4,6 +4,7 @@ import { contractsForLots, DEFAULT_NIFTY_LOT_SIZE } from '../lib/trading'
 import type {
   ActiveTrade,
   EngineMode,
+  MarketSnapshot,
   RenderableMessage,
   ServerEvent,
   SessionBootstrap,
@@ -24,6 +25,7 @@ interface SessionStore {
   config: TradeConfig
   messages: RenderableMessage[]
   activeTrade: ActiveTrade | null
+  marketSnapshot: MarketSnapshot | null
   wallet: number | null
   paperBalance: number | null
   marginUtilized: number | null
@@ -79,6 +81,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   config: {},
   messages: [],
   activeTrade: null,
+  marketSnapshot: null,
   wallet: null,
   paperBalance: null,
   marginUtilized: null,
@@ -116,6 +119,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       config: {},
       messages: [],
       activeTrade: null,
+      marketSnapshot: null,
       wallet: null,
       paperBalance: null,
       marginUtilized: null,
@@ -248,22 +252,33 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
     }
   }
 
+  if (event.type === 'market.snapshot') {
+    return {
+      marketSnapshot: event.data as unknown as MarketSnapshot,
+    }
+  }
+
   if (event.type === 'tick.pnl') {
     const patch = event.data as Partial<ActiveTrade>
-    if (!state.activeTrade) return {}
-    const previousLtp = state.activeTrade.ltp
+    const baseTrade = state.activeTrade ?? seedTradeFromTick(patch, state.config, state.session?.lotSize)
+    if (!baseTrade) return {}
+    const previousLtp = baseTrade.ltp
     const nextLtp = Number(patch.ltp ?? previousLtp)
     const direction: ActiveTrade['ltpDirection'] = nextLtp > previousLtp ? 'up' : nextLtp < previousLtp ? 'down' : 'flat'
+    const nextPnl = Number(patch.pnl ?? baseTrade.pnl)
+    const patchedPnlPct = optionalNumber(patch.pnlPct, null)
     const activeTrade = {
-      ...state.activeTrade,
+      ...baseTrade,
       ...patch,
       ltp: nextLtp,
       ltpDirection: direction,
-      pnlPct: calculatePnlPct(Number(patch.pnl ?? state.activeTrade.pnl), state.activeTrade.avgPrice, state.activeTrade.qty),
+      pnl: nextPnl,
+      pnlPct: patchedPnlPct ?? calculatePnlPct(nextPnl, baseTrade.avgPrice, baseTrade.qty),
     }
     return {
       activeTrade,
-      sessionPnl: Number(patch.pnl ?? state.sessionPnl),
+      sessionPnl: nextPnl,
+      unrealizedPnl: nextPnl,
     }
   }
 
@@ -425,6 +440,48 @@ function normalizeActiveExitLevels(value: unknown): ActiveTrade['activeExitLevel
 
 function appendMessage(messages: RenderableMessage[], message: RenderableMessage): RenderableMessage[] {
   return [...messages, message].slice(-250)
+}
+
+function seedTradeFromTick(data: Partial<ActiveTrade>, config: TradeConfig, lotSize = DEFAULT_NIFTY_LOT_SIZE): ActiveTrade | null {
+  const ltp = optionalNumber(data.ltp, null)
+  if (ltp === null) return null
+  const symbol = typeof data.symbol === 'string' && data.symbol.trim() ? data.symbol : 'NIFTY option'
+  const qty = optionalNumber(data.qty, null) ?? contractsForLots(config.risk?.lots ?? 1, lotSize)
+  const pnl = optionalNumber(data.pnl, 0) ?? 0
+  return {
+    symbol,
+    strike: optionalNumber(data.strike, null) ?? inferStrike(symbol),
+    optType: data.optType ?? inferOptionType(symbol),
+    qty,
+    avgPrice: optionalNumber(data.avgPrice, null) ?? ltp,
+    ltp,
+    pnl,
+    pnlPct: optionalNumber(data.pnlPct, null) ?? calculatePnlPct(pnl, ltp, qty),
+    expiry: data.expiry,
+    exitOn: data.exitOn ?? exitModeLabel(config.exits?.mode),
+    securityId: data.securityId,
+    verifyUrl: data.verifyUrl ?? 'https://web.dhan.co/',
+    ltpDirection: 'flat',
+    orderId: data.orderId ?? 'pending',
+    exchOrderId: data.exchOrderId,
+    sourceLtp: optionalNumber(data.sourceLtp, null) ?? undefined,
+    simulatedCharges: optionalNumber(data.simulatedCharges, null) ?? undefined,
+    slippagePercent: optionalNumber(data.slippagePercent, null) ?? undefined,
+    srSuggestion: normalizeSrSuggestion(data.srSuggestion),
+    activeExitLevels: normalizeActiveExitLevels(data.activeExitLevels),
+    correlationId: data.correlationId ?? '',
+    status: data.status ?? 'OPEN',
+  }
+}
+
+function inferOptionType(symbol: string): ActiveTrade['optType'] {
+  const normalized = symbol.toUpperCase()
+  return normalized.includes(' PE') || normalized.includes('PUT') || normalized.endsWith('PE') ? 'PE' : 'CE'
+}
+
+function inferStrike(symbol: string): number {
+  const match = symbol.toUpperCase().match(/\b(\d{4,5})\b(?=\s*(CE|PE|CALL|PUT)\b)/)
+  return match ? Number(match[1]) : 0
 }
 
 function appendMessages(messages: RenderableMessage[], nextMessages: RenderableMessage[]): RenderableMessage[] {

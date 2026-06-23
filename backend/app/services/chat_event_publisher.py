@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Callable
 
 from app.domain.events import event
 from app.schemas.signal import NormalizedSignal
@@ -78,6 +78,32 @@ def publish_tick_pnl_from_sync(
         asyncio.run_coroutine_threadsafe(coroutine, loop)
 
 
+def publish_market_snapshot_from_sync(
+    *,
+    snapshot: dict[str, Any] | None = None,
+    snapshot_factory: Callable[[], dict[str, Any]] | None = None,
+) -> bool:
+    loop = _MAIN_LOOP
+    if loop is None or loop.is_closed():
+        return False
+    if snapshot is None:
+        if snapshot_factory is None:
+            return False
+        snapshot = snapshot_factory()
+
+    coroutine = publish_market_snapshot(snapshot, user_id=_current_execution_user_id())
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+
+    if running_loop is loop:
+        loop.create_task(coroutine)
+    else:
+        asyncio.run_coroutine_threadsafe(coroutine, loop)
+    return True
+
+
 def publish_active_trade_from_sync(position: dict[str, Any], mode: str | None) -> None:
     loop = _MAIN_LOOP
     if loop is None or loop.is_closed():
@@ -97,6 +123,15 @@ def publish_active_trade_from_sync(position: dict[str, Any], mode: str | None) -
         loop.create_task(coroutine)
     else:
         asyncio.run_coroutine_threadsafe(coroutine, loop)
+
+
+async def publish_market_snapshot(
+    snapshot: dict[str, Any],
+    *,
+    user_id: str | None = None,
+) -> None:
+    for session_id in await session_store.active_session_ids(user_id=user_id):
+        await session_store.append_event(session_id, event("market.snapshot", **snapshot))
 
 
 async def publish_tick_pnl(

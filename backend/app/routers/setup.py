@@ -172,9 +172,10 @@ class RiskSetupRequest(BaseModel):
     marketfeed_ws_enabled: bool = True
     option_ltp_source: str = "AUTO"
     option_exit_mode: str = "DHAN_SUPER"
-    option_ws_stale_seconds: float = Field(default=5.0, ge=1.0)
+    option_ws_stale_seconds: float = Field(default=2.0, ge=1.0)
     option_rest_fallback_enabled: bool = True
-    option_rest_fallback_cooldown_seconds: float = Field(default=15.0, ge=1.0)
+    option_rest_fallback_cooldown_seconds: float = Field(default=3.0, ge=1.0)
+    option_ltp_cache_seconds: float = Field(default=1.0, ge=0.2)
     option_sl_percent: float = Field(default=DISABLED_OPTION_SL_PERCENT, gt=0)
     option_tp_percent: float = Field(default=20.0, gt=0)
     option_ltp_poll_seconds: float = Field(default=1.0, ge=1.0)
@@ -209,6 +210,7 @@ class RiskSettingsPatchRequest(BaseModel):
     option_ws_stale_seconds: float | None = Field(default=None, ge=1.0)
     option_rest_fallback_enabled: bool | None = None
     option_rest_fallback_cooldown_seconds: float | None = Field(default=None, ge=1.0)
+    option_ltp_cache_seconds: float | None = Field(default=None, ge=0.2)
     option_sl_percent: float | None = Field(default=None, gt=0)
     option_tp_percent: float | None = Field(default=None, gt=0)
     option_ltp_poll_seconds: float | None = Field(default=None, ge=1.0)
@@ -442,6 +444,8 @@ def risk_settings_valid(runtime: dict[str, Any] | None = None) -> tuple[bool, li
         issues.append("Option WebSocket stale seconds must be at least 1.")
     if float(runtime.get("option_rest_fallback_cooldown_seconds") or 0) < 1:
         issues.append("Option REST fallback cooldown seconds must be at least 1.")
+    if float(runtime.get("option_ltp_cache_seconds") or 0) < 0.2:
+        issues.append("Option LTP cache seconds must be at least 0.2.")
     if str(runtime.get("option_ltp_source") or "WEBSOCKET").upper() not in {"WEBSOCKET", "REST", "AUTO"}:
         issues.append("Option LTP source must be WEBSOCKET, REST, or AUTO.")
     if str(runtime.get("option_exit_mode") or "DHAN_SUPER").upper() not in {"DHAN_SUPER", "SERVER"}:
@@ -557,6 +561,7 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
             "option_ws_stale_seconds": runtime.get("option_ws_stale_seconds"),
             "option_rest_fallback_enabled": runtime.get("option_rest_fallback_enabled"),
             "option_rest_fallback_cooldown_seconds": runtime.get("option_rest_fallback_cooldown_seconds"),
+            "option_ltp_cache_seconds": runtime.get("option_ltp_cache_seconds"),
             "option_sl_percent": runtime.get("option_sl_percent"),
             "option_tp_percent": runtime.get("option_tp_percent"),
             "option_ltp_poll_seconds": runtime.get("option_ltp_poll_seconds"),

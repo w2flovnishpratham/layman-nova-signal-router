@@ -25,7 +25,7 @@ from app.services.state_store import get_app_state, get_engine_mode, get_runtime
 NIFTY_INDEX_EXCHANGE_SEGMENT = "IDX_I"
 NIFTY_INDEX_SECURITY_ID = "13"
 NIFTY_ATM_STEP = 50
-DEFAULT_LTP_CACHE_SECONDS = 15.0
+DEFAULT_LTP_CACHE_SECONDS = 1.0
 _LTP_CACHE_LOCK = threading.RLock()
 _LTP_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -43,7 +43,7 @@ def get_atm_option_snapshot(
     if not _market_is_open():
         return _market_closed_snapshot(sides=sides, lots=lots)
 
-    max_age_seconds = _positive_float(runtime.get("option_ws_stale_seconds"), 5.0)
+    max_age_seconds = _positive_float(runtime.get("option_ws_stale_seconds"), 2.0)
     rest_fallback = bool(runtime.get("option_rest_fallback_enabled", True)) if allow_rest_fallback is None else bool(allow_rest_fallback)
 
     spot_quote = _ltp_with_prefer_ws(

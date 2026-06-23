@@ -9,7 +9,11 @@ from typing import Any
 from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE, DISABLED_OPTION_SL_PRICE_FRACTION
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
-from app.services.chat_event_publisher import publish_active_trade_from_sync, publish_tick_pnl_from_sync
+from app.services.chat_event_publisher import (
+    publish_active_trade_from_sync,
+    publish_market_snapshot_from_sync,
+    publish_tick_pnl_from_sync,
+)
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret
 from app.services.dhan_client import RealDhanClient, get_broker_client
 from app.services.dhan_marketfeed_ws import (
@@ -19,6 +23,7 @@ from app.services.dhan_marketfeed_ws import (
     marketfeed_ws_status,
     stop_marketfeed_ws,
 )
+from app.services.market_snapshot import build_nifty_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import market_data_credentials, shared_market_data_configured
 from app.services.state_store import get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
@@ -79,7 +84,7 @@ def _poll_seconds(runtime: dict[str, Any]) -> float:
 
 
 def _ws_stale_seconds(runtime: dict[str, Any]) -> float:
-    value = _as_positive_float(runtime.get("option_ws_stale_seconds"), 5.0)
+    value = _as_positive_float(runtime.get("option_ws_stale_seconds"), 2.0)
     return max(1.0, value)
 
 
@@ -93,7 +98,7 @@ def _rest_fallback_allowed(runtime: dict[str, Any], exchange_segment: str, secur
         return True
     if not _runtime_bool(runtime, "option_rest_fallback_enabled", True):
         return False
-    cooldown = _as_positive_float(runtime.get("option_rest_fallback_cooldown_seconds"), 15.0)
+    cooldown = _as_positive_float(runtime.get("option_rest_fallback_cooldown_seconds"), 3.0)
     key = (exchange_segment, security_id)
     last_at = _LAST_REST_FALLBACK_AT.get(key)
     if last_at is not None and time.time() - last_at < cooldown:
@@ -604,11 +609,6 @@ def monitor_once(*, force_rest: bool = False) -> None:
         return
 
     position = get_open_position()
-    if not position.get("has_open_position"):
-        if not force_rest:
-            clear_marketfeed_subscription()
-        return
-
     if not _market_is_open():
         if not force_rest:
             clear_marketfeed_subscription()
@@ -623,6 +623,12 @@ def monitor_once(*, force_rest: bool = False) -> None:
                 "ws_status": marketfeed_ws_status(),
             }
             set_open_position(current)
+        return
+
+    snapshot_published = _publish_market_snapshot_from_monitor()
+    if not position.get("has_open_position"):
+        if not force_rest and not snapshot_published:
+            clear_marketfeed_subscription()
         return
 
     order_creds = get_dhan_credentials()
@@ -756,6 +762,15 @@ def monitor_once(*, force_rest: bool = False) -> None:
         and (get_engine_mode() == "paper" or not _broker_managed_exit(updated))
     ):
         _route_server_exit(updated, exit_reason, snapshot)
+
+
+def _publish_market_snapshot_from_monitor() -> bool:
+    try:
+        return publish_market_snapshot_from_sync(snapshot_factory=build_nifty_snapshot)
+    except Exception as exc:
+        logger.warning("Market snapshot push failed: %s", exc)
+        log_error_event("MARKET_SNAPSHOT_PUSH_FAILED", str(exc))
+        return False
 
 
 def _active_monitor_user_ids(active_routing_user_ids: Any) -> list[uuid.UUID]:

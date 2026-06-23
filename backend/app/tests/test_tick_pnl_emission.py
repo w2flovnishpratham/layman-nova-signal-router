@@ -12,6 +12,15 @@ from app.store.redis_session import session_store
 
 
 TICK_EVENT_KEYS = {"symbol", "securityId", "ltp", "pnl", "pnlPct", "mode"}
+MARKET_SNAPSHOT = {
+    "niftySpot": 24122.65,
+    "marketStatus": "open",
+    "atm": {"ok": True, "niftySpot": 24122.65, "options": {}},
+    "latestSignal": {},
+    "activeOptionLtp": 105.0,
+    "sparkline": [100.0, 105.0],
+    "markers": [],
+}
 
 
 class _FakeClient:
@@ -92,6 +101,7 @@ def _run_monitor_tick(
     )
 
     monkeypatch.setattr(option_position_monitor, "_client", lambda: _FakeClient())
+    monkeypatch.setattr(option_position_monitor, "build_nifty_snapshot", lambda: dict(MARKET_SNAPSHOT))
     monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **_kwargs: None)
     monkeypatch.setattr(
         option_position_monitor,
@@ -129,7 +139,10 @@ def _run_monitor_tick(
             updated = await session_store.get(session.id)
             assert updated is not None
             ticks = [item for item in updated.events if item.type == "tick.pnl"]
+            market_snapshots = [item for item in updated.events if item.type == "market.snapshot"]
             assert len(ticks) == 1
+            assert len(market_snapshots) == 1
+            assert market_snapshots[0].data["niftySpot"] == MARKET_SNAPSHOT["niftySpot"]
             return ticks[0].data
         finally:
             chat_event_publisher.clear_chat_event_loop()

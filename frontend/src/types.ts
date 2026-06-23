@@ -49,6 +49,7 @@ export type ServerEventType =
   | 'order.filled'
   | 'order.rejected'
   | 'tick.pnl'
+  | 'market.snapshot'
   | 'position.update'
   | 'funds.update'
   | 'trade.exit'

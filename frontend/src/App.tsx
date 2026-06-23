@@ -51,6 +51,7 @@ function App() {
   const config = useSessionStore((state) => state.config)
   const messages = useSessionStore((state) => state.messages)
   const activeTrade = useSessionStore((state) => state.activeTrade)
+  const pushedMarketSnapshot = useSessionStore((state) => state.marketSnapshot)
   const wallet = useSessionStore((state) => state.wallet)
   const marginUtilized = useSessionStore((state) => state.marginUtilized)
   const realizedPnl = useSessionStore((state) => state.realizedPnl)
@@ -149,7 +150,7 @@ function App() {
         if (market.status === 'fulfilled') setMarketSnapshot(market.value)
         if (health.status === 'fulfilled') setSystemHealth(health.value)
       })
-      timer = window.setTimeout(poll, 4000)
+      timer = window.setTimeout(poll, 15000)
     }
 
     poll()
@@ -158,6 +159,8 @@ function App() {
       if (timer !== null) window.clearTimeout(timer)
     }
   }, [authUser, bootNonce])
+
+  const displayedMarketSnapshot = pushedMarketSnapshot ?? marketSnapshot
 
   useEffect(() => {
     const handler = () => {
@@ -349,7 +352,7 @@ function App() {
                   transition={panelContentTransition}
                 >
                   <EngineLeftPanel
-                    marketSnapshot={marketSnapshot}
+                    marketSnapshot={displayedMarketSnapshot}
                     engineMode={engineMode}
                     activeTrade={activeTrade}
                     collapseControl={renderLeftCollapseButton()}
@@ -500,7 +503,7 @@ function App() {
                   ✕
                 </button>
               </div>
-              <EngineLeftPanel marketSnapshot={marketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
+              <EngineLeftPanel marketSnapshot={displayedMarketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
                 </motion.div>
               </motion.div>
             ) : null}
