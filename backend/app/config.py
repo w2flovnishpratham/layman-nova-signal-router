@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     WEBHOOK_TRADING_ENABLED: bool = False
     WEBHOOK_HMAC_REQUIRED: bool = False
     WEBHOOK_RATE_LIMIT_PER_MINUTE: int = 120
+    WEBHOOK_REPLAY_RETENTION_SECONDS: int = 60 * 60 * 24 * 3
 
     DHAN_MODE: str = "MOCK"
     DHAN_READ_ONLY_REAL_DATA: bool = True
@@ -194,6 +195,13 @@ class Settings(BaseSettings):
     # Example:
     # [{"public_ip":"203.0.113.10","proxy_url":"http://user:pass@198.51.100.20:8888"}]
     EGRESS_NODES_JSON: str = "[]"
+
+    # Server-side defaults for per-user strategy fan-out risk gates. A value of
+    # 0 disables the cap until a user or user+strategy override is saved.
+    STRATEGY_MAX_LOTS_PER_ORDER: int = 0
+    STRATEGY_MAX_NOTIONAL_PER_TRADE_PAISE: int = 0
+    STRATEGY_MAX_ORDERS_PER_DAY: int = 0
+    STRATEGY_MAX_LOSS_PER_DAY_PAISE: int = 0
 
     # Cookie configuration
     SESSION_COOKIE_NAME: str = "nova_session"

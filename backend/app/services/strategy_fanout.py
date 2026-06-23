@@ -18,7 +18,7 @@ from app.config import DEFAULT_STRATEGY_CODE, settings
 from app.db import crud, models
 from app.db.engine import database_configured, session_scope
 from app.schemas.signal import NormalizedSignal
-from app.services import live_engine, user_credential_vault as vault
+from app.services import live_engine, strategy_risk, user_credential_vault as vault
 from app.services.execution_context import bind_execution_context
 from app.services.execution_router import route_signal
 from app.services.state_store import init_runtime_files
@@ -705,6 +705,31 @@ def dispatch_signal_job(
         if vault.get_user_dhan_credentials(user.id) is None:
             return {**base, "status": "blocked", "reason": "no_credentials"}
 
+    qty = _quantity_for_subscription(lots)
+    try:
+        risk_decision = strategy_risk.evaluate_and_reserve_order(
+            user_id=user.id,
+            strategy_name=strategy_name,
+            lots=lots,
+            qty=qty,
+            signal=signal,
+            execution_mode=mode,
+        )
+    except Exception as exc:
+        return {
+            **base,
+            "status": "blocked",
+            "reason": "strategy_risk_unavailable",
+            "risk_error": str(exc),
+        }
+    if not risk_decision.allowed:
+        return {
+            **base,
+            "status": "blocked",
+            "reason": risk_decision.reason,
+            "risk": risk_decision.as_dict(),
+        }
+
     run_id: str | None = None
     with session_scope() as db:
         run = crud.create_run(
@@ -729,7 +754,7 @@ def dispatch_signal_job(
         run_id = str(run.id)
 
     per_user_signal = signal.model_copy(
-        update={"qty": _quantity_for_subscription(lots)}
+        update={"qty": qty}
     )
     try:
         with bind_execution_context(
@@ -744,6 +769,14 @@ def dispatch_signal_job(
         return {**base, "run_id": run_id, "status": "error", "reason": str(exc)}
 
     failed = execution_result.get("success") is False or execution_result.get("blocked")
+    try:
+        strategy_risk.record_strategy_risk_result(
+            user_id=user.id,
+            strategy_name=strategy_name,
+            execution_result=execution_result,
+        )
+    except Exception:
+        pass
     _update_run(
         run_id,
         "error" if failed else "completed",

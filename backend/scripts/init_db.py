@@ -33,6 +33,11 @@ EXPECTED_TABLES = {
     "strategy_signals",
     "strategy_execution_jobs",
     "user_egress",
+    "webhook_events",
+    "webhook_nonces",
+    "user_risk_controls",
+    "user_strategy_risk_controls",
+    "user_strategy_daily_risk_counters",
 }
 
 

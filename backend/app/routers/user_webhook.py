@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import threading
 import time
 import uuid
@@ -34,6 +35,7 @@ from app.config import settings
 from app.db import crud
 from app.db.engine import database_configured, session_scope
 from app.services import user_credential_vault as vault
+from app.services import webhook_replay_store
 from app.services.user_context import CurrentUser, current_user_from_model
 
 router = APIRouter(prefix="/api/webhook", tags=["Webhook (per-user)"])
@@ -64,6 +66,23 @@ def _check_and_record_nonce(user_id: str, nonce: str) -> bool:
         _prune_nonces(now)
         if key in _SEEN_NONCES:
             return False
+
+    try:
+        durable_status = webhook_replay_store.record_user_nonce(user_id, nonce)
+    except Exception:
+        return False
+    if durable_status == "duplicate":
+        return False
+    if durable_status == "fresh":
+        with _NONCE_LOCK:
+            _SEEN_NONCES[key] = now + WEBHOOK_TIMESTAMP_WINDOW_SECONDS * 2
+        return True
+
+    # Local/dev fallback only. Production requires DATABASE_URL and uses the DB
+    # unique constraint above as the source of truth.
+    with _NONCE_LOCK:
+        if key in _SEEN_NONCES:
+            return False
         _SEEN_NONCES[key] = now + WEBHOOK_TIMESTAMP_WINDOW_SECONDS * 2
         return True
 
@@ -85,7 +104,8 @@ async def user_webhook(user_id: str, request: Request) -> JSONResponse:
         return JSONResponse(status_code=403, content={"ok": False, "error": "Webhook trading is disabled."})
 
     try:
-        payload = await request.json()
+        raw_body = await request.body()
+        payload = json.loads(raw_body.decode("utf-8", errors="replace"))
     except Exception:
         return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid JSON."})
     if not isinstance(payload, dict):
@@ -152,6 +172,21 @@ async def user_webhook(user_id: str, request: Request) -> JSONResponse:
     if not _check_and_record_nonce(str(user_id), nonce):
         return JSONResponse(status_code=409, content={"ok": False, "error": "Duplicate nonce (replay)."})
 
+    if database_configured():
+        try:
+            event_claim = webhook_replay_store.claim_webhook_event(
+                provider="user",
+                event_id=f"{user_id}:{nonce}",
+                raw_body=raw_body,
+                user_id=user.id,
+                signature_ok=True,
+                metadata={"signal": signal, "symbol": symbol, "strategy": strategy},
+            )
+        except Exception:
+            return JSONResponse(status_code=503, content={"ok": False, "error": "Webhook replay store unavailable."})
+        if event_claim.get("status") in {"duplicate", "tampered"}:
+            return JSONResponse(status_code=409, content={"ok": False, "error": "Duplicate webhook event."})
+
     # Signal authenticated and bound to this user. Record it (audit + per-user).
     # NOTE: actual order routing happens only inside a user's active real_orders
     # run after the live-engine safety gates pass — this endpoint never places an
@@ -165,6 +200,14 @@ async def user_webhook(user_id: str, request: Request) -> JSONResponse:
                     action="WEBHOOK_SIGNAL_RECEIVED",
                     metadata={"signal": signal, "symbol": symbol, "strategy": strategy},
                 )
+        except Exception:
+            pass
+        try:
+            webhook_replay_store.update_webhook_event(
+                provider="user",
+                event_id=f"{user_id}:{nonce}",
+                processed_status="accepted",
+            )
         except Exception:
             pass
 

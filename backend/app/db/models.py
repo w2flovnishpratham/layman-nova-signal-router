@@ -13,10 +13,12 @@ A portable GUID type stores native UUIDs on PostgreSQL and CHAR(36) elsewhere
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -181,6 +183,122 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(60), nullable=False)
     audit_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class WebhookEvent(Base):
+    """Durable inbound webhook idempotency record.
+
+    Unique provider/event_id rows are the source of truth for duplicate alert
+    protection across process restarts and multiple workers.
+    """
+
+    __tablename__ = "webhook_events"
+    __table_args__ = (
+        UniqueConstraint("provider", "event_id", name="uq_webhook_event_provider_event"),
+        Index("ix_webhook_events_user_received", "user_id", "received_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    raw_body_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    signature_ok: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    replay_status: Mapped[str] = mapped_column(String(20), default="fresh", nullable=False)
+    processed_status: Mapped[str] = mapped_column(String(30), default="received", nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    event_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class WebhookNonce(Base):
+    """Durable per-user webhook nonce replay guard."""
+
+    __tablename__ = "webhook_nonces"
+    __table_args__ = (
+        UniqueConstraint("user_id", "nonce", name="uq_webhook_nonce_user_nonce"),
+        Index("ix_webhook_nonces_seen_at", "seen_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    nonce: Mapped[str] = mapped_column(String(255), nullable=False)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class UserRiskControl(Base):
+    """Per-user server-side risk gates for strategy fan-out."""
+
+    __tablename__ = "user_risk_controls"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
+    )
+    kill_switch: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    max_lots_per_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_notional_per_trade_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    max_orders_per_day: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_loss_per_day_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class UserStrategyRiskControl(Base):
+    """Per-user, per-strategy overrides for fan-out risk gates."""
+
+    __tablename__ = "user_strategy_risk_controls"
+    __table_args__ = (
+        UniqueConstraint("user_id", "strategy_name", name="uq_user_strategy_risk_control"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    strategy_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    kill_switch: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    max_lots_per_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_notional_per_trade_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    max_orders_per_day: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_loss_per_day_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class UserStrategyDailyRiskCounter(Base):
+    """Durable IST-day risk counter for user+strategy order intents."""
+
+    __tablename__ = "user_strategy_daily_risk_counters"
+    __table_args__ = (
+        UniqueConstraint("user_id", "strategy_name", "trade_date_ist", name="uq_user_strategy_daily_risk"),
+        Index("ix_user_strategy_daily_risk_user_date", "user_id", "trade_date_ist"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    strategy_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    trade_date_ist: Mapped[date] = mapped_column(Date(), nullable=False)
+    orders_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    notional_used_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    realized_pnl_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class StrategySubscription(Base):

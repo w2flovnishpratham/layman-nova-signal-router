@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import hmac
+import json
 import threading
 import time
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -12,7 +14,10 @@ from pydantic import BaseModel, Field
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.config import settings
+from app.db.engine import database_configured
 from app.services import live_engine, strategy_fanout
+from app.services import webhook_replay_store
+from app.services import strategy_risk
 from app.services.signal_parser import PayloadParseError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
 from app.services.user_context import CurrentUser
@@ -55,6 +60,26 @@ class SubscribePayload(BaseModel):
     strategy_name: str = Field(min_length=1, max_length=120)
     lots: int = Field(default=1, ge=1, le=1000)
     execution_mode: str = Field(default="signal_only")
+
+
+class RiskControlPatch(BaseModel):
+    kill_switch: bool | None = None
+    max_lots_per_order: int | None = Field(default=None, ge=0)
+    max_notional_per_trade: str | None = None
+    max_notional_per_trade_paise: int | None = Field(default=None, ge=0)
+    max_orders_per_day: int | None = Field(default=None, ge=0)
+    max_loss_per_day: str | None = None
+    max_loss_per_day_paise: int | None = Field(default=None, ge=0)
+
+    def normalized_changes(self) -> dict[str, Any]:
+        data = self.model_dump(exclude_unset=True)
+        if data.get("max_notional_per_trade_paise") is None and data.get("max_notional_per_trade") is not None:
+            data["max_notional_per_trade_paise"] = strategy_risk.money_to_paise(data["max_notional_per_trade"])
+        if data.get("max_loss_per_day_paise") is None and data.get("max_loss_per_day") is not None:
+            data["max_loss_per_day_paise"] = strategy_risk.money_to_paise(data["max_loss_per_day"])
+        data.pop("max_notional_per_trade", None)
+        data.pop("max_loss_per_day", None)
+        return data
 
 
 @router.get("/api/strategies/subscriptions")
@@ -102,6 +127,37 @@ def verify_current_user_egress(user: CurrentUser = Depends(get_current_user)) ->
     return {"ok": bool(result.get("ok")), "egress": result}
 
 
+@router.get("/api/strategies/risk/{strategy_name}")
+def get_strategy_risk(
+    strategy_name: str,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    return {"ok": True, **strategy_risk.get_effective_controls(user.id, strategy_name)}
+
+
+@router.patch("/api/strategies/risk/user")
+def patch_user_risk(
+    payload: RiskControlPatch,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    control = strategy_risk.set_user_risk_control(user.id, **payload.normalized_changes())
+    return {"ok": True, "user": control}
+
+
+@router.patch("/api/strategies/risk/{strategy_name}")
+def patch_strategy_risk(
+    strategy_name: str,
+    payload: RiskControlPatch,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    control = strategy_risk.set_user_strategy_risk_control(
+        user.id,
+        strategy_name,
+        **payload.normalized_changes(),
+    )
+    return {"ok": True, "strategy": control}
+
+
 @router.post("/api/webhook/strategy/{strategy_name}")
 async def strategy_webhook(
     strategy_name: str,
@@ -120,7 +176,8 @@ async def strategy_webhook(
             content={"ok": False, "error": "Webhook rate limit exceeded."},
         )
     try:
-        body = await request.json()
+        raw_body = await request.body()
+        body = json.loads(raw_body.decode("utf-8", errors="replace"))
     except Exception:
         return JSONResponse(
             status_code=400,
@@ -161,8 +218,59 @@ async def strategy_webhook(
             status_code=422,
             content={"ok": False, "error": error or "Invalid signal."},
         )
+    event_provider = f"strategy:{path_strategy}"
+    event_claimed = False
+    if database_configured():
+        try:
+            event_claim = webhook_replay_store.claim_webhook_event(
+                provider=event_provider,
+                event_id=signal.signal_id,
+                raw_body=raw_body,
+                signature_ok=True,
+                metadata={
+                    "strategy_name": path_strategy,
+                    "payload_format": signal.payload_format,
+                    "action": signal.action,
+                    "side": signal.side,
+                },
+            )
+        except Exception:
+            return JSONResponse(
+                status_code=503,
+                content={"ok": False, "error": "Webhook replay store unavailable."},
+            )
+        if event_claim.get("status") == "tampered":
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "ok": False,
+                    "error": "Duplicate signal has a different body.",
+                    "signal_id": signal.signal_id,
+                },
+            )
+        if event_claim.get("status") == "duplicate":
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "ok": False,
+                    "error": "Duplicate signal.",
+                    "signal_id": signal.signal_id,
+                },
+            )
+        event_claimed = event_claim.get("status") == "fresh"
+
     queued = strategy_fanout.enqueue_strategy_signal(path_strategy, signal)
     if not queued["accepted"]:
+        if event_claimed:
+            try:
+                webhook_replay_store.update_webhook_event(
+                    provider=event_provider,
+                    event_id=signal.signal_id,
+                    processed_status="rejected",
+                    error="duplicate_strategy_signal",
+                )
+            except Exception:
+                pass
         return JSONResponse(
             status_code=409,
             content={
@@ -173,6 +281,16 @@ async def strategy_webhook(
         )
 
     wake_strategy_job_worker()
+    if event_claimed:
+        try:
+            webhook_replay_store.update_webhook_event(
+                provider=event_provider,
+                event_id=signal.signal_id,
+                processed_status="queued",
+                metadata={"subscriber_count": queued["subscriber_count"]},
+            )
+        except Exception:
+            pass
     return JSONResponse(
         status_code=202,
         content={

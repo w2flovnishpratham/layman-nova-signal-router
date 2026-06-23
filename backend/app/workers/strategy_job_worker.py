@@ -14,7 +14,7 @@ from app.config import settings
 from app.db import models
 from app.db.engine import database_configured, get_engine, session_scope
 from app.schemas.signal import NormalizedSignal
-from app.services import strategy_fanout
+from app.services import strategy_fanout, webhook_replay_store
 
 
 logger = logging.getLogger("nova_signal_router.strategy_jobs")
@@ -48,6 +48,10 @@ def _job_snapshot(job: models.StrategyExecutionJob) -> dict[str, Any]:
 def recover_stale_jobs() -> int:
     if not database_configured():
         return 0
+    try:
+        webhook_replay_store.prune_webhook_replay_records()
+    except Exception:
+        logger.exception("Webhook replay store pruning failed")
     cutoff = _now() - timedelta(seconds=max(settings.STRATEGY_JOB_STALE_SECONDS, 30))
     recovered = 0
     with session_scope() as db:

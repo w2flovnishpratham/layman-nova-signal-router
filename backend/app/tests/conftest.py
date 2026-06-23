@@ -14,6 +14,22 @@ def legacy_routes_use_dev_auth(monkeypatch):
     monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def tests_do_not_use_real_database(monkeypatch):
+    """Default tests to no DATABASE_URL unless a DB fixture opts in.
+
+    Local .env files may point at a real Neon database. Unit tests must never
+    touch it accidentally; multi-user tests opt back in via the mu_db fixture.
+    """
+    from app.config import settings
+    from app.db import engine as db_engine
+
+    monkeypatch.setattr(settings, "DATABASE_URL", "", raising=False)
+    db_engine.reset_engine_for_tests()
+    yield
+    db_engine.reset_engine_for_tests()
+
+
 # Every module that binds `_market_is_open` (imported from risk_manager).
 _MARKET_GUARD_MODULES = (
     "app.services.risk_manager",

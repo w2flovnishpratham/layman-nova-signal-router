@@ -12,6 +12,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.config import BLOCK_DUPLICATE_SIGNALS, settings
+from app.db.engine import database_configured
 from app.schemas.signal import NormalizedSignal, WebhookResponse
 from app.services.audit_logger import log_audit_event, log_error_event, log_webhook_event
 from app.services.credential_vault import get_webhook_secret, webhook_secret_strength_error
@@ -20,6 +21,7 @@ from app.services.normalized_errors import classify_failure, order_journey
 from app.services.signal_parser import PayloadParseError, UnsupportedPayloadFormatError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
 from app.services.state_store import add_seen_signal, get_app_state, get_engine_mode, has_seen_signal, update_app_state, utc_now
+from app.services import webhook_replay_store
 
 
 router = APIRouter()
@@ -196,7 +198,7 @@ def _route_payload(payload: NormalizedSignal, client_host: str) -> tuple[dict | 
                 ),
             )
 
-        if BLOCK_DUPLICATE_SIGNALS:
+        if BLOCK_DUPLICATE_SIGNALS and not database_configured():
             add_seen_signal(payload.signal_id)
         return execution_result, None
     finally:
@@ -452,8 +454,60 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
             ),
         )
 
-    if BLOCK_DUPLICATE_SIGNALS and has_seen_signal(payload.signal_id):
-        message = f"Trade blocked: duplicate signal_id {payload.signal_id}"
+    duplicate_message: str | None = None
+    duplicate_status_code = 200
+    event_provider = "tradingview"
+    event_claimed = False
+    if BLOCK_DUPLICATE_SIGNALS:
+        if database_configured():
+            try:
+                event_claim = webhook_replay_store.claim_webhook_event(
+                    provider=event_provider,
+                    event_id=payload.signal_id,
+                    raw_body=raw_body,
+                    signature_ok=True,
+                    metadata={
+                        "payload_format": payload.payload_format,
+                        "action": payload.action,
+                        "side": payload.side,
+                    },
+                )
+            except Exception as exc:
+                message = f"Webhook replay store unavailable: {exc}"
+                log_error_event(
+                    "WEBHOOK_REPLAY_STORE_UNAVAILABLE",
+                    message,
+                    metadata={"signal_id": payload.signal_id, "payload_format": payload.payload_format},
+                )
+                return _response(
+                    503,
+                    WebhookResponse(
+                        accepted=False,
+                        signal_id=payload.signal_id,
+                        action=payload.action,
+                        payload_format=payload.payload_format,
+                        status="REPLAY_STORE_UNAVAILABLE",
+                        message="Webhook replay store unavailable; refusing to route.",
+                        error=_webhook_error(
+                            "Webhook replay store unavailable; refusing to route.",
+                            status="REPLAY_STORE_UNAVAILABLE",
+                            status_code=503,
+                            payload=payload,
+                        ),
+                    ),
+                )
+            if event_claim.get("status") == "fresh":
+                event_claimed = True
+            elif event_claim.get("status") == "tampered":
+                duplicate_message = f"Webhook rejected: duplicate signal_id {payload.signal_id} has a different body."
+                duplicate_status_code = 409
+            else:
+                duplicate_message = f"Trade blocked: duplicate signal_id {payload.signal_id}"
+        elif has_seen_signal(payload.signal_id):
+            duplicate_message = f"Trade blocked: duplicate signal_id {payload.signal_id}"
+
+    if duplicate_message:
+        message = duplicate_message
         normalized_error = _webhook_error(message, status="DUPLICATE_SIGNAL", status_code=200, payload=payload)
         execution_result = {
             "blocked": True,
@@ -483,7 +537,7 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
             last_message=message,
         )
         return _response(
-            200,
+            duplicate_status_code,
             WebhookResponse(
                 accepted=False,
                 signal_id=payload.signal_id,
@@ -559,8 +613,28 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
         strategy_lock.release()
 
     if error_response is not None:
+        if event_claimed:
+            try:
+                webhook_replay_store.update_webhook_event(
+                    provider=event_provider,
+                    event_id=payload.signal_id,
+                    processed_status="rejected",
+                    error="routing_error",
+                )
+            except Exception:
+                pass
         return error_response
     if execution_result is None:
+        if event_claimed:
+            try:
+                webhook_replay_store.update_webhook_event(
+                    provider=event_provider,
+                    event_id=payload.signal_id,
+                    processed_status="rejected",
+                    error="missing_execution_result",
+                )
+            except Exception:
+                pass
         message = "Webhook routing failed without an execution result."
         return _response(
             500,
@@ -586,6 +660,18 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
     else:
         message = f"{payload.action.title()} order placed in {engine_mode.upper()} mode"
         accepted = True
+
+    if event_claimed:
+        try:
+            webhook_replay_store.update_webhook_event(
+                provider=event_provider,
+                event_id=payload.signal_id,
+                processed_status="rejected" if not accepted else "fanned_out",
+                error=message if not accepted else None,
+                metadata={"status": status},
+            )
+        except Exception:
+            pass
 
     return _response(
         200,
