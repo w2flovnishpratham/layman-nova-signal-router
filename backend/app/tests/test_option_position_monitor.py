@@ -3,6 +3,7 @@ from app.services import audit_logger, option_position_monitor, state_store
 from app.services.credential_vault import DhanCredentials
 from app.services.dhan_client import DhanListResult, DhanLtpResult, DhanOrderStatusResult
 from app.services.dhan_marketfeed_ws import MarketFeedLtpResult
+from app.services.user_context import dev_user
 
 
 def setup_runtime(tmp_path, monkeypatch):
@@ -416,3 +417,116 @@ def test_monitor_syncs_entry_price_from_positions_when_order_status_is_empty(tmp
     assert position["live_pnl"]["status"] == "tracking"
     assert len(published_active_trades) == 1
     assert published_active_trades[0][0]["entry_price"] == 100.0
+
+
+def test_live_monitor_uses_shared_data_credentials_for_rest_fallback(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    option_position_monitor._LAST_REST_FALLBACK_AT.clear()
+    state_store.set_engine_mode("live")
+    shared_creds = DhanCredentials(client_id="shared-client", access_token="shared-token", source="shared_market_data")
+    calls = []
+
+    class SharedRestClient:
+        def __init__(self, **kwargs):
+            calls.append(("init", kwargs))
+
+        def get_ltp(self, **kwargs):
+            calls.append(("get_ltp", kwargs))
+            return DhanLtpResult(
+                success=True,
+                message="quote",
+                ltp=105.0,
+                exchange_segment=kwargs["exchange_segment"],
+                security_id=kwargs["security_id"],
+            )
+
+    monkeypatch.setattr(option_position_monitor, "_client", lambda: FakeClient())
+    monkeypatch.setattr(option_position_monitor, "RealDhanClient", SharedRestClient)
+    monkeypatch.setattr(option_position_monitor, "shared_market_data_configured", lambda: True)
+    monkeypatch.setattr(option_position_monitor, "market_data_credentials", lambda: shared_creds)
+    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **kwargs: None)
+    monkeypatch.setattr(
+        option_position_monitor,
+        "get_marketfeed_ltp",
+        lambda **kwargs: MarketFeedLtpResult(
+            success=False,
+            message="stale",
+            ltp=None,
+            exchange_segment=kwargs["exchange_segment"],
+            security_id=kwargs["security_id"],
+            error="ws_tick_stale",
+        ),
+    )
+    monkeypatch.setattr(
+        option_position_monitor,
+        "get_dhan_credentials",
+        lambda: DhanCredentials(client_id="order-client", access_token="order-token"),
+    )
+
+    state_store.update_runtime_settings(
+        server_side_exit_enabled=True,
+        marketfeed_ws_enabled=True,
+        option_ltp_source="AUTO",
+        option_rest_fallback_enabled=True,
+        option_rest_fallback_cooldown_seconds=1.0,
+        option_sl_percent=10.0,
+        option_tp_percent=20.0,
+        allow_exit=True,
+    )
+    state_store.set_open_position(
+        {
+            "has_open_position": True,
+            "strategy_code": "TRADINGVIEW_NIFTY_V1",
+            "symbol": "NIFTY",
+            "instrument_type": "OPTIDX",
+            "exchange_segment": "NSE_FNO",
+            "security_id": "57049",
+            "trading_symbol": "NIFTY TEST CE",
+            "option_side": "CE",
+            "strike": 22500.0,
+            "expiry": "2026-06-25",
+            "qty": 65,
+            "entry_order_id": "ENTRY1",
+            "entry_price": 100.0,
+            "order_type": "MARKET",
+            "product_type": "INTRADAY",
+            "opened_at": state_store.utc_now(),
+        }
+    )
+
+    option_position_monitor.monitor_once()
+
+    assert calls[0] == ("init", {"proxy_url": ""})
+    assert calls[1][0] == "get_ltp"
+    assert calls[1][1]["client_id"] == "shared-client"
+    assert calls[1][1]["access_token"] == "shared-token"
+    position = state_store.get_open_position()
+    assert position["live_pnl"]["ltp"] == 105.0
+    assert position["live_pnl"]["ltp_history"] == [105.0]
+
+
+def test_multi_user_monitor_loop_uses_websocket_first(monkeypatch):
+    calls = []
+
+    class StopAfterOne:
+        def __init__(self):
+            self.waited = False
+
+        def is_set(self):
+            return self.waited
+
+        def wait(self, _seconds):
+            self.waited = True
+
+    monkeypatch.setattr(option_position_monitor, "_STOP_EVENT", StopAfterOne())
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", True)
+    monkeypatch.setattr("app.db.engine.database_configured", lambda: True)
+    monkeypatch.setattr("app.services.strategy_fanout.active_routing_user_ids", lambda: [dev_user().id])
+    monkeypatch.setattr("app.services.strategy_fanout.load_user_context", lambda _user_id: dev_user())
+    monkeypatch.setattr(option_position_monitor, "monitor_once", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(option_position_monitor, "_poll_seconds", lambda _runtime: 0.0)
+    monkeypatch.setattr(option_position_monitor, "log_audit_event", lambda *_args, **_kwargs: None)
+
+    option_position_monitor._monitor_loop()
+
+    assert calls == [{}]

@@ -10,7 +10,7 @@ from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.chat_event_publisher import publish_active_trade_from_sync, publish_tick_pnl_from_sync
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret
-from app.services.dhan_client import get_broker_client
+from app.services.dhan_client import RealDhanClient, get_broker_client
 from app.services.dhan_marketfeed_ws import (
     clear_marketfeed_subscription,
     ensure_marketfeed_subscription,
@@ -19,7 +19,7 @@ from app.services.dhan_marketfeed_ws import (
     stop_marketfeed_ws,
 )
 from app.services.risk_manager import _market_is_open
-from app.services.shared_market_data import get_shared_market_credentials, shared_market_data_configured
+from app.services.shared_market_data import market_data_credentials, shared_market_data_configured
 from app.services.state_store import get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
 
 
@@ -31,6 +31,7 @@ _THREAD_LOCK = threading.RLock()
 
 EXIT_COOLDOWN_SECONDS = 15.0
 _LAST_REST_FALLBACK_AT: dict[tuple[str, str], float] = {}
+LTP_HISTORY_LIMIT = 24
 
 
 def _as_float(value: Any, default: float | None = None) -> float | None:
@@ -172,6 +173,7 @@ def _pnl_snapshot(
         "tp_price": tp_price,
         "unrealized_pnl": unrealized_pnl,
         "pnl_percent": pnl_percent,
+        "ltp_history": _ltp_history(position, ltp),
         "exit_reason": exit_reason,
         "quote_age_seconds": quote_age_seconds,
         "last_checked_at": utc_now(),
@@ -189,9 +191,32 @@ def _client() -> Any:
 
 
 def _market_data_credentials() -> Any:
-    if get_engine_mode() == "paper" and shared_market_data_configured():
-        return get_shared_market_credentials()
+    if shared_market_data_configured():
+        return market_data_credentials()
     return get_dhan_credentials()
+
+
+def _market_data_client(creds: Any) -> Any:
+    if getattr(creds, "source", None) == "shared_market_data":
+        return RealDhanClient(proxy_url="")
+    return _client()
+
+
+def _ltp_history(position: dict[str, Any], ltp: float) -> list[float]:
+    live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
+    raw_history = live_pnl.get("ltp_history") if isinstance(live_pnl, dict) else None
+    history: list[float] = []
+    if isinstance(raw_history, list):
+        for item in raw_history[-(LTP_HISTORY_LIMIT - 1) :]:
+            value = _as_float(item)
+            if value is not None:
+                history.append(float(value))
+    elif isinstance(live_pnl, dict):
+        previous_ltp = _as_float(live_pnl.get("ltp"))
+        if previous_ltp is not None:
+            history.append(float(previous_ltp))
+    history.append(float(ltp))
+    return history[-LTP_HISTORY_LIMIT:]
 
 
 def _ltp_error_snapshot(*, quote: Any, status: str, ws_status: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -608,12 +633,13 @@ def monitor_once(*, force_rest: bool = False) -> None:
     if not security_id:
         return
 
-    client = _client()
+    order_client = _client()
+    market_client = _market_data_client(market_creds)
     entry_price_before_sync = _as_float(position.get("entry_price"))
     if entry_price_before_sync is None and not order_creds:
         return
     sync_creds = order_creds or market_creds
-    position = _sync_entry_fill_if_needed(position, client, sync_creds.client_id, sync_creds.access_token)
+    position = _sync_entry_fill_if_needed(position, order_client, sync_creds.client_id, sync_creds.access_token)
     entry_price = _as_float(position.get("entry_price"))
     if entry_price is None or entry_price <= 0:
         return
@@ -632,7 +658,7 @@ def monitor_once(*, force_rest: bool = False) -> None:
 
     if quote is None or not quote.success:
         if _rest_fallback_allowed(runtime, exchange_segment, security_id):
-            quote = client.get_ltp(
+            quote = market_client.get_ltp(
                 client_id=market_creds.client_id,
                 access_token=market_creds.access_token,
                 exchange_segment=exchange_segment,
@@ -697,7 +723,7 @@ def monitor_once(*, force_rest: bool = False) -> None:
     )
     if should_route_exit:
         confirmed_reason, confirmed_snapshot = _confirm_exit_trigger(
-            client=client,
+            client=market_client,
             creds=market_creds,
             position=position,
             exchange_segment=exchange_segment,
@@ -750,7 +776,7 @@ def _monitor_loop() -> None:
                     if user is None:
                         continue
                     with bind_user_execution_context(user):
-                        monitor_once(force_rest=True)
+                        monitor_once()
             else:
                 monitor_once()
         except Exception as exc:
