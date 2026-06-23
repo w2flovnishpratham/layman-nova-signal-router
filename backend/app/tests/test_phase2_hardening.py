@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -253,3 +254,65 @@ def test_strategy_daily_order_and_loss_caps_are_durable(mu_db, monkeypatch):
     )
     assert loss_block["status"] == "blocked"
     assert loss_block["risk"]["code"] == "max_loss_per_day"
+
+
+def test_recovered_strategy_retry_does_not_double_reserve_daily_counter(mu_db, monkeypatch):
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import strategy_fanout, strategy_risk
+    from app.workers.strategy_job_worker import process_queued_jobs_once, recover_stale_jobs
+
+    user = make_user("phase2-reservation-retry@gmail.com")
+    signal = _signal("phase2-reservation-retry")
+    today = strategy_risk.trade_date_ist()
+    stale_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+    monkeypatch.setattr(
+        strategy_fanout,
+        "route_signal",
+        lambda signal: (_ for _ in ()).throw(AssertionError("recovered retry must not route")),
+    )
+
+    with session_scope() as db:
+        signal_row = models.StrategySignal(
+            strategy_name="supertrend",
+            signal_id=signal.signal_id,
+            status="processing",
+        )
+        db.add(signal_row)
+        db.flush()
+        db.add(
+            models.StrategyExecutionJob(
+                strategy_signal_id=signal_row.id,
+                user_id=user.id,
+                strategy_name="supertrend",
+                signal_id=signal.signal_id,
+                signal_payload=signal.model_dump(mode="json"),
+                lots=1,
+                execution_mode="paper_live_data",
+                status="running",
+                attempts=1,
+                max_attempts=2,
+                locked_at=stale_time,
+                available_at=stale_time,
+            )
+        )
+        db.add(
+            models.UserStrategyDailyRiskCounter(
+                user_id=user.id,
+                strategy_name="supertrend",
+                trade_date_ist=today,
+                orders_count=1,
+                notional_used_paise=0,
+                realized_pnl_paise=0,
+            )
+        )
+
+    assert recover_stale_jobs() == 1
+    assert process_queued_jobs_once(limit=1) == 1
+
+    with session_scope() as db:
+        counter = db.query(models.UserStrategyDailyRiskCounter).one()
+        job = db.query(models.StrategyExecutionJob).one()
+        assert counter.orders_count == 1
+        assert job.status == "failed"
+        assert "Manual review required" in (job.last_error or "")
