@@ -122,6 +122,12 @@ class Settings(BaseSettings):
     DHAN_API_MAX_REQUESTS_PER_SECOND: float = 4.0
     DHAN_API_BURST: int = 4
     DHAN_API_MAX_RETRY_AFTER_SECONDS: int = 60
+    # Dhan's Market Quote / LTP endpoint (/marketfeed/ltp) is throttled to
+    # 1 request/second — far stricter than the general API budget above. A
+    # dedicated limiter serializes these calls so they QUEUE (wait) instead of
+    # being rejected with HTTP 429 (which previously blocked SL/TP exits).
+    DHAN_QUOTE_MAX_REQUESTS_PER_SECOND: float = 1.0
+    DHAN_QUOTE_BURST: int = 1
 
     RUNTIME_STATE_DIR: str = "runtime_state"
     RUNTIME_LOG_DIR: str = "runtime_logs"
@@ -176,6 +182,11 @@ class Settings(BaseSettings):
     STRATEGY_JOB_WORKER_POLL_SECONDS: float = 0.5
     STRATEGY_JOB_WORKER_CONCURRENCY: int = 4
     STRATEGY_JOB_STALE_SECONDS: int = 120
+
+    # Singleton background components (Dhan WS, monitor, EOD, ghost watcher,
+    # shared-token refresh, durable job worker) must run in exactly one process.
+    # Set false on any extra API-only web workers.
+    BACKGROUND_WORKER_RUNNER_ENABLED: bool = True
 
     # Server-only JSON list of selectable egress nodes. Proxy URLs may contain
     # credentials and are never returned to the frontend. public_ip is the

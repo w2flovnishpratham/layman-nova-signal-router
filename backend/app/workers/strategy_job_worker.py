@@ -155,6 +155,16 @@ def _refresh_signal_summary(strategy_signal_id: uuid.UUID) -> None:
 
 
 def _execute_job(job: dict[str, Any]) -> None:
+    if _retry_would_risk_duplicate_execution(job):
+        _complete_job(
+            job,
+            status="failed",
+            error=(
+                "Recovered execution job was not re-run because its previous "
+                "attempt may have reached the broker. Manual review required."
+            ),
+        )
+        return
     with _USER_LOCKS_GUARD:
         user_lock = _USER_LOCKS.setdefault(job["user_id"], threading.Lock())
     with user_lock:
@@ -172,6 +182,12 @@ def _execute_job(job: dict[str, Any]) -> None:
             _complete_job(job, status="failed", error=str(exc))
             return
         _complete_job(job, status="completed", result=result)
+
+
+def _retry_would_risk_duplicate_execution(job: dict[str, Any]) -> bool:
+    mode = str(job.get("execution_mode") or "")
+    attempts = int(job.get("attempts") or 0)
+    return attempts > 1 and mode in {"paper_live_data", "real_orders"}
 
 
 def process_queued_jobs_once(*, limit: int | None = None) -> int:

@@ -1,10 +1,46 @@
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 from app.services.atm_ltp_service import get_atm_option_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.state_store import get_app_state, get_open_position, utc_now
+
+
+# Process-wide shared snapshot cache. The NIFTY spot + ATM CE/PE are identical
+# for every user, so the snapshot is built at most once per TTL and reused by
+# all user sessions AND all REST callers. Cost then scales with the number of
+# strikes, not the number of users — the point of a shared market-data service.
+_SHARED_SNAPSHOT_LOCK = threading.RLock()
+_SHARED_SNAPSHOT_CACHE: dict[str, Any] = {"built_monotonic": 0.0, "data": None}
+SHARED_SNAPSHOT_TTL_SECONDS = 0.4
+
+
+def get_shared_nifty_snapshot(
+    *,
+    allow_rest_fallback: bool = True,
+    max_age_seconds: float = SHARED_SNAPSHOT_TTL_SECONDS,
+) -> dict[str, Any]:
+    """Return the global NIFTY/ATM snapshot, rebuilding at most once per TTL.
+
+    WS reads come from the shared singleton tick cache, so concurrent callers
+    reuse one computation instead of each triggering their own Dhan reads.
+    """
+    now = time.monotonic()
+    with _SHARED_SNAPSHOT_LOCK:
+        cached = _SHARED_SNAPSHOT_CACHE.get("data")
+        built_at = float(_SHARED_SNAPSHOT_CACHE.get("built_monotonic") or 0.0)
+        if cached is not None and (now - built_at) <= max_age_seconds:
+            return cached
+    # Build outside the lock so a (rare) REST-backed build never stalls the
+    # WS-only hot path; a concurrent double-build is harmless and idempotent.
+    snapshot = build_nifty_snapshot(allow_rest_fallback=allow_rest_fallback)
+    with _SHARED_SNAPSHOT_LOCK:
+        _SHARED_SNAPSHOT_CACHE["data"] = snapshot
+        _SHARED_SNAPSHOT_CACHE["built_monotonic"] = time.monotonic()
+    return snapshot
 
 
 def build_nifty_snapshot(*, allow_rest_fallback: bool = True) -> dict[str, Any]:

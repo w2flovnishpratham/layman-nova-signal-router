@@ -10,16 +10,28 @@ from app.config import settings
 
 
 class DhanApiRateLimiter:
-    """Process-wide limiter for every outbound Dhan HTTP request."""
+    """Process-wide limiter for outbound Dhan HTTP requests.
 
-    def __init__(self) -> None:
+    By default it reads the general API budget; pass ``rate_getter`` /
+    ``burst_getter`` to enforce a stricter per-endpoint limit (e.g. the
+    1 req/sec Market Quote / LTP cap).
+    """
+
+    def __init__(
+        self,
+        *,
+        rate_getter: Any = None,
+        burst_getter: Any = None,
+    ) -> None:
         self._lock = threading.Condition(threading.RLock())
         self._requests: deque[float] = deque()
         self._blocked_until = 0.0
+        self._rate_getter = rate_getter or (lambda: settings.DHAN_API_MAX_REQUESTS_PER_SECOND)
+        self._burst_getter = burst_getter or (lambda: settings.DHAN_API_BURST)
 
     def wait(self) -> None:
-        rate = max(float(settings.DHAN_API_MAX_REQUESTS_PER_SECOND), 0.1)
-        burst = max(int(settings.DHAN_API_BURST), 1)
+        rate = max(float(self._rate_getter()), 0.1)
+        burst = max(int(self._burst_getter()), 1)
         window = burst / rate
 
         with self._lock:
@@ -69,6 +81,14 @@ class DhanApiRateLimiter:
 
 
 dhan_api_rate_limiter = DhanApiRateLimiter()
+
+# Dedicated serializer for the Market Quote / LTP endpoint (1 req/sec on Dhan).
+# Quote calls pass through BOTH limiters; this stricter one is the binding
+# constraint and makes concurrent LTP reads queue instead of getting a 429.
+dhan_quote_rate_limiter = DhanApiRateLimiter(
+    rate_getter=lambda: settings.DHAN_QUOTE_MAX_REQUESTS_PER_SECOND,
+    burst_getter=lambda: settings.DHAN_QUOTE_BURST,
+)
 
 
 def before_dhan_request(_request: Any) -> None:

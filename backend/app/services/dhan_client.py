@@ -37,7 +37,7 @@ from app.config import settings
 from app.services.audit_logger import log_order_event
 from app.services.dhan_debugger import build_dhan_headers_debug, get_outgoing_ip, validate_dhan_payload
 from app.services.dhan_error_interpreter import interpret_dhan_error
-from app.services.dhan_rate_limiter import after_dhan_response, before_dhan_request
+from app.services.dhan_rate_limiter import after_dhan_response, before_dhan_request, dhan_quote_rate_limiter
 from app.services.risk_manager import _market_is_open
 
 
@@ -1037,8 +1037,13 @@ class RealDhanClient:
         url = f"{DHAN_BASE_URL}/marketfeed/ltp"
 
         try:
+            # Serialize LTP/quote calls to Dhan's 1 req/sec cap so concurrent
+            # reads (e.g. SL/TP exit confirmation colliding with the monitor
+            # loop) QUEUE instead of failing with HTTP 429.
+            dhan_quote_rate_limiter.wait()
             with self._client(timeout=5.0) as client:
                 response = client.post(url, json=request_body, headers=self._headers(client_id, access_token))
+            dhan_quote_rate_limiter.observe_response(response)
             parsed = self._parse_response(response)
             raw_response = parsed if isinstance(parsed, (dict, list)) else None
 

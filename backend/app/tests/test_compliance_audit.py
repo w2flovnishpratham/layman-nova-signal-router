@@ -99,6 +99,11 @@ def client(tmp_path, monkeypatch):
     setup_router._DHAN_CONNECT_RATE_LIMIT.clear()
 
     from app.main import app
+    import app.main as main_module
+
+    monkeypatch.setattr(main_module, "shared_market_data_configured", lambda: True)
+    monkeypatch.setattr(main_module, "start_shared_token_worker", lambda: None)
+    monkeypatch.setattr(main_module, "stop_shared_token_worker", lambda: None)
 
     with TestClient(app) as test_client:
         test_client.post("/api/control/reset-state")
@@ -108,6 +113,7 @@ def client(tmp_path, monkeypatch):
             "/api/setup/risk",
             json={
                 "max_qty_per_order": 1,
+                "option_ltp_poll_seconds": 1.0,
                 "allow_entry": True,
                 "allow_exit": True,
             },

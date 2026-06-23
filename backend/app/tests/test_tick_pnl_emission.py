@@ -101,7 +101,8 @@ def _run_monitor_tick(
     )
 
     monkeypatch.setattr(option_position_monitor, "_client", lambda: _FakeClient())
-    monkeypatch.setattr(option_position_monitor, "build_nifty_snapshot", lambda: dict(MARKET_SNAPSHOT))
+    monkeypatch.setattr(option_position_monitor, "build_nifty_snapshot", lambda **_kwargs: dict(MARKET_SNAPSHOT))
+    monkeypatch.setattr(option_position_monitor, "get_shared_nifty_snapshot", lambda **_kwargs: dict(MARKET_SNAPSHOT))
     monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **_kwargs: None)
     monkeypatch.setattr(
         option_position_monitor,

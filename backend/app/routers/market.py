@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 from app.services.atm_ltp_service import get_atm_option_snapshot
 from app.services.credential_vault import dhan_metadata
 from app.services.execution_context import current_execution_user
-from app.services.market_snapshot import build_nifty_snapshot
+from app.services.market_snapshot import get_shared_nifty_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.state_store import get_app_state, get_runtime_settings, get_wallet_snapshot
 from app.workers.strategy_job_worker import strategy_job_worker_status
@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.get("/market/nifty-snapshot")
 def nifty_snapshot() -> dict[str, Any]:
-    return build_nifty_snapshot()
+    return get_shared_nifty_snapshot()
 
 
 @router.get("/market/atm-ltp")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -43,6 +44,31 @@ from app.workers.strategy_job_worker import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nova_signal_router")
+
+
+def _configured_web_worker_count() -> int:
+    for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS"):
+        raw = os.environ.get(name)
+        if raw in (None, ""):
+            continue
+        try:
+            return max(int(raw), 1)
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r.", name, raw)
+    return 1
+
+
+def validate_background_worker_runner_configuration() -> None:
+    worker_count = _configured_web_worker_count()
+    if settings.BACKGROUND_WORKER_RUNNER_ENABLED and worker_count > 1:
+        raise RuntimeError(
+            "Multiple web workers were requested while "
+            "BACKGROUND_WORKER_RUNNER_ENABLED=true. Singleton workers such as "
+            "Dhan WS, option monitor, shared-token refresh, EOD, ghost watcher, "
+            "and strategy jobs must run in exactly one process. Use one web "
+            "worker, or set BACKGROUND_WORKER_RUNNER_ENABLED=false on API-only "
+            "workers and run a dedicated worker process."
+        )
 
 
 def validate_production_configuration() -> None:
@@ -108,6 +134,7 @@ def _multi_user_mode() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_production_configuration()
+    validate_background_worker_runner_configuration()
     bind_chat_event_loop(asyncio.get_running_loop())
     init_runtime_files()
     sync_runtime_flags_from_env()
@@ -128,7 +155,8 @@ async def lifespan(app: FastAPI):
     if settings.is_production and not user_vault_ready():
         raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY is missing or invalid; refusing to start in production.")
     start_instrument_cache_warmup()
-    if shared_market_data_configured():
+    background_workers_enabled = bool(settings.BACKGROUND_WORKER_RUNNER_ENABLED)
+    if background_workers_enabled and shared_market_data_configured():
         start_shared_token_worker()
         logger.info("Shared market-data token worker enabled (global paper-mode feed).")
     runtime_settings = get_runtime_settings()
@@ -146,8 +174,11 @@ async def lifespan(app: FastAPI):
         logger.warning("REAL DHAN MODE CONFIGURED.")
     if settings.ENABLE_LIVE_ORDERS:
         logger.warning("LIVE ORDERS ENABLED. REAL MONEY ORDERS MAY BE SENT AFTER RISK CHECKS.")
-    start_strategy_job_worker()
-    if _multi_user_mode():
+    if not background_workers_enabled:
+        logger.warning("Singleton background workers are disabled for this process.")
+    if background_workers_enabled:
+        start_strategy_job_worker()
+    if background_workers_enabled and _multi_user_mode():
         logger.info(
             "Multi-user reconcile, position monitor, EOD, and ghost workers enabled."
         )
@@ -169,7 +200,7 @@ async def lifespan(app: FastAPI):
         start_option_position_monitor()
         start_eod_squareoff_worker()
         start_ghost_position_watcher()
-    else:
+    elif background_workers_enabled:
         reconcile_open_position_on_startup()
         start_option_position_monitor()
         # EOD square-off worker (15:15 IST). Runs as daemon; idempotent.

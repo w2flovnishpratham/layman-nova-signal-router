@@ -23,7 +23,7 @@ from app.services.dhan_marketfeed_ws import (
     marketfeed_ws_status,
     stop_marketfeed_ws,
 )
-from app.services.market_snapshot import build_nifty_snapshot
+from app.services.market_snapshot import build_nifty_snapshot, get_shared_nifty_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import market_data_credentials, shared_market_data_configured
 from app.services.state_store import get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
@@ -770,7 +770,7 @@ def _publish_market_snapshot_from_monitor() -> bool:
         # REST quote API (1 req/sec limit). It reads only cached WebSocket ticks,
         # so it can fan out as fast as the loop runs with zero REST load.
         return publish_market_snapshot_from_sync(
-            snapshot_factory=lambda: build_nifty_snapshot(allow_rest_fallback=False)
+            snapshot_factory=lambda: get_shared_nifty_snapshot(allow_rest_fallback=False)
         )
     except Exception as exc:
         logger.warning("Market snapshot push failed: %s", exc)
