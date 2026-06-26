@@ -34,7 +34,7 @@ export function AuthScreen({ loading, error, onLogin, onRetry }: Props) {
           <div className="auth-actions">
             <button className="google-login-button" type="button" onClick={onLogin}>
               <LogIn size={17} />
-              Continue with Google
+              Continue with Google address
             </button>
             {error ? (
               <button className="secondary-button" type="button" onClick={onRetry}>Retry</button>
