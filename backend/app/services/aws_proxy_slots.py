@@ -16,7 +16,7 @@ PROVIDER = "AWS"
 DEFAULT_AWS_PROXY_HOST = "13.203.58.220"
 
 
-class AWSProxySlotConfigError(RuntimeError):
+class AWSProxySlotConfigError(ValueError):
     """Safe configuration error for AWS proxy slot setup."""
 
 

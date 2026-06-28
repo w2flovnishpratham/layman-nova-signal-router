@@ -296,7 +296,35 @@ def _validated_proxy_url(proxy_url: str) -> str:
     return parsed.geturl()
 
 
-def configured_egress_nodes() -> list[dict[str, str]]:
+def _aws_proxy_slot_node(slot: Any) -> dict[str, Any]:
+    return {
+        "provider": slot.provider,
+        "slot_number": slot.slot_number,
+        "slot_code": f"aws-slot-{slot.slot_number}",
+        "label": f"Nova Static IP {slot.slot_number}",
+        "public_ip": slot.public_ip,
+        "expected_egress_ip": slot.expected_egress_ip,
+        "private_ip": slot.private_ip,
+        "proxy_host": slot.proxy_host,
+        "proxy_port": slot.proxy_port,
+        "proxy_username": slot.proxy_username,
+        # Backend-only. Never include this field in frontend/API option output.
+        "proxy_url": slot.proxy_url,
+    }
+
+
+def _configured_aws_proxy_slot_nodes() -> list[dict[str, Any]]:
+    from app.services.aws_proxy_slots import build_aws_proxy_slots
+
+    return [_aws_proxy_slot_node(slot) for slot in build_aws_proxy_slots(settings)]
+
+
+def _configured_legacy_manual_egress_nodes() -> list[dict[str, Any]]:
+    """Legacy manual egress JSON fallback.
+
+    AWS proxy slots are the preferred Nova Static IP path when enabled. This
+    parser remains only for old backend-managed proxy URL deployments.
+    """
     try:
         raw_nodes = json.loads(settings.EGRESS_NODES_JSON or "[]")
     except json.JSONDecodeError as exc:
@@ -316,6 +344,12 @@ def configured_egress_nodes() -> list[dict[str, str]]:
         seen_ips.add(public_ip)
         nodes.append({"public_ip": public_ip, "proxy_url": proxy_url})
     return nodes
+
+
+def configured_egress_nodes() -> list[dict[str, Any]]:
+    if settings.AWS_PROXY_SLOTS_ENABLED:
+        return _configured_aws_proxy_slot_nodes()
+    return _configured_legacy_manual_egress_nodes()
 
 
 def user_egress_options(user_id: uuid.UUID) -> dict[str, Any]:
@@ -340,6 +374,10 @@ def user_egress_options(user_id: uuid.UUID) -> dict[str, Any]:
         "nodes": [
             {
                 "public_ip": node["public_ip"],
+                "expected_egress_ip": node.get("expected_egress_ip", node["public_ip"]),
+                "provider": node.get("provider"),
+                "slot_number": node.get("slot_number"),
+                "label": node.get("label") or node["public_ip"],
                 "available": (
                     node["public_ip"] not in assignments
                     or assignments[node["public_ip"]] == user_id

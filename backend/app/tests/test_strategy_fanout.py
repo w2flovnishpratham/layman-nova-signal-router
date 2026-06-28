@@ -185,6 +185,104 @@ def test_live_broker_requires_and_uses_user_proxy(mu_db, monkeypatch):
     assert "transport" not in captured
 
 
+def _enable_aws_proxy_slots(monkeypatch, *, password: str = "aws-secret") -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "AWS_PROXY_SLOTS_ENABLED", True, raising=False)
+    monkeypatch.setattr(settings, "AWS_PROXY_HOST", "13.203.58.220", raising=False)
+    monkeypatch.setattr(settings, "AWS_PROXY_SHARED_PASSWORD", password, raising=False)
+    for slot_number in range(1, 6):
+        monkeypatch.setattr(
+            settings,
+            f"AWS_PROXY_SLOT_{slot_number}_PASSWORD",
+            "",
+            raising=False,
+        )
+
+
+def test_configured_egress_nodes_prefers_aws_slots_without_egress_nodes_json(monkeypatch):
+    from app.config import settings
+    from app.services import strategy_fanout
+
+    _enable_aws_proxy_slots(monkeypatch, password="abc@123")
+    monkeypatch.setattr(settings, "EGRESS_NODES_JSON", "not-json", raising=False)
+
+    nodes = strategy_fanout.configured_egress_nodes()
+
+    assert len(nodes) == 5
+    assert [node["public_ip"] for node in nodes] == [
+        "13.203.58.220",
+        "13.127.93.199",
+        "13.206.213.151",
+        "35.154.61.32",
+        "65.0.153.89",
+    ]
+    assert [node["proxy_port"] for node in nodes] == [3001, 3002, 3003, 3004, 3005]
+    assert nodes[0]["proxy_url"] == "http://nova_user_1:abc%40123@13.203.58.220:3001"
+    assert nodes[0]["expected_egress_ip"] == "13.203.58.220"
+    assert nodes[0]["private_ip"] == "172.31.43.47"
+    assert nodes[0]["label"] == "Nova Static IP 1"
+
+
+def test_configured_egress_nodes_uses_legacy_json_when_aws_slots_disabled(monkeypatch):
+    from app.config import settings
+    from app.services import strategy_fanout
+
+    monkeypatch.setattr(settings, "AWS_PROXY_SLOTS_ENABLED", False, raising=False)
+    nodes = [
+        {
+            "public_ip": "165.232.184.177",
+            "proxy_url": "http://legacy-user:secret@64.225.87.19:8888",
+        }
+    ]
+    monkeypatch.setattr(settings, "EGRESS_NODES_JSON", json.dumps(nodes), raising=False)
+
+    assert strategy_fanout.configured_egress_nodes() == nodes
+
+
+def test_configured_egress_nodes_missing_aws_password_raises_safe_error(monkeypatch):
+    from app.services import strategy_fanout
+    from app.services.aws_proxy_slots import AWSProxySlotConfigError
+
+    _enable_aws_proxy_slots(monkeypatch, password="")
+
+    with pytest.raises(AWSProxySlotConfigError) as exc:
+        strategy_fanout.configured_egress_nodes()
+
+    message = str(exc.value)
+    assert message == "AWS proxy credential is missing for slot 1."
+    assert "proxy_url" not in message
+    assert "@" not in message
+
+
+def test_user_egress_options_for_aws_slots_do_not_expose_proxy_credentials(
+    mu_db,
+    monkeypatch,
+):
+    from app.services import strategy_fanout
+
+    user = make_user("aws-egress-options@gmail.com")
+    _enable_aws_proxy_slots(monkeypatch, password="abc@123")
+
+    options = strategy_fanout.user_egress_options(user.id)
+    serialized = json.dumps(options, sort_keys=True)
+
+    assert len(options["nodes"]) == 5
+    assert options["nodes"][0] == {
+        "public_ip": "13.203.58.220",
+        "expected_egress_ip": "13.203.58.220",
+        "provider": "AWS",
+        "slot_number": 1,
+        "label": "Nova Static IP 1",
+        "available": True,
+        "selected": False,
+    }
+    assert "proxy_url" not in serialized
+    assert "abc@123" not in serialized
+    assert "abc%40123" not in serialized
+    assert "nova_user" not in serialized
+
+
 def test_authenticated_users_select_distinct_configured_egress_ips(
     mu_db,
     monkeypatch,
@@ -196,6 +294,7 @@ def test_authenticated_users_select_distinct_configured_egress_ips(
 
     alice = make_user("egress-alice@gmail.com")
     bob = make_user("egress-bob@gmail.com")
+    monkeypatch.setattr(settings, "AWS_PROXY_SLOTS_ENABLED", False, raising=False)
     nodes = [
         {
             "public_ip": "165.232.184.177",
