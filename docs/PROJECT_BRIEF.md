@@ -33,7 +33,7 @@ browser is closed.
 - **Backend:** Python, FastAPI, SQLAlchemy 2.x, psycopg (PostgreSQL driver), httpx, cryptography (Fernet), itsdangerous (cookie signing). Background work runs as in-process daemon threads.
 - **Database:** Neon PostgreSQL (durable multi-user state). Per-user runtime state also kept in JSON files on disk, isolated per user.
 - **Frontend:** React 19 + TypeScript + Vite + Tailwind + zustand, talking to the backend over HTTPS + a WebSocket.
-- **Infra:** Control-plane VPS (FastAPI + nginx) + one DigitalOcean droplet per live user acting as a static-IP egress proxy for Dhan order placement. Frontend can be hosted on Vercel.
+- **Infra:** FastAPI control plane + AWS multi-IP egress proxy. Each live user gets one Nova Static IP backed by a dedicated AWS proxy slot for Dhan order placement. Frontend can be hosted separately.
 
 ---
 
@@ -52,11 +52,11 @@ TradingView ──webhook──▶  ┌─────────────�
                        per-user job (real_orders)        market data (shared TOTP account)
                                   │                            │
                     ┌─────────────▼────────┐         ┌─────────▼─────────┐
-                    │ Droplet A (IP_A) proxy│         │ Dhan market-data  │
+                    │ AWS slot A (IP_A) proxy│        │ Dhan market-data  │
                     │  → Dhan (User A creds)│         │ (LTP, option chain│
                     └───────────────────────┘         │  WebSocket feed)  │
                     ┌───────────────────────┐         └───────────────────┘
-                    │ Droplet B (IP_B) proxy│
+                    │ AWS slot B (IP_B) proxy│
                     │  → Dhan (User B creds)│
                     └───────────────────────┘
 ```
@@ -72,7 +72,7 @@ TradingView ──webhook──▶  ┌─────────────�
 4. Any verified Google account may log in. `ADMIN_EMAILS` only flags `is_admin` (gates `/api/admin/*`) — it never blocks login.
 
 ### Setup (per user, via the chat flow)
-- Pick mode (paper/live), strategy (`supertrend`), enter **Dhan client id + access token** (stored encrypted), select a **static IP / egress droplet**, set **lots** and **exit rules**, then confirm.
+- Pick mode (paper/live), strategy (`supertrend`), enter **Dhan client id + access token** (stored encrypted), select a **Nova Static IP**, set **lots** and **exit rules**, then confirm.
 - Dhan credentials are encrypted server-side and never returned to the browser (only masked status).
 
 ### Signal → fan-out → execution
@@ -80,7 +80,7 @@ TradingView ──webhook──▶  ┌─────────────�
 2. Backend validates secret + strategy + payload, **dedupes by `signal_id`** (unique row in `strategy_signals`), and writes **one `strategy_execution_jobs` row per active subscriber** — atomically.
 3. The **durable job worker** claims queued jobs (`SELECT … FOR UPDATE SKIP LOCKED`), serializes per user, and for each job binds that user's execution context (creds + egress proxy) and runs the signal through the execution router.
 4. ENTRY → BUY=CE / SELL=PE; EXIT → close the tracked position (blocked safely if none open).
-5. For **real_orders**, the Dhan HTTP call is routed through the user's droplet proxy so it egresses from their whitelisted IP. The client **fails closed** if routing is on but no proxy is assigned.
+5. For **real_orders**, the Dhan HTTP call is routed through the user's assigned AWS proxy slot so it egresses from their whitelisted Nova Static IP. The client **fails closed** if routing is on but no proxy is assigned.
 
 ### Live-mode safety gates (all must pass for a real order)
 `ENABLE_LIVE_ORDERS=true` · `DHAN_MODE=REAL` · `DHAN_READ_ONLY_REAL_DATA=false` ·

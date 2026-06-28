@@ -32,7 +32,7 @@ Reviewed in depth:
 - `backend/.env.example`, `backend/.env.live.example`, `requirements.txt`, `requirements_test.txt`.
 - `frontend/src/` — `api.ts`, `lib/backend.ts`, `ws.ts`, `state/sessionStore.ts`, setup components (BrokerForm, ConfirmLaunchCard, RiskForm, StrategyPicker, SetupPanel), QuickActions, message/event cards.
 - `frontend/package.json`, `vite.config.ts`.
-- `deploy/` — nginx conf, systemd unit, `deploy_vps.sh`, `configure_vps_env.sh`, `enable_layman_api_tls.sh`, `install_restricted_ci_key.sh`, `DIGITALOCEAN_PER_USER_IP_SETUP.md`.
+- `deploy/` — nginx conf, systemd unit, `deploy_vps.sh`, `configure_vps_env.sh`, `enable_layman_api_tls.sh`, `install_restricted_ci_key.sh`, `AWS_MULTI_IP_PROXY_SETUP.md`.
 - `.github/workflows/layman-backend-ci-deploy.yml`.
 - `SECURITY_REVIEW_2026_06_12.md`, `SECURITY_FIXES_APPLIED_2026_06_12.md`.
 
@@ -483,7 +483,7 @@ Not deeply reviewed (vendored/generated): `.git/`, `frontend/node_modules/`, `fr
                         │ signed order request
         ┌───────────────▼───────────────┐   one IP per user
         │ Executor nodes (per-user)      │──▶ Dhan API (whitelisted IP)
-        │ DigitalOcean droplet + ReservedIP
+        │ AWS multi-IP egress slot + Elastic IP
         └────────────────────────────────┘
 
    Webhook gateway (TradingView) ─HMAC+timestamp─▶ web tier ─▶ Redis dedup ─▶ worker route

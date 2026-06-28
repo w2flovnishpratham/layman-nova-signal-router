@@ -388,9 +388,11 @@ class StrategyExecutionJob(Base):
 
 
 class UserEgress(Base):
-    """Per-user egress node: the droplet whose static IP is whitelisted in that
-    user's Dhan account. Live order calls for the user route through proxy_url so
-    they exit from public_ip. proxy_url is encrypted (it may carry credentials)."""
+    """Per-user Nova Static IP assignment for Dhan live order routing.
+
+    Live order calls for the user route through the encrypted proxy_url so they
+    exit from public_ip. proxy_url is backend-only and may carry credentials.
+    """
 
     __tablename__ = "user_egress"
 

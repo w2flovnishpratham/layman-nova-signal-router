@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Assign and optionally verify a droplet proxy for a Google-authenticated user."""
+"""Assign and optionally verify a legacy manual egress proxy for a user."""
 from __future__ import annotations
 
 import argparse
@@ -21,13 +21,13 @@ def main() -> int:
     parser.add_argument(
         "--verify",
         action="store_true",
-        help="Verify the proxy's observed public IP after assignment.",
+        help="Verify the proxy observed public IP after assignment.",
     )
     args = parser.parse_args()
 
     proxy_url = (os.environ.get("EGRESS_PROXY_URL") or "").strip()
     if not proxy_url:
-        print("ERROR: set EGRESS_PROXY_URL to the authenticated proxy URL.")
+        print("ERROR: set EGRESS_PROXY_URL to the backend-only proxy URL.")
         return 1
     if not database_configured():
         print("ERROR: DATABASE_URL is not configured.")
@@ -48,16 +48,16 @@ def main() -> int:
     )
     print(
         f"OK: assigned {status['public_ip']} to {args.email}; "
-        f"proxy configured={status['has_proxy']}."
+        f"backend proxy configured={status['has_proxy']}."
     )
     if not args.verify:
         return 0
 
     verification = verify_user_egress(user_id)
     if not verification.get("ok"):
-        print(f"ERROR: proxy verification failed: {verification}")
+        print(f"ERROR: egress verification failed: {verification}")
         return 2
-    print(f"OK: proxy egress verified as {verification['observed_ip']}.")
+    print(f"OK: Nova Static IP egress verified as {verification['observed_ip']}.")
     return 0
 
 

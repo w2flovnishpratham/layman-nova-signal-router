@@ -1,13 +1,18 @@
-# Deploy Backend on a VPS
+# Deploy Backend
 
-The backend must run on a VPS with a **static public IP**. This is the only service that calls Dhan.  
-Dhan requires your server IP to be whitelisted in their portal before live orders will be accepted.
+The backend can run on a managed host or VPS. For live orders, Dhan traffic must
+route through the AWS multi-IP egress proxy described in
+`deploy/AWS_MULTI_IP_PROXY_SETUP.md`.
+
+Dhan requires the user's assigned Nova Static IP to be whitelisted before live
+orders will be accepted. The backend host IP is not the Dhan whitelist IP.
 
 ---
 
-## 1. Obtain a static IP VPS
+## 1. Obtain a backend host
 
-Use any provider (DigitalOcean, Linode, Hetzner, etc.). The VPS IP **must be static** — a dynamic IP will cause Dhan to reject orders. Note the public IP before proceeding.
+Use a backend host that can run the FastAPI service and reach the AWS proxy host.
+Live order egress uses AWS proxy slots, not the backend host's public IP.
 
 ---
 
@@ -65,6 +70,10 @@ DEBUG_ENABLED=false
 
 RUNTIME_STATE_DIR=runtime_state
 RUNTIME_LOG_DIR=runtime_logs
+
+AWS_PROXY_SLOTS_ENABLED=true
+AWS_PROXY_HOST=13.203.58.220
+AWS_PROXY_SHARED_PASSWORD=REPLACE_WITH_SECRET
 ```
 
 ### ⛔ What must NEVER be in `.env`
