@@ -196,6 +196,17 @@ class Settings(BaseSettings):
     # [{"public_ip":"203.0.113.10","proxy_url":"http://user:pass@198.51.100.20:8888"}]
     EGRESS_NODES_JSON: str = "[]"
 
+    # AWS static-IP proxy slots. Password values are server-only secrets used
+    # only to build backend HTTP proxy URLs; never return them to clients.
+    AWS_PROXY_SLOTS_ENABLED: bool = False
+    AWS_PROXY_HOST: str = "13.203.58.220"
+    AWS_PROXY_SHARED_PASSWORD: str = ""
+    AWS_PROXY_SLOT_1_PASSWORD: str = ""
+    AWS_PROXY_SLOT_2_PASSWORD: str = ""
+    AWS_PROXY_SLOT_3_PASSWORD: str = ""
+    AWS_PROXY_SLOT_4_PASSWORD: str = ""
+    AWS_PROXY_SLOT_5_PASSWORD: str = ""
+
     # Server-side defaults for per-user strategy fan-out risk gates. A value of
     # 0 disables the cap until a user or user+strategy override is saved.
     STRATEGY_MAX_LOTS_PER_ORDER: int = 0
