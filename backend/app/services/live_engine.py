@@ -32,6 +32,7 @@ from app.config import settings
 from app.db import crud
 from app.db.engine import database_configured, session_scope
 from app.services import user_credential_vault as vault
+from app.services.dhan_client import RealDhanClient
 from app.services.user_context import CurrentUser, user_runtime_log_dir, user_runtime_state_dir
 
 EXECUTION_MODES = {"signal_only", "paper_live_data", "real_orders"}
@@ -76,14 +77,34 @@ class RunHandle:
 # Safety checklist
 # ---------------------------------------------------------------------------
 def _basic_token_validation(creds) -> bool:
-    """Lightweight validation: credentials present and structurally plausible.
-
-    A real network validation hook (Dhan /fundlimit) can be added here later;
-    kept offline-safe so signal_only / paper_live_data never require live calls.
-    """
+    """Offline shape check used before optional live Dhan profile validation."""
     if creds is None:
         return False
     return bool(creds.client_id and creds.access_token and len(creds.access_token) >= 20)
+
+
+def _validate_dhan_token_for_real_orders(creds) -> dict[str, Any]:
+    """Validate a live-order token with a read-only Dhan profile call."""
+    if creds is None:
+        return {"ok": False, "status_code": None, "message": "Dhan token is missing or expired."}
+    try:
+        validation = RealDhanClient().validate_token(
+            client_id=creds.client_id,
+            access_token=creds.access_token,
+        )
+    except Exception:
+        return {"ok": False, "status_code": None, "message": "Live readiness validation failed."}
+    if not validation.success:
+        return {
+            "ok": False,
+            "status_code": validation.status_code,
+            "message": "Dhan token validation failed.",
+        }
+    return {
+        "ok": True,
+        "status_code": validation.status_code,
+        "message": "Dhan token validation passed.",
+    }
 
 
 def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webhook: bool = False) -> dict[str, Any]:
@@ -133,6 +154,9 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
         "has_saved_credentials": has_creds,
         "vault_decrypt_ok": decrypt_ok,
         "dhan_token_basic_valid": token_ok,
+        "dhan_token_profile_valid": None,
+        "dhan_token_validation_method": None,
+        "dhan_token_validation_status_code": None,
         "enable_live_orders_env": bool(settings.ENABLE_LIVE_ORDERS),
         "webhook_trading_enabled_env": bool(settings.WEBHOOK_TRADING_ENABLED),
         "webhook_hmac_required": bool(settings.WEBHOOK_HMAC_REQUIRED),
@@ -180,6 +204,14 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
             blockers.append("WEBHOOK_TRADING_ENABLED is not true.")
         if settings.WEBHOOK_HMAC_REQUIRED and not webhook_secret_present:
             blockers.append("WEBHOOK_HMAC_REQUIRED=true but no webhook secret saved for this user.")
+
+    if execution_mode == "real_orders" and not blockers:
+        validation = _validate_dhan_token_for_real_orders(creds)
+        checks["dhan_token_profile_valid"] = bool(validation.get("ok"))
+        checks["dhan_token_validation_method"] = "dhan_profile"
+        checks["dhan_token_validation_status_code"] = validation.get("status_code")
+        if not validation.get("ok"):
+            blockers.append(str(validation.get("message") or "Dhan token validation failed."))
 
     return {
         "execution_mode": execution_mode,

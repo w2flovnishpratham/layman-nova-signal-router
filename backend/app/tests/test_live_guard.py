@@ -15,6 +15,52 @@ def _ctx(model):
     return current_user_from_model(model)
 
 
+class _TokenValidation:
+    def __init__(self, *, success: bool, status_code: int | None = None) -> None:
+        self.success = success
+        self.status_code = status_code
+
+
+def _allow_real_order_readiness(monkeypatch):
+    from app.config import settings
+    from app.services import strategy_fanout
+    from app.workers import strategy_job_worker
+
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True, raising=False)
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
+    monkeypatch.setattr(settings, "EXECUTION_NODE_ROUTING_ENABLED", True, raising=False)
+    monkeypatch.setattr(
+        strategy_fanout,
+        "user_egress_status",
+        lambda user_id: {
+            "public_ip": "13.203.58.220",
+            "active": True,
+            "has_proxy": True,
+            "verified": True,
+        },
+    )
+    monkeypatch.setattr(
+        strategy_job_worker,
+        "strategy_job_worker_status",
+        lambda: {"enabled": True, "running": True},
+    )
+
+
+def _patch_token_validation(monkeypatch, *, success: bool, calls: dict[str, int] | None = None, status_code: int | None = 200):
+    from app.services import live_engine
+
+    class FakeDhanClient:
+        def validate_token(self, *, client_id, access_token):
+            if calls is not None:
+                calls["validate_token"] = calls.get("validate_token", 0) + 1
+                calls["client_id"] = client_id
+                calls["access_token"] = access_token
+            return _TokenValidation(success=success, status_code=status_code)
+
+    monkeypatch.setattr(live_engine, "RealDhanClient", FakeDhanClient)
+
+
 def test_real_orders_blocked_without_enable_live_orders(mu_db, monkeypatch):
     from app.config import settings
     from app.services import live_engine, user_credential_vault as vault
@@ -34,29 +80,109 @@ def test_real_orders_blocked_without_enable_live_orders(mu_db, monkeypatch):
 
 
 def test_real_orders_allowed_only_when_all_flags_set(mu_db, monkeypatch):
-    from app.config import settings
-    from app.services import live_engine, strategy_fanout, user_credential_vault as vault
+    from app.services import live_engine, user_credential_vault as vault
 
-    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True, raising=False)
-    monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
-    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
-    monkeypatch.setattr(settings, "EXECUTION_NODE_ROUTING_ENABLED", True, raising=False)
-    monkeypatch.setattr(
-        strategy_fanout,
-        "user_egress_status",
-        lambda user_id: {
-            "public_ip": "165.232.184.177",
-            "active": True,
-            "has_proxy": True,
-            "verified": True,
-        },
-    )
+    _allow_real_order_readiness(monkeypatch)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
     user = make_user("alice@gmail.com")
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
 
     readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
     assert readiness["ready"] is True
     assert readiness["real_orders_allowed"] is True
+    assert readiness["checks"]["dhan_token_profile_valid"] is True
+    assert readiness["checks"]["dhan_token_validation_method"] == "dhan_profile"
+    assert calls["validate_token"] == 1
+
+
+def test_real_order_start_rejects_missing_token(mu_db, monkeypatch):
+    from app.services import live_engine
+
+    _allow_real_order_readiness(monkeypatch)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
+    user = make_user("missing-token@gmail.com")
+
+    result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="real_orders", config={})
+
+    assert result["ok"] is False
+    assert result["run"] is None
+    assert any("No saved Dhan credentials" in b for b in result["readiness"]["blockers"])
+    assert calls == {}
+
+
+def test_real_order_start_rejects_short_placeholder_token(mu_db, monkeypatch):
+    from app.services import live_engine, user_credential_vault as vault
+
+    _allow_real_order_readiness(monkeypatch)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
+    user = make_user("short-token@gmail.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="short")
+
+    result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="real_orders", config={})
+
+    assert result["ok"] is False
+    assert any("basic validation" in b for b in result["readiness"]["blockers"])
+    assert calls == {}
+
+
+def test_real_order_start_rejects_failed_dhan_validation_safely(mu_db, monkeypatch):
+    from app.services import live_engine, user_credential_vault as vault
+
+    _allow_real_order_readiness(monkeypatch)
+    secret_token = "eyJ0eXA-invalid-or-expired-token"
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=False, calls=calls, status_code=401)
+    user = make_user("invalid-token@gmail.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token=secret_token)
+
+    result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="real_orders", config={})
+
+    assert result["ok"] is False
+    readiness = result["readiness"]
+    assert readiness["execution_mode"] == "real_orders"
+    assert readiness["checks"]["dhan_token_profile_valid"] is False
+    assert readiness["checks"]["dhan_token_validation_status_code"] == 401
+    assert any("Dhan token validation failed" in b for b in readiness["blockers"])
+    serialized = str(result)
+    assert secret_token not in serialized
+    assert "access_token" not in serialized
+    assert calls["validate_token"] == 1
+
+
+def test_real_order_start_accepts_only_after_safe_dhan_validation(mu_db, monkeypatch):
+    from app.services import live_engine, user_credential_vault as vault
+
+    _allow_real_order_readiness(monkeypatch)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
+    user = make_user("validated-token@gmail.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-valid-token-abcdef")
+
+    result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="real_orders", config={})
+
+    assert result["ok"] is True
+    assert result["run"]["execution_mode"] == "real_orders"
+    assert result["readiness"]["checks"]["dhan_token_profile_valid"] is True
+    assert calls["validate_token"] == 1
+
+
+def test_non_real_order_mode_does_not_call_dhan_validation(mu_db, monkeypatch):
+    from app.services import live_engine, user_credential_vault as vault
+
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=False, calls=calls)
+    user = make_user("paper-no-validation@gmail.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-valid-token-abcdef")
+
+    result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="signal_only", config={})
+
+    assert result["ok"] is True
+    assert result["run"]["execution_mode"] == "signal_only"
+    assert result["readiness"]["checks"]["dhan_token_profile_valid"] is None
+    assert calls == {}
 
 
 def test_live_start_blocked_without_credentials(mu_db):
