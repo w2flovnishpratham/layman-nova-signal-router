@@ -387,6 +387,38 @@ class StrategyExecutionJob(Base):
     )
 
 
+class LiveOrderIntent(Base):
+    """Durable idempotency gate for live Dhan write intents."""
+
+    __tablename__ = "live_order_intents"
+    __table_args__ = (
+        UniqueConstraint("user_id", "scope", "idempotency_key", name="uq_live_order_intent_user_scope_key"),
+        Index("ix_live_order_intents_user_created", "user_id", "created_at"),
+        Index("ix_live_order_intents_status_updated", "status", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    scope: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    action: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    side: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    symbol: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    broker_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    broker_correlation_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    intent_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
 class UserEgress(Base):
     """Per-user Nova Static IP assignment for Dhan live order routing.
 

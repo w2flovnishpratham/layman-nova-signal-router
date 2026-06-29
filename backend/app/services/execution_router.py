@@ -20,7 +20,8 @@ from app.services.dhan_client import (
     RealDhanClient,
     get_broker_client,
 )
-from app.services.execution_context import LiveEgressGuardError, require_verified_live_egress
+from app.services.execution_context import LiveEgressGuardError, current_execution_user, require_verified_live_egress
+from app.services import order_idempotency
 from app.services.normalized_errors import classify_failure, order_journey
 from app.services.risk_manager import (
     RiskDecision,
@@ -137,6 +138,227 @@ def _build_dhan_payload_and_resolution(signal: NormalizedSignal, qty: int, actio
 def _build_dhan_payload(signal: NormalizedSignal, qty: int, action: str) -> dict[str, Any]:
     payload, _resolution = _build_dhan_payload_and_resolution(signal, qty, action)
     return payload
+
+
+def _is_manual_order_signal(signal: NormalizedSignal) -> bool:
+    return bool(isinstance(signal.raw_payload, dict) and signal.raw_payload.get("manual_order") is True)
+
+
+def _live_order_scope_and_key(signal: NormalizedSignal, action: str, place_method: str) -> tuple[str, str | None]:
+    if _is_manual_order_signal(signal):
+        raw_payload = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
+        key = str(raw_payload.get("idempotency_key") or "").strip()
+        return "manual_order", key or None
+    source = str(signal.source or signal.payload_format or "signal").strip().lower() or "signal"
+    key = f"{signal.signal_id}:{action}:{place_method}"
+    return f"{source}_order", key
+
+
+def _live_order_intent_payload(
+    *,
+    signal: NormalizedSignal,
+    qty: int,
+    action: str,
+    place_method: str,
+    request_payload: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        "action": action,
+        "side": signal.side,
+        "source": signal.source,
+        "strategy_code": signal.strategy_code,
+        "symbol": signal.symbol,
+        "instrument_type": signal.instrument_type,
+        "exchange_segment": request_payload.get("exchangeSegment") or signal.exchange_segment,
+        "product_type": request_payload.get("productType") or signal.product_type,
+        "order_type": request_payload.get("orderType") or signal.order_type,
+        "transaction_type": request_payload.get("transactionType"),
+        "security_id": request_payload.get("securityId") or signal.security_id,
+        "trading_symbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
+        "option_side": signal.option_side,
+        "strike": signal.strike,
+        "expiry": signal.expiry,
+        "qty": qty,
+        "place_method": place_method,
+    }
+    if not _is_manual_order_signal(signal):
+        payload["signal_id"] = signal.signal_id
+    return payload
+
+
+def _claim_live_order_intent_or_result(
+    *,
+    signal: NormalizedSignal,
+    qty: int,
+    action: str,
+    place_method: str,
+    request_payload: dict[str, Any],
+    security_id_resolution: dict[str, Any],
+) -> order_idempotency.OrderIntentClaim | dict[str, Any] | None:
+    if get_engine_mode() != "live":
+        return None
+
+    user = current_execution_user()
+    if user is None or user.is_dev:
+        if settings.is_production:
+            return _blocked(
+                "BLOCKED",
+                "Live order idempotency requires authenticated user context.",
+                signal,
+                security_id_resolution=security_id_resolution,
+                security_id=request_payload.get("securityId"),
+                trading_symbol=request_payload.get("tradingSymbol"),
+                result_extra={"block_code": "LIVE_ORDER_IDEMPOTENCY_UNAVAILABLE"},
+            )
+        return None
+
+    scope, key = _live_order_scope_and_key(signal, action, place_method)
+    if not key:
+        if settings.is_production and _is_manual_order_signal(signal):
+            return _blocked(
+                "BLOCKED",
+                "Manual live order blocked: Idempotency-Key header is required.",
+                signal,
+                security_id_resolution=security_id_resolution,
+                security_id=request_payload.get("securityId"),
+                trading_symbol=request_payload.get("tradingSymbol"),
+                result_extra={"block_code": "IDEMPOTENCY_KEY_REQUIRED"},
+            )
+        return None
+
+    identity_payload = _live_order_intent_payload(
+        signal=signal,
+        qty=qty,
+        action=action,
+        place_method=place_method,
+        request_payload=request_payload,
+    )
+    payload_hash = order_idempotency.stable_payload_hash(identity_payload)
+    try:
+        claim = order_idempotency.claim_live_order_intent(
+            user_id=user.id,
+            scope=scope,
+            idempotency_key=key,
+            payload_hash=payload_hash,
+            signal_id=signal.signal_id,
+            action=action,
+            side=signal.side,
+            symbol=signal.symbol,
+            broker_correlation_id=str(request_payload.get("correlationId") or "") or None,
+            metadata={
+                "place_method": place_method,
+                "source": signal.source,
+                "payload_format": signal.payload_format,
+                "identity_hash": payload_hash,
+            },
+        )
+    except Exception:
+        if settings.is_production:
+            return _blocked(
+                "BLOCKED",
+                "Live order idempotency store unavailable; refusing to submit.",
+                signal,
+                security_id_resolution=security_id_resolution,
+                security_id=request_payload.get("securityId"),
+                trading_symbol=request_payload.get("tradingSymbol"),
+                result_extra={"block_code": "LIVE_ORDER_IDEMPOTENCY_UNAVAILABLE"},
+            )
+        return None
+
+    if claim.status == "replay" and claim.result_summary:
+        replay = dict(claim.result_summary)
+        replay["idempotent_replay"] = True
+        replay["order_intent_id"] = claim.intent_id
+        return replay
+    if claim.status == "conflict":
+        return _blocked(
+            "BLOCKED",
+            claim.message or "Idempotency key was already used for a different order payload.",
+            signal,
+            security_id_resolution=security_id_resolution,
+            security_id=request_payload.get("securityId"),
+            trading_symbol=request_payload.get("tradingSymbol"),
+            result_extra={
+                "block_code": "IDEMPOTENCY_KEY_CONFLICT",
+                "order_intent_id": claim.intent_id,
+            },
+        )
+    if claim.status == "in_progress":
+        return _blocked(
+            "BLOCKED",
+            claim.message or "Order intent is already in progress. Reconcile broker state before retrying.",
+            signal,
+            security_id_resolution=security_id_resolution,
+            security_id=request_payload.get("securityId"),
+            trading_symbol=request_payload.get("tradingSymbol"),
+            result_extra={
+                "block_code": "ORDER_INTENT_IN_PROGRESS",
+                "order_intent_id": claim.intent_id,
+            },
+        )
+    return claim
+
+
+def _lookup_existing_live_order_intent_result(
+    *,
+    signal: NormalizedSignal,
+    qty: int,
+    action: str,
+    place_method: str,
+) -> dict[str, Any] | None:
+    if get_engine_mode() != "live":
+        return None
+    user = current_execution_user()
+    if user is None or user.is_dev:
+        return None
+    scope, key = _live_order_scope_and_key(signal, action, place_method)
+    if not key:
+        return None
+    try:
+        request_payload = _build_dhan_payload(signal, qty, action)
+        identity_payload = _live_order_intent_payload(
+            signal=signal,
+            qty=qty,
+            action=action,
+            place_method=place_method,
+            request_payload=request_payload,
+        )
+        lookup = order_idempotency.lookup_live_order_intent(
+            user_id=user.id,
+            scope=scope,
+            idempotency_key=key,
+            payload_hash=order_idempotency.stable_payload_hash(identity_payload),
+        )
+    except Exception:
+        return None
+    if lookup.status == "missing":
+        return None
+    if lookup.status == "replay" and lookup.result_summary:
+        replay = dict(lookup.result_summary)
+        replay["idempotent_replay"] = True
+        replay["order_intent_id"] = lookup.intent_id
+        return replay
+    if lookup.status == "conflict":
+        return _blocked(
+            "BLOCKED",
+            lookup.message or "Idempotency key was already used for a different order payload.",
+            signal,
+            result_extra={
+                "block_code": "IDEMPOTENCY_KEY_CONFLICT",
+                "order_intent_id": lookup.intent_id,
+            },
+        )
+    if lookup.status == "in_progress":
+        return _blocked(
+            "BLOCKED",
+            lookup.message or "Order intent is already in progress. Reconcile broker state before retrying.",
+            signal,
+            result_extra={
+                "block_code": "ORDER_INTENT_IN_PROGRESS",
+                "order_intent_id": lookup.intent_id,
+            },
+        )
+    return None
 
 
 def _runtime_float(runtime: dict[str, Any], key: str, default: float) -> float:
@@ -1061,6 +1283,21 @@ def _place_order(
         )
         place_method = "super_orders"
 
+    order_intent_id: str | None = None
+    if engine_mode == "live":
+        intent_claim = _claim_live_order_intent_or_result(
+            signal=signal,
+            qty=qty,
+            action=action,
+            place_method=place_method,
+            request_payload=request_payload,
+            security_id_resolution=security_id_resolution,
+        )
+        if isinstance(intent_claim, dict):
+            return intent_claim
+        if intent_claim is not None:
+            order_intent_id = intent_claim.intent_id
+
     log_order_event(
         {
             "phase": "before_request",
@@ -1084,6 +1321,26 @@ def _place_order(
             **_normalized_log_fields(signal),
         }
     )
+
+    if order_intent_id:
+        try:
+            order_idempotency.mark_order_intent_submitted(
+                order_intent_id,
+                broker_correlation_id=str(request_payload.get("correlationId") or "") or None,
+            )
+        except Exception:
+            return _blocked(
+                "BLOCKED",
+                "Live order idempotency store unavailable; refusing to submit.",
+                signal,
+                security_id_resolution=security_id_resolution,
+                security_id=request_payload.get("securityId"),
+                trading_symbol=request_payload.get("tradingSymbol") or signal.trading_symbol,
+                result_extra={
+                    "block_code": "LIVE_ORDER_IDEMPOTENCY_UNAVAILABLE",
+                    "order_intent_id": order_intent_id,
+                },
+            )
 
     if use_super_order:
         result = client.place_super_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
@@ -1238,6 +1495,8 @@ def _place_order(
         "trading_symbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
         "security_id_resolution": security_id_resolution,
     }
+    if order_intent_id:
+        result_payload["order_intent_id"] = order_intent_id
     if not final_success or final_status in {"PENDING_CONFIRMATION", "PARTIAL_FILL_PENDING", "PARTIAL_FILL", "ORDER_STATE_UNKNOWN"}:
         normalized_error = classify_failure(
             result.error or final_status or "Dhan order status could not be verified.",
@@ -1265,6 +1524,23 @@ def _place_order(
         execution_result=result_payload,
         normalized_error=result_payload.get("normalizedError"),
     )
+    if order_intent_id:
+        try:
+            order_idempotency.complete_order_intent(
+                order_intent_id,
+                result_summary=result_payload,
+            )
+        except Exception:
+            log_error_event(
+                "LIVE_ORDER_INTENT_UPDATE_FAILED",
+                "Live order was submitted but idempotency result update failed; retries will fail closed.",
+                metadata={
+                    "signal_id": signal.signal_id,
+                    "order_intent_id": order_intent_id,
+                    "order_id": result_payload.get("order_id"),
+                    "status": result_payload.get("status"),
+                },
+            )
     return result_payload
 
 
@@ -1679,6 +1955,19 @@ def route_entry_signal(
     entry_block = _entry_request_block(signal, runtime)
     if entry_block:
         return entry_block
+    entry_place_method = (
+        "super_orders"
+        if get_engine_mode() == "live" and _option_exit_mode(runtime) == "DHAN_SUPER"
+        else "orders"
+    )
+    existing_intent = _lookup_existing_live_order_intent_result(
+        signal=signal,
+        qty=signal.qty,
+        action="ENTRY",
+        place_method=entry_place_method,
+    )
+    if existing_intent is not None:
+        return existing_intent
 
     broker_reconcile = _reconcile_tracked_position_before_entry(signal)
     if broker_reconcile and not broker_reconcile.allowed:
@@ -1750,6 +2039,14 @@ def route_exit_signal(
         last_alert_at=utc_now(),
         last_message=f"Exit alert received for {signal.trading_symbol or signal.symbol}",
     )
+    existing_intent = _lookup_existing_live_order_intent_result(
+        signal=signal,
+        qty=signal.qty,
+        action="EXIT",
+        place_method="orders",
+    )
+    if existing_intent is not None:
+        return existing_intent
     decision: RiskDecision = evaluate_exit(signal, runtime=runtime)
     if not decision.allowed:
         return _blocked("BLOCKED", decision.reason, signal)

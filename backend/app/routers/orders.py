@@ -3,11 +3,12 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.services.audit_logger import read_jsonl
-from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_PRODUCT_TYPE, DEFAULT_ORDER_TYPE
+from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_PRODUCT_TYPE, DEFAULT_ORDER_TYPE, settings
 from app.routers.setup import current_nifty_lot_size
 from app.schemas.signal import NormalizedSignal
 from app.services.atm_ltp_service import get_atm_option_snapshot
@@ -104,7 +105,7 @@ def orders(limit: int = Query(default=100, ge=1, le=1000)) -> list[dict]:
 
 
 @router.post("/orders/manual-entry")
-def manual_entry(body: ManualEntryRequest) -> dict[str, Any]:
+def manual_entry(request: Request, body: ManualEntryRequest) -> Any:
     signal = _manual_entry_signal(
         option_side=body.side,
         lots=body.lots,
@@ -118,12 +119,15 @@ def manual_entry(body: ManualEntryRequest) -> dict[str, Any]:
             "stopLossPct": body.stopLossPct,
         },
     )
+    blocked = _attach_manual_idempotency_or_block(signal, request)
+    if blocked is not None:
+        return blocked
     execution_result = route_signal(signal)
     return _manual_response(execution_result)
 
 
 @router.post("/orders/manual-exit")
-def manual_exit(body: ManualExitRequest) -> dict[str, Any]:
+def manual_exit(request: Request, body: ManualExitRequest) -> Any:
     position = get_open_position()
     if not position.get("has_open_position"):
         error = classify_failure(
@@ -155,12 +159,15 @@ def manual_exit(body: ManualExitRequest) -> dict[str, Any]:
         source="manual_panel",
         raw_payload={"manual_order": True, "manual_exit_reason": body.reason or "manual_panel"},
     )
+    blocked = _attach_manual_idempotency_or_block(signal, request)
+    if blocked is not None:
+        return blocked
     execution_result = route_signal(signal)
     return _manual_response(execution_result)
 
 
 @router.post("/orders/manual-reverse")
-def manual_reverse(body: ManualReverseRequest) -> dict[str, Any]:
+def manual_reverse(request: Request, body: ManualReverseRequest) -> Any:
     position = get_open_position()
     if not position.get("has_open_position"):
         error = classify_failure(
@@ -187,6 +194,9 @@ def manual_reverse(body: ManualReverseRequest) -> dict[str, Any]:
             "fromOptionSide": current_side,
         },
     )
+    blocked = _attach_manual_idempotency_or_block(signal, request)
+    if blocked is not None:
+        return blocked
     execution_result = route_signal(signal)
     return _manual_response(execution_result)
 
@@ -545,6 +555,66 @@ def _manual_entry_signal(
 def _manual_auto_contract_allowed() -> bool:
     mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
     return str(mode or "").lower() == "paper"
+
+
+def _manual_live_order_requires_idempotency_key() -> bool:
+    mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
+    return settings.is_production and mode == "live" and settings.ENABLE_LIVE_ORDERS
+
+
+def _attach_manual_idempotency_or_block(signal: NormalizedSignal, request: Request) -> JSONResponse | None:
+    idempotency_key = str(request.headers.get("Idempotency-Key") or "").strip()
+    if idempotency_key:
+        if len(idempotency_key) > 255:
+            reason = "Manual live order blocked: Idempotency-Key is too long."
+            return _manual_block_response(signal, reason, status_code=409, block_code="IDEMPOTENCY_KEY_INVALID")
+        raw_payload = dict(signal.raw_payload or {})
+        raw_payload["idempotency_key"] = idempotency_key
+        raw_payload["idempotency_source"] = "Idempotency-Key"
+        signal.raw_payload = raw_payload
+        return None
+    if _manual_live_order_requires_idempotency_key():
+        reason = "Manual live order blocked: Idempotency-Key header is required."
+        return _manual_block_response(signal, reason, status_code=409, block_code="IDEMPOTENCY_KEY_REQUIRED")
+    return None
+
+
+def _manual_block_response(
+    signal: NormalizedSignal,
+    reason: str,
+    *,
+    status_code: int,
+    block_code: str,
+) -> JSONResponse:
+    mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
+    error = classify_failure(
+        reason,
+        source="NOVA_BACKEND",
+        signal=signal,
+        mode=mode,
+        order_sent_to_broker=False,
+        money_at_risk=mode == "live",
+    )
+    execution_result = {
+        "blocked": True,
+        "success": False,
+        "status": "BLOCKED",
+        "reason": reason,
+        "block_code": block_code,
+        "normalizedError": error,
+        "payload_format": signal.payload_format,
+        "normalized_action": signal.action,
+        "normalized_side": signal.side,
+        "normalized_qty": signal.qty,
+        "normalized_symbol": signal.symbol,
+        "normalized_strike": signal.strike,
+        "normalized_expiry": signal.expiry,
+        "normalized_option_side": signal.option_side,
+    }
+    return JSONResponse(
+        status_code=status_code,
+        content=_manual_response(execution_result),
+    )
 
 
 def _latest_nifty_reference_price() -> float | None:
