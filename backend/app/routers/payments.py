@@ -1,10 +1,18 @@
 """Payment provider webhook routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
+from app.auth.dependencies import get_current_user
 from app.config import settings
+from app.services.razorpay_checkout import (
+    RazorpayPlanConfigError,
+    RazorpayProviderConfigError,
+    RazorpaySubscriptionCreateError,
+    create_razorpay_subscription_checkout,
+)
 from app.services.razorpay_webhooks import (
     RazorpayWebhookConflict,
     RazorpayWebhookRejected,
@@ -12,9 +20,35 @@ from app.services.razorpay_webhooks import (
     process_razorpay_webhook,
     verify_razorpay_signature,
 )
+from app.services.user_context import CurrentUser
 
 
 router = APIRouter(prefix="/api/payments", tags=["Payments"])
+
+
+class RazorpayCreateSubscriptionRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    plan_code: str
+
+
+@router.post("/razorpay/create-subscription")
+def create_razorpay_subscription(
+    payload: RazorpayCreateSubscriptionRequest,
+    user: CurrentUser = Depends(get_current_user),
+) -> JSONResponse:
+    try:
+        result = create_razorpay_subscription_checkout(
+            user=user,
+            plan_code=payload.plan_code,
+        )
+    except RazorpayPlanConfigError as exc:
+        return _safe_error(400, str(exc) or "Payment plan is not configured.")
+    except RazorpayProviderConfigError as exc:
+        return _safe_error(503, str(exc) or "Payment provider is not configured.")
+    except RazorpaySubscriptionCreateError as exc:
+        return _safe_error(502, str(exc) or "Payment subscription could not be created.")
+    return JSONResponse(status_code=200, content=result.as_response())
 
 
 @router.post("/razorpay/webhook")
