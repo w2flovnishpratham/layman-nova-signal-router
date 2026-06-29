@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -56,6 +58,59 @@ def _strategy_webhook_client():
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/api/docs", "/api/redoc", "/openapi.json"])
+def test_production_disables_public_api_documentation(monkeypatch, path):
+    from app.config import settings
+    from app.main import _api_documentation_urls
+
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+
+    app = FastAPI(**_api_documentation_urls())
+    response = TestClient(app).get(path)
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/api/docs", "/api/redoc", "/openapi.json"])
+def test_non_production_keeps_api_documentation_available(monkeypatch, path):
+    from app.config import settings
+    from app.main import _api_documentation_urls
+
+    monkeypatch.setattr(settings, "APP_ENV", "local", raising=False)
+
+    app = FastAPI(**_api_documentation_urls())
+    response = TestClient(app).get(path)
+
+    assert response.status_code == 200
+
+
+def test_chat_websocket_accepts_session_token_subprotocol_without_query_token(monkeypatch):
+    from app.api import ws as chat_ws
+    from app.auth.dependencies import get_current_websocket_user
+    from app.config import settings
+    from app.domain.state_machine import SetupState
+    from app.services.user_context import CurrentUser
+    from app.store.redis_session import session_store
+    from app.store.session_token import issue_session_token
+
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", True, raising=False)
+    user = CurrentUser(id=uuid.uuid4(), email="ws-token@example.com")
+    session = asyncio.run(
+        session_store.create(user_id=user.id_str, state=SetupState.IDLE)
+    )
+    token = issue_session_token(session.id)
+
+    app = FastAPI()
+    app.include_router(chat_ws.router)
+    app.dependency_overrides[get_current_websocket_user] = lambda: user
+
+    with TestClient(app).websocket_connect(
+        f"/ws/session/{session.id}",
+        subprotocols=["nova-session", f"nova-session-token.{token}"],
+    ):
+        pass
 
 
 def _signed_user_body(secret, uid, *, nonce, ts=None, signal="BUY"):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -206,6 +207,28 @@ def test_chat_session_recovers_persisted_paused_engine_state(tmp_path, monkeypat
     assert snapshot["config"]["exits"]["mode"] == "custom"
     assert snapshot["config"]["exits"]["stopLossPct"] == 12
     assert snapshot["config"]["exits"]["targetPct"] == 35
+
+
+def test_chat_session_snapshot_masks_dhan_client_id(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("live")
+    state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
+    credential_vault._LOCAL_MEMORY_PAYLOAD["dhan"] = {
+        "client_id": "1000000001",
+        "access_token": "raw-dhan-access-token",
+        "connected_at": state_store.utc_now(),
+    }
+    from app.main import app
+
+    with TestClient(app) as client:
+        bootstrap = client.post("/api/session/start").json()
+        snapshot = client.get(f"/api/session/{bootstrap['sessionId']}").json()
+
+    serialized = json.dumps(snapshot)
+    assert snapshot["config"]["broker"]["clientId"] == "******0001"
+    assert "1000000001" not in serialized
+    assert "raw-dhan-access-token" not in serialized
+    assert "access_token" not in serialized
 
 
 def test_side_filter_closes_opposite_position_without_opening_disallowed_side(tmp_path, monkeypatch):

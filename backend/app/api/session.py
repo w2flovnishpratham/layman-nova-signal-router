@@ -13,7 +13,12 @@ from app.db.engine import database_configured, session_scope
 from app.domain.events import event
 from app.domain.state_machine import SetupState
 from app.routers.setup import current_nifty_lot_size
-from app.services.credential_vault import get_dhan_credentials, get_webhook_secret, save_webhook_secret
+from app.services.credential_vault import (
+    get_dhan_credentials,
+    get_webhook_secret,
+    mask_client_id,
+    save_webhook_secret,
+)
 from app.services.execution_context import bind_user_execution_context
 from app.schemas.signal import NormalizedSignal
 from app.services.chat_event_publisher import active_trade_from_position, append_chat_result_to_session
@@ -200,7 +205,7 @@ def _production_chat_snapshot() -> tuple[SetupState, dict[str, object]]:
         "engineMode": get_engine_mode(legacy_fallback=False),
         "strategy": "supertrend",
         "broker": {
-            "clientId": creds.client_id if creds else "",
+            "clientId": mask_client_id(creds.client_id) if creds else "",
             "status": "verified" if creds else "missing",
         },
         "risk": {

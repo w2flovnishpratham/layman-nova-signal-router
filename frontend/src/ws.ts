@@ -34,7 +34,7 @@ export class SessionWS {
     if (this.closedByClient || this.socket) return
     this.openedThisAttempt = false
     const wsUrl = this.buildUrl()
-    this.socket = new WebSocket(wsUrl)
+    this.socket = new WebSocket(wsUrl, ['nova-session', `nova-session-token.${this.token}`])
 
     this.socket.addEventListener('open', () => {
       this.openedThisAttempt = true
@@ -115,7 +115,7 @@ export class SessionWS {
   }
 
   private buildUrl(): string {
-    return backendWsUrl(`/ws/session/${this.sessionId}?token=${encodeURIComponent(this.token)}`)
+    return backendWsUrl(`/ws/session/${this.sessionId}`)
   }
 
   private emitStatus(status: 'live' | 'degraded' | 'down'): void {

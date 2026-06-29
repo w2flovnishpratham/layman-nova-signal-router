@@ -150,6 +150,16 @@ def _multi_user_mode() -> bool:
     return settings.AUTH_REQUIRED and database_configured()
 
 
+def _api_documentation_urls() -> dict[str, str | None]:
+    if settings.is_production:
+        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    return {
+        "docs_url": "/api/docs",
+        "redoc_url": "/api/redoc",
+        "openapi_url": "/openapi.json",
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_production_configuration()
@@ -251,8 +261,7 @@ app = FastAPI(
     description="TradingView webhook to Dhan signal router with server-side credentials and file-backed MVP runtime state.",
     version="1.0.0-mvp",
     lifespan=lifespan,
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
+    **_api_documentation_urls(),
 )
 
 cors_origins = [settings.FRONTEND_ORIGIN, settings.FRONTEND_URL]

@@ -24,6 +24,8 @@ from app.services.user_context import CurrentUser, dev_user
 
 
 router = APIRouter(tags=["websocket"])
+SESSION_WEBSOCKET_SUBPROTOCOL = "nova-session"
+SESSION_WEBSOCKET_TOKEN_PREFIX = "nova-session-token."
 
 
 @router.websocket("/ws/session/{session_id}")
@@ -38,13 +40,14 @@ async def session_websocket(
         await websocket.close(code=4404, reason="Session not found")
         return
 
+    session_token = _session_token_from_websocket(websocket, token)
     try:
-        verify_session_token(token, session_id)
+        verify_session_token(session_token, session_id)
     except SessionTokenError as exc:
         await websocket.close(code=4401, reason=str(exc))
         return
 
-    await websocket.accept()
+    await websocket.accept(subprotocol=_accepted_session_subprotocol(websocket))
     for item in session.events[-200:]:
         await websocket.send_json(item.model_dump(mode="json"))
 
@@ -59,6 +62,28 @@ async def session_websocket(
         if not task.cancelled():
             task.result()
     await session_store.unsubscribe(session_id, queue)
+
+
+def _websocket_subprotocols(websocket: WebSocket) -> list[str]:
+    raw = websocket.headers.get("sec-websocket-protocol", "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _session_token_from_websocket(websocket: WebSocket, query_token: str = "") -> str:
+    # Browser WebSocket APIs cannot set arbitrary Authorization headers. The
+    # subprotocol token path keeps new clients from placing session tokens in
+    # URLs while the query token remains only for backward-compatible clients.
+    for protocol in _websocket_subprotocols(websocket):
+        if protocol.startswith(SESSION_WEBSOCKET_TOKEN_PREFIX):
+            return protocol.removeprefix(SESSION_WEBSOCKET_TOKEN_PREFIX)
+    return query_token
+
+
+def _accepted_session_subprotocol(websocket: WebSocket) -> str | None:
+    protocols = _websocket_subprotocols(websocket)
+    if SESSION_WEBSOCKET_SUBPROTOCOL in protocols:
+        return SESSION_WEBSOCKET_SUBPROTOCOL
+    return None
 
 
 async def _send_events(websocket: WebSocket, queue: asyncio.Queue[Any]) -> None:
