@@ -121,6 +121,8 @@ def validate_production_configuration() -> None:
         raise RuntimeError(
             "STRATEGY_WEBHOOK_SECRET must be set to at least 24 random characters in production."
         )
+    if not settings.WEBHOOK_HMAC_REQUIRED:
+        raise RuntimeError("WEBHOOK_HMAC_REQUIRED must be true in production.")
     if settings.ENABLE_LIVE_ORDERS:
         if settings.DHAN_READ_ONLY_REAL_DATA:
             raise RuntimeError(

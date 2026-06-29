@@ -135,6 +135,8 @@ def _safe_raw_body_for_log(raw_body: str) -> str:
 def _valid_webhook_signature(raw_body: str, secret: str, signature: str) -> bool:
     expected = hmac.new(secret.encode("utf-8"), raw_body.encode("utf-8"), hashlib.sha256).hexdigest()
     supplied = signature.removeprefix("sha256=").strip()
+    if len(supplied) != len(expected) or any(char not in "0123456789abcdefABCDEF" for char in supplied):
+        return False
     return secrets.compare_digest(expected, supplied)
 
 
@@ -384,7 +386,8 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
         )
 
     signature = request.headers.get("x-nova-signature")
-    if signature or settings.WEBHOOK_HMAC_REQUIRED:
+    hmac_required = settings.WEBHOOK_HMAC_REQUIRED or settings.is_production
+    if signature or hmac_required:
         if not signature or not _valid_webhook_signature(raw_body, expected_secret, signature):
             log_audit_event(
                 "WEBHOOK_HMAC_AUTH_FAILED",

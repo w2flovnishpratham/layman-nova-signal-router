@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -49,6 +50,14 @@ def _user_webhook_client():
     return TestClient(app)
 
 
+def _strategy_webhook_client():
+    from app.routers.strategies import router
+
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
 def _signed_user_body(secret, uid, *, nonce, ts=None, signal="BUY"):
     from app.routers.user_webhook import build_signature
 
@@ -71,6 +80,32 @@ def _signed_user_body(secret, uid, *, nonce, ts=None, signal="BUY"):
         "nonce": nonce,
         "signature": signature,
     }
+
+
+def _shared_strategy_body(
+    secret: str,
+    *,
+    signal_id: str = "phase2-prod-shared-signal",
+    timestamp: int | None = None,
+    nonce: str | None = "phase2-prod-nonce",
+):
+    from app.config import DEFAULT_STRATEGY_CODE
+
+    body = {
+        "secret": secret,
+        "signal_id": signal_id,
+        "strategy_code": DEFAULT_STRATEGY_CODE,
+        "action": "ENTRY",
+        "side": "BUY",
+        "symbol": "NIFTY",
+        "order_type": "MARKET",
+        "product_type": "INTRADAY",
+    }
+    if timestamp is not None:
+        body["timestamp"] = timestamp
+    if nonce is not None:
+        body["nonce"] = nonce
+    return body
 
 
 def test_user_webhook_nonce_replay_is_durable_after_cache_clear(mu_db, monkeypatch):
@@ -135,6 +170,141 @@ def test_strategy_webhook_event_claim_blocks_duplicate_and_body_mismatch(mu_db, 
         assert db.query(models.WebhookEvent).count() == 1
         assert db.query(models.StrategySignal).count() == 1
         assert db.query(models.StrategyExecutionJob).count() == 1
+
+
+@pytest.mark.parametrize(
+    ("missing_field", "expected_error"),
+    [
+        ("timestamp", "Webhook timestamp is required."),
+        ("nonce", "Webhook nonce is required."),
+    ],
+)
+def test_production_strategy_webhook_requires_timestamp_and_nonce(
+    mu_db,
+    monkeypatch,
+    missing_field,
+    expected_error,
+):
+    from app.config import settings
+
+    secret = "phase2-prod-strategy-secret-1234567890"
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
+    body = _shared_strategy_body(
+        secret,
+        signal_id=f"phase2-missing-{missing_field}",
+        timestamp=int(time.time()),
+        nonce=f"nonce-missing-{missing_field}",
+    )
+    body.pop(missing_field)
+
+    response = _strategy_webhook_client().post("/api/webhook/strategy/supertrend", json=body)
+
+    assert response.status_code == 401
+    assert response.json()["error"] == expected_error
+    assert secret not in str(response.json())
+
+
+@pytest.mark.parametrize("offset_seconds", [-301, 301])
+def test_production_strategy_webhook_rejects_stale_or_future_timestamp(
+    mu_db,
+    monkeypatch,
+    offset_seconds,
+):
+    from app.config import settings
+
+    secret = "phase2-prod-strategy-secret-1234567890"
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
+    body = _shared_strategy_body(
+        secret,
+        signal_id=f"phase2-window-{offset_seconds}",
+        timestamp=int(time.time()) + offset_seconds,
+        nonce=f"nonce-window-{offset_seconds}",
+    )
+
+    response = _strategy_webhook_client().post("/api/webhook/strategy/supertrend", json=body)
+
+    assert response.status_code == 401
+    assert response.json()["error"] == "Webhook timestamp is outside the allowed window."
+    assert secret not in str(response.json())
+
+
+def test_production_strategy_webhook_requires_durable_replay_store(monkeypatch):
+    from app.config import settings
+
+    secret = "phase2-prod-strategy-secret-1234567890"
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
+    body = _shared_strategy_body(
+        secret,
+        signal_id="phase2-no-replay-store",
+        timestamp=int(time.time()),
+        nonce="nonce-no-replay-store",
+    )
+
+    response = _strategy_webhook_client().post("/api/webhook/strategy/supertrend", json=body)
+
+    assert response.status_code == 503
+    assert response.json()["error"] == "Webhook replay store unavailable."
+    assert secret not in str(response.json())
+
+
+def test_production_strategy_webhook_rejects_replayed_nonce(mu_db, monkeypatch):
+    from app.config import settings
+    from app.services import strategy_fanout
+
+    secret = "phase2-prod-strategy-secret-1234567890"
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
+    user = make_user("phase2-prod-nonce@gmail.com")
+    strategy_fanout.subscribe_user(user.id, "supertrend", lots=1, execution_mode="signal_only")
+    client = _strategy_webhook_client()
+    body = _shared_strategy_body(
+        secret,
+        signal_id="phase2-prod-nonce-signal",
+        timestamp=int(time.time()),
+        nonce="nonce-prod-replay",
+    )
+
+    assert client.post("/api/webhook/strategy/supertrend", json=body).status_code == 202
+    replay = client.post("/api/webhook/strategy/supertrend", json=body)
+
+    assert replay.status_code == 409
+    assert replay.json()["error"] == "Duplicate webhook signal."
+    assert secret not in str(replay.json())
+
+
+def test_production_strategy_webhook_rejects_duplicate_signal_identity(mu_db, monkeypatch):
+    from app.config import settings
+    from app.services import strategy_fanout
+
+    secret = "phase2-prod-strategy-secret-1234567890"
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
+    user = make_user("phase2-prod-signal-identity@gmail.com")
+    strategy_fanout.subscribe_user(user.id, "supertrend", lots=1, execution_mode="signal_only")
+    client = _strategy_webhook_client()
+    signal_id = "phase2-prod-duplicate-identity"
+    first_body = _shared_strategy_body(
+        secret,
+        signal_id=signal_id,
+        timestamp=int(time.time()),
+        nonce="nonce-prod-identity-1",
+    )
+    second_body = _shared_strategy_body(
+        secret,
+        signal_id=signal_id,
+        timestamp=int(time.time()),
+        nonce="nonce-prod-identity-2",
+    )
+
+    assert client.post("/api/webhook/strategy/supertrend", json=first_body).status_code == 202
+    duplicate = client.post("/api/webhook/strategy/supertrend", json=second_body)
+
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"] == "Duplicate webhook signal."
+    assert secret not in str(duplicate.json())
 
 
 def test_strategy_risk_kill_switch_blocks_only_its_scope(mu_db, monkeypatch):

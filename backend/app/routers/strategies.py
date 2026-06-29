@@ -6,6 +6,7 @@ import json
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -28,6 +29,7 @@ router = APIRouter(tags=["Strategies"])
 _WEBHOOK_REQUESTS: dict[str, list[float]] = {}
 _WEBHOOK_RATE_LOCK = threading.RLock()
 _FANOUT_QTY_PLACEHOLDER = 1
+_PRODUCTION_WEBHOOK_WINDOW_SECONDS = 300
 
 
 def _webhook_rate_limited(client_host: str) -> bool:
@@ -54,6 +56,82 @@ def _fanout_parse_body(body: dict) -> dict:
         body = dict(body)
         body["qty"] = _FANOUT_QTY_PLACEHOLDER
     return body
+
+
+def _parse_webhook_timestamp(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        timestamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.timestamp()
+
+
+def _production_freshness_error(body: dict, *, now: float | None = None) -> str | None:
+    if body.get("timestamp") in (None, ""):
+        return "Webhook timestamp is required."
+    timestamp = _parse_webhook_timestamp(body.get("timestamp"))
+    if timestamp is None:
+        return "Invalid webhook timestamp."
+    current_time = time.time() if now is None else now
+    if abs(current_time - timestamp) > _PRODUCTION_WEBHOOK_WINDOW_SECONDS:
+        return "Webhook timestamp is outside the allowed window."
+    if not str(body.get("nonce") or "").strip():
+        return "Webhook nonce is required."
+    return None
+
+
+def _claim_production_webhook_nonce(
+    *,
+    path_strategy: str,
+    nonce: str,
+    raw_body: bytes,
+    timestamp: Any,
+) -> JSONResponse | None:
+    if not database_configured():
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": "Webhook replay store unavailable."},
+        )
+    try:
+        nonce_claim = webhook_replay_store.claim_webhook_event(
+            provider=f"strategy:{path_strategy}:nonce",
+            event_id=nonce,
+            raw_body=raw_body,
+            signature_ok=True,
+            metadata={
+                "strategy_name": path_strategy,
+                "timestamp": str(timestamp),
+            },
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": "Webhook replay store unavailable."},
+        )
+    if nonce_claim.get("status") in {"duplicate", "tampered"}:
+        return JSONResponse(
+            status_code=409,
+            content={"ok": False, "error": "Duplicate webhook signal."},
+        )
+    if nonce_claim.get("status") != "fresh":
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": "Webhook replay store unavailable."},
+        )
+    return None
 
 
 class SubscribePayload(BaseModel):
@@ -194,6 +272,23 @@ async def strategy_webhook(
             content={"ok": False, "error": "Invalid secret."},
         )
 
+    path_strategy = strategy_fanout.canonical_strategy_name(strategy_name)
+    if settings.is_production:
+        freshness_error = _production_freshness_error(body)
+        if freshness_error:
+            return JSONResponse(
+                status_code=401,
+                content={"ok": False, "error": freshness_error},
+            )
+        nonce_response = _claim_production_webhook_nonce(
+            path_strategy=path_strategy,
+            nonce=str(body.get("nonce") or "").strip(),
+            raw_body=raw_body,
+            timestamp=body.get("timestamp"),
+        )
+        if nonce_response is not None:
+            return nonce_response
+
     try:
         signal = parse_webhook_payload(_fanout_parse_body(body))
     except PayloadParseError as exc:
@@ -202,7 +297,6 @@ async def strategy_webhook(
             content={"ok": False, "error": str(exc)},
         )
 
-    path_strategy = strategy_fanout.canonical_strategy_name(strategy_name)
     payload_strategy = strategy_fanout.canonical_strategy_name(
         signal.strategy_code
     )
@@ -240,20 +334,26 @@ async def strategy_webhook(
                 content={"ok": False, "error": "Webhook replay store unavailable."},
             )
         if event_claim.get("status") == "tampered":
+            error_message = (
+                "Duplicate webhook signal."
+                if settings.is_production
+                else "Duplicate signal has a different body."
+            )
             return JSONResponse(
                 status_code=409,
                 content={
                     "ok": False,
-                    "error": "Duplicate signal has a different body.",
+                    "error": error_message,
                     "signal_id": signal.signal_id,
                 },
             )
         if event_claim.get("status") == "duplicate":
+            error_message = "Duplicate webhook signal." if settings.is_production else "Duplicate signal."
             return JSONResponse(
                 status_code=409,
                 content={
                     "ok": False,
-                    "error": "Duplicate signal.",
+                    "error": error_message,
                     "signal_id": signal.signal_id,
                 },
             )

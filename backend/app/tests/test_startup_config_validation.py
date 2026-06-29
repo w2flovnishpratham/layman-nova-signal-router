@@ -28,6 +28,7 @@ def _set_production_live_baseline(
     *,
     app_env: str = "production",
     auth_required: bool = True,
+    webhook_hmac_required: bool = True,
     enable_live_orders: bool = True,
     aws_slots_enabled: bool = True,
     aws_shared_password: str = "aws-shared-secret",
@@ -47,6 +48,7 @@ def _set_production_live_baseline(
     monkeypatch.setattr(settings, "GOOGLE_CLIENT_ID", "google-client-id", raising=False)
     monkeypatch.setattr(settings, "GOOGLE_CLIENT_SECRET", "google-client-secret", raising=False)
     monkeypatch.setattr(settings, "GOOGLE_REDIRECT_URI", "https://api.example.com/api/auth/google/callback", raising=False)
+    monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", webhook_hmac_required, raising=False)
     monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", "w" * 24, raising=False)
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", enable_live_orders, raising=False)
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
@@ -99,6 +101,32 @@ def test_production_auth_required_passes_auth_startup_check(monkeypatch):
         monkeypatch,
         auth_required=True,
         enable_live_orders=False,
+    )
+
+    validate_production_configuration()
+
+
+def test_production_webhook_hmac_disabled_fails_startup_safely(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        enable_live_orders=False,
+        webhook_hmac_required=False,
+    )
+    monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", "webhook-secret-should-not-leak", raising=False)
+
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration()
+
+    message = str(exc.value)
+    assert message == "WEBHOOK_HMAC_REQUIRED must be true in production."
+    assert "webhook-secret-should-not-leak" not in message
+
+
+def test_production_webhook_hmac_enabled_passes_startup_check(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        enable_live_orders=False,
+        webhook_hmac_required=True,
     )
 
     validate_production_configuration()

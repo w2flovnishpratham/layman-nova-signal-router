@@ -1,8 +1,12 @@
+import hashlib
+import hmac
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import settings
@@ -11,6 +15,62 @@ from app.services import risk_manager
 from app.services.credential_vault import DhanCredentials
 from app.services.dhan_client import DhanLtpResult
 from app.tests.test_signal_parser import TEST_WEBHOOK_SECRET, nova_payload, pine_payload
+
+
+PRODUCTION_WEBHOOK_SECRET = "ProdHmac-7Kx9mQ2pL8sZ-2026!"
+
+
+def _signed_body(payload: dict, secret: str) -> tuple[str, str]:
+    raw_body = json.dumps(payload, separators=(",", ":"))
+    signature = hmac.new(
+        secret.encode("utf-8"),
+        raw_body.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return raw_body, f"sha256={signature}"
+
+
+def _legacy_production_webhook_client(monkeypatch) -> tuple[TestClient, str]:
+    from app.routers import webhook as webhook_router
+
+    secret = PRODUCTION_WEBHOOK_SECRET
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", False, raising=False)
+    monkeypatch.setattr(settings, "WEBHOOK_RATE_LIMIT_PER_MINUTE", 1000, raising=False)
+    monkeypatch.setattr(webhook_router, "get_engine_mode", lambda *args, **kwargs: "paper")
+    monkeypatch.setattr(
+        webhook_router,
+        "get_app_state",
+        lambda: {"engine_started": True, "webhook_trading_enabled": True},
+    )
+    monkeypatch.setattr(webhook_router, "get_webhook_secret", lambda: secret)
+    monkeypatch.setattr(webhook_router, "database_configured", lambda: False)
+    monkeypatch.setattr(webhook_router, "has_seen_signal", lambda _signal_id: False)
+    monkeypatch.setattr(webhook_router, "add_seen_signal", lambda _signal_id: None)
+    monkeypatch.setattr(webhook_router, "update_app_state", lambda **_kwargs: None)
+    monkeypatch.setattr(webhook_router, "log_webhook_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(webhook_router, "log_audit_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(webhook_router, "log_error_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        webhook_router,
+        "route_signal",
+        lambda signal: {
+            "blocked": False,
+            "success": True,
+            "status": "ORDER_PLACED",
+            "order_id": f"TEST-{signal.signal_id}",
+        },
+    )
+
+    app = FastAPI()
+    app.include_router(webhook_router.router, prefix="/webhook")
+    return TestClient(app), secret
+
+
+def _production_legacy_payload(secret: str, signal_id: str = "prod-hmac-001") -> dict:
+    payload = nova_payload("ENTRY", "BUY", signal_id)
+    payload["secret"] = secret
+    return payload
 
 
 @pytest.fixture()
@@ -78,6 +138,52 @@ def client(tmp_path, monkeypatch):
         )
         state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
         yield test_client
+
+
+def test_production_legacy_webhook_rejects_unsigned_body_secret_only(monkeypatch):
+    client, secret = _legacy_production_webhook_client(monkeypatch)
+
+    response = client.post("/webhook/tradingview", json=_production_legacy_payload(secret))
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["status"] == "UNAUTHORIZED"
+    assert "HMAC" in body["message"]
+    assert secret not in json.dumps(body)
+
+
+@pytest.mark.parametrize("signature", ["not-a-signature", "sha256=nothex"])
+def test_production_legacy_webhook_rejects_invalid_or_malformed_hmac(monkeypatch, signature):
+    client, secret = _legacy_production_webhook_client(monkeypatch)
+    raw_body, _valid_signature = _signed_body(_production_legacy_payload(secret), secret)
+
+    response = client.post(
+        "/webhook/tradingview",
+        content=raw_body,
+        headers={"content-type": "application/json", "x-nova-signature": signature},
+    )
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["status"] == "UNAUTHORIZED"
+    assert secret not in json.dumps(body)
+
+
+def test_production_legacy_webhook_accepts_valid_hmac(monkeypatch):
+    client, secret = _legacy_production_webhook_client(monkeypatch)
+    raw_body, signature = _signed_body(_production_legacy_payload(secret), secret)
+
+    response = client.post(
+        "/webhook/tradingview",
+        content=raw_body,
+        headers={"content-type": "application/json", "x-nova-signature": signature},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["signal_id"] == "prod-hmac-001"
+    assert secret not in json.dumps(body)
 
 
 def test_wrong_secret_rejected_after_parse(client):
