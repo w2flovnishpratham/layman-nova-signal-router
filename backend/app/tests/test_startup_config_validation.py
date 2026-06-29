@@ -34,6 +34,11 @@ def _set_production_live_baseline(
     aws_shared_password: str = "aws-shared-secret",
     per_slot_passwords: dict[int, str] | None = None,
     egress_nodes_json: str = "[]",
+    payment_provider: str = "razorpay",
+    razorpay_key_id: str = "test-razorpay-key-id",
+    razorpay_key_secret: str = "razorpay-key-secret",
+    razorpay_webhook_secret: str = "razorpay-webhook-secret",
+    payment_simulation_enabled: bool = False,
 ) -> None:
     monkeypatch.setattr(settings, "APP_ENV", app_env, raising=False)
     monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
@@ -50,6 +55,11 @@ def _set_production_live_baseline(
     monkeypatch.setattr(settings, "GOOGLE_REDIRECT_URI", "https://api.example.com/api/auth/google/callback", raising=False)
     monkeypatch.setattr(settings, "WEBHOOK_HMAC_REQUIRED", webhook_hmac_required, raising=False)
     monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", "w" * 24, raising=False)
+    monkeypatch.setattr(settings, "PAYMENT_PROVIDER", payment_provider, raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_KEY_ID", razorpay_key_id, raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_KEY_SECRET", razorpay_key_secret, raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_WEBHOOK_SECRET", razorpay_webhook_secret, raising=False)
+    monkeypatch.setattr(settings, "PAYMENT_SIMULATION_ENABLED", payment_simulation_enabled, raising=False)
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", enable_live_orders, raising=False)
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
     monkeypatch.setattr(settings, "EXECUTION_NODE_ROUTING_ENABLED", True, raising=False)
@@ -127,6 +137,116 @@ def test_production_webhook_hmac_enabled_passes_startup_check(monkeypatch):
         monkeypatch,
         enable_live_orders=False,
         webhook_hmac_required=True,
+    )
+
+    validate_production_configuration()
+
+
+def test_local_dev_live_orders_disabled_does_not_require_razorpay_keys(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        app_env="local",
+        auth_required=False,
+        enable_live_orders=False,
+        payment_provider="none",
+        razorpay_key_id="",
+        razorpay_key_secret="",
+        razorpay_webhook_secret="",
+    )
+
+    validate_production_configuration()
+
+
+def test_production_live_orders_payment_provider_none_fails(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        payment_provider="none",
+        razorpay_key_id="razorpay-key-id-should-not-leak",
+        razorpay_key_secret="razorpay-key-secret-should-not-leak",
+        razorpay_webhook_secret="razorpay-webhook-secret-should-not-leak",
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration()
+
+    message = str(exc.value)
+    assert message == "ENABLE_LIVE_ORDERS=true requires PAYMENT_PROVIDER=razorpay."
+    assert "razorpay-key-id-should-not-leak" not in message
+    assert "razorpay-key-secret-should-not-leak" not in message
+    assert "razorpay-webhook-secret-should-not-leak" not in message
+
+
+def test_production_live_orders_missing_razorpay_key_id_fails_safely(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        razorpay_key_id="",
+        razorpay_key_secret="razorpay-key-secret-should-not-leak",
+        razorpay_webhook_secret="razorpay-webhook-secret-should-not-leak",
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration()
+
+    message = str(exc.value)
+    assert message == "ENABLE_LIVE_ORDERS=true requires RAZORPAY_KEY_ID."
+    assert "razorpay-key-secret-should-not-leak" not in message
+    assert "razorpay-webhook-secret-should-not-leak" not in message
+
+
+def test_production_live_orders_missing_razorpay_key_secret_fails_safely(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        razorpay_key_id="test-razorpay-key-id",
+        razorpay_key_secret="",
+        razorpay_webhook_secret="razorpay-webhook-secret-should-not-leak",
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration()
+
+    message = str(exc.value)
+    assert message == "ENABLE_LIVE_ORDERS=true requires RAZORPAY_KEY_SECRET."
+    assert "test-razorpay-key-id" not in message
+    assert "razorpay-webhook-secret-should-not-leak" not in message
+
+
+def test_production_live_orders_missing_razorpay_webhook_secret_fails_safely(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        razorpay_key_id="test-razorpay-key-id",
+        razorpay_key_secret="razorpay-key-secret-should-not-leak",
+        razorpay_webhook_secret="",
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration()
+
+    message = str(exc.value)
+    assert message == "ENABLE_LIVE_ORDERS=true requires RAZORPAY_WEBHOOK_SECRET."
+    assert "test-razorpay-key-id" not in message
+    assert "razorpay-key-secret-should-not-leak" not in message
+
+
+def test_production_payment_simulation_enabled_fails_even_without_live_orders(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        enable_live_orders=False,
+        payment_simulation_enabled=True,
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration()
+
+    assert str(exc.value) == "PAYMENT_SIMULATION_ENABLED must be false in production."
+
+
+def test_production_live_orders_complete_razorpay_config_passes(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        payment_provider="razorpay",
+        razorpay_key_id="test-razorpay-key-id",
+        razorpay_key_secret="razorpay-key-secret",
+        razorpay_webhook_secret="razorpay-webhook-secret",
     )
 
     validate_production_configuration()

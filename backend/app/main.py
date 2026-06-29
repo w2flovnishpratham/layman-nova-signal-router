@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import session as chat_session
 from app.api import ws as chat_ws
 from app.auth.dependencies import get_execution_scoped_user
-from app.config import settings
+from app.config import VALID_PAYMENT_PROVIDERS, settings
 from app.routers import broker, control, dashboard, debug, engine, market, orders, positions, setup, webhook
 from app.routers import admin as admin_router
 from app.routers import live as live_router
@@ -85,6 +85,19 @@ def _validate_live_aws_proxy_slots() -> None:
         raise RuntimeError("AWS proxy slots are enabled but no AWS proxy slots were built.")
 
 
+def _validate_live_payment_provider_configuration() -> None:
+    provider = settings.payment_provider_normalized
+    if provider != "razorpay":
+        raise RuntimeError("ENABLE_LIVE_ORDERS=true requires PAYMENT_PROVIDER=razorpay.")
+    for name, value in (
+        ("RAZORPAY_KEY_ID", settings.RAZORPAY_KEY_ID),
+        ("RAZORPAY_KEY_SECRET", settings.RAZORPAY_KEY_SECRET),
+        ("RAZORPAY_WEBHOOK_SECRET", settings.RAZORPAY_WEBHOOK_SECRET),
+    ):
+        if not (value or "").strip():
+            raise RuntimeError(f"ENABLE_LIVE_ORDERS=true requires {name}.")
+
+
 def validate_production_configuration() -> None:
     if not settings.is_production:
         return
@@ -123,7 +136,12 @@ def validate_production_configuration() -> None:
         )
     if not settings.WEBHOOK_HMAC_REQUIRED:
         raise RuntimeError("WEBHOOK_HMAC_REQUIRED must be true in production.")
+    if settings.payment_provider_normalized not in VALID_PAYMENT_PROVIDERS:
+        raise RuntimeError("PAYMENT_PROVIDER must be one of: none, razorpay.")
+    if settings.PAYMENT_SIMULATION_ENABLED:
+        raise RuntimeError("PAYMENT_SIMULATION_ENABLED must be false in production.")
     if settings.ENABLE_LIVE_ORDERS:
+        _validate_live_payment_provider_configuration()
         if settings.DHAN_READ_ONLY_REAL_DATA:
             raise RuntimeError(
                 "ENABLE_LIVE_ORDERS=true requires DHAN_READ_ONLY_REAL_DATA=false."
