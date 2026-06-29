@@ -323,6 +323,68 @@ class StrategySubscription(Base):
     )
 
 
+class UserEntitlement(Base):
+    """Server-owned paid/trial entitlement state for one user."""
+
+    __tablename__ = "user_entitlements"
+    __table_args__ = (
+        Index("ix_user_entitlements_user_status", "user_id", "status"),
+        Index("ix_user_entitlements_user_expires", "user_id", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    plan_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    live_orders_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    static_ip_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    strategy_access_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    max_strategy_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Safe operational metadata only. Do not store raw provider payloads,
+    # secrets, or full PII in this JSON field.
+    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class PaymentEvent(Base):
+    """Durable payment-provider event audit/idempotency record."""
+
+    __tablename__ = "payment_events"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_event_id", name="uq_payment_event_provider_event"),
+        Index("ix_payment_events_user_id", "user_id"),
+        Index("ix_payment_events_received_at", "received_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    provider_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    event_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Store amount in provider minor units when available.
+    amount: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    processed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    # Safe event metadata only. Raw provider payloads/secrets must stay out of
+    # this table; payload_hash is the durable audit/idempotency key.
+    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class StrategySignal(Base):
     """Durable idempotency record for one inbound strategy alert."""
 
