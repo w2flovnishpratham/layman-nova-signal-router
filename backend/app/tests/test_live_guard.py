@@ -339,16 +339,81 @@ def test_non_real_order_mode_does_not_call_dhan_validation(mu_db, monkeypatch):
     assert result["ok"] is True
     assert result["run"]["execution_mode"] == "signal_only"
     assert result["readiness"]["checks"]["dhan_token_profile_valid"] is None
+    assert result["readiness"]["checks"]["requires_dhan_credentials"] is False
+    assert result["readiness"]["checks"]["requires_dhan_profile_validation"] is False
+    assert result["readiness"]["checks"]["requires_verified_egress"] is False
     assert calls == {}
 
 
-def test_live_start_blocked_without_credentials(mu_db):
+def test_signal_only_start_succeeds_without_dhan_credentials(mu_db, monkeypatch):
     from app.services import live_engine
 
-    user = make_user("nocreds@gmail.com")
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=False, calls=calls)
+    user = make_user("signal-only-nocreds@gmail.com")
     readiness = live_engine.evaluate_live_readiness(_ctx(user), "signal_only")
-    assert readiness["ready"] is False
-    assert any("No saved Dhan credentials" in b for b in readiness["blockers"])
+    result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="signal_only", config={})
+
+    assert readiness["ready"] is True
+    assert readiness["real_orders_allowed"] is False
+    assert readiness["checks"]["has_saved_credentials"] is False
+    assert readiness["checks"]["places_real_orders"] is False
+    assert readiness["checks"]["offline_compatible_mode"] is True
+    assert readiness["checks"]["requires_dhan_credentials"] is False
+    assert readiness["checks"]["requires_dhan_profile_validation"] is False
+    assert readiness["checks"]["requires_verified_egress"] is False
+    assert readiness["checks"]["dhan_token_profile_valid"] is None
+    assert not any("No saved Dhan credentials" in b for b in readiness["blockers"])
+    assert result["ok"] is True
+    assert result["run"]["execution_mode"] == "signal_only"
+    assert result["readiness"]["real_orders_allowed"] is False
+    assert calls == {}
+
+
+def test_paper_live_data_start_succeeds_without_dhan_credentials(mu_db, monkeypatch):
+    from app.services import live_engine
+
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=False, calls=calls)
+    user = make_user("paper-live-data-nocreds@gmail.com")
+
+    readiness = live_engine.evaluate_live_readiness(_ctx(user), "paper_live_data")
+    result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="paper_live_data", config={})
+
+    assert readiness["ready"] is True
+    assert readiness["real_orders_allowed"] is False
+    assert readiness["checks"]["has_saved_credentials"] is False
+    assert readiness["checks"]["places_real_orders"] is False
+    assert readiness["checks"]["offline_compatible_mode"] is True
+    assert readiness["checks"]["requires_dhan_credentials"] is False
+    assert readiness["checks"]["requires_dhan_profile_validation"] is False
+    assert readiness["checks"]["requires_verified_egress"] is False
+    assert readiness["checks"]["dhan_token_profile_valid"] is None
+    assert not any("No saved Dhan credentials" in b for b in readiness["blockers"])
+    assert result["ok"] is True
+    assert result["run"]["execution_mode"] == "paper_live_data"
+    assert result["readiness"]["real_orders_allowed"] is False
+    assert calls == {}
+
+
+def test_real_order_start_without_credentials_does_not_downgrade(mu_db, monkeypatch):
+    from app.services import live_engine
+
+    _allow_real_order_readiness(monkeypatch)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
+    user = make_user("real-nocreds-no-downgrade@gmail.com")
+
+    result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="real_orders", config={})
+
+    assert result["ok"] is False
+    assert result["run"] is None
+    assert result["readiness"]["execution_mode"] == "real_orders"
+    assert result["readiness"]["real_orders_allowed"] is False
+    assert result["readiness"]["checks"]["places_real_orders"] is True
+    assert result["readiness"]["checks"]["requires_dhan_credentials"] is True
+    assert any("No saved Dhan credentials" in b for b in result["readiness"]["blockers"])
+    assert calls == {}
 
 
 def test_signal_only_allowed_with_credentials(mu_db):

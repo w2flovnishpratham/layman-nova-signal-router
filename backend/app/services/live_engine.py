@@ -4,9 +4,10 @@ This module is the safety-critical chokepoint between a logged-in user and real
 money. It NEVER places a real order unless every guard passes:
 
   1. user is authenticated
-  2. user has saved Dhan credentials
+  2. user has saved Dhan credentials       (only when execution_mode == real_orders)
   3. those credentials decrypt successfully from the vault
-  4. a basic Dhan token validation passes
+                                            (only when execution_mode == real_orders)
+  4. a basic Dhan token validation passes   (only when execution_mode == real_orders)
   5. ENABLE_LIVE_ORDERS=true            (only when execution_mode == real_orders)
   6. WEBHOOK_TRADING_ENABLED=true       (only when webhook trading is used)
   7. a per-user webhook secret exists    (when WEBHOOK_HMAC_REQUIRED=true)
@@ -42,6 +43,8 @@ from app.services.execution_context import (
 from app.services.user_context import CurrentUser, user_runtime_log_dir, user_runtime_state_dir
 
 EXECUTION_MODES = {"signal_only", "paper_live_data", "real_orders"}
+REAL_ORDER_EXECUTION_MODES = {"real_orders"}
+OFFLINE_COMPATIBLE_EXECUTION_MODES = EXECUTION_MODES - REAL_ORDER_EXECUTION_MODES
 
 _REGISTRY: dict[str, dict[str, "RunHandle"]] = {}  # user_id_str -> {run_id_str -> handle}
 _LOCK = threading.RLock()
@@ -89,6 +92,10 @@ def _basic_token_validation(creds) -> bool:
     return bool(creds.client_id and creds.access_token and len(creds.access_token) >= 20)
 
 
+def _places_real_orders(execution_mode: str) -> bool:
+    return (execution_mode or "").strip().lower() in REAL_ORDER_EXECUTION_MODES
+
+
 def _validate_dhan_token_for_real_orders(user: CurrentUser, creds) -> dict[str, Any]:
     """Validate a live-order token with a read-only Dhan profile call."""
     if creds is None:
@@ -130,6 +137,7 @@ def _validate_dhan_token_for_real_orders(user: CurrentUser, creds) -> dict[str, 
 
 def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webhook: bool = False) -> dict[str, Any]:
     execution_mode = (execution_mode or "signal_only").strip().lower()
+    places_real_orders = _places_real_orders(execution_mode)
     creds = None
     decrypt_ok = False
     try:
@@ -178,6 +186,11 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
         "dhan_token_profile_valid": None,
         "dhan_token_validation_method": None,
         "dhan_token_validation_status_code": None,
+        "places_real_orders": places_real_orders,
+        "offline_compatible_mode": execution_mode in OFFLINE_COMPATIBLE_EXECUTION_MODES,
+        "requires_dhan_credentials": places_real_orders,
+        "requires_dhan_profile_validation": places_real_orders,
+        "requires_verified_egress": places_real_orders,
         "enable_live_orders_env": bool(settings.ENABLE_LIVE_ORDERS),
         "webhook_trading_enabled_env": bool(settings.WEBHOOK_TRADING_ENABLED),
         "webhook_hmac_required": bool(settings.WEBHOOK_HMAC_REQUIRED),
@@ -193,16 +206,16 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
     }
 
     blockers: list[str] = []
-    if not has_creds:
+    if places_real_orders and not has_creds:
         blockers.append("No saved Dhan credentials for this user.")
-    if has_creds and not decrypt_ok:
+    if places_real_orders and has_creds and not decrypt_ok:
         blockers.append("Credential vault could not be decrypted.")
-    if has_creds and not token_ok:
+    if places_real_orders and has_creds and not token_ok:
         blockers.append("Dhan token failed basic validation.")
-    if token_age_hours is not None and token_age_hours >= settings.TOKEN_MAX_AGE_HOURS:
+    if places_real_orders and token_age_hours is not None and token_age_hours >= settings.TOKEN_MAX_AGE_HOURS:
         blockers.append("Saved Dhan token is too old; generate and save a fresh token.")
 
-    if execution_mode == "real_orders":
+    if places_real_orders:
         if not settings.ENABLE_LIVE_ORDERS:
             blockers.append("ENABLE_LIVE_ORDERS is not true; real orders are blocked.")
         if settings.DHAN_MODE.upper() != "REAL":
@@ -226,7 +239,7 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
         if settings.WEBHOOK_HMAC_REQUIRED and not webhook_secret_present:
             blockers.append("WEBHOOK_HMAC_REQUIRED=true but no webhook secret saved for this user.")
 
-    if execution_mode == "real_orders" and not blockers:
+    if places_real_orders and not blockers:
         validation = _validate_dhan_token_for_real_orders(user, creds)
         checks["dhan_token_profile_valid"] = bool(validation.get("ok"))
         checks["dhan_token_validation_method"] = "dhan_profile"
@@ -239,7 +252,7 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
         "checks": checks,
         "blockers": blockers,
         "ready": len(blockers) == 0,
-        "real_orders_allowed": execution_mode == "real_orders" and len(blockers) == 0,
+        "real_orders_allowed": places_real_orders and len(blockers) == 0,
         "egress": egress_status,
         "subscriptions": subscriptions,
         "worker": worker_status,
