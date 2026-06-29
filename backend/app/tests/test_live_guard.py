@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import time
+from datetime import timedelta
 
 import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -102,12 +104,37 @@ def _live_client(user):
     return TestClient(app)
 
 
+def _grant_live_entitlement(user, *, status: str = "active") -> None:
+    from app.db import models
+    from app.db.engine import session_scope
+
+    now = models.utcnow()
+    with session_scope() as db:
+        db.add(
+            models.UserEntitlement(
+                user_id=user.id,
+                plan_code="nova_live",
+                status=status,
+                source="payment_provider",
+                starts_at=now - timedelta(days=1),
+                expires_at=now + timedelta(days=30),
+                live_orders_enabled=True,
+                static_ip_enabled=False,
+                strategy_access_enabled=False,
+                metadata_json={"test": "live_guard"},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+
 def test_real_orders_blocked_without_enable_live_orders(mu_db, monkeypatch):
     from app.config import settings
     from app.services import live_engine, user_credential_vault as vault
 
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False, raising=False)
     user = make_user("alice@gmail.com")
+    _grant_live_entitlement(user)
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
 
     readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
@@ -127,11 +154,13 @@ def test_real_orders_allowed_only_when_all_flags_set(mu_db, monkeypatch):
     calls: dict[str, int] = {}
     _patch_token_validation(monkeypatch, success=True, calls=calls)
     user = make_user("alice@gmail.com")
+    _grant_live_entitlement(user)
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
 
     readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
     assert readiness["ready"] is True
     assert readiness["real_orders_allowed"] is True
+    assert readiness["checks"]["live_entitlement_valid"] is True
     assert readiness["checks"]["dhan_token_profile_valid"] is True
     assert readiness["checks"]["dhan_token_validation_method"] == "dhan_profile"
     assert calls["validate_token"] == 1
@@ -164,6 +193,7 @@ def test_real_orders_readiness_uses_proxy_not_direct_transport(mu_db, monkeypatc
 
     monkeypatch.setattr("app.services.dhan_client.httpx.Client", fake_client)
     user = make_user("proxy-bound-readiness@gmail.com")
+    _grant_live_entitlement(user)
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
 
     readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
@@ -181,6 +211,7 @@ def test_real_orders_readiness_fails_without_verified_egress(mu_db, monkeypatch)
     calls: dict[str, int] = {}
     _patch_token_validation(monkeypatch, success=True, calls=calls)
     user = make_user("no-egress@gmail.com")
+    _grant_live_entitlement(user)
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
 
     readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
@@ -199,6 +230,7 @@ def test_real_orders_readiness_fails_when_egress_is_unverified(mu_db, monkeypatc
     calls: dict[str, int] = {}
     _patch_token_validation(monkeypatch, success=True, calls=calls)
     user = make_user("unverified-egress@gmail.com")
+    _grant_live_entitlement(user)
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
 
     readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
@@ -215,6 +247,7 @@ def test_live_readiness_endpoint_fails_without_verified_egress(mu_db, monkeypatc
     calls: dict[str, int] = {}
     _patch_token_validation(monkeypatch, success=True, calls=calls)
     user = make_user("readiness-no-egress@gmail.com")
+    _grant_live_entitlement(user)
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
 
     response = _live_client(user).get("/api/live/readiness", params={"execution_mode": "real_orders"})
@@ -234,6 +267,7 @@ def test_live_start_endpoint_fails_without_verified_egress(mu_db, monkeypatch):
     calls: dict[str, int] = {}
     _patch_token_validation(monkeypatch, success=True, calls=calls)
     user = make_user("start-no-egress@gmail.com")
+    _grant_live_entitlement(user)
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
 
     response = _live_client(user).post(
@@ -257,6 +291,7 @@ def test_real_order_start_rejects_missing_token(mu_db, monkeypatch):
     calls: dict[str, int] = {}
     _patch_token_validation(monkeypatch, success=True, calls=calls)
     user = make_user("missing-token@gmail.com")
+    _grant_live_entitlement(user)
 
     result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="real_orders", config={})
 
@@ -273,6 +308,7 @@ def test_real_order_start_rejects_short_placeholder_token(mu_db, monkeypatch):
     calls: dict[str, int] = {}
     _patch_token_validation(monkeypatch, success=True, calls=calls)
     user = make_user("short-token@gmail.com")
+    _grant_live_entitlement(user)
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="short")
 
     result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="real_orders", config={})
@@ -290,6 +326,7 @@ def test_real_order_start_rejects_failed_dhan_validation_safely(mu_db, monkeypat
     calls: dict[str, int] = {}
     _patch_token_validation(monkeypatch, success=False, calls=calls, status_code=401)
     user = make_user("invalid-token@gmail.com")
+    _grant_live_entitlement(user)
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token=secret_token)
 
     result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="real_orders", config={})
@@ -316,6 +353,7 @@ def test_real_order_start_accepts_only_after_safe_dhan_validation(mu_db, monkeyp
     calls: dict[str, int] = {}
     _patch_token_validation(monkeypatch, success=True, calls=calls)
     user = make_user("validated-token@gmail.com")
+    _grant_live_entitlement(user)
     vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-valid-token-abcdef")
 
     result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="real_orders", config={})
@@ -403,6 +441,7 @@ def test_real_order_start_without_credentials_does_not_downgrade(mu_db, monkeypa
     calls: dict[str, int] = {}
     _patch_token_validation(monkeypatch, success=True, calls=calls)
     user = make_user("real-nocreds-no-downgrade@gmail.com")
+    _grant_live_entitlement(user)
 
     result = live_engine.start_run(_ctx(user), strategy_name="s", execution_mode="real_orders", config={})
 
@@ -413,6 +452,43 @@ def test_real_order_start_without_credentials_does_not_downgrade(mu_db, monkeypa
     assert result["readiness"]["checks"]["places_real_orders"] is True
     assert result["readiness"]["checks"]["requires_dhan_credentials"] is True
     assert any("No saved Dhan credentials" in b for b in result["readiness"]["blockers"])
+    assert calls == {}
+
+
+def test_real_orders_readiness_requires_live_entitlement(mu_db, monkeypatch):
+    from app.services import live_engine, user_credential_vault as vault
+
+    _allow_real_order_readiness(monkeypatch)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
+    user = make_user("live-entitlement-required@gmail.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-valid-token-abcdef")
+
+    readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
+
+    assert readiness["ready"] is False
+    assert readiness["real_orders_allowed"] is False
+    assert readiness["checks"]["live_entitlement_valid"] is False
+    assert "Live entitlement is required." in readiness["blockers"]
+    assert calls == {}
+
+
+@pytest.mark.parametrize("status", ["expired", "cancelled", "revoked", "past_due"])
+def test_real_orders_readiness_blocks_invalid_entitlement_statuses(mu_db, monkeypatch, status):
+    from app.services import live_engine, user_credential_vault as vault
+
+    _allow_real_order_readiness(monkeypatch)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
+    user = make_user(f"live-entitlement-{status}@gmail.com")
+    _grant_live_entitlement(user, status=status)
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-valid-token-abcdef")
+
+    readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
+
+    assert readiness["ready"] is False
+    assert readiness["real_orders_allowed"] is False
+    assert "Live entitlement is required." in readiness["blockers"]
     assert calls == {}
 
 

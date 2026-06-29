@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,30 @@ def _current_user(model):
     from app.services.user_context import current_user_from_model
 
     return current_user_from_model(model)
+
+
+def _grant_real_order_entitlement(user) -> None:
+    from app.db import models
+    from app.db.engine import session_scope
+
+    now = models.utcnow()
+    with session_scope() as db:
+        db.add(
+            models.UserEntitlement(
+                user_id=user.id,
+                plan_code="nova_live",
+                status="active",
+                source="payment_provider",
+                starts_at=now - timedelta(days=1),
+                expires_at=now + timedelta(days=30),
+                live_orders_enabled=True,
+                static_ip_enabled=False,
+                strategy_access_enabled=True,
+                metadata_json={"test": "phase1_egress_guard"},
+                created_at=now,
+                updated_at=now,
+            )
+        )
 
 
 def _signal(signal_id: str = "phase1-signal"):
@@ -231,6 +256,7 @@ def test_real_orders_fail_closed_without_verified_egress(mu_db, monkeypatch):
     from app.services import strategy_fanout
 
     user = make_user("phase1-unverified-egress@gmail.com")
+    _grant_real_order_entitlement(user)
     strategy_fanout.set_user_egress(
         user.id,
         public_ip="1.1.1.1",

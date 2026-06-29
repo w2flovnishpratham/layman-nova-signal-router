@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from app.auth.dependencies import get_current_user, require_admin
 from app.config import settings
 from app.db.engine import database_configured
-from app.services import live_engine, strategy_fanout
+from app.services import entitlements, live_engine, strategy_fanout
 from app.services import webhook_replay_store
 from app.services import strategy_risk
 from app.services.signal_parser import PayloadParseError, parse_webhook_payload
@@ -175,6 +175,10 @@ def subscribe(
             status_code=400,
             content={"error": "invalid execution_mode"},
         )
+    if payload.execution_mode == "real_orders":
+        entitlement_response = _require_real_order_strategy_entitlements(user)
+        if entitlement_response is not None:
+            return entitlement_response
     subscription = strategy_fanout.subscribe_user(
         user.id,
         payload.strategy_name,
@@ -201,6 +205,9 @@ def egress_status(user: CurrentUser = Depends(get_current_user)) -> dict:
 
 @router.post("/api/strategies/egress/verify")
 def verify_current_user_egress(user: CurrentUser = Depends(get_current_user)) -> dict:
+    entitlement_response = _require_static_ip_entitlement(user)
+    if entitlement_response is not None:
+        return entitlement_response
     result = strategy_fanout.verify_user_egress(user.id)
     return {"ok": bool(result.get("ok")), "egress": result}
 
@@ -416,6 +423,9 @@ class EgressSelectionPayload(BaseModel):
 
 @router.get("/api/strategies/egress/options")
 def egress_options(user: CurrentUser = Depends(get_current_user)) -> dict:
+    entitlement_response = _require_static_ip_entitlement(user)
+    if entitlement_response is not None:
+        return entitlement_response
     try:
         return strategy_fanout.user_egress_options(user.id)
     except ValueError as exc:
@@ -430,6 +440,9 @@ def select_egress(
     payload: EgressSelectionPayload,
     user: CurrentUser = Depends(get_current_user),
 ) -> dict:
+    entitlement_response = _require_static_ip_entitlement(user)
+    if entitlement_response is not None:
+        return entitlement_response
     try:
         result = strategy_fanout.select_user_egress(user.id, payload.public_ip)
     except ValueError as exc:
@@ -439,6 +452,33 @@ def select_egress(
             content={"ok": False, "error": str(exc)},
         )
     return {"ok": True, **result}
+
+
+def _entitlement_error(message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={"ok": False, "error": message},
+    )
+
+
+def _require_static_ip_entitlement(user: CurrentUser) -> JSONResponse | None:
+    try:
+        entitlements.require_static_ip_entitlement_for_user(user.id)
+    except entitlements.EntitlementError:
+        return _entitlement_error("Static IP entitlement is required.")
+    return None
+
+
+def _require_real_order_strategy_entitlements(user: CurrentUser) -> JSONResponse | None:
+    try:
+        entitlements.require_live_entitlement_for_user(user.id)
+        entitlements.require_strategy_entitlement_for_user(user.id)
+    except entitlements.EntitlementError as exc:
+        message = str(exc) or "Live entitlement is required."
+        if "Strategy" not in message:
+            message = "Live entitlement is required."
+        return _entitlement_error(message)
+    return None
 
 
 @router.post("/api/admin/egress")

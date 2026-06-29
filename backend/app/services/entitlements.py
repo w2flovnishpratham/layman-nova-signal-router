@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import desc, select
 
 from app.db import models
+from app.db.engine import database_configured, session_scope
 
 
 ACTIVE_STATUSES = {"active", "trialing"}
@@ -195,3 +196,72 @@ def require_strategy_entitlement(db, user_id: uuid.UUID | str, now: datetime | N
     if not (result.valid and result.strategy_access_enabled):
         raise EntitlementError("Strategy entitlement required.")
     return result
+
+
+def has_live_entitlement_for_user(user_id: uuid.UUID | str, now: datetime | None = None) -> bool:
+    if not database_configured():
+        return False
+    try:
+        with session_scope() as db:
+            return has_live_entitlement(db, user_id, now=now)
+    except Exception:
+        return False
+
+
+def has_static_ip_entitlement_for_user(user_id: uuid.UUID | str, now: datetime | None = None) -> bool:
+    if not database_configured():
+        return False
+    try:
+        with session_scope() as db:
+            return has_static_ip_entitlement(db, user_id, now=now)
+    except Exception:
+        return False
+
+
+def has_strategy_entitlement_for_user(user_id: uuid.UUID | str, now: datetime | None = None) -> bool:
+    if not database_configured():
+        return False
+    try:
+        with session_scope() as db:
+            return has_strategy_entitlement(db, user_id, now=now)
+    except Exception:
+        return False
+
+
+def require_live_entitlement_for_user(
+    user_id: uuid.UUID | str,
+    now: datetime | None = None,
+) -> EntitlementEvaluation:
+    if not database_configured():
+        raise EntitlementError("Live entitlement is required.")
+    try:
+        with session_scope() as db:
+            return require_live_entitlement(db, user_id, now=now)
+    except Exception as exc:
+        raise EntitlementError("Live entitlement is required.") from exc
+
+
+def require_static_ip_entitlement_for_user(
+    user_id: uuid.UUID | str,
+    now: datetime | None = None,
+) -> EntitlementEvaluation:
+    if not database_configured():
+        raise EntitlementError("Static IP entitlement is required.")
+    try:
+        with session_scope() as db:
+            return require_static_ip_entitlement(db, user_id, now=now)
+    except Exception as exc:
+        raise EntitlementError("Static IP entitlement is required.") from exc
+
+
+def require_strategy_entitlement_for_user(
+    user_id: uuid.UUID | str,
+    now: datetime | None = None,
+) -> EntitlementEvaluation:
+    if not database_configured():
+        raise EntitlementError("Strategy entitlement is required.")
+    try:
+        with session_scope() as db:
+            return require_strategy_entitlement(db, user_id, now=now)
+    except Exception as exc:
+        raise EntitlementError("Strategy entitlement is required.") from exc

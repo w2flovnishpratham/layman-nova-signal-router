@@ -4,6 +4,7 @@ import asyncio
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -111,6 +112,31 @@ def test_chat_websocket_accepts_session_token_subprotocol_without_query_token(mo
         subprotocols=["nova-session", f"nova-session-token.{token}"],
     ):
         pass
+
+
+def test_chat_confirm_live_requires_server_side_entitlement(monkeypatch):
+    from app.api import ws as chat_ws
+    from app.services import entitlements
+    from app.services.user_context import CurrentUser
+
+    user = CurrentUser(id=uuid.uuid4(), email="ws-live-entitlement@example.com")
+    session = SimpleNamespace(config={"strategy": "supertrend", "risk": {"lots": 1}})
+    monkeypatch.setattr(chat_ws, "get_engine_mode", lambda legacy_fallback=True: "live")
+    monkeypatch.setattr(
+        chat_ws,
+        "start_engine",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("entitlement must block before live start")),
+    )
+
+    with pytest.raises(entitlements.EntitlementError, match="Live entitlement is required"):
+        asyncio.run(
+            chat_ws._apply_production_command(
+                "setup.confirm_live",
+                {},
+                user=user,
+                session=session,
+            )
+        )
 
 
 def _signed_user_body(secret, uid, *, nonce, ts=None, signal="BUY"):
