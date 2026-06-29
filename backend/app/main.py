@@ -12,7 +12,7 @@ from app.api import session as chat_session
 from app.api import ws as chat_ws
 from app.auth.dependencies import get_execution_scoped_user
 from app.config import VALID_PAYMENT_PROVIDERS, settings
-from app.routers import broker, control, dashboard, debug, engine, market, orders, positions, setup, webhook
+from app.routers import broker, control, dashboard, debug, engine, market, orders, payments, positions, setup, webhook
 from app.routers import admin as admin_router
 from app.routers import live as live_router
 from app.routers import user_credentials as user_credentials_router
@@ -310,6 +310,7 @@ app.include_router(broker.router, prefix="/api/broker", tags=["Broker"], depende
 app.include_router(debug.router, prefix="/api/debug", tags=["Debug"], dependencies=authenticated)
 app.include_router(webhook.router, prefix="/webhook", tags=["Webhook"])
 app.include_router(webhook.router, prefix="/api/webhook", tags=["Webhook"])
+app.include_router(payments.router)
 app.include_router(chat_session.router)
 app.include_router(chat_ws.router)
 
