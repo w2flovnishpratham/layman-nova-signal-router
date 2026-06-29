@@ -20,6 +20,7 @@ from app.services.dhan_client import (
     RealDhanClient,
     get_broker_client,
 )
+from app.services.execution_context import LiveEgressGuardError, require_verified_live_egress
 from app.services.normalized_errors import classify_failure, order_journey
 from app.services.risk_manager import (
     RiskDecision,
@@ -334,6 +335,10 @@ def _cancel_super_order_exit_legs(position: dict[str, Any]) -> dict[str, Any] | 
     if engine_mode == "live":
         if not creds:
             return {"attempted": False, "reason": "missing_dhan_credentials"}
+        try:
+            require_verified_live_egress()
+        except LiveEgressGuardError as exc:
+            return {"attempted": False, "reason": str(exc)}
         client = _live_broker_client()
         client_id = creds.client_id
         access_token = creds.access_token
@@ -515,6 +520,32 @@ def _dhan_token_signal_preflight(signal: NormalizedSignal) -> dict[str, Any] | N
             metadata={"signal_id": signal.signal_id, "token_age": token_meta},
         )
 
+    return None
+
+
+def _live_egress_signal_preflight(signal: NormalizedSignal) -> dict[str, Any] | None:
+    if get_engine_mode() != "live":
+        return None
+    try:
+        require_verified_live_egress()
+    except LiveEgressGuardError as exc:
+        reason = str(exc)
+        update_app_state(
+            state="BLOCKED",
+            last_signal_id=signal.signal_id,
+            last_alert_at=utc_now(),
+            last_message=reason,
+        )
+        return _blocked(
+            "BLOCKED",
+            reason,
+            signal,
+            audit_event="LIVE_EGRESS_UNVERIFIED_SIGNAL_BLOCK",
+            result_extra={
+                "success": False,
+                "block_code": "LIVE_EGRESS_NOT_VERIFIED",
+            },
+        )
     return None
 
 
@@ -799,6 +830,17 @@ def _reconcile_tracked_position_before_entry(signal: NormalizedSignal) -> RiskDe
     if get_engine_mode() != "live" or not settings.ENABLE_LIVE_ORDERS:
         return None
 
+    egress_block = _live_egress_signal_preflight(signal)
+    if egress_block:
+        return RiskDecision(
+            False,
+            str(
+                egress_block.get("reason")
+                or egress_block.get("message")
+                or "Live Dhan orders require a verified Nova Static IP."
+            ),
+        )
+
     creds = get_dhan_credentials()
     if not creds:
         return RiskDecision(False, "Trade blocked: local open position exists and Dhan credentials are missing.")
@@ -915,6 +957,9 @@ def _place_order(
                 security_id=request_payload.get("securityId"),
                 trading_symbol=request_payload.get("tradingSymbol"),
             )
+        egress_block = _live_egress_signal_preflight(signal)
+        if egress_block:
+            return egress_block
         client = _live_broker_client()
         client_id = creds.client_id
         access_token = creds.access_token

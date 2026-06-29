@@ -468,9 +468,11 @@ def get_user_egress(user_id: uuid.UUID) -> dict[str, Any] | None:
         )
         return {
             "public_ip": row.public_ip,
+            "expected_egress_ip": row.public_ip,
             "proxy_url": proxy_url,
             "active": row.active,
             "verified": _egress_is_verified(row),
+            "last_observed_ip": row.last_observed_ip,
             "last_verified_at": (
                 row.last_verified_at.isoformat()
                 if row.last_verified_at
@@ -799,6 +801,10 @@ def dispatch_signal_job(
             user,
             proxy_url=egress.get("proxy_url") if egress else None,
             egress_ip=egress.get("public_ip") if egress else None,
+            expected_egress_ip=egress.get("expected_egress_ip") if egress else None,
+            observed_egress_ip=egress.get("last_observed_ip") if egress else None,
+            egress_verified=bool(egress.get("verified")) if egress else False,
+            egress_last_verified_at=egress.get("last_verified_at") if egress else None,
         ):
             init_runtime_files()
             execution_result = route_signal(per_user_signal)

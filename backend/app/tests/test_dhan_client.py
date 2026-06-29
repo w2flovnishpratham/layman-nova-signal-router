@@ -1,7 +1,12 @@
+import uuid
+
 import httpx
+import pytest
 
 from app.config import settings
 from app.services.dhan_client import DHAN_BASE_URL, RealDhanClient
+from app.services.execution_context import LiveEgressGuardError, bind_execution_context
+from app.services.user_context import CurrentUser
 
 
 class FakeHTTPClient:
@@ -78,6 +83,38 @@ def patch_timeout_then_order_book(monkeypatch, recorder, order_book_response):
     monkeypatch.setattr("app.services.dhan_client.httpx.Client", fake_client)
 
 
+def _live_user() -> CurrentUser:
+    return CurrentUser(id=uuid.uuid4(), email="live-user@example.com", is_dev=False)
+
+
+def _verified_live_context():
+    return bind_execution_context(
+        _live_user(),
+        proxy_url="http://proxy-user:secret@152.42.157.165:8888",
+        egress_ip="152.42.157.165",
+        expected_egress_ip="152.42.157.165",
+        observed_egress_ip="152.42.157.165",
+        egress_verified=True,
+    )
+
+
+def _valid_order_payload() -> dict:
+    return {
+        "dhanClientId": "1000000001",
+        "transactionType": "BUY",
+        "exchangeSegment": "NSE_FNO",
+        "productType": "INTRADAY",
+        "orderType": "MARKET",
+        "validity": "DAY",
+        "securityId": "123456",
+        "quantity": 1,
+        "disclosedQuantity": 0,
+        "price": 0,
+        "triggerPrice": 0,
+        "afterMarketOrder": False,
+    }
+
+
 def test_validate_token_uses_v2_profile_endpoint(monkeypatch):
     recorder = {}
     response = httpx.Response(200, json={"dhanClientId": "1000000001", "tokenValidity": "30/03/2025 15:37"})
@@ -146,17 +183,106 @@ def test_place_order_uses_v2_orders_endpoint(monkeypatch):
         "afterMarketOrder": False,
     }
 
-    result = RealDhanClient().place_order(
-        client_id="1000000001",
-        access_token="token",
-        payload=payload,
-    )
+    with _verified_live_context():
+        result = RealDhanClient().place_order(
+            client_id="1000000001",
+            access_token="token",
+            payload=payload,
+        )
 
     assert result.success is True
     assert result.order_id == "112111182198"
     assert recorder["method"] == "POST"
     assert recorder["url"] == f"{DHAN_BASE_URL}/orders"
     assert recorder["json"] == payload
+
+
+def test_live_order_requires_verified_execution_context(monkeypatch):
+    def forbidden_client(*_args, **_kwargs):
+        raise AssertionError("Dhan HTTP must not be called without verified egress")
+
+    monkeypatch.setattr("app.services.dhan_client.httpx.Client", forbidden_client)
+
+    with pytest.raises(LiveEgressGuardError) as exc:
+        RealDhanClient(proxy_url="http://proxy-user:secret@152.42.157.165:8888").place_order(
+            client_id="1000000001",
+            access_token="token",
+            payload=_valid_order_payload(),
+        )
+
+    message = str(exc.value)
+    assert "authenticated execution context" in message
+    assert "proxy-user" not in message
+    assert "secret" not in message
+    assert "token" not in message
+
+
+def test_live_order_rejects_unverified_execution_context(monkeypatch):
+    def forbidden_client(*_args, **_kwargs):
+        raise AssertionError("Dhan HTTP must not be called with unverified egress")
+
+    monkeypatch.setattr("app.services.dhan_client.httpx.Client", forbidden_client)
+
+    with bind_execution_context(
+        _live_user(),
+        proxy_url="http://proxy-user:secret@152.42.157.165:8888",
+        egress_ip="152.42.157.165",
+        expected_egress_ip="152.42.157.165",
+        observed_egress_ip="152.42.157.165",
+        egress_verified=False,
+    ):
+        with pytest.raises(LiveEgressGuardError) as exc:
+            RealDhanClient().place_order(
+                client_id="1000000001",
+                access_token="token",
+                payload=_valid_order_payload(),
+            )
+
+    assert str(exc.value) == "Live Dhan orders require a verified Nova Static IP."
+
+
+def test_live_order_rejects_observed_ip_mismatch(monkeypatch):
+    def forbidden_client(*_args, **_kwargs):
+        raise AssertionError("Dhan HTTP must not be called with mismatched egress")
+
+    monkeypatch.setattr("app.services.dhan_client.httpx.Client", forbidden_client)
+
+    with bind_execution_context(
+        _live_user(),
+        proxy_url="http://proxy-user:secret@152.42.157.165:8888",
+        egress_ip="152.42.157.165",
+        expected_egress_ip="152.42.157.165",
+        observed_egress_ip="198.51.100.10",
+        egress_verified=True,
+    ):
+        with pytest.raises(LiveEgressGuardError) as exc:
+            RealDhanClient().place_order(
+                client_id="1000000001",
+                access_token="token",
+                payload=_valid_order_payload(),
+            )
+
+    assert "observed egress IP" in str(exc.value)
+
+
+def test_live_order_rejects_proxy_url_override(monkeypatch):
+    def forbidden_client(*_args, **_kwargs):
+        raise AssertionError("Dhan HTTP must not be called with overridden proxy URL")
+
+    monkeypatch.setattr("app.services.dhan_client.httpx.Client", forbidden_client)
+
+    with _verified_live_context():
+        with pytest.raises(LiveEgressGuardError) as exc:
+            RealDhanClient(proxy_url="http://other-user:secret@152.42.157.166:8888").place_order(
+                client_id="1000000001",
+                access_token="token",
+                payload=_valid_order_payload(),
+            )
+
+    message = str(exc.value)
+    assert "verified assigned Nova Static IP" in message
+    assert "other-user" not in message
+    assert "secret" not in message
 
 
 def test_place_order_timeout_recovers_order_by_correlation_id(monkeypatch):
@@ -183,25 +309,26 @@ def test_place_order_timeout_recovers_order_by_correlation_id(monkeypatch):
     monkeypatch.setattr("app.services.dhan_client._market_is_open", lambda: True)
     monkeypatch.setattr("app.services.dhan_client.log_order_event", lambda event: event)
 
-    result = RealDhanClient().place_order(
-        client_id="1000000001",
-        access_token="token",
-        payload={
-            "dhanClientId": "1000000001",
-            "correlationId": "recover-correlation-01",
-            "transactionType": "BUY",
-            "exchangeSegment": "NSE_FNO",
-            "productType": "INTRADAY",
-            "orderType": "MARKET",
-            "validity": "DAY",
-            "securityId": "123456",
-            "quantity": 1,
-            "disclosedQuantity": 0,
-            "price": 0,
-            "triggerPrice": 0,
-            "afterMarketOrder": False,
-        },
-    )
+    with _verified_live_context():
+        result = RealDhanClient().place_order(
+            client_id="1000000001",
+            access_token="token",
+            payload={
+                "dhanClientId": "1000000001",
+                "correlationId": "recover-correlation-01",
+                "transactionType": "BUY",
+                "exchangeSegment": "NSE_FNO",
+                "productType": "INTRADAY",
+                "orderType": "MARKET",
+                "validity": "DAY",
+                "securityId": "123456",
+                "quantity": 1,
+                "disclosedQuantity": 0,
+                "price": 0,
+                "triggerPrice": 0,
+                "afterMarketOrder": False,
+            },
+        )
 
     assert result.success is True
     assert result.order_id == "112111182198"
@@ -220,25 +347,26 @@ def test_place_order_timeout_without_match_returns_unknown_state(monkeypatch):
     monkeypatch.setattr("app.services.dhan_client._market_is_open", lambda: True)
     monkeypatch.setattr("app.services.dhan_client.log_order_event", lambda event: event)
 
-    result = RealDhanClient().place_order(
-        client_id="1000000001",
-        access_token="token",
-        payload={
-            "dhanClientId": "1000000001",
-            "correlationId": "missing-correlation-01",
-            "transactionType": "BUY",
-            "exchangeSegment": "NSE_FNO",
-            "productType": "INTRADAY",
-            "orderType": "MARKET",
-            "validity": "DAY",
-            "securityId": "123456",
-            "quantity": 1,
-            "disclosedQuantity": 0,
-            "price": 0,
-            "triggerPrice": 0,
-            "afterMarketOrder": False,
-        },
-    )
+    with _verified_live_context():
+        result = RealDhanClient().place_order(
+            client_id="1000000001",
+            access_token="token",
+            payload={
+                "dhanClientId": "1000000001",
+                "correlationId": "missing-correlation-01",
+                "transactionType": "BUY",
+                "exchangeSegment": "NSE_FNO",
+                "productType": "INTRADAY",
+                "orderType": "MARKET",
+                "validity": "DAY",
+                "securityId": "123456",
+                "quantity": 1,
+                "disclosedQuantity": 0,
+                "price": 0,
+                "triggerPrice": 0,
+                "afterMarketOrder": False,
+            },
+        )
 
     assert result.success is False
     assert result.status == "ORDER_STATE_UNKNOWN"
@@ -271,11 +399,12 @@ def test_place_super_order_uses_v2_super_orders_endpoint(monkeypatch):
         "trailingJump": 0,
     }
 
-    result = RealDhanClient().place_super_order(
-        client_id="1000000001",
-        access_token="token",
-        payload=payload,
-    )
+    with _verified_live_context():
+        result = RealDhanClient().place_super_order(
+            client_id="1000000001",
+            access_token="token",
+            payload=payload,
+        )
 
     assert result.success is True
     assert result.order_id == "112111182198"
@@ -300,12 +429,13 @@ def test_modify_super_order_uses_v2_super_orders_endpoint(monkeypatch):
         "targetPrice": 160,
     }
 
-    result = RealDhanClient().modify_super_order(
-        client_id="1000000001",
-        access_token="token",
-        order_id="112111182198",
-        payload=payload,
-    )
+    with _verified_live_context():
+        result = RealDhanClient().modify_super_order(
+            client_id="1000000001",
+            access_token="token",
+            order_id="112111182198",
+            payload=payload,
+        )
 
     assert result.success is True
     assert result.order_id == "112111182198"
@@ -324,12 +454,13 @@ def test_cancel_super_order_leg_uses_v2_super_orders_endpoint(monkeypatch):
     )
     monkeypatch.setattr("app.services.dhan_client.log_order_event", lambda event: event)
 
-    result = RealDhanClient().cancel_super_order_leg(
-        client_id="1000000001",
-        access_token="token",
-        order_id="112111182198",
-        leg_name="STOP_LOSS_LEG",
-    )
+    with _verified_live_context():
+        result = RealDhanClient().cancel_super_order_leg(
+            client_id="1000000001",
+            access_token="token",
+            order_id="112111182198",
+            leg_name="STOP_LOSS_LEG",
+        )
 
     assert result.success is True
     assert result.order_id == "112111182198"
@@ -348,14 +479,15 @@ def test_place_order_refuses_raw_pine_payload_before_http(monkeypatch):
     monkeypatch.setattr("app.services.dhan_client._market_is_open", lambda: True)
     monkeypatch.setattr("app.services.dhan_client.log_order_event", lambda event: event)
 
-    result = RealDhanClient().place_order(
-        client_id="1000000001",
-        access_token="token",
-        payload={
-            "alertType": "multi_leg_order",
-            "order_legs": [{"transactionType": "B", "strike_price": "22500.0"}],
-        },
-    )
+    with _verified_live_context():
+        result = RealDhanClient().place_order(
+            client_id="1000000001",
+            access_token="token",
+            payload={
+                "alertType": "multi_leg_order",
+                "order_legs": [{"transactionType": "B", "strike_price": "22500.0"}],
+            },
+        )
 
     assert result.success is False
     assert result.status == "PAYLOAD_INVALID"

@@ -1,8 +1,9 @@
 """
 Dhan client wrappers for MOCK and REAL modes.
 
-The execution router decides whether a real order is allowed. This module only
-performs the request it is given and never reads or exposes the access token.
+The execution router decides whether a real order is allowed. This module also
+fails closed if a Dhan write is attempted without a verified execution context,
+and never reads or exposes the access token.
 
 Dhan v2 API base: https://api.dhan.co/v2
 Order placement requires static IP whitelisting.
@@ -149,6 +150,20 @@ class RealDhanClient:
                 self._requires_user_proxy = settings.EXECUTION_NODE_ROUTING_ENABLED
         self.proxy_url = (proxy_url or "").strip() or None
         self.expected_egress_ip = (expected_egress_ip or "").strip() or None
+
+    def _require_verified_live_order_context(self) -> None:
+        from app.services.execution_context import LiveEgressGuardError, require_verified_live_egress
+
+        context = require_verified_live_egress()
+        if self.proxy_url != context.proxy_url:
+            raise LiveEgressGuardError(
+                "Live Dhan orders must use the verified assigned Nova Static IP."
+            )
+        expected_ip = context.expected_egress_ip or context.egress_ip
+        if self.expected_egress_ip and self.expected_egress_ip != expected_ip:
+            raise LiveEgressGuardError(
+                "Live Dhan orders require the expected Nova Static IP to match the verified assignment."
+            )
 
     def _client(self, *, timeout: float) -> httpx.Client:
         if self._requires_user_proxy and not self.proxy_url:
@@ -469,6 +484,7 @@ class RealDhanClient:
             )
 
     def place_order(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanOrderResult:
+        self._require_verified_live_order_context()
         url = f"{DHAN_BASE_URL}/orders"
         outgoing_ip_result = self._outgoing_ip_result()
         outgoing_ip = outgoing_ip_result.get("outgoing_ip")
@@ -600,6 +616,7 @@ class RealDhanClient:
             )
 
     def place_super_order(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanOrderResult:
+        self._require_verified_live_order_context()
         url = f"{DHAN_BASE_URL}/super/orders"
         outgoing_ip_result = self._outgoing_ip_result()
         outgoing_ip = outgoing_ip_result.get("outgoing_ip")
@@ -700,6 +717,7 @@ class RealDhanClient:
             )
 
     def modify_super_order(self, *, client_id: str, access_token: str, order_id: str, payload: dict[str, Any]) -> DhanOrderResult:
+        self._require_verified_live_order_context()
         url = f"{DHAN_BASE_URL}/super/orders/{order_id}"
         outgoing_ip_result = self._outgoing_ip_result()
         outgoing_ip = outgoing_ip_result.get("outgoing_ip")
@@ -802,6 +820,7 @@ class RealDhanClient:
             )
 
     def cancel_super_order_leg(self, *, client_id: str, access_token: str, order_id: str, leg_name: str) -> DhanOrderResult:
+        self._require_verified_live_order_context()
         url = f"{DHAN_BASE_URL}/super/orders/{order_id}/{leg_name}"
         outgoing_ip_result = self._outgoing_ip_result()
         outgoing_ip = outgoing_ip_result.get("outgoing_ip")

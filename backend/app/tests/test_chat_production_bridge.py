@@ -375,6 +375,56 @@ def test_manual_paper_entry_auto_selects_contract_with_real_market_data_settings
     assert signal.raw_payload["autoAtm"]["atmStrike"] == 24100
 
 
+def test_manual_live_entry_cannot_bypass_verified_egress_guard(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("live")
+    state_store.update_app_state(engine_started=True, webhook_trading_enabled=True)
+    state_store.update_runtime_settings(max_qty_per_order=65, allowed_option_side="BOTH")
+    monkeypatch.setattr(
+        "app.services.execution_router.get_dhan_credentials",
+        lambda: DhanCredentials("1000000001", "live-token", "test"),
+    )
+    monkeypatch.setattr(
+        "app.services.execution_router.dhan_token_age_metadata",
+        lambda: {
+            "token_age_minutes": 1,
+            "token_warn": False,
+            "token_expired": False,
+        },
+    )
+    monkeypatch.setattr("app.services.execution_router._market_is_open", lambda: True)
+
+    def forbidden_http_client(*_args, **_kwargs):
+        raise AssertionError("manual live route must not call Dhan without verified egress")
+
+    monkeypatch.setattr("app.services.dhan_client.httpx.Client", forbidden_http_client)
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+        monkeypatch.setattr(settings, "EXECUTION_NODE_ROUTING_ENABLED", True)
+        response = client.post(
+            "/api/orders/manual-entry",
+            json={
+                "side": "CE",
+                "lots": 1,
+                "securityId": "LIVE-CE",
+                "tradingSymbol": "NIFTY LIVE CE",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["executionResult"]["blocked"] is True
+    assert body["executionResult"]["block_code"] == "LIVE_EGRESS_NOT_VERIFIED"
+    serialized = str(body)
+    assert "live-token" not in serialized
+    assert "proxy_url" not in serialized
+
+
 def test_active_position_exit_levels_can_be_updated_for_server_managed_position(tmp_path, monkeypatch):
     _isolate_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("paper")

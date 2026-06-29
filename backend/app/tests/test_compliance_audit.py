@@ -35,10 +35,12 @@ from app.services.execution_router import (
     route_exit_signal,
     route_signal,
 )
+from app.services.execution_context import bind_execution_context
 from app.services.security_id_resolver import (
     NIFTY_UNDERLYING_ID,
     resolve_security_id,
 )
+from app.services.user_context import dev_user
 from app.services.signal_parser import (
     PayloadParseError,
     UnsupportedPayloadFormatError,
@@ -150,6 +152,17 @@ def make_signal(
     )
 
 
+def verified_live_execution_context():
+    return bind_execution_context(
+        dev_user(),
+        proxy_url="http://proxy-user:secret@152.42.157.165:8888",
+        egress_ip="152.42.157.165",
+        expected_egress_ip="152.42.157.165",
+        observed_egress_ip="152.42.157.165",
+        egress_verified=True,
+    )
+
+
 # ===========================================================================
 # TASK 10: Webhook secret flow
 # ===========================================================================
@@ -190,7 +203,8 @@ class TestWebhookSecretFlow:
     def test_webhook_rejected_if_wrong_secret(self, client):
         payload = pine_payload("B")
         payload["secret"] = "totally-wrong-secret"
-        response = client.post("/webhook/tradingview", json=payload)
+        with verified_live_execution_context():
+            response = client.post("/webhook/tradingview", json=payload)
         assert response.status_code == 403
         assert response.json()["status"] == "UNAUTHORIZED"
 
@@ -530,7 +544,8 @@ class TestLiveOrderGating:
 
         monkeypatch.setattr("app.services.execution_router.RealDhanClient", FreshTokenDhanClient)
 
-        result = route_signal(make_signal(security_id="CE123").model_copy(update={"signal_id": "fresh-token-001"}))
+        with verified_live_execution_context():
+            result = route_signal(make_signal(security_id="CE123").model_copy(update={"signal_id": "fresh-token-001"}))
 
         assert result["status"] == "ORDER_PLACED"
         assert calls["placed"] == 1
@@ -555,7 +570,8 @@ class TestLiveOrderGating:
         # NOVA payload with no security_id and no scrip master to resolve from
         payload = nova_payload("ENTRY", "BUY", "no-secid-001")
         del payload["security_id"]
-        response = client.post("/webhook/tradingview", json=payload)
+        with verified_live_execution_context():
+            response = client.post("/webhook/tradingview", json=payload)
         assert real_called["called"] is False
         body = response.json()
         assert body["accepted"] is False
@@ -592,7 +608,8 @@ class TestLiveOrderGating:
         monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
 
         payload = nova_payload("ENTRY", "BUY", "dhan-open-position-001")
-        response = client.post("/webhook/tradingview", json=payload)
+        with verified_live_execution_context():
+            response = client.post("/webhook/tradingview", json=payload)
         body = response.json()
 
         assert response.status_code == 200
@@ -665,7 +682,8 @@ class TestLiveOrderGating:
                 "security_id": "CE456",
             }
         )
-        result = route_entry_signal(ce_signal)
+        with verified_live_execution_context():
+            result = route_entry_signal(ce_signal)
 
         assert result["status"] == "ORDER_PLACED"
         assert calls["placed"] == 1
@@ -723,7 +741,8 @@ class TestLiveOrderGating:
 
         monkeypatch.setattr("app.services.execution_router.RealDhanClient", PartialEntryDhanClient)
 
-        result = route_entry_signal(make_signal(security_id="CE123", qty=65))
+        with verified_live_execution_context():
+            result = route_entry_signal(make_signal(security_id="CE123", qty=65))
 
         assert result["status"] == "PARTIAL_ENTRY_FILLED"
         assert result["partial_fill"] is True
@@ -792,7 +811,8 @@ class TestLiveOrderGating:
         monkeypatch.setattr("app.services.execution_router.RealDhanClient", PartialExitDhanClient)
 
         exit_signal = make_signal(security_id="CE123", qty=65, action="EXIT", side="SELL")
-        result = route_exit_signal(exit_signal)
+        with verified_live_execution_context():
+            result = route_exit_signal(exit_signal)
 
         assert result["status"] == "PARTIAL_EXIT_FILLED"
         assert result["partial_fill"] is True
@@ -932,7 +952,8 @@ class TestLiveOrderGating:
                 "security_id": incoming_security_id,
             }
         )
-        result = route_entry_signal(incoming_signal)
+        with verified_live_execution_context():
+            result = route_entry_signal(incoming_signal)
 
         assert result["status"] == "REVERSAL_ORDER_PLACED"
         assert calls["orders"][0]["transactionType"] == "SELL"
@@ -985,7 +1006,8 @@ class TestLiveOrderGating:
         monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
 
         payload = nova_payload("ENTRY", "BUY", "dhan-pending-order-001")
-        response = client.post("/webhook/tradingview", json=payload)
+        with verified_live_execution_context():
+            response = client.post("/webhook/tradingview", json=payload)
         body = response.json()
 
         assert response.status_code == 200
@@ -1066,7 +1088,8 @@ class TestLiveOrderGating:
                 "raw_payload": {"exit_reason": "EOD_FLATTEN"},
             }
         )
-        result = route_exit_signal(stale_exit_signal)
+        with verified_live_execution_context():
+            result = route_exit_signal(stale_exit_signal)
 
         assert result["success"] is True
         assert calls[0]["transactionType"] == "SELL"
@@ -1217,7 +1240,8 @@ class TestDhanPayloadCompliance:
 
         monkeypatch.setattr("app.services.execution_router.RealDhanClient", FakeRealDhanClient)
 
-        result = _place_order(make_signal(security_id="57046"), 1, "ENTRY")
+        with verified_live_execution_context():
+            result = _place_order(make_signal(security_id="57046"), 1, "ENTRY")
 
         assert result["success"] is True
         assert result["status"] == "TRADED"
