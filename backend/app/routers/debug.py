@@ -18,6 +18,7 @@ from app.services.dhan_debugger import (
     validate_dhan_payload,
 )
 from app.services.dhan_error_interpreter import interpret_dhan_error
+from app.services.dhan_response_safety import sanitize_dhan_response_surface
 from app.services.execution_router import _build_dhan_payload_and_resolution
 from app.services.risk_manager import _market_is_open, evaluate_entry, evaluate_exit
 from app.services.security_id_resolver import DEFAULT_SECURITY_ID_WARNING, resolve_security_id_for_contract
@@ -53,9 +54,9 @@ def _risk_decision(signal: NormalizedSignal) -> dict[str, Any]:
 def _last_dhan_response() -> dict[str, Any] | None:
     for row in reversed(read_jsonl("order", limit=500)):
         if row.get("event") in {"DHAN_ORDER_RESPONSE", "DHAN_ORDER_EXCEPTION"}:
-            return row
+            return sanitize_dhan_response_surface(row)
         if row.get("phase") == "after_response":
-            return row
+            return sanitize_dhan_response_surface(row)
     return None
 
 
@@ -139,7 +140,7 @@ def dhan_config() -> dict[str, Any]:
             "force_allow_order_when_market_closed": settings.FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED,
         },
         "runtime_state": {
-            "app_state": app_state,
+            "app_state": sanitize_dhan_response_surface(app_state),
             "settings": runtime_settings,
         },
         "last_dhan_response": last_response,
@@ -228,14 +229,17 @@ def live_order_dry_run(raw_payload: dict[str, Any] = Body(...)) -> dict[str, Any
 def ping_safe() -> dict[str, Any]:
     outgoing_ip = get_outgoing_ip()
     creds = get_dhan_credentials()
-    headers_masked = build_dhan_headers_debug(creds.client_id if creds else None, creds.access_token if creds else None)
+    header_status = {
+        "client_id_present": bool(creds and creds.client_id),
+        "access_token_present": bool(creds and creds.access_token),
+    }
 
     if settings.DHAN_MODE.upper() != "REAL":
         return {
             "ok": True,
             "message": "MOCK Dhan mode is active; no read-only Dhan request was sent.",
             "endpoint": None,
-            "headers_masked": headers_masked,
+            "header_status": header_status,
             "outgoing_ip": outgoing_ip.get("outgoing_ip"),
             "outgoing_ip_check": outgoing_ip,
         }
@@ -245,7 +249,7 @@ def ping_safe() -> dict[str, Any]:
             "ok": False,
             "message": "Dhan Client ID or Access Token missing.",
             "endpoint": None,
-            "headers_masked": headers_masked,
+            "header_status": header_status,
             "outgoing_ip": outgoing_ip.get("outgoing_ip"),
             "outgoing_ip_check": outgoing_ip,
         }
@@ -264,28 +268,37 @@ def ping_safe() -> dict[str, Any]:
             parsed: Any = response.json()
         except ValueError:
             parsed = None
-        interpreted_error = None if 200 <= response.status_code <= 299 else interpret_dhan_error(response.status_code, parsed or response.text)
+        interpreted_error = (
+            None
+            if 200 <= response.status_code <= 299
+            else sanitize_dhan_response_surface(interpret_dhan_error(response.status_code, parsed or response.text))
+        )
+        masked_client_id = None
+        if isinstance(parsed, dict):
+            masked_client_id = sanitize_dhan_response_surface({"client_id": parsed.get("dhanClientId")}).get("client_id")
         return {
             "ok": 200 <= response.status_code <= 299,
             "status_code": response.status_code,
-            "response_text": response.text[:4000],
-            "response_json": parsed,
+            "broker": "DHAN",
+            "message": "Dhan profile check completed." if 200 <= response.status_code <= 299 else "Dhan profile check failed.",
+            "masked_client_id": masked_client_id,
             "endpoint": endpoint,
-            "headers_masked": headers_masked,
+            "header_status": header_status,
             "outgoing_ip": outgoing_ip.get("outgoing_ip"),
             "outgoing_ip_check": outgoing_ip,
-            "interpreted_error": interpreted_error,
+            "safe_error": interpreted_error,
         }
     except Exception as exc:
-        interpreted_error = interpret_dhan_error(None, str(exc))
+        interpreted_error = sanitize_dhan_response_surface(interpret_dhan_error(None, type(exc).__name__))
         return {
             "ok": False,
             "status_code": None,
-            "response_text": str(exc),
-            "response_json": None,
+            "broker": "DHAN",
+            "message": "Dhan profile check failed.",
             "endpoint": endpoint,
-            "headers_masked": headers_masked,
+            "header_status": header_status,
             "outgoing_ip": outgoing_ip.get("outgoing_ip"),
             "outgoing_ip_check": outgoing_ip,
-            "interpreted_error": interpreted_error,
+            "safe_error": interpreted_error,
+            "error_type": type(exc).__name__,
         }

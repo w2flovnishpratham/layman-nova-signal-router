@@ -1204,12 +1204,9 @@ class RealDhanClient:
                 if profile_client_id and str(profile_client_id) != str(client_id):
                     return DhanValidationResult(
                         success=False,
-                        message=(
-                            "Dhan token valid, but it belongs to client ID "
-                            f"{profile_client_id}, not configured client ID {client_id}."
-                        ),
+                        message="Dhan token validation failed: client identity mismatch.",
                         status_code=response.status_code,
-                        raw_response=data,
+                        raw_response={"client_identity_mismatch": True},
                     )
                 return DhanValidationResult(
                     success=True,

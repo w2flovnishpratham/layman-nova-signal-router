@@ -5,6 +5,7 @@ from app.services.credential_vault import dhan_metadata, get_dhan_credentials
 from app.services.dhan_client import RealDhanClient
 from app.services.state_store import get_engine_mode
 from app.services.wallet_service import refresh_wallet_snapshot
+from app.services.dhan_response_safety import sanitize_wallet_snapshot
 
 
 router = APIRouter()
@@ -33,7 +34,7 @@ def test_dhan() -> dict:
         client_id=creds.client_id,
         access_token=creds.access_token,
     )
-    wallet = refresh_wallet_snapshot(force=True, log_event=True) if result.success else None
+    wallet = sanitize_wallet_snapshot(refresh_wallet_snapshot(force=True, log_event=True)) if result.success else None
     message = result.message
     if wallet and wallet.get("success") and wallet.get("available_balance") is not None:
         message = f"{message} Available balance: Rs.{wallet['available_balance']:.2f}."
@@ -44,4 +45,4 @@ def test_dhan() -> dict:
 
 @router.get("/dhan/funds")
 def dhan_funds() -> dict:
-    return refresh_wallet_snapshot(force=False, log_event=False)
+    return sanitize_wallet_snapshot(refresh_wallet_snapshot(force=False, log_event=False))

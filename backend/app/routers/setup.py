@@ -37,6 +37,7 @@ from app.services.credential_vault import (
     webhook_secret_metadata,
 )
 from app.services.dhan_client import DhanFundsResult, RealDhanClient
+from app.services.dhan_response_safety import sanitize_dhan_response_surface, sanitize_wallet_snapshot
 from app.services.paper_portfolio import paper_wallet_snapshot, reset_paper_portfolio
 from app.services.dhan_debugger import get_outgoing_ip
 from app.services.dhan_error_interpreter import interpret_dhan_error
@@ -379,15 +380,14 @@ def _wallet_from_funds(result: DhanFundsResult, previous: dict[str, Any] | None 
             "session_start_balance": session_start,
             "session_pnl": session_pnl,
             "last_checked_at": utc_now(),
-            "raw_response": result.raw_response,
         }
     )
-    return snapshot
+    return sanitize_wallet_snapshot(snapshot)
 
 
 def _connection_failure_kind(message: str, status_code: int | None, raw_response: Any = None) -> str:
     text = " ".join([message, json.dumps(raw_response, default=str) if raw_response is not None else ""]).lower()
-    if "belongs to client id" in text or "client id" in text and "not configured" in text:
+    if "client identity mismatch" in text or "belongs to client id" in text or "client id" in text and "not configured" in text:
         return "client ID mismatch"
     if any(term in text for term in ("static ip", "whitelist", "white list", "unauthorized ip", "unauthorised ip", "invalid ip")):
         return "IP issue"
@@ -409,7 +409,7 @@ def validate_dhan_credentials(client_id: str, access_token: str) -> tuple[bool, 
                 {
                     "status_code": validation.status_code,
                     "error_kind": kind,
-                    "interpreted_error": interpreted,
+                    "interpreted_error": sanitize_dhan_response_surface(interpreted),
                 },
             )
         funds = RealDhanClient().get_fund_limit(client_id=client_id, access_token=access_token)
@@ -523,7 +523,7 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
     webhook_meta = webhook_secret_metadata()
     outgoing = get_outgoing_ip(timeout=2.0) if include_outgoing_ip else {"outgoing_ip": None, "ok": False, "error": None}
     readiness = setup_readiness(check_dhan_ping=False)
-    wallet = get_wallet_snapshot()
+    wallet = sanitize_wallet_snapshot(get_wallet_snapshot())
 
     token_meta = dhan_token_age_metadata()
     return {
@@ -571,7 +571,7 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
             "emergency_stop": bool(runtime.get("emergency_stop")),
             "global_kill_switch": bool(runtime.get("global_kill_switch")),
         },
-        "app_state": app_state,
+        "app_state": sanitize_dhan_response_surface(app_state),
         "readiness": readiness,
         "debug_enabled": settings.DEBUG_ENABLED,
         "vault": vault_status(),
@@ -639,7 +639,11 @@ def connect_dhan(body: DhanConnectRequest, request: Request) -> dict[str, Any]:
     try:
         if has_credential_changes:
             save_dhan_credentials(client_id, access_token)
-        wallet = set_wallet_snapshot(_wallet_from_funds(funds, get_wallet_snapshot())) if funds else get_wallet_snapshot()
+        wallet = (
+            sanitize_wallet_snapshot(set_wallet_snapshot(_wallet_from_funds(funds, get_wallet_snapshot())))
+            if funds
+            else sanitize_wallet_snapshot(get_wallet_snapshot())
+        )
         token_meta = dhan_token_age_metadata()
         outgoing = get_outgoing_ip(timeout=3.0)
     except VaultError as exc:

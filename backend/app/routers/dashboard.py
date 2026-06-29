@@ -14,6 +14,7 @@ from app.services.position_reconciler import get_reconciled_open_position
 from app.services.shared_market_data import shared_market_data_status
 from app.services.state_store import get_app_state, get_external_positions, get_runtime_settings
 from app.services.wallet_service import refresh_wallet_snapshot
+from app.services.dhan_response_safety import sanitize_dhan_response_surface, sanitize_wallet_snapshot
 
 
 router = APIRouter()
@@ -65,14 +66,16 @@ def dashboard_summary() -> dict:
     meta = dhan_metadata()
     webhook_meta = webhook_secret_metadata()
     has_token = bool(creds and creds.access_token)
-    wallet = refresh_wallet_snapshot(force=False, log_event=False) if has_token else app_state.get("wallet")
+    wallet = sanitize_wallet_snapshot(
+        refresh_wallet_snapshot(force=False, log_event=False) if has_token else app_state.get("wallet")
+    )
 
     return {
         "dhan_connected": bool(meta["connected"]),
         "dhan_client_id_masked": meta["client_id_masked"],
         "webhook_secret_set": bool(webhook_meta["set"]),
         "engine_started": bool(app_state.get("webhook_trading_enabled")),
-        "app_state": app_state,
+        "app_state": sanitize_dhan_response_surface(app_state),
         "open_position": open_position,
         "external_positions": get_external_positions(),
         "wallet": wallet,
@@ -86,10 +89,10 @@ def dashboard_summary() -> dict:
             "dhan_token_configured": has_token,
         },
         "last_logs": {
-            "webhook": _latest("webhook"),
-            "order": _latest("order"),
-            "audit": _latest("audit"),
-            "error": _latest("error"),
+            "webhook": sanitize_dhan_response_surface(_latest("webhook")),
+            "order": sanitize_dhan_response_surface(_latest("order")),
+            "audit": sanitize_dhan_response_surface(_latest("audit")),
+            "error": sanitize_dhan_response_surface(_latest("error")),
         },
     }
 
@@ -140,10 +143,10 @@ def live_flow() -> list[dict]:
 @router.get("/logs")
 def logs(limit: int = Query(default=100, ge=1, le=1000)) -> dict:
     return {
-        "webhook_events": read_jsonl("webhook", limit=limit),
-        "order_events": read_jsonl("order", limit=limit),
-        "audit_events": read_jsonl("audit", limit=limit),
-        "error_events": read_jsonl("error", limit=limit),
+        "webhook_events": sanitize_dhan_response_surface(read_jsonl("webhook", limit=limit)),
+        "order_events": sanitize_dhan_response_surface(read_jsonl("order", limit=limit)),
+        "audit_events": sanitize_dhan_response_surface(read_jsonl("audit", limit=limit)),
+        "error_events": sanitize_dhan_response_surface(read_jsonl("error", limit=limit)),
     }
 
 

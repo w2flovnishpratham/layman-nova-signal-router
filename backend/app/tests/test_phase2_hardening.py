@@ -541,3 +541,218 @@ def test_recovered_strategy_retry_does_not_double_reserve_daily_counter(mu_db, m
         assert counter.orders_count == 1
         assert job.status == "failed"
         assert "Manual review required" in (job.last_error or "")
+
+
+def _assert_no_raw_dhan_surface(payload):
+    forbidden_text = [
+        "1000000001",
+        "9999999999",
+        "raw-token-secret",
+        "refresh-token-secret",
+        "proxy-secret",
+        "abc%40123",
+        "http://nova_user_1:proxy-secret@13.203.58.220:3001",
+    ]
+    text = str(payload)
+    for forbidden in forbidden_text:
+        assert forbidden not in text
+
+    def walk(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                assert key not in {"raw_response", "response_text", "response_json", "proxy_url"}
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(payload)
+
+
+def test_setup_dhan_connect_redacts_identity_mismatch(monkeypatch):
+    from app.config import settings
+    from app.routers import setup as setup_router
+    from app.services.dhan_client import DhanValidationResult
+
+    class FakeDhanClient:
+        def validate_token(self, *, client_id, access_token):
+            return DhanValidationResult(
+                success=False,
+                message="Dhan token validation failed: client identity mismatch.",
+                status_code=200,
+                raw_response={"client_identity_mismatch": True, "dhanClientId": "9999999999"},
+            )
+
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
+    monkeypatch.setattr(setup_router, "vault_status", lambda: {"ready": True, "local_mock_allowed": False})
+    monkeypatch.setattr(setup_router, "RealDhanClient", FakeDhanClient)
+    setup_router._DHAN_CONNECT_RATE_LIMIT.clear()
+
+    app = FastAPI()
+    app.include_router(setup_router.router)
+    response = TestClient(app).post(
+        "/setup/dhan/connect",
+        json={"client_id": "1000000001", "access_token": "raw-token-secret"},
+        headers={"x-real-ip": "203.0.113.10"},
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert "client identity mismatch" in str(body)
+    _assert_no_raw_dhan_surface(body)
+
+
+def test_wallet_refresh_sanitizes_raw_dhan_response(monkeypatch):
+    from app.services import wallet_service
+    from app.services.credential_vault import DhanCredentials
+    from app.services.dhan_client import DhanFundsResult
+    from app.services.state_store import default_wallet_snapshot, utc_now
+
+    class FakeDhanClient:
+        def get_fund_limit(self, *, client_id, access_token):
+            return DhanFundsResult(
+                success=True,
+                message="Dhan fund limit fetched.",
+                status_code=200,
+                client_id="1000000001",
+                available_balance=12345.0,
+                raw_response={
+                    "dhanClientId": "1000000001",
+                    "access_token": "raw-token-secret",
+                    "proxy_url": "http://nova_user_1:proxy-secret@13.203.58.220:3001",
+                },
+            )
+
+    monkeypatch.setattr(wallet_service, "get_engine_mode", lambda legacy_fallback=False: "live")
+    monkeypatch.setattr(wallet_service, "get_wallet_snapshot", default_wallet_snapshot)
+    monkeypatch.setattr(
+        wallet_service,
+        "set_wallet_snapshot",
+        lambda snapshot: {**snapshot, "last_checked_at": utc_now(), "raw_response": {"dhanClientId": "1000000001"}},
+    )
+    monkeypatch.setattr(wallet_service, "get_dhan_credentials", lambda: DhanCredentials("1000000001", "raw-token-secret"))
+    monkeypatch.setattr(wallet_service, "RealDhanClient", FakeDhanClient)
+
+    snapshot = wallet_service.refresh_wallet_snapshot(force=True)
+
+    assert snapshot["client_id"] == "******0001"
+    assert snapshot["available_balance"] == 12345.0
+    _assert_no_raw_dhan_surface(snapshot)
+
+
+def test_broker_routes_sanitize_wallet_and_profile_payload(monkeypatch):
+    from app.routers import broker
+    from app.services.credential_vault import DhanCredentials
+    from app.services.dhan_client import DhanValidationResult
+
+    class FakeDhanClient:
+        def validate_token(self, *, client_id, access_token):
+            return DhanValidationResult(
+                success=True,
+                message="Dhan token valid.",
+                status_code=200,
+                raw_response={"dhanClientId": "1000000001"},
+            )
+
+    raw_wallet = {
+        "success": True,
+        "message": "wallet ok",
+        "client_id": "1000000001",
+        "available_balance": 100.0,
+        "raw_response": {"dhanClientId": "1000000001", "access_token": "raw-token-secret"},
+        "proxy_url": "http://nova_user_1:proxy-secret@13.203.58.220:3001",
+    }
+    monkeypatch.setattr(broker, "get_dhan_credentials", lambda: DhanCredentials("1000000001", "raw-token-secret"))
+    monkeypatch.setattr(broker, "RealDhanClient", FakeDhanClient)
+    monkeypatch.setattr(broker, "refresh_wallet_snapshot", lambda **_kwargs: raw_wallet)
+
+    app = FastAPI()
+    app.include_router(broker.router)
+    client = TestClient(app)
+    test_body = client.post("/dhan/test").json()
+    funds_body = client.get("/dhan/funds").json()
+
+    assert test_body["wallet"]["client_id"] == "******0001"
+    assert funds_body["client_id"] == "******0001"
+    _assert_no_raw_dhan_surface(test_body)
+    _assert_no_raw_dhan_surface(funds_body)
+
+
+def test_dashboard_sanitizes_wallet_state_and_log_surfaces(monkeypatch):
+    from app.routers import dashboard
+
+    raw_wallet = {
+        "success": True,
+        "client_id": "1000000001",
+        "raw_response": {"dhanClientId": "1000000001", "access_token": "raw-token-secret"},
+        "proxy_url": "http://nova_user_1:proxy-secret@13.203.58.220:3001",
+    }
+    raw_log = {
+        "event": "DHAN_ORDER_RESPONSE",
+        "raw_response": {"dhanClientId": "9999999999", "refresh_token": "refresh-token-secret"},
+        "response_text": "client ID 9999999999 access-token=raw-token-secret",
+        "proxy_url": "http://nova_user_1:proxy-secret@13.203.58.220:3001",
+    }
+    monkeypatch.setattr(dashboard, "get_reconciled_open_position", lambda reason: None)
+    monkeypatch.setattr(dashboard, "get_app_state", lambda: {"wallet": raw_wallet, "nested": raw_log})
+    monkeypatch.setattr(dashboard, "get_runtime_settings", lambda: {})
+    monkeypatch.setattr(dashboard, "tradingview_webhook_url", lambda: "https://example.test/webhook")
+    monkeypatch.setattr(dashboard, "get_dhan_credentials", lambda: None)
+    monkeypatch.setattr(dashboard, "dhan_metadata", lambda: {"connected": True, "client_id_masked": "******0001"})
+    monkeypatch.setattr(dashboard, "webhook_secret_metadata", lambda: {"set": True})
+    monkeypatch.setattr(dashboard, "get_external_positions", lambda: [])
+    monkeypatch.setattr(dashboard, "shared_market_data_status", lambda: {})
+    monkeypatch.setattr(dashboard, "read_jsonl", lambda _name, limit=1: [raw_log])
+
+    summary = dashboard.dashboard_summary()
+    logs = dashboard.logs()
+
+    assert summary["wallet"]["client_id"] == "******0001"
+    _assert_no_raw_dhan_surface(summary)
+    _assert_no_raw_dhan_surface(logs)
+
+
+def test_debug_ping_safe_never_returns_raw_dhan_payload(monkeypatch):
+    import httpx
+
+    from app.config import settings
+    from app.routers import debug
+    from app.services.credential_vault import DhanCredentials
+
+    class FakeHTTPClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, headers):
+            return httpx.Response(
+                403,
+                json={
+                    "dhanClientId": "9999999999",
+                    "access_token": "raw-token-secret",
+                    "proxy_url": "http://nova_user_1:proxy-secret@13.203.58.220:3001",
+                },
+            )
+
+    monkeypatch.setattr(settings, "DEBUG_ENABLED", True, raising=False)
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(debug, "get_dhan_credentials", lambda: DhanCredentials("1000000001", "raw-token-secret"))
+    monkeypatch.setattr(debug, "get_outgoing_ip", lambda timeout=2.0: {"outgoing_ip": "13.203.58.220", "ok": True})
+    monkeypatch.setattr(debug.httpx, "Client", FakeHTTPClient)
+
+    app = FastAPI()
+    app.include_router(debug.router)
+    response = TestClient(app).post("/dhan/ping-safe")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "response_text" not in body
+    assert "response_json" not in body
+    assert "safe_error" in body
+    _assert_no_raw_dhan_surface(body)

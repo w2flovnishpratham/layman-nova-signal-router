@@ -150,10 +150,10 @@ def test_validate_token_rejects_profile_for_different_client_id(monkeypatch):
     result = RealDhanClient().validate_token(client_id="1000000001", access_token="token")
 
     assert result.success is False
-    assert result.message == (
-        "Dhan token valid, but it belongs to client ID 9999999999, "
-        "not configured client ID 1000000001."
-    )
+    assert result.message == "Dhan token validation failed: client identity mismatch."
+    assert "9999999999" not in result.message
+    assert "1000000001" not in result.message
+    assert result.raw_response == {"client_identity_mismatch": True}
 
 
 def test_place_order_uses_v2_orders_endpoint(monkeypatch):

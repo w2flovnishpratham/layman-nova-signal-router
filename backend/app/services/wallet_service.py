@@ -9,6 +9,7 @@ from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import get_dhan_credentials, mask_client_id
 from app.services.dhan_client import DhanFundsResult, RealDhanClient
 from app.services.paper_portfolio import paper_wallet_snapshot
+from app.services.dhan_response_safety import sanitize_wallet_snapshot
 from app.services.state_store import default_wallet_snapshot, get_engine_mode, get_wallet_snapshot, set_wallet_snapshot, utc_now
 
 
@@ -75,10 +76,9 @@ def _snapshot_from_result(result: DhanFundsResult, previous: dict[str, Any] | No
             "session_start_date_ist": session_start_date_ist,
             "session_pnl": session_pnl,
             "last_checked_at": utc_now(),
-            "raw_response": result.raw_response,
         }
     )
-    return snapshot
+    return sanitize_wallet_snapshot(snapshot)
 
 
 def wallet_is_stale(snapshot: dict[str, Any]) -> bool:
@@ -97,7 +97,7 @@ def refresh_wallet_snapshot(*, force: bool = False, log_event: bool = False) -> 
 
     current = get_wallet_snapshot()
     if not force and not wallet_is_stale(current):
-        return current
+        return sanitize_wallet_snapshot(current)
 
     creds = get_dhan_credentials()
     if not creds:
@@ -109,7 +109,7 @@ def refresh_wallet_snapshot(*, force: bool = False, log_event: bool = False) -> 
                 "last_checked_at": utc_now(),
             }
         )
-        return set_wallet_snapshot(snapshot)
+        return sanitize_wallet_snapshot(set_wallet_snapshot(snapshot))
 
     result = RealDhanClient().get_fund_limit(
         client_id=creds.client_id,
@@ -131,4 +131,4 @@ def refresh_wallet_snapshot(*, force: bool = False, log_event: bool = False) -> 
                 "session_pnl": snapshot["session_pnl"],
             },
         )
-    return snapshot
+    return sanitize_wallet_snapshot(snapshot)
