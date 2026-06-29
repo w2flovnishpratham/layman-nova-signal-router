@@ -71,6 +71,20 @@ def validate_background_worker_runner_configuration() -> None:
         )
 
 
+def _validate_live_aws_proxy_slots() -> None:
+    if not settings.AWS_PROXY_SLOTS_ENABLED:
+        return
+
+    from app.services.aws_proxy_slots import AWSProxySlotConfigError, build_aws_proxy_slots
+
+    try:
+        slots = build_aws_proxy_slots(settings)
+    except AWSProxySlotConfigError as exc:
+        raise RuntimeError(f"AWS proxy slot configuration invalid: {exc}") from exc
+    if not slots:
+        raise RuntimeError("AWS proxy slots are enabled but no AWS proxy slots were built.")
+
+
 def validate_production_configuration() -> None:
     if settings.APP_ENV.lower() != "production":
         return
@@ -119,6 +133,8 @@ def validate_production_configuration() -> None:
             raise RuntimeError(
                 "ENABLE_LIVE_ORDERS=true requires STRATEGY_JOB_WORKER_ENABLED=true."
             )
+        if settings.EXECUTION_NODE_ROUTING_ENABLED and settings.AWS_PROXY_SLOTS_ENABLED:
+            _validate_live_aws_proxy_slots()
         from app.services.strategy_fanout import configured_egress_nodes
 
         if len(configured_egress_nodes()) < 2:
