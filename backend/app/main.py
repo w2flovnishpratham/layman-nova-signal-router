@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +20,7 @@ from app.routers import user_credentials as user_credentials_router
 from app.routers import user_webhook as user_webhook_router
 from app.routers import strategies as strategies_router
 from app.auth import google as google_auth
-from app.db.engine import database_configured, init_db
+from app.db.engine import database_configured, get_engine, init_db
 from app.services.user_credential_vault import vault_ready as user_vault_ready
 from app.services.audit_logger import log_audit_event
 from app.services.chat_event_publisher import bind_chat_event_loop, clear_chat_event_loop
@@ -44,6 +45,76 @@ from app.workers.strategy_job_worker import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nova_signal_router")
+
+
+def _current_alembic_heads() -> set[str]:
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError(
+            "Alembic migration metadata is unavailable; run `python -m alembic upgrade head` "
+            "before starting production."
+        ) from exc
+
+    backend_root = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_root / "alembic.ini"))
+    heads = set(ScriptDirectory.from_config(config).get_heads())
+    if not heads:
+        raise RuntimeError("Alembic migration metadata has no head revision.")
+    return heads
+
+
+def validate_production_database_migration_state() -> None:
+    """Fail closed if production is not already migrated by Alembic."""
+    if not settings.is_production:
+        return
+    if not database_configured():
+        raise RuntimeError("DATABASE_URL must be configured in production.")
+
+    expected_heads = _current_alembic_heads()
+    try:
+        from sqlalchemy import inspect, text
+
+        engine = get_engine()
+        with engine.connect() as connection:
+            table_names = set(inspect(connection).get_table_names())
+            if "alembic_version" not in table_names:
+                raise RuntimeError(
+                    "Database schema is not Alembic-managed. Run `python -m alembic upgrade head` "
+                    "before starting production."
+                )
+            versions = {
+                str(row[0])
+                for row in connection.execute(text("SELECT version_num FROM alembic_version")).all()
+                if row[0]
+            }
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            "Database migration validation failed. Run `python -m alembic upgrade head` "
+            "before starting production."
+        ) from exc
+
+    if versions != expected_heads:
+        raise RuntimeError(
+            "Database schema is not at the current Alembic head. Run `python -m alembic upgrade head` "
+            "before starting production."
+        )
+    logger.info("Database Alembic migration state verified.")
+
+
+def ensure_database_schema_ready_for_startup() -> None:
+    if settings.is_production:
+        validate_production_database_migration_state()
+        return
+    if database_configured():
+        try:
+            init_db()
+            logger.info("Development database schema ensured via SQLAlchemy create_all.")
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Database init skipped (dev): %s", exc)
 
 
 def _configured_web_worker_count() -> int:
@@ -188,17 +259,7 @@ async def lifespan(app: FastAPI):
     vault = vault_status()
     if settings.is_production and not vault["ready"]:
         raise RuntimeError(f"Encrypted credential vault unavailable: {vault['error']}")
-    # Multi-user layer: ensure Neon schema exists (additive; paper mode unaffected).
-    if database_configured():
-        try:
-            init_db()
-            logger.info("Neon database schema ensured.")
-        except Exception as exc:  # pragma: no cover
-            if settings.is_production:
-                raise
-            logger.warning("Database init skipped (dev): %s", exc)
-    elif settings.is_production:
-        raise RuntimeError("DATABASE_URL must be configured in production.")
+    ensure_database_schema_ready_for_startup()
     if settings.is_production and not user_vault_ready():
         raise RuntimeError("CREDENTIAL_ENCRYPTION_KEY is missing or invalid; refusing to start in production.")
     start_instrument_cache_warmup()

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine, text
 
 from app.config import settings
 from app.main import validate_production_configuration
@@ -92,6 +94,104 @@ def test_production_auth_disabled_fails_startup_safely(monkeypatch):
     assert message == "AUTH_REQUIRED must be true in production."
     assert "google-secret-should-not-leak" not in message
     assert "GOOGLE_CLIENT_SECRET" not in message
+
+
+def test_production_missing_database_url_fails_startup_safely(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        enable_live_orders=False,
+    )
+    monkeypatch.setattr(settings, "DATABASE_URL", "", raising=False)
+
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration()
+
+    assert str(exc.value) == "DATABASE_URL must be set in production (Neon PostgreSQL)."
+
+
+def test_production_schema_startup_uses_alembic_guard_not_create_all(monkeypatch):
+    import app.main as main_module
+
+    _set_production_live_baseline(
+        monkeypatch,
+        enable_live_orders=False,
+    )
+    calls: dict[str, bool] = {}
+
+    def fake_validate_migrations() -> None:
+        calls["migration_guard"] = True
+
+    def fail_init_db() -> None:
+        raise AssertionError("production startup must not call init_db/create_all")
+
+    monkeypatch.setattr(main_module, "validate_production_database_migration_state", fake_validate_migrations)
+    monkeypatch.setattr(main_module, "init_db", fail_init_db)
+
+    main_module.ensure_database_schema_ready_for_startup()
+
+    assert calls == {"migration_guard": True}
+
+
+def test_production_migration_validation_accepts_current_head(monkeypatch, tmp_path):
+    import app.main as main_module
+
+    db_path = tmp_path / "migrated.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(64) NOT NULL)"))
+        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('current_head')"))
+
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://user:secret@db.example/nova", raising=False)
+    monkeypatch.setattr(main_module, "_current_alembic_heads", lambda: {"current_head"})
+    monkeypatch.setattr(main_module, "get_engine", lambda: engine)
+
+    main_module.validate_production_database_migration_state()
+
+
+def test_production_migration_validation_requires_alembic_version_safely(monkeypatch, tmp_path):
+    import app.main as main_module
+
+    secret_url = "postgresql://user:database-secret@db.example/nova"
+    engine = create_engine(f"sqlite:///{tmp_path / 'unmigrated.db'}")
+
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "DATABASE_URL", secret_url, raising=False)
+    monkeypatch.setattr(main_module, "_current_alembic_heads", lambda: {"current_head"})
+    monkeypatch.setattr(main_module, "get_engine", lambda: engine)
+
+    with pytest.raises(RuntimeError) as exc:
+        main_module.validate_production_database_migration_state()
+
+    message = str(exc.value)
+    assert message == (
+        "Database schema is not Alembic-managed. Run `python -m alembic upgrade head` "
+        "before starting production."
+    )
+    assert "database-secret" not in message
+    assert "postgresql://" not in message
+
+
+def test_nonproduction_schema_startup_keeps_dev_init_db_convenience(monkeypatch):
+    import app.main as main_module
+
+    monkeypatch.setattr(settings, "APP_ENV", "local", raising=False)
+    monkeypatch.setattr(settings, "DATABASE_URL", "sqlite:///dev-test.db", raising=False)
+    calls: dict[str, bool] = {}
+
+    monkeypatch.setattr(main_module, "init_db", lambda: calls.setdefault("init_db", True))
+
+    main_module.ensure_database_schema_ready_for_startup()
+
+    assert calls == {"init_db": True}
+
+
+def test_vps_deploy_uses_alembic_not_legacy_init_script():
+    repo_root = Path(__file__).resolve().parents[3]
+    deploy_script = (repo_root / "deploy" / "deploy_vps.sh").read_text(encoding="utf-8")
+
+    assert ".venv/bin/python -m alembic upgrade head" in deploy_script
+    assert "scripts.init_db" not in deploy_script
 
 
 def test_prod_alias_auth_disabled_fails_startup(monkeypatch):

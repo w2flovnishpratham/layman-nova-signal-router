@@ -29,7 +29,7 @@ backend/.venv/bin/pip install -r backend/requirements.txt
 bash deploy/configure_vps_env.sh "$repo_dir"
 (
   cd backend
-  .venv/bin/python -m scripts.init_db
+  .venv/bin/python -m alembic upgrade head
 )
 
 install -m 644 deploy/layman-nova-signal-router.service /etc/systemd/system/layman-nova-signal-router.service

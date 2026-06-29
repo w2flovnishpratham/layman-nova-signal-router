@@ -18,7 +18,7 @@ webhooks.
 ### New files (backend)
 ```
 app/db/__init__.py
-app/db/engine.py                     # Neon engine + URL normalizer + init_db
+app/db/engine.py                     # Neon engine + URL normalizer + dev/test init_db
 app/db/models.py                     # users, user_sessions, user_credential_vaults, user_runs, audit_logs
 app/db/crud.py                       # user/session/run/audit data-access helpers
 app/auth/__init__.py
@@ -32,7 +32,7 @@ app/routers/user_credentials.py      # /api/user/credentials (GET status / POST 
 app/routers/live.py                  # /api/live/start|stop|status|logs|readiness
 app/routers/user_webhook.py          # /api/webhook/user/{user_id} (HMAC + replay protection)
 app/routers/admin.py                 # /api/admin/users|runs|health (admin-gated)
-scripts/init_db.py                   # production schema init script
+scripts/init_db.py                   # legacy local/dev schema helper
 app/tests/conftest_multiuser.py      # shared fixtures (SQLite) for the new tests
 app/tests/test_db_url_normalizer.py
 app/tests/test_auth_login.py
@@ -46,8 +46,8 @@ app/tests/test_live_guard.py
 ```
 app/config.py        # new settings: DATABASE_URL, AUTH_REQUIRED, APP_SECRET_KEY,
                      #   CREDENTIAL_ENCRYPTION_KEY, GOOGLE_*, ADMIN_EMAILS, cookie flags
-app/main.py          # include new routers; init_db on startup; CORS allow_credentials=True;
-                     #   production fail-loud checks for secrets + DB
+app/main.py          # include new routers; CORS allow_credentials=True;
+                     #   production fail-loud checks for secrets, DB, and Alembic state
 requirements.txt     # + SQLAlchemy, psycopg[binary], itsdangerous
 .env.example         # documented all new env vars
 .gitignore (backend) # allow .env.production.example
@@ -98,8 +98,8 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env               # then edit .env
 
-# Optional: initialize Neon schema (only if DATABASE_URL is set)
-python -m scripts.init_db
+# Optional: initialize/update DB schema (only if DATABASE_URL is set)
+python -m alembic upgrade head
 
 uvicorn app.main:app --reload --port 8001
 ```
@@ -132,7 +132,7 @@ existing systemd unit (`deploy/layman-nova-signal-router.service`) or Docker.
 cd backend
 source .venv/bin/activate
 pip install -r requirements.txt          # picks up SQLAlchemy / psycopg / itsdangerous
-python -m scripts.init_db                # one-time (and after model changes)
+python -m alembic upgrade head           # one-time and after migrations
 
 # restart your service (systemd example)
 sudo systemctl restart layman-nova-signal-router
@@ -170,7 +170,8 @@ For local http, set `SESSION_COOKIE_SECURE=false` in `.env`.
 2. Put it in `DATABASE_URL` (env only — never hardcode).
 3. The backend auto-normalizes `postgresql://` → `postgresql+psycopg://` and **keeps**
    `sslmode` and `channel_binding`. No manual change needed.
-4. Run `python -m scripts.init_db` to create tables (or they’re auto-created on startup in dev).
+4. Run `python -m alembic upgrade head` to create/update tables. Production startup
+   verifies Alembic state and does not use SQLAlchemy `create_all()` as schema authority.
 
 ---
 

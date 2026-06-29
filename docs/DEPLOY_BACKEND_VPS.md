@@ -55,6 +55,8 @@ BACKEND_PORT=8000
 BACKEND_PUBLIC_BASE_URL=https://api.yourdomain.com
 FRONTEND_ORIGIN=https://your-vercel-app.vercel.app
 
+DATABASE_URL=<NEON_PRODUCTION_DATABASE_URL>
+
 DHAN_MODE=REAL
 ENABLE_LIVE_ORDERS=false
 
@@ -85,6 +87,33 @@ AWS_PROXY_SHARED_PASSWORD=REPLACE_WITH_SECRET
 | `WEBHOOK_SECRET` | Configure via the frontend setup page → stored encrypted server-side |
 
 Putting credentials in `.env` bypasses the encrypted vault and exposes them in plaintext.
+Never commit the Neon `DATABASE_URL`; keep it only in the VPS environment or secret store.
+
+### Database schema
+
+Create a new Neon production database or branch, set `DATABASE_URL` in the VPS
+environment, then run Alembic from the backend directory before starting the
+service:
+
+```bash
+cd /opt/nova-signal-router/backend
+source .venv/bin/activate
+python -m alembic upgrade head
+python -m alembic current
+```
+
+Verify the expected tables exist:
+
+```sql
+select table_name
+from information_schema.tables
+where table_schema = 'public'
+order by table_name;
+```
+
+Production startup treats Alembic as the schema authority. Do not use
+`python -m scripts.init_db` or SQLAlchemy `create_all()` for production schema
+initialization.
 
 ---
 
@@ -254,6 +283,7 @@ ssh deploy@YOUR_VPS_IP "cd /opt/nova-signal-router && bash scripts/deploy_vps.sh
 The deploy script:
 - fetches the target git ref
 - installs backend requirements into `backend/.venv`
+- runs `python -m alembic upgrade head` from `backend`
 - compiles backend Python files
 - keeps `.env`, `runtime_state`, `runtime_logs`, and `data` on the VPS
 - restarts `nova-signal-router`
