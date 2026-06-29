@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.auth.dependencies import get_current_user
 from app.config import settings
+from app.services.execution_context import bind_user_execution_context
 from app.services import live_engine
 from app.services.user_context import CurrentUser
 
@@ -41,7 +42,8 @@ def live_readiness(
     uses_webhook: bool = False,
     user: CurrentUser = Depends(get_current_user),
 ) -> dict:
-    return live_engine.evaluate_live_readiness(user, execution_mode, uses_webhook=uses_webhook)
+    with bind_user_execution_context(user):
+        return live_engine.evaluate_live_readiness(user, execution_mode, uses_webhook=uses_webhook)
 
 
 @router.post("/start")
@@ -53,13 +55,14 @@ def live_start(payload: LiveStartPayload, user: CurrentUser = Depends(get_curren
         "quantity": payload.quantity,
         "risk_config": payload.risk_config,
     }
-    result = live_engine.start_run(
-        user,
-        strategy_name=payload.strategy_name,
-        execution_mode=payload.execution_mode,
-        config=config,
-        uses_webhook=payload.uses_webhook,
-    )
+    with bind_user_execution_context(user):
+        result = live_engine.start_run(
+            user,
+            strategy_name=payload.strategy_name,
+            execution_mode=payload.execution_mode,
+            config=config,
+            uses_webhook=payload.uses_webhook,
+        )
     if not result["ok"]:
         raise HTTPException(
             status_code=412,  # Precondition Failed — safety checks not met

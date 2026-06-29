@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -22,24 +23,19 @@ class _TokenValidation:
 
 
 def _allow_real_order_readiness(monkeypatch):
+    _arm_real_order_flags(monkeypatch)
+    _patch_verified_egress(monkeypatch)
+
+
+def _arm_real_order_flags(monkeypatch):
     from app.config import settings
-    from app.services import strategy_fanout
     from app.workers import strategy_job_worker
 
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True, raising=False)
     monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
     monkeypatch.setattr(settings, "EXECUTION_NODE_ROUTING_ENABLED", True, raising=False)
-    monkeypatch.setattr(
-        strategy_fanout,
-        "user_egress_status",
-        lambda user_id: {
-            "public_ip": "13.203.58.220",
-            "active": True,
-            "has_proxy": True,
-            "verified": True,
-        },
-    )
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
     monkeypatch.setattr(
         strategy_job_worker,
         "strategy_job_worker_status",
@@ -47,10 +43,45 @@ def _allow_real_order_readiness(monkeypatch):
     )
 
 
+def _patch_verified_egress(monkeypatch, *, verified: bool = True):
+    from app.services import strategy_fanout
+
+    proxy_url = "http://nova_user_1:secret@13.203.58.220:3001"
+    monkeypatch.setattr(
+        strategy_fanout,
+        "user_egress_status",
+        lambda user_id: {
+            "public_ip": "13.203.58.220",
+            "active": True,
+            "has_proxy": True,
+            "verified": verified,
+            "last_observed_ip": "13.203.58.220" if verified else "198.51.100.10",
+        },
+    )
+    monkeypatch.setattr(
+        strategy_fanout,
+        "get_user_egress",
+        lambda user_id: {
+            "public_ip": "13.203.58.220",
+            "expected_egress_ip": "13.203.58.220",
+            "proxy_url": proxy_url,
+            "active": True,
+            "verified": verified,
+            "last_observed_ip": "13.203.58.220" if verified else "198.51.100.10",
+            "last_verified_at": "2026-06-29T00:00:00+00:00" if verified else None,
+        },
+    )
+
+
 def _patch_token_validation(monkeypatch, *, success: bool, calls: dict[str, int] | None = None, status_code: int | None = 200):
     from app.services import live_engine
 
     class FakeDhanClient:
+        def __init__(self, *args, **kwargs) -> None:
+            if calls is not None:
+                calls["init_args"] = args
+                calls["init_kwargs"] = kwargs
+
         def validate_token(self, *, client_id, access_token):
             if calls is not None:
                 calls["validate_token"] = calls.get("validate_token", 0) + 1
@@ -59,6 +90,16 @@ def _patch_token_validation(monkeypatch, *, success: bool, calls: dict[str, int]
             return _TokenValidation(success=success, status_code=status_code)
 
     monkeypatch.setattr(live_engine, "RealDhanClient", FakeDhanClient)
+
+
+def _live_client(user):
+    from app.auth.dependencies import get_current_user
+    from app.routers import live
+
+    app = FastAPI()
+    app.include_router(live.router)
+    app.dependency_overrides[get_current_user] = lambda: _ctx(user)
+    return TestClient(app)
 
 
 def test_real_orders_blocked_without_enable_live_orders(mu_db, monkeypatch):
@@ -94,6 +135,119 @@ def test_real_orders_allowed_only_when_all_flags_set(mu_db, monkeypatch):
     assert readiness["checks"]["dhan_token_profile_valid"] is True
     assert readiness["checks"]["dhan_token_validation_method"] == "dhan_profile"
     assert calls["validate_token"] == 1
+    assert calls["init_kwargs"]["proxy_url"] == "http://nova_user_1:secret@13.203.58.220:3001"
+    assert calls["init_kwargs"]["expected_egress_ip"] == "13.203.58.220"
+
+
+def test_real_orders_readiness_uses_proxy_not_direct_transport(mu_db, monkeypatch):
+    from app.services import live_engine, user_credential_vault as vault
+
+    _allow_real_order_readiness(monkeypatch)
+    recorder: dict[str, object] = {}
+
+    class FakeHTTPClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers):
+            recorder["url"] = url
+            recorder["headers"] = headers
+            return httpx.Response(200, json={"dhanClientId": "1100123456"})
+
+    def fake_client(*args, **kwargs):
+        recorder["client_args"] = args
+        recorder["client_kwargs"] = kwargs
+        return FakeHTTPClient()
+
+    monkeypatch.setattr("app.services.dhan_client.httpx.Client", fake_client)
+    user = make_user("proxy-bound-readiness@gmail.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
+
+    readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
+
+    assert readiness["ready"] is True
+    client_kwargs = recorder["client_kwargs"]
+    assert client_kwargs["proxy"] == "http://nova_user_1:secret@13.203.58.220:3001"
+    assert "transport" not in client_kwargs
+
+
+def test_real_orders_readiness_fails_without_verified_egress(mu_db, monkeypatch):
+    from app.services import live_engine, user_credential_vault as vault
+
+    _arm_real_order_flags(monkeypatch)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
+    user = make_user("no-egress@gmail.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
+
+    readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
+
+    assert readiness["ready"] is False
+    assert readiness["real_orders_allowed"] is False
+    assert any("No Dhan static-IP execution node" in b for b in readiness["blockers"])
+    assert calls == {}
+
+
+def test_real_orders_readiness_fails_when_egress_is_unverified(mu_db, monkeypatch):
+    from app.services import live_engine, user_credential_vault as vault
+
+    _arm_real_order_flags(monkeypatch)
+    _patch_verified_egress(monkeypatch, verified=False)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
+    user = make_user("unverified-egress@gmail.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
+
+    readiness = live_engine.evaluate_live_readiness(_ctx(user), "real_orders")
+
+    assert readiness["ready"] is False
+    assert any("not verified" in b for b in readiness["blockers"])
+    assert calls == {}
+
+
+def test_live_readiness_endpoint_fails_without_verified_egress(mu_db, monkeypatch):
+    from app.services import user_credential_vault as vault
+
+    _arm_real_order_flags(monkeypatch)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
+    user = make_user("readiness-no-egress@gmail.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
+
+    response = _live_client(user).get("/api/live/readiness", params={"execution_mode": "real_orders"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ready"] is False
+    assert body["real_orders_allowed"] is False
+    assert any("No Dhan static-IP execution node" in b for b in body["blockers"])
+    assert calls == {}
+
+
+def test_live_start_endpoint_fails_without_verified_egress(mu_db, monkeypatch):
+    from app.services import user_credential_vault as vault
+
+    _arm_real_order_flags(monkeypatch)
+    calls: dict[str, int] = {}
+    _patch_token_validation(monkeypatch, success=True, calls=calls)
+    user = make_user("start-no-egress@gmail.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="eyJ0eXA-aaaaaaaaaaaaaaaaa")
+
+    response = _live_client(user).post(
+        "/api/live/start",
+        json={"strategy_name": "s", "execution_mode": "real_orders"},
+    )
+
+    assert response.status_code == 412
+    body = response.json()
+    readiness = body["detail"]["readiness"]
+    assert readiness["execution_mode"] == "real_orders"
+    assert readiness["real_orders_allowed"] is False
+    assert any("No Dhan static-IP execution node" in b for b in readiness["blockers"])
+    assert calls == {}
 
 
 def test_real_order_start_rejects_missing_token(mu_db, monkeypatch):
@@ -149,7 +303,10 @@ def test_real_order_start_rejects_failed_dhan_validation_safely(mu_db, monkeypat
     serialized = str(result)
     assert secret_token not in serialized
     assert "access_token" not in serialized
+    assert "nova_user_1" not in serialized
+    assert "secret@13.203.58.220" not in serialized
     assert calls["validate_token"] == 1
+    assert calls["init_kwargs"]["proxy_url"] == "http://nova_user_1:secret@13.203.58.220:3001"
 
 
 def test_real_order_start_accepts_only_after_safe_dhan_validation(mu_db, monkeypatch):

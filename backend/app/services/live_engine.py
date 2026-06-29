@@ -33,6 +33,12 @@ from app.db import crud
 from app.db.engine import database_configured, session_scope
 from app.services import user_credential_vault as vault
 from app.services.dhan_client import RealDhanClient
+from app.services.execution_context import (
+    LiveEgressGuardError,
+    bind_user_execution_context,
+    current_execution_context,
+    require_verified_live_egress,
+)
 from app.services.user_context import CurrentUser, user_runtime_log_dir, user_runtime_state_dir
 
 EXECUTION_MODES = {"signal_only", "paper_live_data", "real_orders"}
@@ -83,28 +89,43 @@ def _basic_token_validation(creds) -> bool:
     return bool(creds.client_id and creds.access_token and len(creds.access_token) >= 20)
 
 
-def _validate_dhan_token_for_real_orders(creds) -> dict[str, Any]:
+def _validate_dhan_token_for_real_orders(user: CurrentUser, creds) -> dict[str, Any]:
     """Validate a live-order token with a read-only Dhan profile call."""
     if creds is None:
         return {"ok": False, "status_code": None, "message": "Dhan token is missing or expired."}
-    try:
-        validation = RealDhanClient().validate_token(
+
+    def _validate_with_bound_egress() -> dict[str, Any]:
+        context = require_verified_live_egress()
+        expected_ip = context.expected_egress_ip or context.egress_ip
+        validation = RealDhanClient(
+            proxy_url=context.proxy_url,
+            expected_egress_ip=expected_ip,
+        ).validate_token(
             client_id=creds.client_id,
             access_token=creds.access_token,
         )
+        if not validation.success:
+            return {
+                "ok": False,
+                "status_code": validation.status_code,
+                "message": "Dhan token validation failed.",
+            }
+        return {
+            "ok": True,
+            "status_code": validation.status_code,
+            "message": "Dhan token validation passed.",
+        }
+
+    try:
+        context = current_execution_context()
+        if context is not None and context.user.id == user.id:
+            return _validate_with_bound_egress()
+        with bind_user_execution_context(user):
+            return _validate_with_bound_egress()
+    except LiveEgressGuardError:
+        return {"ok": False, "status_code": None, "message": "Verified egress is required for live readiness."}
     except Exception:
         return {"ok": False, "status_code": None, "message": "Live readiness validation failed."}
-    if not validation.success:
-        return {
-            "ok": False,
-            "status_code": validation.status_code,
-            "message": "Dhan token validation failed.",
-        }
-    return {
-        "ok": True,
-        "status_code": validation.status_code,
-        "message": "Dhan token validation passed.",
-    }
 
 
 def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webhook: bool = False) -> dict[str, Any]:
@@ -206,7 +227,7 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
             blockers.append("WEBHOOK_HMAC_REQUIRED=true but no webhook secret saved for this user.")
 
     if execution_mode == "real_orders" and not blockers:
-        validation = _validate_dhan_token_for_real_orders(creds)
+        validation = _validate_dhan_token_for_real_orders(user, creds)
         checks["dhan_token_profile_valid"] = bool(validation.get("ok"))
         checks["dhan_token_validation_method"] = "dhan_profile"
         checks["dhan_token_validation_status_code"] = validation.get("status_code")
