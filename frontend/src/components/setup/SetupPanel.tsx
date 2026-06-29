@@ -1,6 +1,8 @@
 import { FlaskConical, Loader2, Zap } from 'lucide-react'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
+import { createRazorpaySubscription } from '../../api'
+import type { RazorpayPlanCode } from '../../api'
 import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
@@ -414,10 +416,77 @@ function DeploymentSummary({ draft, lotSize, onDeploy }: { draft: SetupDraft; lo
           <strong>{draft.maxTrades ? `${draft.maxTrades} trades` : 'None'} | {draft.maxLoss ? formatCurrency(draft.maxLoss) : 'None'}</strong>
         </div>
       </div>
+      {draft.engineMode === 'live' ? <RazorpayTestCheckoutCard /> : null}
       <button className="live-confirm" type="button" onClick={onDeploy}>
         {draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Trade Real Money - Confirm'}
       </button>
     </article>
+  )
+}
+
+function RazorpayTestCheckoutCard() {
+  const [planCode, setPlanCode] = useState<RazorpayPlanCode>('live_monthly')
+  const [pending, setPending] = useState(false)
+  const [status, setStatus] = useState<'not_active' | 'pending_confirmation'>('not_active')
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  async function startCheckout() {
+    setPending(true)
+    setError('')
+    setMessage('')
+    try {
+      const checkout = await createRazorpaySubscription(planCode)
+      const checkoutUrl = checkout.checkout_url || checkout.short_url
+      if (!checkoutUrl) {
+        throw new Error('Checkout link was not returned.')
+      }
+      const opened = window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
+      if (!opened) {
+        throw new Error('Allow pop-ups to open Razorpay checkout.')
+      }
+      setStatus('pending_confirmation')
+      setMessage('Complete checkout, then wait for payment confirmation.')
+    } catch (checkoutError) {
+      setError(checkoutError instanceof Error ? checkoutError.message : 'Could not start Razorpay checkout.')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <section className="subscription-access-card" aria-live="polite">
+      <div className="subscription-access-header">
+        <h4>Activate Nova Access</h4>
+        <span className={status === 'pending_confirmation' ? 'subscription-pending' : ''}>
+          {status === 'pending_confirmation' ? 'Pending payment confirmation' : 'Not active'}
+        </span>
+      </div>
+      <p>Test mode only. Access activates after Razorpay webhook confirms payment.</p>
+      <label className="subscription-plan-control">
+        Plan
+        <select
+          value={planCode}
+          disabled={pending}
+          onChange={(event) => setPlanCode(event.target.value as RazorpayPlanCode)}
+        >
+          <option value="bundle_monthly">Bundle monthly</option>
+          <option value="live_monthly">Live monthly</option>
+          <option value="static_ip_monthly">Static IP monthly</option>
+          <option value="strategy_monthly">Strategy monthly</option>
+        </select>
+      </label>
+      <button className="checkout-button" type="button" disabled={pending} onClick={startCheckout}>
+        {pending ? (
+          <MotionSpinner>
+            <Loader2 size={14} />
+          </MotionSpinner>
+        ) : null}
+        {pending ? 'Creating Checkout' : 'Start Razorpay Test Checkout'}
+      </button>
+      {message ? <p className="subscription-status-row">{message}</p> : null}
+      {error ? <p className="subscription-error">{error}</p> : null}
+    </section>
   )
 }
 

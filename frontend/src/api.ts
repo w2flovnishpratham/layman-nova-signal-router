@@ -37,6 +37,19 @@ export interface EgressOptionsResponse {
   egress: EgressStatus
 }
 
+export type RazorpayPlanCode = 'live_monthly' | 'static_ip_monthly' | 'strategy_monthly' | 'bundle_monthly'
+
+export interface RazorpayCheckoutResponse {
+  ok: boolean
+  provider: 'razorpay'
+  checkout_url: string | null
+  short_url: string | null
+  subscription_id: string
+  plan_code: RazorpayPlanCode
+  status: string
+  message: string
+}
+
 async function apiFetch(path: `/${string}`, init: RequestInit = {}): Promise<Response> {
   return fetch(backendHttpUrl(path), {
     ...init,
@@ -185,6 +198,22 @@ export async function verifyEgressIp(): Promise<void> {
   if (!body?.ok) {
     throw new Error(body?.egress?.error || 'Static IP verification failed.')
   }
+}
+
+export async function createRazorpaySubscription(planCode: RazorpayPlanCode): Promise<RazorpayCheckoutResponse> {
+  const response = await apiFetch('/api/payments/razorpay/create-subscription', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan_code: planCode }),
+  })
+  const body = await response.json().catch(() => null) as RazorpayCheckoutResponse & { error?: string } | null
+  if (!response.ok) {
+    throw new Error(body?.error || `Could not create Razorpay checkout: ${response.status}`)
+  }
+  if (!body?.ok) {
+    throw new Error(body?.error || 'Could not create Razorpay checkout.')
+  }
+  return body
 }
 
 export async function getMarketSnapshot(): Promise<MarketSnapshot> {
