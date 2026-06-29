@@ -86,7 +86,7 @@ def _validate_live_aws_proxy_slots() -> None:
 
 
 def validate_production_configuration() -> None:
-    if settings.APP_ENV.lower() != "production":
+    if not settings.is_production:
         return
 
     session_secret = settings.SESSION_TOKEN_SECRET.strip()
@@ -108,14 +108,15 @@ def validate_production_configuration() -> None:
         )
     if not database_configured():
         raise RuntimeError("DATABASE_URL must be set in production (Neon PostgreSQL).")
-    if settings.AUTH_REQUIRED:
-        for name, value in (
-            ("GOOGLE_CLIENT_ID", settings.GOOGLE_CLIENT_ID),
-            ("GOOGLE_CLIENT_SECRET", settings.GOOGLE_CLIENT_SECRET),
-            ("GOOGLE_REDIRECT_URI", settings.GOOGLE_REDIRECT_URI),
-        ):
-            if not (value or "").strip():
-                raise RuntimeError(f"AUTH_REQUIRED=true but {name} is not configured.")
+    if not settings.AUTH_REQUIRED:
+        raise RuntimeError("AUTH_REQUIRED must be true in production.")
+    for name, value in (
+        ("GOOGLE_CLIENT_ID", settings.GOOGLE_CLIENT_ID),
+        ("GOOGLE_CLIENT_SECRET", settings.GOOGLE_CLIENT_SECRET),
+        ("GOOGLE_REDIRECT_URI", settings.GOOGLE_REDIRECT_URI),
+    ):
+        if not (value or "").strip():
+            raise RuntimeError(f"AUTH_REQUIRED=true but {name} is not configured.")
     if len((settings.STRATEGY_WEBHOOK_SECRET or "").strip()) < 24:
         raise RuntimeError(
             "STRATEGY_WEBHOOK_SECRET must be set to at least 24 random characters in production."
@@ -155,7 +156,7 @@ async def lifespan(app: FastAPI):
     init_runtime_files()
     sync_runtime_flags_from_env()
     vault = vault_status()
-    if settings.APP_ENV.lower() == "production" and not vault["ready"]:
+    if settings.is_production and not vault["ready"]:
         raise RuntimeError(f"Encrypted credential vault unavailable: {vault['error']}")
     # Multi-user layer: ensure Neon schema exists (additive; paper mode unaffected).
     if database_configured():
@@ -253,7 +254,7 @@ app = FastAPI(
 )
 
 cors_origins = [settings.FRONTEND_ORIGIN, settings.FRONTEND_URL]
-if settings.APP_ENV.lower() != "production":
+if not settings.is_production:
     cors_origins.extend(["http://localhost:5173", "http://127.0.0.1:5173"])
 cors_origins = [origin.rstrip("/") for origin in dict.fromkeys(cors_origins) if origin]
 

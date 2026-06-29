@@ -238,7 +238,7 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        return self.APP_ENV.strip().lower() == "production"
+        return self.APP_ENV.strip().lower() in {"production", "prod"}
 
 
 settings = Settings()

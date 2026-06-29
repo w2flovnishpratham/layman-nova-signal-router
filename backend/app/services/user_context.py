@@ -49,6 +49,8 @@ def is_admin_user(email: str | None) -> bool:
 
 
 def dev_user() -> CurrentUser:
+    if settings.is_production:
+        raise RuntimeError("Dev user fallback is disabled in production.")
     return CurrentUser(
         id=DEV_USER_ID,
         email=DEV_USER_EMAIL,

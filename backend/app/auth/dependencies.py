@@ -47,7 +47,7 @@ def _resolve_user(request: Request) -> CurrentUser | None:
 def _authenticated_or_dev(user: CurrentUser | None) -> CurrentUser | None:
     if user is not None:
         return user
-    if not settings.AUTH_REQUIRED:
+    if not settings.AUTH_REQUIRED and not settings.is_production:
         return dev_user()
     return None
 

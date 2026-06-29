@@ -1,6 +1,7 @@
 """Google login: open to any verified user; ADMIN_EMAILS never blocks login."""
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -35,6 +36,7 @@ def test_me_dev_fallback_when_auth_not_required(monkeypatch):
     from app.config import settings
     from app.auth.google import router
 
+    monkeypatch.setattr(settings, "APP_ENV", "local", raising=False)
     monkeypatch.setattr(settings, "AUTH_REQUIRED", False, raising=False)
     monkeypatch.setattr(settings, "APP_SECRET_KEY", "y" * 48, raising=False)
     app = FastAPI()
@@ -48,10 +50,40 @@ def test_me_dev_fallback_when_auth_not_required(monkeypatch):
     assert body["user"]["is_admin"] is False
 
 
+def test_me_production_auth_disabled_does_not_return_dev_user(monkeypatch):
+    from app.config import settings
+    from app.auth.google import router
+
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", False, raising=False)
+    monkeypatch.setattr(settings, "APP_SECRET_KEY", "y" * 48, raising=False)
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    resp = client.get("/api/me")
+
+    assert resp.status_code == 401
+    assert resp.json() == {"authenticated": False, "user": None}
+
+
+def test_dev_user_helper_fails_closed_in_production(monkeypatch):
+    from app.config import settings
+    from app.services.user_context import dev_user
+
+    monkeypatch.setattr(settings, "APP_ENV", "prod", raising=False)
+
+    with pytest.raises(RuntimeError) as exc:
+        dev_user()
+
+    assert str(exc.value) == "Dev user fallback is disabled in production."
+
+
 def test_me_unauthenticated_when_auth_required(monkeypatch):
     from app.config import settings
     from app.auth.google import router
 
+    monkeypatch.setattr(settings, "APP_ENV", "local", raising=False)
     monkeypatch.setattr(settings, "AUTH_REQUIRED", True, raising=False)
     monkeypatch.setattr(settings, "APP_SECRET_KEY", "y" * 48, raising=False)
     app = FastAPI()
