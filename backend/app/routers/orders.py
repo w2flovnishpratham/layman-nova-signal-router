@@ -14,6 +14,8 @@ from app.schemas.signal import NormalizedSignal
 from app.services.atm_ltp_service import get_atm_option_snapshot
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret
 from app.services.dhan_client import get_broker_client
+from app.services import entitlements
+from app.services.execution_context import current_execution_user
 from app.services.execution_router import route_signal
 from app.services.normalized_errors import classify_failure
 from app.services.paper_portfolio import resize_paper_open_trade_quantity
@@ -122,6 +124,9 @@ def manual_entry(request: Request, body: ManualEntryRequest) -> Any:
     blocked = _attach_manual_idempotency_or_block(signal, request)
     if blocked is not None:
         return blocked
+    blocked = _manual_live_entitlement_or_block(signal)
+    if blocked is not None:
+        return blocked
     execution_result = route_signal(signal)
     return _manual_response(execution_result)
 
@@ -162,6 +167,9 @@ def manual_exit(request: Request, body: ManualExitRequest) -> Any:
     blocked = _attach_manual_idempotency_or_block(signal, request)
     if blocked is not None:
         return blocked
+    blocked = _manual_live_entitlement_or_block(signal)
+    if blocked is not None:
+        return blocked
     execution_result = route_signal(signal)
     return _manual_response(execution_result)
 
@@ -195,6 +203,9 @@ def manual_reverse(request: Request, body: ManualReverseRequest) -> Any:
         },
     )
     blocked = _attach_manual_idempotency_or_block(signal, request)
+    if blocked is not None:
+        return blocked
+    blocked = _manual_live_entitlement_or_block(signal)
     if blocked is not None:
         return blocked
     execution_result = route_signal(signal)
@@ -560,6 +571,41 @@ def _manual_auto_contract_allowed() -> bool:
 def _manual_live_order_requires_idempotency_key() -> bool:
     mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
     return settings.is_production and mode == "live" and settings.ENABLE_LIVE_ORDERS
+
+
+def _manual_order_can_place_real_orders() -> bool:
+    mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
+    return (
+        mode == "live"
+        and bool(settings.ENABLE_LIVE_ORDERS)
+        and settings.DHAN_MODE.upper() == "REAL"
+        and not settings.DHAN_READ_ONLY_REAL_DATA
+    )
+
+
+def _manual_live_entitlement_or_block(signal: NormalizedSignal) -> JSONResponse | None:
+    if not _manual_order_can_place_real_orders():
+        return None
+    user = current_execution_user()
+    if user is not None and user.is_dev and not settings.is_production:
+        return None
+    if user is None:
+        return _manual_block_response(
+            signal,
+            "Live entitlement is required.",
+            status_code=403,
+            block_code="LIVE_ENTITLEMENT_REQUIRED",
+        )
+    try:
+        entitlements.require_live_entitlement_for_user(user.id)
+    except entitlements.EntitlementError:
+        return _manual_block_response(
+            signal,
+            "Live entitlement is required.",
+            status_code=403,
+            block_code="LIVE_ENTITLEMENT_REQUIRED",
+        )
+    return None
 
 
 def _attach_manual_idempotency_or_block(signal: NormalizedSignal, request: Request) -> JSONResponse | None:

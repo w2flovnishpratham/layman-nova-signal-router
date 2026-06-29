@@ -18,7 +18,7 @@ from app.config import DEFAULT_STRATEGY_CODE, settings
 from app.db import crud, models
 from app.db.engine import database_configured, session_scope
 from app.schemas.signal import NormalizedSignal
-from app.services import live_engine, strategy_risk, user_credential_vault as vault
+from app.services import entitlements, live_engine, strategy_risk, user_credential_vault as vault
 from app.services.execution_context import bind_execution_context
 from app.services.execution_router import route_signal
 from app.services.state_store import init_runtime_files
@@ -56,6 +56,9 @@ def subscribe_user(
         raise ValueError(f"Invalid execution_mode '{execution_mode}'.")
     if lots < 1:
         raise ValueError("lots must be at least 1.")
+    if execution_mode == "real_orders":
+        entitlements.require_live_entitlement_for_user(user_id)
+        entitlements.require_strategy_entitlement_for_user(user_id)
 
     with session_scope() as db:
         row = db.scalar(
@@ -726,6 +729,10 @@ def dispatch_signal_job(
 
     egress = get_user_egress(user.id) if mode == "real_orders" else None
     if mode == "real_orders":
+        if not entitlements.has_live_entitlement_for_user(user.id):
+            return {**base, "status": "blocked", "reason": "live_entitlement_required"}
+        if not entitlements.has_strategy_entitlement_for_user(user.id):
+            return {**base, "status": "blocked", "reason": "strategy_entitlement_required"}
         if (
             not settings.ENABLE_LIVE_ORDERS
             or settings.DHAN_MODE.upper() != "REAL"

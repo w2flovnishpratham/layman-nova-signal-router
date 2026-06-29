@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from fastapi import FastAPI
@@ -160,6 +161,29 @@ def _bound_user(user_model):
     )
 
 
+def _grant_live_entitlement(user_model) -> None:
+    from app.db import models
+
+    now = models.utcnow()
+    with session_scope() as db:
+        db.add(
+            models.UserEntitlement(
+                user_id=user_model.id,
+                plan_code="nova_live",
+                status="active",
+                source="payment_provider",
+                starts_at=now - timedelta(days=1),
+                expires_at=now + timedelta(days=30),
+                live_orders_enabled=True,
+                static_ip_enabled=False,
+                strategy_access_enabled=False,
+                metadata_json={"test": "manual_order"},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+
 def test_manual_live_same_idempotency_key_same_payload_does_not_submit_twice(mu_db, monkeypatch, tmp_path):
     from app.services import execution_router
 
@@ -305,6 +329,92 @@ def test_production_manual_route_missing_idempotency_key_blocks_before_routing(m
     body = response.json()
     assert body["ok"] is False
     assert body["executionResult"]["block_code"] == "IDEMPOTENCY_KEY_REQUIRED"
+
+
+def test_manual_live_route_requires_live_entitlement_before_routing(monkeypatch, tmp_path):
+    from app.config import settings
+    from app.routers import orders as orders_router
+    from app.services import state_store
+
+    state_dir = tmp_path / "runtime_state"
+    monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
+    monkeypatch.setattr(state_store, "OPEN_POSITION_FILE", state_dir / "open_position.json")
+    monkeypatch.setattr(state_store, "PAPER_POSITION_FILE", state_dir / "paper_position.json")
+    monkeypatch.setattr(state_store, "PAPER_PORTFOLIO_FILE", state_dir / "paper_portfolio.json")
+    monkeypatch.setattr(state_store, "SETTINGS_FILE", state_dir / "settings.json")
+    state_store.init_runtime_files()
+    state_store.set_engine_mode("live")
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True, raising=False)
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
+    monkeypatch.setattr(
+        orders_router,
+        "route_signal",
+        lambda _signal: (_ for _ in ()).throw(AssertionError("entitlement must block before route_signal")),
+    )
+
+    app = FastAPI()
+    app.include_router(orders_router.router, prefix="/api")
+    response = TestClient(app).post(
+        "/api/orders/manual-entry",
+        headers={"Idempotency-Key": "manual-live-no-entitlement"},
+        json={"side": "CE", "lots": 1, "securityId": "CE123", "tradingSymbol": "NIFTY CE"},
+    )
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["ok"] is False
+    assert body["executionResult"]["block_code"] == "LIVE_ENTITLEMENT_REQUIRED"
+    assert "Live entitlement is required." in body["executionResult"]["reason"]
+
+
+def test_manual_live_route_allows_entitled_server_user_to_reach_router(mu_db, monkeypatch, tmp_path):
+    from app.config import settings
+    from app.routers import orders as orders_router
+    from app.services import state_store
+    from app.services.execution_context import bind_execution_context
+    from app.services.user_context import current_user_from_model
+    from starlette.requests import Request
+
+    state_dir = tmp_path / "runtime_state"
+    monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
+    monkeypatch.setattr(state_store, "OPEN_POSITION_FILE", state_dir / "open_position.json")
+    monkeypatch.setattr(state_store, "PAPER_POSITION_FILE", state_dir / "paper_position.json")
+    monkeypatch.setattr(state_store, "PAPER_PORTFOLIO_FILE", state_dir / "paper_portfolio.json")
+    monkeypatch.setattr(state_store, "SETTINGS_FILE", state_dir / "settings.json")
+    state_store.init_runtime_files()
+    state_store.set_engine_mode("live")
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True, raising=False)
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
+    user = make_user("manual-live-entitled-route@example.com")
+    _grant_live_entitlement(user)
+    routed: list[str] = []
+    monkeypatch.setattr(
+        orders_router,
+        "route_signal",
+        lambda signal: routed.append(signal.signal_id) or {"success": True, "status": "ORDER_PLACED"},
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/orders/manual-entry",
+            "headers": [(b"idempotency-key", b"manual-live-entitled")],
+        }
+    )
+    body = orders_router.ManualEntryRequest(
+        side="CE",
+        lots=1,
+        securityId="CE123",
+        tradingSymbol="NIFTY CE",
+    )
+
+    with bind_execution_context(current_user_from_model(user)):
+        response = orders_router.manual_entry(request, body)
+
+    assert response["ok"] is True
+    assert routed
 
 
 def test_tradingview_live_order_uses_signal_identity_for_idempotency(mu_db, monkeypatch, tmp_path):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -15,6 +15,37 @@ def _current_user(model):
     from app.services.user_context import current_user_from_model
 
     return current_user_from_model(model)
+
+
+def _grant_entitlement(
+    user,
+    *,
+    live: bool = False,
+    static_ip: bool = False,
+    strategy: bool = False,
+    status: str = "active",
+) -> None:
+    from app.db import models
+    from app.db.engine import session_scope
+
+    now = models.utcnow()
+    with session_scope() as db:
+        db.add(
+            models.UserEntitlement(
+                user_id=user.id,
+                plan_code="nova_test",
+                status=status,
+                source="payment_provider",
+                starts_at=now - timedelta(days=1),
+                expires_at=now + timedelta(days=30),
+                live_orders_enabled=live,
+                static_ip_enabled=static_ip,
+                strategy_access_enabled=strategy,
+                metadata_json={"test": "strategy_fanout"},
+                created_at=now,
+                updated_at=now,
+            )
+        )
 
 
 def _signal(secret: str, signal_id: str = "fanout-1"):
@@ -294,6 +325,8 @@ def test_authenticated_users_select_distinct_configured_egress_ips(
 
     alice = make_user("egress-alice@gmail.com")
     bob = make_user("egress-bob@gmail.com")
+    _grant_entitlement(alice, static_ip=True)
+    _grant_entitlement(bob, static_ip=True)
     monkeypatch.setattr(settings, "AWS_PROXY_SLOTS_ENABLED", False, raising=False)
     nodes = [
         {
@@ -370,6 +403,50 @@ def test_authenticated_users_select_distinct_configured_egress_ips(
     assert bob_selected.status_code == 200
 
 
+def test_egress_select_and_verify_require_static_ip_entitlement(mu_db, monkeypatch):
+    from app.auth.dependencies import get_current_user
+    from app.config import settings
+    from app.routers.strategies import router
+    from app.services import strategy_fanout
+
+    user = make_user("egress-no-entitlement@gmail.com")
+    monkeypatch.setattr(settings, "AWS_PROXY_SLOTS_ENABLED", False, raising=False)
+    monkeypatch.setattr(
+        settings,
+        "EGRESS_NODES_JSON",
+        json.dumps(
+            [
+                {
+                    "public_ip": "165.232.184.177",
+                    "proxy_url": "http://node-user:secret@64.225.87.19:8888",
+                }
+            ]
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy_fanout,
+        "verify_user_egress",
+        lambda _user_id: (_ for _ in ()).throw(AssertionError("static IP entitlement must block first")),
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: _current_user(user)
+    client = TestClient(app)
+
+    options = client.get("/api/strategies/egress/options")
+    selected = client.post("/api/strategies/egress/select", json={"public_ip": "165.232.184.177"})
+    verified = client.post("/api/strategies/egress/verify")
+
+    assert options.status_code == 403
+    assert selected.status_code == 403
+    assert verified.status_code == 403
+    for response in (options, selected, verified):
+        assert response.json()["error"] == "Static IP entitlement is required."
+        assert "secret" not in response.text
+
+
 def test_context_free_live_router_is_blocked_when_egress_routing_is_enabled(
     monkeypatch,
 ):
@@ -384,6 +461,162 @@ def test_context_free_live_router_is_blocked_when_egress_routing_is_enabled(
     )
     with pytest.raises(RuntimeError, match="Context-free live routing"):
         _live_broker_client()
+
+
+def test_strategy_real_order_subscription_requires_server_entitlement(mu_db):
+    from app.auth.dependencies import get_current_user
+    from app.routers.strategies import router
+
+    user = make_user("strategy-real-subscribe-entitlement@gmail.com")
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: _current_user(user)
+    client = TestClient(app)
+
+    blocked = client.post(
+        "/api/strategies/subscribe",
+        json={
+            "strategy_name": "supertrend",
+            "lots": 1,
+            "execution_mode": "real_orders",
+            "payment_status": "active",
+            "subscription_status": "active",
+            "is_paid": True,
+        },
+    )
+
+    assert blocked.status_code == 403
+    assert blocked.json()["error"] == "Live entitlement is required."
+
+    _grant_entitlement(user, live=True, strategy=True)
+    allowed = client.post(
+        "/api/strategies/subscribe",
+        json={"strategy_name": "supertrend", "lots": 1, "execution_mode": "real_orders"},
+    )
+
+    assert allowed.status_code == 200
+    assert allowed.json()["subscription"]["execution_mode"] == "real_orders"
+
+
+def test_strategy_signal_only_subscription_remains_offline_compatible(mu_db):
+    from app.services import strategy_fanout
+
+    user = make_user("strategy-signal-only-free@gmail.com")
+
+    subscription = strategy_fanout.subscribe_user(
+        user.id,
+        "supertrend",
+        lots=1,
+        execution_mode="signal_only",
+    )
+
+    assert subscription["execution_mode"] == "signal_only"
+
+
+def test_real_order_fanout_blocks_without_entitlement_before_routing(mu_db, monkeypatch):
+    from app.config import settings
+    from app.services import strategy_fanout
+
+    user = make_user("fanout-no-live-entitlement@gmail.com")
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True, raising=False)
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
+    monkeypatch.setattr(settings, "EXECUTION_NODE_ROUTING_ENABLED", True, raising=False)
+    monkeypatch.setattr(
+        strategy_fanout,
+        "route_signal",
+        lambda _signal: (_ for _ in ()).throw(AssertionError("entitlement must block before routing")),
+    )
+
+    result = strategy_fanout.dispatch_signal_job(
+        user_id=user.id,
+        strategy_name="supertrend",
+        lots=1,
+        execution_mode="real_orders",
+        signal=_signal("shared-secret", signal_id="fanout-no-entitlement"),
+    )
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "live_entitlement_required"
+
+
+def test_real_order_fanout_requires_strategy_entitlement_separately(mu_db, monkeypatch):
+    from app.config import settings
+    from app.services import strategy_fanout
+
+    user = make_user("fanout-no-strategy-entitlement@gmail.com")
+    _grant_entitlement(user, live=True, strategy=False)
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True, raising=False)
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
+    monkeypatch.setattr(settings, "EXECUTION_NODE_ROUTING_ENABLED", True, raising=False)
+
+    result = strategy_fanout.dispatch_signal_job(
+        user_id=user.id,
+        strategy_name="supertrend",
+        lots=1,
+        execution_mode="real_orders",
+        signal=_signal("shared-secret", signal_id="fanout-no-strategy-entitlement"),
+    )
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "strategy_entitlement_required"
+
+
+def test_real_order_fanout_dispatches_only_for_entitled_user(mu_db, monkeypatch):
+    from app.config import settings
+    from app.services import strategy_fanout
+    from app.services.execution_context import current_execution_user
+
+    entitled = make_user("fanout-entitled@gmail.com")
+    blocked = make_user("fanout-other-user@gmail.com")
+    _grant_entitlement(entitled, live=True, strategy=True)
+    calls: list[str] = []
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True, raising=False)
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
+    monkeypatch.setattr(settings, "EXECUTION_NODE_ROUTING_ENABLED", True, raising=False)
+    monkeypatch.setattr(
+        strategy_fanout,
+        "get_user_egress",
+        lambda user_id: {
+            "public_ip": "13.203.58.220",
+            "expected_egress_ip": "13.203.58.220",
+            "proxy_url": "http://nova_user_1:proxy-secret@13.203.58.220:3001",
+            "active": True,
+            "verified": True,
+            "last_observed_ip": "13.203.58.220",
+            "last_verified_at": "2026-06-29T00:00:00+00:00",
+        },
+    )
+    monkeypatch.setattr(strategy_fanout.vault, "get_user_dhan_credentials", lambda _user_id: object())
+    monkeypatch.setattr(strategy_fanout, "init_runtime_files", lambda: None)
+    monkeypatch.setattr(strategy_fanout, "_quantity_for_subscription", lambda lots: lots * 75)
+    monkeypatch.setattr(
+        strategy_fanout,
+        "route_signal",
+        lambda signal: calls.append(current_execution_user().email) or {"success": True, "status": "TRADED"},
+    )
+
+    allowed = strategy_fanout.dispatch_signal_job(
+        user_id=entitled.id,
+        strategy_name="supertrend",
+        lots=1,
+        execution_mode="real_orders",
+        signal=_signal("shared-secret", signal_id="fanout-entitled"),
+    )
+    denied = strategy_fanout.dispatch_signal_job(
+        user_id=blocked.id,
+        strategy_name="supertrend",
+        lots=1,
+        execution_mode="real_orders",
+        signal=_signal("shared-secret", signal_id="fanout-blocked-other"),
+    )
+
+    assert allowed["status"] == "completed"
+    assert denied["status"] == "blocked"
+    assert denied["reason"] == "live_entitlement_required"
+    assert calls == ["fanout-entitled@gmail.com"]
 
 
 def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(

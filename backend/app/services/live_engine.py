@@ -32,7 +32,7 @@ from typing import Any
 from app.config import settings
 from app.db import crud
 from app.db.engine import database_configured, session_scope
-from app.services import user_credential_vault as vault
+from app.services import entitlements, user_credential_vault as vault
 from app.services.dhan_client import RealDhanClient
 from app.services.execution_context import (
     LiveEgressGuardError,
@@ -180,6 +180,8 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
 
     checks = {
         "logged_in": True,
+        "live_entitlement_required": places_real_orders,
+        "live_entitlement_valid": None,
         "has_saved_credentials": has_creds,
         "vault_decrypt_ok": decrypt_ok,
         "dhan_token_basic_valid": token_ok,
@@ -206,6 +208,13 @@ def evaluate_live_readiness(user: CurrentUser, execution_mode: str, *, uses_webh
     }
 
     blockers: list[str] = []
+    if places_real_orders:
+        if entitlements.has_live_entitlement_for_user(user.id):
+            checks["live_entitlement_valid"] = True
+        else:
+            checks["live_entitlement_valid"] = False
+            blockers.append("Live entitlement is required.")
+
     if places_real_orders and not has_creds:
         blockers.append("No saved Dhan credentials for this user.")
     if places_real_orders and has_creds and not decrypt_ok:

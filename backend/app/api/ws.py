@@ -16,7 +16,7 @@ from app.services.credential_vault import save_dhan_credentials
 from app.services.chat_event_publisher import active_trade_from_position
 from app.services.execution_context import bind_user_execution_context
 from app.services.state_store import get_engine_mode, get_open_position, get_wallet_snapshot, set_open_position, update_runtime_settings, utc_now
-from app.services import strategy_fanout
+from app.services import entitlements, strategy_fanout
 from app.services.wallet_service import refresh_wallet_snapshot
 from app.store.redis_session import session_store
 from app.store.session_token import SessionTokenError, verify_session_token
@@ -294,6 +294,8 @@ async def _apply_production_command(
             raise ValueError("Engine mode is not configured.")
         engine_mode = cast(Literal["paper", "live"], mode)
         if engine_mode == "live" and not user.is_dev:
+            await asyncio.to_thread(entitlements.require_live_entitlement_for_user, user.id)
+            await asyncio.to_thread(entitlements.require_strategy_entitlement_for_user, user.id)
             if (
                 settings.DHAN_MODE.upper() != "REAL"
                 or not settings.ENABLE_LIVE_ORDERS

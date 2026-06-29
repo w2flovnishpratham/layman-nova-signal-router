@@ -27,6 +27,7 @@ BLOCK_DUPLICATE_SIGNALS = True
 GLOBAL_KILL_SWITCH_BLOCKS_EXITS = False
 DASHBOARD_POLL_SECONDS = 2
 DEFAULT_NIFTY_LOT_SIZE = 65
+VALID_PAYMENT_PROVIDERS = {"none", "razorpay"}
 
 DEFAULT_RUNTIME_SETTINGS = {
     # H8 — Optimistic-locking counter; incremented on every settings write.
@@ -207,6 +208,18 @@ class Settings(BaseSettings):
     AWS_PROXY_SLOT_4_PASSWORD: str = ""
     AWS_PROXY_SLOT_5_PASSWORD: str = ""
 
+    # Payment provider configuration. Razorpay is the selected provider for
+    # Nova subscriptions, but local/dev can leave secrets empty while live
+    # orders are disabled. Secrets are backend-only and must never reach clients.
+    PAYMENT_PROVIDER: str = "none"
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+    RAZORPAY_WEBHOOK_SECRET: str = ""
+    RAZORPAY_PLAN_LIVE_MONTHLY: str = ""
+    RAZORPAY_PLAN_STATIC_IP_MONTHLY: str = ""
+    RAZORPAY_PLAN_STRATEGY_MONTHLY: str = ""
+    PAYMENT_SIMULATION_ENABLED: bool = False
+
     # Server-side defaults for per-user strategy fan-out risk gates. A value of
     # 0 disables the cap until a user or user+strategy override is saved.
     STRATEGY_MAX_LOTS_PER_ORDER: int = 0
@@ -239,6 +252,10 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.APP_ENV.strip().lower() in {"production", "prod"}
+
+    @property
+    def payment_provider_normalized(self) -> str:
+        return (self.PAYMENT_PROVIDER or "none").strip().lower()
 
 
 settings = Settings()
