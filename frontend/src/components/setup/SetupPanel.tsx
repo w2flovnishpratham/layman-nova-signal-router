@@ -1,5 +1,5 @@
 import { FlaskConical, Loader2, Zap } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createRazorpaySubscription, getPaymentEntitlementStatus } from '../../api'
 import type { PaymentEntitlementStatus } from '../../api'
@@ -182,16 +182,19 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
   const [entitlement, setEntitlement] = useState<PaymentEntitlementStatus | null>(null)
   const [paymentPolling, setPaymentPolling] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  const autoContinuedRef = useRef(false)
 
-  const refreshEntitlement = useCallback(async () => {
+  const refreshEntitlement = useCallback(async (): Promise<PaymentEntitlementStatus | null> => {
     try {
       const nextEntitlement = await getPaymentEntitlementStatus()
       setEntitlement(nextEntitlement)
       if (nextEntitlement.static_ip_enabled) {
         setRefreshKey((current) => current + 1)
       }
+      return nextEntitlement
     } catch {
       setEntitlement(null)
+      return null
     }
   }, [])
 
@@ -204,9 +207,27 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
     const interval = window.setInterval(() => {
       void refreshEntitlement()
       setRefreshKey((current) => current + 1)
-    }, 5000)
+    }, 2500)
     return () => window.clearInterval(interval)
   }, [entitlement?.static_ip_enabled, paymentPolling, refreshEntitlement, staticIpReady])
+
+  useEffect(() => {
+    if (!paymentPolling) return
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshEntitlement()
+      }
+    }
+    const refreshWhenFocused = () => {
+      void refreshEntitlement()
+    }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener('focus', refreshWhenFocused)
+    return () => {
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener('focus', refreshWhenFocused)
+    }
+  }, [paymentPolling, refreshEntitlement])
 
   const staticIpEntitled = Boolean(entitlement?.valid && entitlement.static_ip_enabled)
   useEffect(() => {
@@ -215,13 +236,21 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
     }
   }, [staticIpEntitled])
 
+  useEffect(() => {
+    if (!staticIpReady || !staticIpEntitled || autoContinuedRef.current) return
+    autoContinuedRef.current = true
+    window.setTimeout(() => {
+      onContinue()
+    }, 600)
+  }, [onContinue, staticIpEntitled, staticIpReady])
+
   return (
     <article className="setup-card live-access-step">
       <div className="live-access-heading">
         <Zap size={16} />
         <div>
-          <h3>Activate Static IP Access</h3>
-          <p>Live setup can continue after Razorpay confirms static IP access and the assigned Nova Static IP is verified.</p>
+          <h3>{staticIpEntitled ? 'Verify Nova Static IP' : 'Activate Nova Premium'}</h3>
+          <p>{staticIpEntitled ? 'Whitelist the assigned Nova Static IP in Dhan, then verify it before strategy setup.' : 'Complete Razorpay checkout first. NOVA reveals the assigned Static IP only after webhook-confirmed payment.'}</p>
         </div>
       </div>
       {staticIpEntitled ? (
@@ -237,10 +266,14 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
           }}
         />
       )}
-      <button type="button" className="primary-button" disabled={!staticIpReady} onClick={onContinue}>
-        Continue to Strategy
-      </button>
-      {!staticIpReady ? <p className="form-hint">Complete Nova Premium checkout, wait for Razorpay confirmation, then verify the assigned IP before continuing. Live and strategy access are checked again before deployment.</p> : null}
+      {staticIpEntitled ? (
+        <>
+          <button type="button" className="primary-button" disabled={!staticIpReady} onClick={onContinue}>
+            {staticIpReady ? 'Opening Strategy Setup...' : 'Continue to Strategy'}
+          </button>
+          {!staticIpReady ? <p className="form-hint">Whitelist and verify the assigned IP before strategy setup. Live and strategy access are checked again before deployment.</p> : null}
+        </>
+      ) : null}
     </article>
   )
 }
@@ -523,7 +556,7 @@ function RazorpayTestCheckoutCard({
         throw new Error('Allow pop-ups to open Razorpay checkout.')
       }
       setStatus('pending_confirmation')
-      setMessage('Complete checkout. NOVA will refresh this panel after Razorpay confirms payment.')
+      setMessage('Complete checkout, then return here. NOVA checks payment confirmation automatically.')
       onCheckoutCreated?.()
     } catch (checkoutError) {
       setError(checkoutError instanceof Error ? checkoutError.message : 'Could not start Razorpay checkout.')
