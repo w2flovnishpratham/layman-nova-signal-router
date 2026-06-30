@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api import ws as ws_router
 from app.api.ws import _apply_production_command
 from app.db import models
 from app.db.engine import session_scope
@@ -1047,6 +1048,39 @@ def test_chat_risk_command_does_not_write_backend_quantity_cap(tmp_path, monkeyp
     assert runtime["allowed_option_side"] == "BOTH"
     assert runtime["max_trades_per_day"] == 5
     assert runtime["max_daily_loss"] == 3000
+
+
+def test_confirm_live_hydrates_runtime_risk_from_session_config(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    state_store.set_engine_mode("live")
+    calls = []
+
+    def fake_start_engine(body):
+        calls.append(body)
+        runtime = state_store.get_runtime_settings()
+        assert runtime["allowed_option_side"] == "PE"
+        assert runtime["max_trades_per_day"] == 5
+        assert runtime["max_daily_loss"] == 3000
+        assert runtime["option_exit_mode"] == "DHAN_SUPER"
+        assert runtime["option_disable_sl"] is False
+        assert runtime["option_sl_percent"] == 10
+        assert runtime["option_tp_percent"] == 21
+        return {"success": True}
+
+    monkeypatch.setattr(ws_router, "start_engine", fake_start_engine)
+    session = SimpleNamespace(
+        config={
+            "strategy": "supertrend",
+            "risk": {"lots": 1, "side": "PE", "maxTrades": 5, "maxLoss": 3000},
+            "exits": {"mode": "custom", "targetPct": 21, "stopLossPct": 10},
+        }
+    )
+
+    asyncio.run(ws_router._apply_production_command("setup.confirm_live", {}, session=session))
+
+    assert len(calls) == 1
+    assert calls[0].engine_mode == "live"
+    assert calls[0].confirm_live_orders is True
 
 
 def test_successful_server_exit_publishes_exact_trade_exit_event(tmp_path, monkeypatch):

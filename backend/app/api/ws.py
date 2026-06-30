@@ -258,41 +258,7 @@ async def _apply_production_command(
         return
 
     if command_type == "setup.exits":
-        mode = str(data.get("mode") or "flip_only")
-        target_pct = float(data.get("targetPct") or 5)
-        stop_loss_pct = float(data.get("stopLossPct") or DISABLED_OPTION_SL_PERCENT)
-        changes: dict[str, Any] = {
-            "option_tp_percent": target_pct,
-            "option_sl_percent": stop_loss_pct,
-            "eod_squareoff_enabled": True,
-        }
-        if mode == "flip_only":
-            changes.update(
-                {
-                    "option_exit_mode": "SERVER",
-                    "server_side_exit_enabled": False,
-                    "option_disable_sl": True,
-                    "option_sl_percent": DISABLED_OPTION_SL_PERCENT,
-                }
-            )
-        elif mode == "flip_tp":
-            changes.update(
-                {
-                    "option_exit_mode": "DHAN_SUPER",
-                    "server_side_exit_enabled": True,
-                    "option_disable_sl": True,
-                    "option_sl_percent": DISABLED_OPTION_SL_PERCENT,
-                }
-            )
-        else:
-            changes.update(
-                {
-                    "option_exit_mode": "DHAN_SUPER",
-                    "server_side_exit_enabled": True,
-                    "option_disable_sl": False,
-                }
-            )
-        await asyncio.to_thread(update_runtime_settings, **changes)
+        await asyncio.to_thread(update_runtime_settings, **_exit_runtime_settings(data))
         return
 
     if command_type == "setup.confirm_live":
@@ -334,6 +300,9 @@ async def _apply_production_command(
                         "The assigned Dhan execution node has not passed its IP verification "
                         f"in the last 24 hours: {detail}"
                     )
+        session_runtime_settings = _runtime_settings_from_session_config(session_config)
+        if session_runtime_settings:
+            await asyncio.to_thread(update_runtime_settings, **session_runtime_settings)
         await asyncio.to_thread(
             start_engine,
             StartEngineRequest(
@@ -418,6 +387,61 @@ async def _apply_production_command(
                 str(session_config.get("strategy") or "supertrend"),
                 False,
             )
+
+
+def _runtime_settings_from_session_config(session_config: dict[str, Any]) -> dict[str, Any]:
+    changes: dict[str, Any] = {}
+    risk_data = session_config.get("risk")
+    if isinstance(risk_data, dict):
+        changes.update(
+            {
+                "allowed_option_side": str(risk_data.get("side") or "BOTH").upper(),
+                "max_trades_per_day": int(risk_data.get("maxTrades") or 0),
+                "max_daily_loss": float(risk_data.get("maxLoss") or 0),
+            }
+        )
+    exits_data = session_config.get("exits")
+    if isinstance(exits_data, dict):
+        changes.update(_exit_runtime_settings(exits_data))
+    return changes
+
+
+def _exit_runtime_settings(data: dict[str, Any]) -> dict[str, Any]:
+    mode = str(data.get("mode") or "flip_only")
+    target_pct = float(data.get("targetPct") or 5)
+    stop_loss_pct = float(data.get("stopLossPct") or DISABLED_OPTION_SL_PERCENT)
+    changes: dict[str, Any] = {
+        "option_tp_percent": target_pct,
+        "option_sl_percent": stop_loss_pct,
+        "eod_squareoff_enabled": True,
+    }
+    if mode == "flip_only":
+        changes.update(
+            {
+                "option_exit_mode": "SERVER",
+                "server_side_exit_enabled": False,
+                "option_disable_sl": True,
+                "option_sl_percent": DISABLED_OPTION_SL_PERCENT,
+            }
+        )
+    elif mode == "flip_tp":
+        changes.update(
+            {
+                "option_exit_mode": "DHAN_SUPER",
+                "server_side_exit_enabled": True,
+                "option_disable_sl": True,
+                "option_sl_percent": DISABLED_OPTION_SL_PERCENT,
+            }
+        )
+    else:
+        changes.update(
+            {
+                "option_exit_mode": "DHAN_SUPER",
+                "server_side_exit_enabled": True,
+                "option_disable_sl": False,
+            }
+        )
+    return changes
 
 
 def _require_live_static_ip_ready(user: CurrentUser) -> None:

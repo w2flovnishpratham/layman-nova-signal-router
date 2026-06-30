@@ -41,6 +41,15 @@ export function SetupPanel({
   onDraft,
   onStep,
 }: Props) {
+  const pendingExitsRef = useRef<ClientCommand['data'] | null>(null)
+
+  useEffect(() => {
+    if (state !== 'RISK_CONFIGURED' || !pendingExitsRef.current) return
+    const exitsPayload = pendingExitsRef.current
+    pendingExitsRef.current = null
+    onSend({ type: 'setup.exits', data: exitsPayload })
+  }, [onSend, state])
+
   if (state === 'LIVE' || state === 'PAUSED' || state === 'ENDED' || flowStep === 'complete') return null
   if (flowStep === 'mode') return <ModeStep draft={draft} onSelect={(engineMode, paperStartingBalance) => {
     onDraft({ engineMode, paperStartingBalance })
@@ -88,6 +97,12 @@ export function SetupPanel({
     const finalDraft = { ...draft, ...patch }
     onDraft(patch)
     onUserReply(limitsReply(finalDraft.maxTrades, finalDraft.maxLoss))
+    pendingExitsRef.current = {
+      mode: finalDraft.exitMode,
+      targetProfit: finalDraft.exitMode === 'flip_only' ? null : Math.max(100, finalDraft.targetPct * 100),
+      targetPct: finalDraft.targetPct,
+      stopLossPct: finalDraft.stopLossPct,
+    }
     onSend({
       type: 'setup.risk',
       data: {
@@ -95,15 +110,6 @@ export function SetupPanel({
         maxLoss: finalDraft.maxLoss === 0 ? null : finalDraft.maxLoss,
         lots: finalDraft.lots,
         side: finalDraft.side,
-      },
-    })
-    onSend({
-      type: 'setup.exits',
-      data: {
-        mode: finalDraft.exitMode,
-        targetProfit: finalDraft.exitMode === 'flip_only' ? null : Math.max(100, finalDraft.targetPct * 100),
-        targetPct: finalDraft.targetPct,
-        stopLossPct: finalDraft.stopLossPct,
       },
     })
   }} />
