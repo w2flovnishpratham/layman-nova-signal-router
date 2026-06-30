@@ -529,6 +529,11 @@ def _revoke_entitlement(
         db.add(entitlement)
         return
 
+    if _has_premium_plan_code(entitlement.plan_code) and not _has_premium_plan_code(plan_features.plan_code):
+        entitlement.metadata_json = metadata
+        entitlement.updated_at = now
+        return
+
     entitlement.status = status
     entitlement.plan_code = _merge_plan_codes(entitlement.plan_code, plan_features.plan_code)
     entitlement.expires_at = now
@@ -661,7 +666,17 @@ def _merge_plan_codes(existing: str | None, incoming: str) -> str:
         for code in source.split("+")
         if code
     }
+    if "razorpay_premium_monthly" in codes:
+        return "razorpay_premium_monthly"
     return "+".join(sorted(codes))
+
+
+def _has_premium_plan_code(value: str | None) -> bool:
+    return "razorpay_premium_monthly" in {
+        code
+        for code in (value or "").split("+")
+        if code
+    }
 
 
 def _as_utc(value: datetime | None) -> datetime | None:

@@ -359,6 +359,74 @@ def test_subscription_activated_premium_plan_grants_all_entitlements(razorpay_en
     assert entitlement["expires_at"] is not None
 
 
+def test_premium_activation_over_legacy_split_plan_row_uses_short_canonical_code(razorpay_env):
+    user = make_user("razorpay-premium-over-legacy@example.com")
+    legacy_code = "razorpay_live_monthly+razorpay_static_ip_monthly+razorpay_strategy_monthly"
+    with session_scope() as db:
+        db.add(
+            models.UserEntitlement(
+                user_id=user.id,
+                plan_code=legacy_code,
+                status="cancelled",
+                source="payment_provider",
+                starts_at=NOW - timedelta(days=40),
+                expires_at=NOW - timedelta(days=1),
+                live_orders_enabled=False,
+                static_ip_enabled=False,
+                strategy_access_enabled=False,
+                metadata_json={"reason": "legacy_split_cancelled"},
+                created_at=NOW - timedelta(days=40),
+                updated_at=NOW - timedelta(days=1),
+            )
+        )
+
+    response = _post_signed(
+        _client(),
+        _subscription_payload(user.id, event="subscription.activated", plan_id=PREMIUM_PLAN),
+        event_id="evt_activate_premium_after_legacy",
+    )
+
+    assert response.status_code == 200
+    entitlement = _latest_entitlement(user.id)
+    assert entitlement is not None
+    assert entitlement["status"] == "active"
+    assert entitlement["plan_code"] == "razorpay_premium_monthly"
+    assert len(entitlement["plan_code"]) <= 80
+    assert entitlement["live_orders_enabled"] is True
+    assert entitlement["static_ip_enabled"] is True
+    assert entitlement["strategy_access_enabled"] is True
+
+
+def test_legacy_split_cancellation_does_not_revoke_active_premium_entitlement(razorpay_env):
+    user = make_user("razorpay-premium-survives-legacy-cancel@example.com")
+    client = _client()
+    assert _post_signed(
+        client,
+        _subscription_payload(user.id, event="subscription.activated", plan_id=PREMIUM_PLAN),
+        event_id="evt_premium_before_legacy_cancel",
+    ).status_code == 200
+
+    response = _post_signed(
+        client,
+        _subscription_payload(
+            user.id,
+            event="subscription.cancelled",
+            plan_id=STATIC_PLAN,
+            subscription_status="cancelled",
+        ),
+        event_id="evt_legacy_cancel_after_premium",
+    )
+
+    assert response.status_code == 200
+    entitlement = _latest_entitlement(user.id)
+    assert entitlement is not None
+    assert entitlement["status"] == "active"
+    assert entitlement["plan_code"] == "razorpay_premium_monthly"
+    assert entitlement["live_orders_enabled"] is True
+    assert entitlement["static_ip_enabled"] is True
+    assert entitlement["strategy_access_enabled"] is True
+
+
 def test_subscription_charged_with_captured_payment_grants_entitlement(razorpay_env):
     user = make_user("razorpay-charged@example.com")
 
@@ -398,6 +466,7 @@ def test_same_razorpay_plan_id_can_unlock_multiple_feature_flags(razorpay_env, m
     assert entitlement["live_orders_enabled"] is True
     assert entitlement["static_ip_enabled"] is True
     assert entitlement["strategy_access_enabled"] is True
+    assert entitlement["plan_code"] == "razorpay_live_monthly+razorpay_static_ip_monthly+razorpay_strategy_monthly"
 
 
 def test_payment_provider_entitlement_without_period_end_is_not_created(razorpay_env):
