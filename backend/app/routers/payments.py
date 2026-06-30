@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict
 
 from app.auth.dependencies import get_current_user
 from app.config import settings
+from app.db.engine import database_configured, session_scope
+from app.services import entitlements
 from app.services.razorpay_checkout import (
     RazorpayPlanConfigError,
     RazorpayProviderConfigError,
@@ -30,6 +32,26 @@ class RazorpayCreateSubscriptionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     plan_code: str
+
+
+@router.get("/entitlements/status")
+def payment_entitlement_status(
+    user: CurrentUser = Depends(get_current_user),
+) -> JSONResponse:
+    if database_configured():
+        with session_scope() as db:
+            evaluation = entitlements.evaluate_entitlement(
+                entitlements.get_user_entitlement(db, user.id)
+            )
+    else:
+        evaluation = entitlements.evaluate_entitlement(None)
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": True,
+            "entitlement": evaluation.as_safe_dict(),
+        },
+    )
 
 
 @router.post("/razorpay/create-subscription")

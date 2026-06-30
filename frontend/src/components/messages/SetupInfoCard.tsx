@@ -3,13 +3,15 @@ import { useCallback, useEffect, useState } from 'react'
 import { getEgressOptions, selectEgressIp, verifyEgressIp, type EgressOptionsResponse } from '../../api'
 
 interface Props {
+  autoAssign?: boolean
   onReadyChange?: (ready: boolean) => void
+  refreshKey?: number
 }
 
-export function SetupInfoCard({ onReadyChange }: Props = {}) {
+export function SetupInfoCard({ autoAssign = true, onReadyChange, refreshKey = 0 }: Props = {}) {
   const [options, setOptions] = useState<EgressOptionsResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [selecting, setSelecting] = useState<string | null>(null)
+  const [assigning, setAssigning] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -17,35 +19,35 @@ export function SetupInfoCard({ onReadyChange }: Props = {}) {
     setLoading(true)
     setError(null)
     try {
-      setOptions(await getEgressOptions())
+      let response = await getEgressOptions()
+      if (autoAssign && !response.egress.public_ip) {
+        const availableNode = response.nodes.find((node) => node.available)
+        if (!availableNode) {
+          setOptions(response)
+          setError('No Nova Static IP is currently available.')
+          return
+        }
+        setAssigning(true)
+        await selectEgressIp(availableNode.public_ip)
+        response = await getEgressOptions()
+      }
+      setOptions(response)
     } catch (loadError) {
       setOptions(null)
       setError(loadError instanceof Error ? loadError.message : 'Could not load static IPs.')
     } finally {
+      setAssigning(false)
       setLoading(false)
     }
-  }, [])
+  }, [autoAssign])
 
   useEffect(() => {
     void loadOptions()
-  }, [loadOptions])
+  }, [loadOptions, refreshKey])
 
   useEffect(() => {
     onReadyChange?.(Boolean(options?.egress.public_ip && options.egress.verified))
   }, [onReadyChange, options])
-
-  async function selectIp(publicIp: string) {
-    setSelecting(publicIp)
-    setError(null)
-    try {
-      await selectEgressIp(publicIp)
-      setOptions(await getEgressOptions())
-    } catch (selectError) {
-      setError(selectError instanceof Error ? selectError.message : 'Could not select static IP.')
-    } finally {
-      setSelecting(null)
-    }
-  }
 
   async function verifyIp() {
     setVerifying(true)
@@ -61,39 +63,43 @@ export function SetupInfoCard({ onReadyChange }: Props = {}) {
     }
   }
 
+  const assignedIp = options?.egress.public_ip ?? null
+  const assignedNode = assignedIp
+    ? options?.nodes.find((node) => node.public_ip === assignedIp || node.selected)
+    : null
+
   return (
     <div className="setup-info-card">
       <div className="static-ip-heading">
         <strong>Dhan static IP</strong>
-        <span>Select one IP and whitelist it in your Dhan account.</span>
+        <span>NOVA assigns one dedicated IP. Whitelist this IP in your Dhan account.</span>
       </div>
-      {loading ? <div className="static-ip-loading"><LoaderCircle size={15} /> Loading IPs...</div> : null}
+      {loading ? <div className="static-ip-loading"><LoaderCircle size={15} /> {assigning ? 'Assigning Static IP...' : 'Checking Static IP access...'}</div> : null}
       <div className="static-ip-options">
-        {options?.nodes.map((node) => {
-          const disabled = selecting !== null || (!node.available && !node.selected)
-          return (
-            <div className={`static-ip-option ${node.selected ? 'selected' : ''}`} key={node.public_ip}>
+        {assignedIp ? (
+            <div className="static-ip-option selected" key={assignedIp}>
               <div>
-                <code>{node.public_ip}</code>
-                <span>{node.selected ? 'Assigned to this account' : node.available ? 'Available' : 'Assigned to another account'}</span>
+                <code>{assignedIp}</code>
+                <span>{assignedNode?.selected ? 'Assigned to this account' : 'Assigned Nova Static IP'}</span>
               </div>
-              <button type="button" disabled={disabled || node.selected} onClick={() => void selectIp(node.public_ip)}>
-                {selecting === node.public_ip ? <LoaderCircle size={13} /> : node.selected ? <CheckCircle2 size={13} /> : null}
-                {node.selected ? 'Selected' : node.available ? 'Select' : 'Unavailable'}
+              <button type="button" disabled>
+                <CheckCircle2 size={13} />
+                Assigned
               </button>
-              <button type="button" className="static-ip-copy" aria-label={`Copy ${node.public_ip}`} onClick={() => void navigator.clipboard?.writeText(node.public_ip)}>
+              <button type="button" className="static-ip-copy" aria-label={`Copy ${assignedIp}`} onClick={() => void navigator.clipboard?.writeText(assignedIp)}>
                 <Copy size={13} />
               </button>
             </div>
-          )
-        })}
+        ) : !loading && options ? (
+          <p className="static-ip-pending">Payment confirmation is pending. This panel refreshes after Razorpay webhook confirmation.</p>
+        ) : null}
       </div>
       {options?.egress.public_ip ? (
         <div className="static-ip-verification-row">
           <p className={`static-ip-verification ${options.egress.verified ? 'verified' : ''}`}>
             {options.egress.verified ? 'Proxy verified. Add the selected IP to Dhan.' : options.egress.verification_error || 'Proxy verification is pending.'}
           </p>
-          <button type="button" onClick={() => void verifyIp()} disabled={selecting !== null || verifying}>
+          <button type="button" onClick={() => void verifyIp()} disabled={verifying}>
             {verifying ? <LoaderCircle size={13} /> : <RefreshCw size={13} />}
             Verify
           </button>

@@ -236,6 +236,10 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
   }
 
   if (event.type === 'bot.message') {
+    const data = event.data as { state?: SetupState }
+    if (data.state === 'MODE_PICKED' && state.config.engineMode === 'live') {
+      return { typing: false }
+    }
     return {
       typing: false,
       messages: appendMessage(state.messages, event),
@@ -442,6 +446,7 @@ function normalizeActiveExitLevels(value: unknown): ActiveTrade['activeExitLevel
 }
 
 function appendMessage(messages: RenderableMessage[], message: RenderableMessage): RenderableMessage[] {
+  if (message.type === 'setup.info') return messages
   return [...messages, message].slice(-250)
 }
 
@@ -488,7 +493,7 @@ function inferStrike(symbol: string): number {
 }
 
 function appendMessages(messages: RenderableMessage[], nextMessages: RenderableMessage[]): RenderableMessage[] {
-  return [...messages, ...nextMessages].slice(-250)
+  return [...messages, ...nextMessages.filter((message) => message.type !== 'setup.info')].slice(-250)
 }
 
 function isRestoredRecentEvent(event: ServerEvent): boolean {

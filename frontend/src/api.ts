@@ -50,6 +50,18 @@ export interface RazorpayCheckoutResponse {
   message: string
 }
 
+export interface PaymentEntitlementStatus {
+  valid: boolean
+  reason: string
+  status: string | null
+  source: string | null
+  plan_code: string | null
+  live_orders_enabled: boolean
+  static_ip_enabled: boolean
+  strategy_access_enabled: boolean
+  max_strategy_count: number | null
+}
+
 async function apiFetch(path: `/${string}`, init: RequestInit = {}): Promise<Response> {
   return fetch(backendHttpUrl(path), {
     ...init,
@@ -214,6 +226,15 @@ export async function createRazorpaySubscription(planCode: RazorpayPlanCode): Pr
     throw new Error(body?.error || 'Could not create Razorpay checkout.')
   }
   return body
+}
+
+export async function getPaymentEntitlementStatus(): Promise<PaymentEntitlementStatus> {
+  const response = await apiFetch('/api/payments/entitlements/status', { cache: 'no-store' })
+  const body = await response.json().catch(() => null) as { ok?: boolean; entitlement?: PaymentEntitlementStatus; error?: string } | null
+  if (!response.ok || !body?.ok || !body.entitlement) {
+    throw new Error(body?.error || `Could not load payment status: ${response.status}`)
+  }
+  return body.entitlement
 }
 
 export async function getMarketSnapshot(): Promise<MarketSnapshot> {

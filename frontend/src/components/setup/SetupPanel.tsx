@@ -1,8 +1,8 @@
 import { FlaskConical, Loader2, Zap } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { createRazorpaySubscription } from '../../api'
-import type { RazorpayPlanCode } from '../../api'
+import { createRazorpaySubscription, getPaymentEntitlementStatus } from '../../api'
+import type { PaymentEntitlementStatus, RazorpayPlanCode } from '../../api'
 import { SetupInfoCard } from '../messages/SetupInfoCard'
 import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
@@ -177,6 +177,36 @@ function SharedDataStep({ onContinue }: { onContinue: () => void }) {
 
 function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
   const [staticIpReady, setStaticIpReady] = useState(false)
+  const [entitlement, setEntitlement] = useState<PaymentEntitlementStatus | null>(null)
+  const [paymentPolling, setPaymentPolling] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  const refreshEntitlement = useCallback(async () => {
+    try {
+      const nextEntitlement = await getPaymentEntitlementStatus()
+      setEntitlement(nextEntitlement)
+      if (nextEntitlement.static_ip_enabled) {
+        setRefreshKey((current) => current + 1)
+      }
+    } catch {
+      setEntitlement(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshEntitlement()
+  }, [refreshEntitlement])
+
+  useEffect(() => {
+    if (!paymentPolling || staticIpReady || entitlement?.static_ip_enabled) return
+    const interval = window.setInterval(() => {
+      void refreshEntitlement()
+      setRefreshKey((current) => current + 1)
+    }, 5000)
+    return () => window.clearInterval(interval)
+  }, [entitlement?.static_ip_enabled, paymentPolling, refreshEntitlement, staticIpReady])
+
+  const staticIpEntitled = Boolean(entitlement?.valid && entitlement.static_ip_enabled)
   return (
     <article className="setup-card live-access-step">
       <div className="live-access-heading">
@@ -186,8 +216,16 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
           <p>Live setup can continue after Razorpay confirms static IP access and the assigned Nova Static IP is verified.</p>
         </div>
       </div>
-      <RazorpayTestCheckoutCard initialPlanCode="static_ip_monthly" />
-      <SetupInfoCard onReadyChange={setStaticIpReady} />
+      <RazorpayTestCheckoutCard
+        accessReady={staticIpEntitled}
+        initialPlanCode="static_ip_monthly"
+        onCheckoutCreated={() => {
+          setPaymentPolling(true)
+          setRefreshKey((current) => current + 1)
+          void refreshEntitlement()
+        }}
+      />
+      <SetupInfoCard onReadyChange={setStaticIpReady} refreshKey={refreshKey} />
       <button type="button" className="primary-button" disabled={!staticIpReady} onClick={onContinue}>
         Continue to Strategy
       </button>
@@ -442,7 +480,6 @@ function DeploymentSummary({ draft, lotSize, onDeploy }: { draft: SetupDraft; lo
           <strong>{draft.maxTrades ? `${draft.maxTrades} trades` : 'None'} | {draft.maxLoss ? formatCurrency(draft.maxLoss) : 'None'}</strong>
         </div>
       </div>
-      {draft.engineMode === 'live' ? <RazorpayTestCheckoutCard /> : null}
       <button className="live-confirm" type="button" onClick={onDeploy}>
         {draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Trade Real Money - Confirm'}
       </button>
@@ -450,12 +487,26 @@ function DeploymentSummary({ draft, lotSize, onDeploy }: { draft: SetupDraft; lo
   )
 }
 
-function RazorpayTestCheckoutCard({ initialPlanCode = 'live_monthly' }: { initialPlanCode?: RazorpayPlanCode }) {
+function RazorpayTestCheckoutCard({
+  accessReady = false,
+  initialPlanCode = 'live_monthly',
+  onCheckoutCreated,
+}: {
+  accessReady?: boolean
+  initialPlanCode?: RazorpayPlanCode
+  onCheckoutCreated?: () => void
+}) {
   const [planCode, setPlanCode] = useState<RazorpayPlanCode>(initialPlanCode)
   const [pending, setPending] = useState(false)
-  const [status, setStatus] = useState<'not_active' | 'pending_confirmation'>('not_active')
+  const [status, setStatus] = useState<'not_active' | 'pending_confirmation' | 'confirmed'>('not_active')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!accessReady) return
+    setStatus('confirmed')
+    setMessage('Static IP entitlement confirmed. Select and verify the assigned IP below.')
+  }, [accessReady])
 
   async function startCheckout() {
     setPending(true)
@@ -472,7 +523,8 @@ function RazorpayTestCheckoutCard({ initialPlanCode = 'live_monthly' }: { initia
         throw new Error('Allow pop-ups to open Razorpay checkout.')
       }
       setStatus('pending_confirmation')
-      setMessage('Complete checkout, then wait for payment confirmation.')
+      setMessage('Complete checkout. NOVA will refresh this panel after Razorpay confirms payment.')
+      onCheckoutCreated?.()
     } catch (checkoutError) {
       setError(checkoutError instanceof Error ? checkoutError.message : 'Could not start Razorpay checkout.')
     } finally {
@@ -484,8 +536,8 @@ function RazorpayTestCheckoutCard({ initialPlanCode = 'live_monthly' }: { initia
     <section className="subscription-access-card" aria-live="polite">
       <div className="subscription-access-header">
         <h4>Activate Nova Access</h4>
-        <span className={status === 'pending_confirmation' ? 'subscription-pending' : ''}>
-          {status === 'pending_confirmation' ? 'Pending payment confirmation' : 'Not active'}
+        <span className={status === 'confirmed' ? 'subscription-confirmed' : status === 'pending_confirmation' ? 'subscription-pending' : ''}>
+          {status === 'confirmed' ? 'Static IP active' : status === 'pending_confirmation' ? 'Pending payment confirmation' : 'Not active'}
         </span>
       </div>
       <p>Test mode only. Access activates after Razorpay webhook confirms payment.</p>

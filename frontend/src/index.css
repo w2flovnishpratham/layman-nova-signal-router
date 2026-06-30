@@ -1520,6 +1520,10 @@ code {
   color: var(--warning);
 }
 
+.subscription-access-header .subscription-confirmed {
+  color: var(--success);
+}
+
 .subscription-plan-control {
   display: grid;
   gap: 6px;
@@ -1975,11 +1979,18 @@ code {
 }
 
 .static-ip-loading,
-.static-ip-verification {
+.static-ip-verification,
+.static-ip-pending {
   display: flex;
   gap: 6px;
   align-items: center;
   margin: 0;
+}
+
+.static-ip-pending {
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .static-ip-verification-row {

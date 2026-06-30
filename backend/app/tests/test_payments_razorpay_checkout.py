@@ -159,6 +159,44 @@ def test_unauthenticated_user_cannot_create_subscription(checkout_env):
     assert response.status_code == 401
 
 
+def test_entitlement_status_returns_safe_server_owned_flags(checkout_env):
+    user_model = make_user("checkout-status@example.com")
+    user = _current_user(user_model)
+    now = models.utcnow()
+    with session_scope() as db:
+        db.add(
+            models.UserEntitlement(
+                user_id=user.id,
+                plan_code="static_ip_monthly",
+                status="active",
+                source="payment_provider",
+                starts_at=now - timedelta(minutes=1),
+                expires_at=now + timedelta(days=30),
+                live_orders_enabled=False,
+                static_ip_enabled=True,
+                strategy_access_enabled=False,
+                metadata_json={"provider_event_id": "evt_safe"},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    client, _ = _auth_client(user)
+
+    response = client.get("/api/payments/entitlements/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["entitlement"]["valid"] is True
+    assert body["entitlement"]["static_ip_enabled"] is True
+    assert body["entitlement"]["live_orders_enabled"] is False
+    assert body["entitlement"]["strategy_access_enabled"] is False
+    serialized = json.dumps(body)
+    assert KEY_SECRET not in serialized
+    assert WEBHOOK_SECRET not in serialized
+    assert "provider_event_id" not in serialized
+
+
 def test_authenticated_user_can_request_configured_plan(checkout_env, monkeypatch):
     from app.services import razorpay_checkout
 
