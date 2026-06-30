@@ -355,63 +355,100 @@ def configured_egress_nodes() -> list[dict[str, Any]]:
     return _configured_legacy_manual_egress_nodes()
 
 
-def user_egress_options(user_id: uuid.UUID) -> dict[str, Any]:
-    nodes = configured_egress_nodes()
-    configured_ips = {node["public_ip"] for node in nodes}
-    assignments: dict[str, uuid.UUID] = {}
-    selected_ip: str | None = None
-    if database_configured() and configured_ips:
-        with session_scope() as db:
-            rows = db.scalars(
-                select(models.UserEgress).where(
-                    models.UserEgress.public_ip.in_(configured_ips)
-                )
-            ).all()
-            for row in rows:
-                if row.public_ip:
-                    assignments[row.public_ip] = row.user_id
-                if row.user_id == user_id and row.active:
-                    selected_ip = row.public_ip
-    status = user_egress_status(user_id)
+def _safe_node_option(node: dict[str, Any], *, selected: bool) -> dict[str, Any]:
     return {
-        "nodes": [
-            {
-                "public_ip": node["public_ip"],
-                "expected_egress_ip": node.get("expected_egress_ip", node["public_ip"]),
-                "provider": node.get("provider"),
-                "slot_number": node.get("slot_number"),
-                "label": node.get("label") or node["public_ip"],
-                "available": (
-                    node["public_ip"] not in assignments
-                    or assignments[node["public_ip"]] == user_id
-                ),
-                "selected": node["public_ip"] == selected_ip,
-            }
-            for node in nodes
-        ],
+        "public_ip": node["public_ip"],
+        "expected_egress_ip": node.get("expected_egress_ip", node["public_ip"]),
+        "provider": node.get("provider"),
+        "slot_number": node.get("slot_number"),
+        "label": node.get("label") or node["public_ip"],
+        "available": selected,
+        "selected": selected,
+    }
+
+
+def _node_for_public_ip(nodes: list[dict[str, Any]], public_ip: str | None) -> dict[str, Any] | None:
+    if not public_ip:
+        return None
+    return next((node for node in nodes if node["public_ip"] == public_ip), None)
+
+
+def _assigned_public_ips(configured_ips: set[str]) -> set[str]:
+    if not database_configured() or not configured_ips:
+        return set()
+    with session_scope() as db:
+        rows = db.scalars(
+            select(models.UserEgress).where(
+                models.UserEgress.active.is_(True),
+                models.UserEgress.public_ip.in_(configured_ips),
+            )
+        ).all()
+        return {row.public_ip for row in rows if row.public_ip}
+
+
+def _assign_first_available_user_egress(user_id: uuid.UUID, nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    if not nodes:
+        raise ValueError("No Nova Static IP is configured.")
+
+    existing = user_egress_status(user_id)
+    existing_node = _node_for_public_ip(nodes, existing.get("public_ip"))
+    if existing.get("active") and existing_node:
+        return existing
+
+    assigned_ips = _assigned_public_ips({node["public_ip"] for node in nodes})
+    candidates = [node for node in nodes if node["public_ip"] not in assigned_ips]
+    if not candidates:
+        raise ValueError("No Nova Static IP is currently available.")
+
+    last_error: ValueError | None = None
+    for node in candidates:
+        try:
+            return set_user_egress(
+                user_id,
+                public_ip=node["public_ip"],
+                proxy_url=node["proxy_url"],
+                active=True,
+                allow_proxy_host_mismatch=True,
+            )
+        except ValueError as exc:
+            if "already assigned" not in str(exc):
+                raise
+            last_error = exc
+    raise ValueError("No Nova Static IP is currently available.") from last_error
+
+
+def user_egress_options(user_id: uuid.UUID) -> dict[str, Any]:
+    entitlements.require_static_ip_entitlement_for_user(user_id)
+    nodes = configured_egress_nodes()
+    if not nodes:
+        return {
+            "nodes": [],
+            "egress": user_egress_status(user_id),
+        }
+
+    status = user_egress_status(user_id)
+    selected_node = _node_for_public_ip(nodes, status.get("public_ip"))
+    if not (status.get("active") and selected_node):
+        status = _assign_first_available_user_egress(user_id, nodes)
+        status = user_egress_status(user_id)
+        selected_node = _node_for_public_ip(nodes, status.get("public_ip"))
+
+    return {
+        "nodes": [_safe_node_option(selected_node, selected=True)] if selected_node else [],
         "egress": status,
     }
 
 
 def select_user_egress(user_id: uuid.UUID, public_ip: str) -> dict[str, Any]:
+    entitlements.require_static_ip_entitlement_for_user(user_id)
     public_ip = _validated_public_ip(public_ip)
-    node = next(
-        (
-            configured_node
-            for configured_node in configured_egress_nodes()
-            if configured_node["public_ip"] == public_ip
-        ),
-        None,
-    )
-    if node is None:
+    nodes = configured_egress_nodes()
+    if _node_for_public_ip(nodes, public_ip) is None:
         raise ValueError("That egress IP is not configured.")
-    assignment = set_user_egress(
-        user_id,
-        public_ip=public_ip,
-        proxy_url=node["proxy_url"],
-        active=True,
-        allow_proxy_host_mismatch=True,
-    )
+    assignment = _assign_first_available_user_egress(user_id, nodes)
+    assigned_ip = assignment.get("public_ip")
+    if assigned_ip != public_ip:
+        raise ValueError("Nova Static IP is assigned server-side.")
     verification = verify_user_egress(user_id)
     return {"assignment": assignment, "verification": verification}
 

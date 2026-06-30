@@ -293,12 +293,13 @@ def test_user_egress_options_for_aws_slots_do_not_expose_proxy_credentials(
     from app.services import strategy_fanout
 
     user = make_user("aws-egress-options@gmail.com")
+    _grant_entitlement(user, static_ip=True)
     _enable_aws_proxy_slots(monkeypatch, password="abc@123")
 
     options = strategy_fanout.user_egress_options(user.id)
     serialized = json.dumps(options, sort_keys=True)
 
-    assert len(options["nodes"]) == 5
+    assert len(options["nodes"]) == 1
     assert options["nodes"][0] == {
         "public_ip": "13.203.58.220",
         "expected_egress_ip": "13.203.58.220",
@@ -306,12 +307,31 @@ def test_user_egress_options_for_aws_slots_do_not_expose_proxy_credentials(
         "slot_number": 1,
         "label": "Nova Static IP 1",
         "available": True,
-        "selected": False,
+        "selected": True,
     }
+    assert options["egress"]["public_ip"] == "13.203.58.220"
     assert "proxy_url" not in serialized
     assert "abc@123" not in serialized
     assert "abc%40123" not in serialized
     assert "nova_user" not in serialized
+
+
+def test_user_egress_options_require_static_ip_entitlement_before_listing_slots(
+    mu_db,
+    monkeypatch,
+):
+    from app.services import entitlements, strategy_fanout
+
+    user = make_user("aws-egress-options-no-entitlement@gmail.com")
+    _enable_aws_proxy_slots(monkeypatch, password="abc@123")
+
+    with pytest.raises(entitlements.EntitlementError) as exc:
+        strategy_fanout.user_egress_options(user.id)
+
+    message = str(exc.value)
+    assert message == "Static IP entitlement is required."
+    assert "13.203.58.220" not in message
+    assert "abc" not in message
 
 
 def test_authenticated_users_select_distinct_configured_egress_ips(
@@ -364,10 +384,9 @@ def test_authenticated_users_select_distinct_configured_egress_ips(
 
     options = client.get("/api/strategies/egress/options")
     assert options.status_code == 200
-    assert [node["public_ip"] for node in options.json()["nodes"]] == [
-        "165.232.184.177",
-        "167.71.232.232",
-    ]
+    assert [node["public_ip"] for node in options.json()["nodes"]] == ["165.232.184.177"]
+    assert options.json()["nodes"][0]["selected"] is True
+    assert options.json()["egress"]["public_ip"] == "165.232.184.177"
     assert "secret-one" not in options.text
     assert "secret-two" not in options.text
 
@@ -387,14 +406,17 @@ def test_authenticated_users_select_distinct_configured_egress_ips(
 
     app.dependency_overrides[get_current_user] = lambda: _current_user(bob)
     bob_options = client.get("/api/strategies/egress/options").json()
-    assert bob_options["nodes"][0]["available"] is False
-    assert bob_options["nodes"][1]["available"] is True
+    assert [node["public_ip"] for node in bob_options["nodes"]] == ["167.71.232.232"]
+    assert bob_options["nodes"][0]["available"] is True
+    assert bob_options["nodes"][0]["selected"] is True
+    assert bob_options["egress"]["public_ip"] == "167.71.232.232"
 
     conflict = client.post(
         "/api/strategies/egress/select",
         json={"public_ip": "165.232.184.177"},
     )
-    assert conflict.status_code == 409
+    assert conflict.status_code == 400
+    assert conflict.json()["error"] == "Nova Static IP is assigned server-side."
 
     bob_selected = client.post(
         "/api/strategies/egress/select",
