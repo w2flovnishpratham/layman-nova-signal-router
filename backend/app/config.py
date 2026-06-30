@@ -51,7 +51,10 @@ DEFAULT_RUNTIME_SETTINGS = {
     "option_ltp_cache_seconds": 1.0,
     "option_sl_percent": DISABLED_OPTION_SL_PERCENT,
     "option_tp_percent": 20.0,
-    "option_ltp_poll_seconds": 0.5,
+    # Must satisfy risk_settings_valid()'s floor (>= 1) and the setup API schemas
+    # (ge=1.0). A sub-1 default silently fails engine-start readiness for any user
+    # who configures via the chat flow (which never writes this field).
+    "option_ltp_poll_seconds": 1.0,
     "eod_squareoff_enabled": True,
     "allow_entry": True,
     "allow_exit": True,

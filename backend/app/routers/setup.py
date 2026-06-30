@@ -512,6 +512,7 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
         "warnings": warnings,
         "dhan_ping": dhan_ping,
         "risk_configured": risk_ok,
+        "risk_issues": risk_issues,
         "engine_mode": engine_mode,
     }
 

@@ -504,6 +504,13 @@ def get_runtime_settings() -> dict[str, Any]:
         if key not in data:
             data[key] = value
             changed = True
+    try:
+        poll_seconds = float(data.get("option_ltp_poll_seconds") or 0)
+    except (TypeError, ValueError):
+        poll_seconds = 0
+    if poll_seconds < 1:
+        data["option_ltp_poll_seconds"] = defaults["option_ltp_poll_seconds"]
+        changed = True
     if changed:
         set_runtime_settings(data)
     return data

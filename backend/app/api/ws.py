@@ -537,14 +537,21 @@ def _readiness_failure_summary(detail: dict[str, Any]) -> str:
     failures: list[str] = []
 
     if isinstance(readiness, dict):
-        blockers = readiness.get("blockers")
-        if isinstance(blockers, list):
-            failures.extend(str(item) for item in blockers if item)
-        for key, value in readiness.items():
-            if key in {"blockers", "ready"}:
-                continue
-            if value is False:
-                failures.append(key.replace("_", " "))
+        # Prefer the specific reason strings (e.g. "Option LTP poll seconds must
+        # be at least 1.") over vague boolean keys like "risk_configured".
+        specific: list[str] = []
+        for list_key in ("blockers", "issues"):
+            values = readiness.get(list_key)
+            if isinstance(values, list):
+                specific.extend(str(item) for item in values if item)
+        if specific:
+            failures.extend(specific)
+        else:
+            for key, value in readiness.items():
+                if key in {"blockers", "issues", "ready"}:
+                    continue
+                if value is False:
+                    failures.append(key.replace("_", " "))
 
     if isinstance(checks, dict):
         for key, value in checks.items():

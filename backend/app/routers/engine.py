@@ -98,12 +98,19 @@ def _build_engine_readiness_checks(
         "severity": "ok" if secret_ok else "error",
     })
 
-    # 5. Risk limits
+    # 5. Risk limits — surface the *specific* blocker, not a generic label.
     risk_ok = readiness.get("risk_configured", False)
+    risk_issues = readiness.get("risk_issues") or []
+    if risk_ok:
+        risk_message = "Risk limits configured."
+    elif risk_issues:
+        risk_message = "Risk limits not configured: " + " ".join(risk_issues)
+    else:
+        risk_message = "Risk limits not configured."
     checks.append({
         "name": "risk_limits",
         "ok": risk_ok,
-        "message": "Risk limits configured." if risk_ok else "Risk limits not configured.",
+        "message": risk_message,
         "severity": "ok" if risk_ok else "error",
     })
 
