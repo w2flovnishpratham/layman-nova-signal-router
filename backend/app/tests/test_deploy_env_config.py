@@ -93,3 +93,14 @@ def test_configure_vps_env_armed_live_enables_aws_slots_without_secret_values():
     assert "razorpay-secret" not in script
     assert "webhook-secret" not in script
     assert "aws-secret" not in script
+
+
+def test_configure_vps_env_syncs_runtime_webhook_state_for_explicit_deploy_modes():
+    script = _deploy_script_text()
+
+    assert "set_webhook_runtime_state()" in script
+    assert 'RUNTIME_APP_STATE_FILE="$repo_dir/backend/runtime_state/app_state.json"' in script
+    assert 'data["engine_started"] = enabled' in script
+    assert 'data["webhook_trading_enabled"] = enabled' in script
+    assert "set_webhook_runtime_state true" in script
+    assert "set_webhook_runtime_state false" in script

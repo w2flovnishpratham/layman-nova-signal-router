@@ -50,6 +50,29 @@ path.write_text("\n".join(result) + "\n", encoding="utf-8")
 PY
 }
 
+set_webhook_runtime_state() {
+  local enabled="$1"
+
+  RUNTIME_APP_STATE_FILE="$repo_dir/backend/runtime_state/app_state.json" RUNTIME_WEBHOOK_TRADING_ENABLED="$enabled" "$python_bin" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["RUNTIME_APP_STATE_FILE"])
+enabled = os.environ["RUNTIME_WEBHOOK_TRADING_ENABLED"].strip().lower() == "true"
+path.parent.mkdir(parents=True, exist_ok=True)
+try:
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+except json.JSONDecodeError:
+    data = {}
+data["engine_started"] = enabled
+data["webhook_trading_enabled"] = enabled
+tmp = path.with_suffix(path.suffix + ".tmp")
+tmp.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+tmp.replace(path)
+PY
+}
+
 set_env APP_ENV production
 set_env BACKEND_HOST 127.0.0.1
 set_env BACKEND_PORT 8002
@@ -156,12 +179,14 @@ case "$live_trading_armed" in
     set_env DHAN_READ_ONLY_REAL_DATA false
     set_env EXECUTION_NODE_ROUTING_ENABLED true
     set_env WEBHOOK_TRADING_ENABLED true
+    set_webhook_runtime_state true
     ;;
   false|safe)
     set_env ENABLE_LIVE_ORDERS false
     set_env DHAN_READ_ONLY_REAL_DATA true
     set_env EXECUTION_NODE_ROUTING_ENABLED false
     set_env WEBHOOK_TRADING_ENABLED false
+    set_webhook_runtime_state false
     ;;
   ""|preserve)
     if ! grep -Eq '^ENABLE_LIVE_ORDERS=' "$env_file"; then
@@ -169,6 +194,7 @@ case "$live_trading_armed" in
       set_env DHAN_READ_ONLY_REAL_DATA true
       set_env EXECUTION_NODE_ROUTING_ENABLED false
       set_env WEBHOOK_TRADING_ENABLED false
+      set_webhook_runtime_state false
     else
       echo "Preserving existing live trading gate values in $env_file."
     fi
