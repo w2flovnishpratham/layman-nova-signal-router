@@ -1900,6 +1900,34 @@ code {
   gap: 10px;
 }
 
+.live-access-step {
+  gap: 14px;
+}
+
+.live-access-heading {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.live-access-heading svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+  margin-top: 2px;
+}
+
+.live-access-heading h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.live-access-heading p {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .static-ip-heading {
   display: grid;
   gap: 4px;
@@ -1970,6 +1998,20 @@ code {
 
 .static-ip-verification.verified {
   color: var(--success);
+}
+
+.static-ip-error-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.static-ip-error-row button {
+  width: auto;
+  min-height: 28px;
+  padding: 0 10px;
 }
 
 .static-ip-error {

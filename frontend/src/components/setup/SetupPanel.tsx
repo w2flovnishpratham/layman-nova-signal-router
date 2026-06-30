@@ -3,6 +3,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { createRazorpaySubscription } from '../../api'
 import type { RazorpayPlanCode } from '../../api'
+import { SetupInfoCard } from '../messages/SetupInfoCard'
 import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
@@ -43,6 +44,10 @@ export function SetupPanel({
     onDraft({ engineMode, paperStartingBalance })
     onUserReply(engineMode === 'paper' ? `Paper mode with ${formatCurrency(paperStartingBalance)} virtual balance` : 'Live mode - real money routing')
     onSend({ type: 'setup.mode', data: { engineMode, paperStartingBalance } })
+  }} />
+  if (flowStep === 'live_access') return <LiveAccessStep onContinue={() => {
+    onUserReply('Nova Static IP entitlement and proxy verification confirmed')
+    onStep('strategy')
   }} />
   if (flowStep === 'strategy') return <StrategyStep onSelect={() => {
     onUserReply('Supertrend Strategy (NSE Options)')
@@ -166,6 +171,27 @@ function SharedDataStep({ onContinue }: { onContinue: () => void }) {
           Continue with shared market data
         </button>
       </div>
+    </article>
+  )
+}
+
+function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
+  const [staticIpReady, setStaticIpReady] = useState(false)
+  return (
+    <article className="setup-card live-access-step">
+      <div className="live-access-heading">
+        <Zap size={16} />
+        <div>
+          <h3>Activate Static IP Access</h3>
+          <p>Live setup can continue after Razorpay confirms static IP access and the assigned Nova Static IP is verified.</p>
+        </div>
+      </div>
+      <RazorpayTestCheckoutCard initialPlanCode="static_ip_monthly" />
+      <SetupInfoCard onReadyChange={setStaticIpReady} />
+      <button type="button" className="primary-button" disabled={!staticIpReady} onClick={onContinue}>
+        Continue to Strategy
+      </button>
+      {!staticIpReady ? <p className="form-hint">Complete static IP checkout, refresh access, select an IP, then verify it before continuing. Live and strategy access are checked again before deployment.</p> : null}
     </article>
   )
 }
@@ -424,8 +450,8 @@ function DeploymentSummary({ draft, lotSize, onDeploy }: { draft: SetupDraft; lo
   )
 }
 
-function RazorpayTestCheckoutCard() {
-  const [planCode, setPlanCode] = useState<RazorpayPlanCode>('live_monthly')
+function RazorpayTestCheckoutCard({ initialPlanCode = 'live_monthly' }: { initialPlanCode?: RazorpayPlanCode }) {
+  const [planCode, setPlanCode] = useState<RazorpayPlanCode>(initialPlanCode)
   const [pending, setPending] = useState(false)
   const [status, setStatus] = useState<'not_active' | 'pending_confirmation'>('not_active')
   const [message, setMessage] = useState('')

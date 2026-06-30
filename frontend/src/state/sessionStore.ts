@@ -219,7 +219,7 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       setupState: nextState,
       config: nextConfig,
       engineMode: nextConfig.engineMode ?? state.engineMode,
-      setupFlowStep: nextFlowStep(state.setupFlowStep, nextState),
+      setupFlowStep: nextFlowStep(state.setupFlowStep, nextState, nextConfig),
       lastSetupError: '',
       session: nextSession,
     }
@@ -369,8 +369,11 @@ function normalizeTrade(data: Partial<ActiveTrade>, config: TradeConfig, lotSize
   }
 }
 
-function nextFlowStep(current: SetupFlowStep, backendState: SetupState): SetupFlowStep {
-  if (backendState === 'MODE_PICKED') return current === 'mode' ? 'strategy' : current
+function nextFlowStep(current: SetupFlowStep, backendState: SetupState, config: TradeConfig): SetupFlowStep {
+  if (backendState === 'MODE_PICKED') {
+    if (current !== 'mode') return current
+    return config.engineMode === 'live' ? 'live_access' : 'strategy'
+  }
   if (backendState === 'STRATEGY_PICKED') return current === 'strategy' ? 'broker' : current
   if (backendState === 'BROKER_CONNECTED') return current === 'broker' ? 'side' : current
   if (backendState === 'EXITS_CONFIGURED' || backendState === 'READY_TO_LAUNCH') return 'confirm'

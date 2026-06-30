@@ -217,7 +217,14 @@ async def _apply_production_command(
         )
         return
 
+    if command_type == "setup.select_strategy":
+        if session_config.get("engineMode") == "live" and not user.is_dev:
+            await asyncio.to_thread(_require_live_static_ip_ready, user)
+        return
+
     if command_type == "setup.broker_creds":
+        if session_config.get("engineMode") == "live" and not user.is_dev:
+            await asyncio.to_thread(_require_live_static_ip_ready, user)
         client_id = str(data.get("clientId", "")).strip()
         access_token = str(data.get("accessToken", "")).strip()
         ok, message, _funds, details = await asyncio.to_thread(
@@ -411,6 +418,26 @@ async def _apply_production_command(
                 str(session_config.get("strategy") or "supertrend"),
                 False,
             )
+
+
+def _require_live_static_ip_ready(user: CurrentUser) -> None:
+    try:
+        entitlements.require_static_ip_entitlement_for_user(user.id)
+    except entitlements.EntitlementError as exc:
+        raise ValueError("Static IP entitlement is required before live setup.") from exc
+
+    egress = strategy_fanout.get_user_egress(user.id)
+    if egress is None or not egress.get("proxy_url"):
+        raise ValueError("Select a Nova Static IP before continuing live setup.")
+
+    if egress.get("verified"):
+        return
+
+    verification = strategy_fanout.verify_user_egress(user.id)
+    if verification.get("ok"):
+        return
+
+    raise ValueError("Verify the selected Nova Static IP before continuing live setup.")
 
 
 def _suggestion_level(suggestion: dict[str, Any], *keys: str) -> float | None:

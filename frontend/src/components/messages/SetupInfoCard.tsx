@@ -1,32 +1,38 @@
 import { CheckCircle2, Copy, LoaderCircle, RefreshCw } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { getEgressOptions, selectEgressIp, verifyEgressIp, type EgressOptionsResponse } from '../../api'
 
-export function SetupInfoCard() {
+interface Props {
+  onReadyChange?: (ready: boolean) => void
+}
+
+export function SetupInfoCard({ onReadyChange }: Props = {}) {
   const [options, setOptions] = useState<EgressOptionsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [selecting, setSelecting] = useState<string | null>(null)
   const [verifying, setVerifying] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let active = true
-    void getEgressOptions()
-      .then((response) => {
-        if (active) setOptions(response)
-      })
-      .catch((loadError: unknown) => {
-        if (active) {
-          setError(loadError instanceof Error ? loadError.message : 'Could not load static IPs.')
-        }
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
-    return () => {
-      active = false
+  const loadOptions = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setOptions(await getEgressOptions())
+    } catch (loadError) {
+      setOptions(null)
+      setError(loadError instanceof Error ? loadError.message : 'Could not load static IPs.')
+    } finally {
+      setLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    void loadOptions()
+  }, [loadOptions])
+
+  useEffect(() => {
+    onReadyChange?.(Boolean(options?.egress.public_ip && options.egress.verified))
+  }, [onReadyChange, options])
 
   async function selectIp(publicIp: string) {
     setSelecting(publicIp)
@@ -93,7 +99,15 @@ export function SetupInfoCard() {
           </button>
         </div>
       ) : null}
-      {error ? <p className="static-ip-error">{error}</p> : null}
+      {error ? (
+        <div className="static-ip-error-row">
+          <p className="static-ip-error">{error}</p>
+          <button type="button" onClick={() => void loadOptions()} disabled={loading}>
+            <RefreshCw size={13} />
+            Refresh
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }

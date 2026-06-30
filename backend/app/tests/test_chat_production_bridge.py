@@ -4,11 +4,15 @@ import asyncio
 import hashlib
 import hmac
 import json
+from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.ws import _apply_production_command
+from app.db import models
+from app.db.engine import session_scope
 from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.state_machine import SetupState, validate_command
 from app.routers import orders as orders_router
@@ -21,6 +25,8 @@ from app.services.credential_vault import DhanCredentials
 from app.services.dhan_client import RealDhanClient
 from app.services.dhan_client import DhanLtpResult
 from app.services.execution_router import _broker_exit_levels, route_entry_signal
+from app.services.user_context import current_user_from_model
+from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 from app.store.redis_session import session_store
 
 
@@ -71,6 +77,145 @@ def _isolate_runtime(tmp_path, monkeypatch) -> None:
     credential_vault._LOCAL_MEMORY_PAYLOAD.clear()
     credential_vault._LOCAL_MEMORY_PAYLOAD.update({"version": 1, "dhan": None, "webhook_secret": None})
     state_store.init_runtime_files()
+
+
+def _grant_static_ip_entitlement(user_id) -> None:
+    now = models.utcnow()
+    with session_scope() as db:
+        db.add(
+            models.UserEntitlement(
+                user_id=user_id,
+                plan_code="static_ip_monthly",
+                status="active",
+                source="payment_provider",
+                starts_at=now,
+                expires_at=now + timedelta(days=365),
+                live_orders_enabled=False,
+                static_ip_enabled=True,
+                strategy_access_enabled=False,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+
+def test_live_setup_strategy_requires_static_ip_entitlement(mu_db):
+    user = current_user_from_model(make_user("live-flow-no-static@example.com"))
+    session = SimpleNamespace(config={"engineMode": "live"})
+
+    with pytest.raises(ValueError, match="Static IP entitlement is required before live setup"):
+        asyncio.run(
+            _apply_production_command(
+                "setup.select_strategy",
+                {"strategy": "supertrend"},
+                user=user,
+                session=session,
+            )
+        )
+
+
+def test_live_setup_broker_credentials_require_static_ip_before_dhan_validation(mu_db, monkeypatch):
+    user = current_user_from_model(make_user("live-flow-no-egress@example.com"))
+    _grant_static_ip_entitlement(user.id)
+    session = SimpleNamespace(config={"engineMode": "live"})
+
+    monkeypatch.setattr("app.api.ws.strategy_fanout.get_user_egress", lambda _user_id: None)
+
+    def forbidden_validate(*_args, **_kwargs):
+        raise AssertionError("Dhan credential validation must not run before verified static IP.")
+
+    monkeypatch.setattr("app.api.ws.validate_dhan_credentials", forbidden_validate)
+
+    with pytest.raises(ValueError, match="Select a Nova Static IP"):
+        asyncio.run(
+            _apply_production_command(
+                "setup.broker_creds",
+                {"clientId": "1110131436", "accessToken": "test-token"},
+                user=user,
+                session=session,
+            )
+        )
+
+
+def test_live_setup_broker_credentials_require_verified_static_ip(mu_db, monkeypatch):
+    user = current_user_from_model(make_user("live-flow-unverified-egress@example.com"))
+    _grant_static_ip_entitlement(user.id)
+    session = SimpleNamespace(config={"engineMode": "live"})
+
+    monkeypatch.setattr(
+        "app.api.ws.strategy_fanout.get_user_egress",
+        lambda _user_id: {
+            "public_ip": "13.203.58.220",
+            "expected_egress_ip": "13.203.58.220",
+            "proxy_url": "http://backend-only-proxy-url",
+            "active": True,
+            "verified": False,
+        },
+    )
+    monkeypatch.setattr(
+        "app.api.ws.strategy_fanout.verify_user_egress",
+        lambda _user_id: {"ok": False, "error": "Observed proxy IP does not match assigned public IP."},
+    )
+
+    def forbidden_validate(*_args, **_kwargs):
+        raise AssertionError("Dhan credential validation must not run before verified static IP.")
+
+    monkeypatch.setattr("app.api.ws.validate_dhan_credentials", forbidden_validate)
+
+    with pytest.raises(ValueError, match="Verify the selected Nova Static IP"):
+        asyncio.run(
+            _apply_production_command(
+                "setup.broker_creds",
+                {"clientId": "1110131436", "accessToken": "test-token"},
+                user=user,
+                session=session,
+            )
+        )
+
+
+def test_live_setup_broker_credentials_reaches_dhan_validation_after_verified_static_ip(mu_db, monkeypatch):
+    user = current_user_from_model(make_user("live-flow-ready-egress@example.com"))
+    _grant_static_ip_entitlement(user.id)
+    session = SimpleNamespace(config={"engineMode": "live"})
+    calls = {"validated": False, "saved": False, "wallet": False}
+
+    monkeypatch.setattr(
+        "app.api.ws.strategy_fanout.get_user_egress",
+        lambda _user_id: {
+            "public_ip": "13.203.58.220",
+            "expected_egress_ip": "13.203.58.220",
+            "proxy_url": "http://backend-only-proxy-url",
+            "active": True,
+            "verified": True,
+        },
+    )
+
+    def fake_validate(client_id, access_token):
+        calls["validated"] = True
+        assert client_id == "1110131436"
+        assert access_token == "test-token"
+        return True, "Dhan connected.", None, {}
+
+    def fake_save(_client_id, _access_token):
+        calls["saved"] = True
+
+    def fake_refresh(*_args, **_kwargs):
+        calls["wallet"] = True
+
+    monkeypatch.setattr("app.api.ws.validate_dhan_credentials", fake_validate)
+    monkeypatch.setattr("app.api.ws.save_dhan_credentials", fake_save)
+    monkeypatch.setattr("app.api.ws.refresh_wallet_snapshot", fake_refresh)
+
+    asyncio.run(
+        _apply_production_command(
+            "setup.broker_creds",
+            {"clientId": "1110131436", "accessToken": "test-token"},
+            user=user,
+            session=session,
+        )
+    )
+
+    assert calls == {"validated": True, "saved": True, "wallet": True}
 
 
 def test_chat_session_uses_persistent_production_webhook(tmp_path, monkeypatch):

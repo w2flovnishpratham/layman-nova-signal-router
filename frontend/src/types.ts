@@ -14,7 +14,7 @@ export type WsStatus = 'live' | 'degraded' | 'down'
 export type NovaView = 'trading' | 'dashboard'
 export type Tone = 'up' | 'down' | 'flat'
 export type EngineMode = 'paper' | 'live'
-export type SetupFlowStep = 'mode' | 'strategy' | 'broker' | 'side' | 'lots' | 'exits' | 'limits' | 'confirm' | 'complete'
+export type SetupFlowStep = 'mode' | 'live_access' | 'strategy' | 'broker' | 'side' | 'lots' | 'exits' | 'limits' | 'confirm' | 'complete'
 export type ErrorSource = 'TRADINGVIEW' | 'DHAN' | 'NOVA_BACKEND' | 'PAPER_ENGINE' | 'RISK_ENGINE' | 'NETWORK' | 'PUBSUB' | 'STATIC_IP'
 export type ErrorCategory =
   | 'AUTH'
