@@ -72,6 +72,21 @@ for required_key in DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
 done
 
 for optional_key in \
+  PAYMENT_PROVIDER \
+  RAZORPAY_KEY_ID \
+  RAZORPAY_KEY_SECRET \
+  RAZORPAY_WEBHOOK_SECRET \
+  RAZORPAY_PLAN_LIVE_MONTHLY \
+  RAZORPAY_PLAN_STATIC_IP_MONTHLY \
+  RAZORPAY_PLAN_STRATEGY_MONTHLY \
+  AWS_PROXY_SLOTS_ENABLED \
+  AWS_PROXY_HOST \
+  AWS_PROXY_SHARED_PASSWORD \
+  AWS_PROXY_SLOT_1_PASSWORD \
+  AWS_PROXY_SLOT_2_PASSWORD \
+  AWS_PROXY_SLOT_3_PASSWORD \
+  AWS_PROXY_SLOT_4_PASSWORD \
+  AWS_PROXY_SLOT_5_PASSWORD \
   DHAN_SHARED_DATA_ENABLED \
   DHAN_SHARED_CLIENT_ID \
   DHAN_SHARED_PIN \
@@ -100,6 +115,29 @@ live_trading_armed="$(
 )"
 case "$live_trading_armed" in
   true|armed)
+    for live_required_key in \
+      PAYMENT_PROVIDER \
+      RAZORPAY_KEY_ID \
+      RAZORPAY_KEY_SECRET \
+      RAZORPAY_WEBHOOK_SECRET \
+      AWS_PROXY_SHARED_PASSWORD
+    do
+      value="$(grep -m1 "^${live_required_key}=" "$env_file" | cut -d= -f2- || true)"
+      if [[ -z "$value" ]]; then
+        echo "Live trading deployment is armed but incomplete: ${live_required_key}" >&2
+        exit 1
+      fi
+    done
+    payment_provider="$(grep -m1 '^PAYMENT_PROVIDER=' "$env_file" | cut -d= -f2- || true)"
+    payment_provider_lc="$(printf '%s' "$payment_provider" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$payment_provider_lc" != "razorpay" ]]; then
+      echo "Live trading deployment requires PAYMENT_PROVIDER=razorpay." >&2
+      exit 1
+    fi
+    set_env AWS_PROXY_SLOTS_ENABLED true
+    if ! grep -Eq '^AWS_PROXY_HOST=.+$' "$env_file"; then
+      set_env AWS_PROXY_HOST 13.203.58.220
+    fi
     set_env ENABLE_LIVE_ORDERS true
     set_env DHAN_READ_ONLY_REAL_DATA false
     set_env EXECUTION_NODE_ROUTING_ENABLED true

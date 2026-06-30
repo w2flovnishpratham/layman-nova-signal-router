@@ -71,6 +71,21 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          PAYMENT_PROVIDER: ${{ secrets.PAYMENT_PROVIDER }}
+          RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+          RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+          RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET }}
+          RAZORPAY_PLAN_LIVE_MONTHLY: ${{ secrets.RAZORPAY_PLAN_LIVE_MONTHLY }}
+          RAZORPAY_PLAN_STATIC_IP_MONTHLY: ${{ secrets.RAZORPAY_PLAN_STATIC_IP_MONTHLY }}
+          RAZORPAY_PLAN_STRATEGY_MONTHLY: ${{ secrets.RAZORPAY_PLAN_STRATEGY_MONTHLY }}
+          AWS_PROXY_SLOTS_ENABLED: ${{ secrets.AWS_PROXY_SLOTS_ENABLED }}
+          AWS_PROXY_HOST: ${{ secrets.AWS_PROXY_HOST }}
+          AWS_PROXY_SHARED_PASSWORD: ${{ secrets.AWS_PROXY_SHARED_PASSWORD }}
+          AWS_PROXY_SLOT_1_PASSWORD: ${{ secrets.AWS_PROXY_SLOT_1_PASSWORD }}
+          AWS_PROXY_SLOT_2_PASSWORD: ${{ secrets.AWS_PROXY_SLOT_2_PASSWORD }}
+          AWS_PROXY_SLOT_3_PASSWORD: ${{ secrets.AWS_PROXY_SLOT_3_PASSWORD }}
+          AWS_PROXY_SLOT_4_PASSWORD: ${{ secrets.AWS_PROXY_SLOT_4_PASSWORD }}
+          AWS_PROXY_SLOT_5_PASSWORD: ${{ secrets.AWS_PROXY_SLOT_5_PASSWORD }}
           DHAN_SHARED_DATA_ENABLED: ${{ secrets.DHAN_SHARED_DATA_ENABLED }}
           DHAN_SHARED_CLIENT_ID: ${{ secrets.DHAN_SHARED_CLIENT_ID }}
           DHAN_SHARED_PIN: ${{ secrets.DHAN_SHARED_PIN }}
@@ -104,6 +119,21 @@ jobs:
             printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
             printf 'LIVE_TRADING_ARMED=%s\n' "$live_trading_armed"
             for optional_name in \
+              PAYMENT_PROVIDER \
+              RAZORPAY_KEY_ID \
+              RAZORPAY_KEY_SECRET \
+              RAZORPAY_WEBHOOK_SECRET \
+              RAZORPAY_PLAN_LIVE_MONTHLY \
+              RAZORPAY_PLAN_STATIC_IP_MONTHLY \
+              RAZORPAY_PLAN_STRATEGY_MONTHLY \
+              AWS_PROXY_SLOTS_ENABLED \
+              AWS_PROXY_HOST \
+              AWS_PROXY_SHARED_PASSWORD \
+              AWS_PROXY_SLOT_1_PASSWORD \
+              AWS_PROXY_SLOT_2_PASSWORD \
+              AWS_PROXY_SLOT_3_PASSWORD \
+              AWS_PROXY_SLOT_4_PASSWORD \
+              AWS_PROXY_SLOT_5_PASSWORD \
               DHAN_SHARED_DATA_ENABLED \
               DHAN_SHARED_CLIENT_ID \
               DHAN_SHARED_PIN \
