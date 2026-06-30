@@ -322,6 +322,16 @@ def _features_for_plan(plan_id: str | None) -> PlanFeatures | None:
     if not normalized:
         return None
 
+    premium_plan_ids = _premium_plan_ids()
+    if normalized in premium_plan_ids:
+        return PlanFeatures(
+            plan_id=normalized,
+            plan_code="razorpay_premium_monthly",
+            live_orders_enabled=True,
+            static_ip_enabled=True,
+            strategy_access_enabled=True,
+        )
+
     flags = {
         "live_orders_enabled": False,
         "static_ip_enabled": False,
@@ -347,6 +357,20 @@ def _features_for_plan(plan_id: str | None) -> PlanFeatures | None:
         static_ip_enabled=flags["static_ip_enabled"],
         strategy_access_enabled=flags["strategy_access_enabled"],
     )
+
+
+def _premium_plan_ids() -> set[str]:
+    premium_ids = {_safe_string(settings.RAZORPAY_PLAN_PREMIUM_MONTHLY)}
+    premium_ids.discard("")
+    legacy_ids = {
+        _safe_string(settings.RAZORPAY_PLAN_LIVE_MONTHLY),
+        _safe_string(settings.RAZORPAY_PLAN_STATIC_IP_MONTHLY),
+        _safe_string(settings.RAZORPAY_PLAN_STRATEGY_MONTHLY),
+    }
+    legacy_ids.discard("")
+    if not premium_ids and len(legacy_ids) == 1:
+        premium_ids.update(legacy_ids)
+    return premium_ids
 
 
 def _decide_entitlement_action(

@@ -21,6 +21,7 @@ from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 WEBHOOK_SECRET = "checkout-webhook-secret"
 KEY_ID = "rzp_test_checkout_key"
 KEY_SECRET = "checkout-key-secret-should-not-leak"
+PREMIUM_PLAN = "plan_premium_checkout"
 LIVE_PLAN = "plan_live_checkout"
 STATIC_PLAN = "plan_static_checkout"
 STRATEGY_PLAN = "plan_strategy_checkout"
@@ -36,6 +37,7 @@ def checkout_env(mu_db, monkeypatch):
     monkeypatch.setattr(settings, "RAZORPAY_KEY_ID", KEY_ID, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_KEY_SECRET", KEY_SECRET, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_WEBHOOK_SECRET", WEBHOOK_SECRET, raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_PLAN_PREMIUM_MONTHLY", PREMIUM_PLAN, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_LIVE_MONTHLY", LIVE_PLAN, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_STATIC_IP_MONTHLY", STATIC_PLAN, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_STRATEGY_MONTHLY", STRATEGY_PLAN, raising=False)
@@ -110,7 +112,7 @@ def _headers(raw_body: bytes, *, event_id: str) -> dict[str, str]:
     }
 
 
-def _subscription_payload(notes: dict, *, plan_id: str = LIVE_PLAN) -> dict:
+def _subscription_payload(notes: dict, *, plan_id: str = PREMIUM_PLAN) -> dict:
     return {
         "event": "subscription.activated",
         "payload": {
@@ -154,7 +156,7 @@ def _latest_entitlement(user_id):
 def test_unauthenticated_user_cannot_create_subscription(checkout_env):
     client, _user = _auth_client()
 
-    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "live_monthly"})
+    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "premium_monthly"})
 
     assert response.status_code == 401
 
@@ -206,7 +208,7 @@ def test_authenticated_user_can_request_configured_plan(checkout_env, monkeypatc
     monkeypatch.setattr(razorpay_checkout.httpx, "Client", FakeRazorpayClient)
     client, _ = _auth_client(user)
 
-    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "live_monthly"})
+    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "premium_monthly"})
 
     assert response.status_code == 200
     body = response.json()
@@ -216,13 +218,13 @@ def test_authenticated_user_can_request_configured_plan(checkout_env, monkeypatc
         "checkout_url": "https://rzp.io/i/test-checkout",
         "short_url": "https://rzp.io/i/test-checkout",
         "subscription_id": "sub_checkout_test",
-        "plan_code": "live_monthly",
+        "plan_code": "premium_monthly",
         "status": "created",
         "message": "Razorpay subscription created. Complete checkout to activate entitlement.",
     }
     assert FakeRazorpayClient.calls[0]["url"] == "https://api.razorpay.com/v1/subscriptions"
     assert FakeRazorpayClient.calls[0]["auth"] == (KEY_ID, KEY_SECRET)
-    assert FakeRazorpayClient.calls[0]["json"]["plan_id"] == LIVE_PLAN
+    assert FakeRazorpayClient.calls[0]["json"]["plan_id"] == PREMIUM_PLAN
     assert FakeRazorpayClient.calls[0]["json"]["customer_notify"] is True
 
 
@@ -238,7 +240,7 @@ def test_frontend_user_id_and_payment_fields_are_ignored(checkout_env, monkeypat
     response = client.post(
         "/api/payments/razorpay/create-subscription",
         json={
-            "plan_code": "static_ip_monthly",
+            "plan_code": "premium_monthly",
             "user_id": attacker_user_id,
             "payment_status": "paid",
             "subscription_status": "active",
@@ -253,10 +255,10 @@ def test_frontend_user_id_and_payment_fields_are_ignored(checkout_env, monkeypat
 
     assert response.status_code == 200
     sent_payload = FakeRazorpayClient.calls[0]["json"]
-    assert sent_payload["plan_id"] == STATIC_PLAN
+    assert sent_payload["plan_id"] == PREMIUM_PLAN
     assert sent_payload["notes"] == {
         "nova_user_id": server_user.id_str,
-        "nova_plan_code": "static_ip_monthly",
+        "nova_plan_code": "premium_monthly",
     }
     serialized_sent = str(sent_payload)
     assert attacker_user_id not in serialized_sent
@@ -265,16 +267,32 @@ def test_frontend_user_id_and_payment_fields_are_ignored(checkout_env, monkeypat
     assert _entitlements_count() == 0
 
 
-def test_missing_plan_config_fails_safely_before_razorpay_call(checkout_env, monkeypatch):
+@pytest.mark.parametrize("plan_code", ["live_monthly", "static_ip_monthly", "strategy_monthly"])
+def test_legacy_split_plan_checkout_codes_are_not_user_facing(checkout_env, monkeypatch, plan_code):
     from app.services import razorpay_checkout
 
-    user = _current_user(make_user("checkout-missing-plan@example.com"))
-    monkeypatch.setattr(settings, "RAZORPAY_PLAN_LIVE_MONTHLY", "", raising=False)
+    user = _current_user(make_user(f"checkout-legacy-{plan_code}@example.com"))
     FakeRazorpayClient.calls = []
     monkeypatch.setattr(razorpay_checkout.httpx, "Client", FakeRazorpayClient)
     client, _ = _auth_client(user)
 
-    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "live_monthly"})
+    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": plan_code})
+
+    assert response.status_code == 400
+    assert response.json() == {"ok": False, "error": "Payment plan is not configured."}
+    assert FakeRazorpayClient.calls == []
+
+
+def test_missing_plan_config_fails_safely_before_razorpay_call(checkout_env, monkeypatch):
+    from app.services import razorpay_checkout
+
+    user = _current_user(make_user("checkout-missing-plan@example.com"))
+    monkeypatch.setattr(settings, "RAZORPAY_PLAN_PREMIUM_MONTHLY", "", raising=False)
+    FakeRazorpayClient.calls = []
+    monkeypatch.setattr(razorpay_checkout.httpx, "Client", FakeRazorpayClient)
+    client, _ = _auth_client(user)
+
+    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "premium_monthly"})
 
     assert response.status_code == 400
     assert response.json() == {"ok": False, "error": "Payment plan is not configured."}
@@ -289,7 +307,7 @@ def test_checkout_response_does_not_return_secret_or_raw_razorpay_response(check
     monkeypatch.setattr(razorpay_checkout.httpx, "Client", FakeRazorpayClient)
     client, _ = _auth_client(user)
 
-    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "strategy_monthly"})
+    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "premium_monthly"})
 
     assert response.status_code == 200
     serialized = str(response.json())
@@ -316,7 +334,7 @@ def test_checkout_creation_does_not_grant_entitlement_directly(checkout_env, mon
     monkeypatch.setattr(razorpay_checkout.httpx, "Client", FakeRazorpayClient)
     client, _ = _auth_client(user)
 
-    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "live_monthly"})
+    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "premium_monthly"})
 
     assert response.status_code == 200
     assert _latest_entitlement(user.id) is None
@@ -330,7 +348,7 @@ def test_entitlement_is_granted_only_after_verified_webhook(checkout_env, monkey
     monkeypatch.setattr(razorpay_checkout.httpx, "Client", FakeRazorpayClient)
     client, _ = _auth_client(user)
 
-    created = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "live_monthly"})
+    created = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "premium_monthly"})
     assert created.status_code == 200
     assert _latest_entitlement(user.id) is None
 
@@ -348,21 +366,20 @@ def test_entitlement_is_granted_only_after_verified_webhook(checkout_env, monkey
     assert entitlement is not None
     assert entitlement["status"] == "active"
     assert entitlement["live_orders_enabled"] is True
+    assert entitlement["static_ip_enabled"] is True
+    assert entitlement["strategy_access_enabled"] is True
 
 
-def test_bundle_plan_uses_shared_configured_plan_id(checkout_env, monkeypatch):
+def test_legacy_bundle_plan_checkout_code_is_not_user_facing(checkout_env, monkeypatch):
     from app.services import razorpay_checkout
 
-    user = _current_user(make_user("checkout-bundle@example.com"))
-    monkeypatch.setattr(settings, "RAZORPAY_PLAN_LIVE_MONTHLY", "plan_bundle", raising=False)
-    monkeypatch.setattr(settings, "RAZORPAY_PLAN_STATIC_IP_MONTHLY", "plan_bundle", raising=False)
-    monkeypatch.setattr(settings, "RAZORPAY_PLAN_STRATEGY_MONTHLY", "plan_bundle", raising=False)
+    user = _current_user(make_user("checkout-bundle-alias@example.com"))
     FakeRazorpayClient.calls = []
     monkeypatch.setattr(razorpay_checkout.httpx, "Client", FakeRazorpayClient)
     client, _ = _auth_client(user)
 
     response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "bundle_monthly"})
 
-    assert response.status_code == 200
-    assert FakeRazorpayClient.calls[0]["json"]["plan_id"] == "plan_bundle"
-    assert FakeRazorpayClient.calls[0]["json"]["notes"]["nova_plan_code"] == "bundle_monthly"
+    assert response.status_code == 400
+    assert response.json() == {"ok": False, "error": "Payment plan is not configured."}
+    assert FakeRazorpayClient.calls == []

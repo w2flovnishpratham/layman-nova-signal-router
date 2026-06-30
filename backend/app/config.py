@@ -215,6 +215,9 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
     RAZORPAY_WEBHOOK_SECRET: str = ""
+    RAZORPAY_PLAN_PREMIUM_MONTHLY: str = ""
+    # Deprecated split-plan IDs retained only for legacy webhook compatibility.
+    # New checkout creation uses RAZORPAY_PLAN_PREMIUM_MONTHLY.
     RAZORPAY_PLAN_LIVE_MONTHLY: str = ""
     RAZORPAY_PLAN_STATIC_IP_MONTHLY: str = ""
     RAZORPAY_PLAN_STRATEGY_MONTHLY: str = ""

@@ -18,6 +18,7 @@ from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 
 
 WEBHOOK_SECRET = "razorpay-webhook-secret-for-tests"
+PREMIUM_PLAN = "plan_premium_monthly"
 LIVE_PLAN = "plan_live_monthly"
 STATIC_PLAN = "plan_static_ip_monthly"
 STRATEGY_PLAN = "plan_strategy_monthly"
@@ -30,6 +31,7 @@ PERIOD_END = int((NOW + timedelta(days=30)).timestamp())
 def razorpay_env(mu_db, monkeypatch):
     monkeypatch.setattr(settings, "PAYMENT_PROVIDER", "razorpay", raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_WEBHOOK_SECRET", WEBHOOK_SECRET, raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_PLAN_PREMIUM_MONTHLY", PREMIUM_PLAN, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_LIVE_MONTHLY", LIVE_PLAN, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_STATIC_IP_MONTHLY", STATIC_PLAN, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_STRATEGY_MONTHLY", STRATEGY_PLAN, raising=False)
@@ -333,6 +335,27 @@ def test_subscription_activated_known_plan_grants_live_entitlement(razorpay_env)
     assert entitlement["live_orders_enabled"] is True
     assert entitlement["static_ip_enabled"] is False
     assert entitlement["strategy_access_enabled"] is False
+    assert entitlement["expires_at"] is not None
+
+
+def test_subscription_activated_premium_plan_grants_all_entitlements(razorpay_env):
+    user = make_user("razorpay-premium-plan@example.com")
+
+    response = _post_signed(
+        _client(),
+        _subscription_payload(user.id, event="subscription.activated", plan_id=PREMIUM_PLAN),
+        event_id="evt_activate_premium",
+    )
+
+    assert response.status_code == 200
+    entitlement = _latest_entitlement(user.id)
+    assert entitlement is not None
+    assert entitlement["status"] == "active"
+    assert entitlement["source"] == "payment_provider"
+    assert entitlement["plan_code"] == "razorpay_premium_monthly"
+    assert entitlement["live_orders_enabled"] is True
+    assert entitlement["static_ip_enabled"] is True
+    assert entitlement["strategy_access_enabled"] is True
     assert entitlement["expires_at"] is not None
 
 

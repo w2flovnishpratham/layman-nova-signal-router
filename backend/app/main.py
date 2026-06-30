@@ -164,6 +164,7 @@ def _validate_live_payment_provider_configuration() -> None:
         ("RAZORPAY_KEY_ID", settings.RAZORPAY_KEY_ID),
         ("RAZORPAY_KEY_SECRET", settings.RAZORPAY_KEY_SECRET),
         ("RAZORPAY_WEBHOOK_SECRET", settings.RAZORPAY_WEBHOOK_SECRET),
+        ("RAZORPAY_PLAN_PREMIUM_MONTHLY", settings.RAZORPAY_PLAN_PREMIUM_MONTHLY),
     ):
         if not (value or "").strip():
             raise RuntimeError(f"ENABLE_LIVE_ORDERS=true requires {name}.")

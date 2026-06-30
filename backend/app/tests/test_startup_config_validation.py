@@ -40,6 +40,7 @@ def _set_production_live_baseline(
     razorpay_key_id: str = "test-razorpay-key-id",
     razorpay_key_secret: str = "razorpay-key-secret",
     razorpay_webhook_secret: str = "razorpay-webhook-secret",
+    razorpay_plan_premium_monthly: str = "plan_premium_monthly",
     payment_simulation_enabled: bool = False,
 ) -> None:
     monkeypatch.setattr(settings, "APP_ENV", app_env, raising=False)
@@ -61,6 +62,7 @@ def _set_production_live_baseline(
     monkeypatch.setattr(settings, "RAZORPAY_KEY_ID", razorpay_key_id, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_KEY_SECRET", razorpay_key_secret, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_WEBHOOK_SECRET", razorpay_webhook_secret, raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_PLAN_PREMIUM_MONTHLY", razorpay_plan_premium_monthly, raising=False)
     monkeypatch.setattr(settings, "PAYMENT_SIMULATION_ENABLED", payment_simulation_enabled, raising=False)
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", enable_live_orders, raising=False)
     monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
@@ -327,6 +329,25 @@ def test_production_live_orders_missing_razorpay_webhook_secret_fails_safely(mon
     assert "razorpay-key-secret-should-not-leak" not in message
 
 
+def test_production_live_orders_missing_razorpay_premium_plan_fails_safely(monkeypatch):
+    _set_production_live_baseline(
+        monkeypatch,
+        razorpay_key_id="test-razorpay-key-id",
+        razorpay_key_secret="razorpay-key-secret-should-not-leak",
+        razorpay_webhook_secret="razorpay-webhook-secret-should-not-leak",
+        razorpay_plan_premium_monthly="",
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration()
+
+    message = str(exc.value)
+    assert message == "ENABLE_LIVE_ORDERS=true requires RAZORPAY_PLAN_PREMIUM_MONTHLY."
+    assert "test-razorpay-key-id" not in message
+    assert "razorpay-key-secret-should-not-leak" not in message
+    assert "razorpay-webhook-secret-should-not-leak" not in message
+
+
 def test_production_payment_simulation_enabled_fails_even_without_live_orders(monkeypatch):
     _set_production_live_baseline(
         monkeypatch,
@@ -347,6 +368,7 @@ def test_production_live_orders_complete_razorpay_config_passes(monkeypatch):
         razorpay_key_id="test-razorpay-key-id",
         razorpay_key_secret="razorpay-key-secret",
         razorpay_webhook_secret="razorpay-webhook-secret",
+        razorpay_plan_premium_monthly="plan_premium_monthly",
     )
 
     validate_production_configuration()

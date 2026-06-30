@@ -12,7 +12,8 @@ from app.services.user_context import CurrentUser
 
 RAZORPAY_SUBSCRIPTIONS_URL = "https://api.razorpay.com/v1/subscriptions"
 DEFAULT_SUBSCRIPTION_TOTAL_COUNT = 12
-VALID_PLAN_CODES = {"live_monthly", "static_ip_monthly", "strategy_monthly", "bundle_monthly"}
+PREMIUM_PLAN_CODE = "premium_monthly"
+VALID_PLAN_CODES = {PREMIUM_PLAN_CODE}
 
 
 class RazorpayCheckoutError(RuntimeError):
@@ -66,25 +67,14 @@ def resolve_razorpay_plan(plan_code: str) -> RazorpayPlan:
     if normalized not in VALID_PLAN_CODES:
         raise RazorpayPlanConfigError("Payment plan is not configured.")
 
-    mapping = {
-        "live_monthly": settings.RAZORPAY_PLAN_LIVE_MONTHLY,
-        "static_ip_monthly": settings.RAZORPAY_PLAN_STATIC_IP_MONTHLY,
-        "strategy_monthly": settings.RAZORPAY_PLAN_STRATEGY_MONTHLY,
-    }
-    if normalized == "bundle_monthly":
-        configured_ids = {
-            plan_id.strip()
-            for plan_id in mapping.values()
-            if (plan_id or "").strip()
-        }
-        if len(configured_ids) == 1:
-            return RazorpayPlan(plan_code=normalized, plan_id=next(iter(configured_ids)))
-        raise RazorpayPlanConfigError("Payment plan is not configured.")
-
-    plan_id = (mapping.get(normalized) or "").strip()
+    plan_id = _configured_premium_plan_id()
     if not plan_id:
         raise RazorpayPlanConfigError("Payment plan is not configured.")
-    return RazorpayPlan(plan_code=normalized, plan_id=plan_id)
+    return RazorpayPlan(plan_code=PREMIUM_PLAN_CODE, plan_id=plan_id)
+
+
+def _configured_premium_plan_id() -> str:
+    return _safe_string(settings.RAZORPAY_PLAN_PREMIUM_MONTHLY)
 
 
 def create_razorpay_subscription_checkout(

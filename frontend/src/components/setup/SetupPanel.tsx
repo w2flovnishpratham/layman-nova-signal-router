@@ -2,7 +2,7 @@ import { FlaskConical, Loader2, Zap } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createRazorpaySubscription, getPaymentEntitlementStatus } from '../../api'
-import type { PaymentEntitlementStatus, RazorpayPlanCode } from '../../api'
+import type { PaymentEntitlementStatus } from '../../api'
 import { SetupInfoCard } from '../messages/SetupInfoCard'
 import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
@@ -218,7 +218,6 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
       </div>
       <RazorpayTestCheckoutCard
         accessReady={staticIpEntitled}
-        initialPlanCode="static_ip_monthly"
         onCheckoutCreated={() => {
           setPaymentPolling(true)
           setRefreshKey((current) => current + 1)
@@ -489,14 +488,11 @@ function DeploymentSummary({ draft, lotSize, onDeploy }: { draft: SetupDraft; lo
 
 function RazorpayTestCheckoutCard({
   accessReady = false,
-  initialPlanCode = 'live_monthly',
   onCheckoutCreated,
 }: {
   accessReady?: boolean
-  initialPlanCode?: RazorpayPlanCode
   onCheckoutCreated?: () => void
 }) {
-  const [planCode, setPlanCode] = useState<RazorpayPlanCode>(initialPlanCode)
   const [pending, setPending] = useState(false)
   const [status, setStatus] = useState<'not_active' | 'pending_confirmation' | 'confirmed'>('not_active')
   const [message, setMessage] = useState('')
@@ -513,7 +509,7 @@ function RazorpayTestCheckoutCard({
     setError('')
     setMessage('')
     try {
-      const checkout = await createRazorpaySubscription(planCode)
+      const checkout = await createRazorpaySubscription('premium_monthly')
       const checkoutUrl = checkout.checkout_url || checkout.short_url
       if (!checkoutUrl) {
         throw new Error('Checkout link was not returned.')
@@ -535,25 +531,12 @@ function RazorpayTestCheckoutCard({
   return (
     <section className="subscription-access-card" aria-live="polite">
       <div className="subscription-access-header">
-        <h4>Activate Nova Access</h4>
+        <h4>Activate Nova Premium</h4>
         <span className={status === 'confirmed' ? 'subscription-confirmed' : status === 'pending_confirmation' ? 'subscription-pending' : ''}>
           {status === 'confirmed' ? 'Static IP active' : status === 'pending_confirmation' ? 'Pending payment confirmation' : 'Not active'}
         </span>
       </div>
-      <p>Test mode only. Access activates after Razorpay webhook confirms payment.</p>
-      <label className="subscription-plan-control">
-        Plan
-        <select
-          value={planCode}
-          disabled={pending}
-          onChange={(event) => setPlanCode(event.target.value as RazorpayPlanCode)}
-        >
-          <option value="bundle_monthly">Bundle monthly</option>
-          <option value="live_monthly">Live monthly</option>
-          <option value="static_ip_monthly">Static IP monthly</option>
-          <option value="strategy_monthly">Strategy monthly</option>
-        </select>
-      </label>
+      <p>Premium includes live orders, Nova Static IP, and strategy access. Test mode only; access activates after Razorpay webhook confirms payment.</p>
       <button className="checkout-button" type="button" disabled={pending} onClick={startCheckout}>
         {pending ? (
           <MotionSpinner>

@@ -37,7 +37,7 @@ export interface EgressOptionsResponse {
   egress: EgressStatus
 }
 
-export type RazorpayPlanCode = 'live_monthly' | 'static_ip_monthly' | 'strategy_monthly' | 'bundle_monthly'
+export type RazorpayPlanCode = 'premium_monthly'
 
 export interface RazorpayCheckoutResponse {
   ok: boolean
