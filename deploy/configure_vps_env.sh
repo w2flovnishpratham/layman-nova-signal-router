@@ -2,10 +2,24 @@
 set -euo pipefail
 
 repo_dir="${1:-/root/layman-nova-signal-router}"
-env_file="$repo_dir/backend/.env"
 python_bin="$repo_dir/backend/.venv/bin/python"
 
+service_env_file=""
+if command -v systemctl >/dev/null 2>&1; then
+  service_environment="$(systemctl show layman-nova-signal-router.service -p Environment --value --no-pager 2>/dev/null || true)"
+  for environment_entry in $service_environment; do
+    case "$environment_entry" in
+      LAYMAN_ENV_FILE=*)
+        service_env_file="${environment_entry#LAYMAN_ENV_FILE=}"
+        ;;
+    esac
+  done
+fi
+
+env_file="${LAYMAN_ENV_FILE:-${service_env_file:-$repo_dir/backend/.env}}"
+
 umask 077
+mkdir -p "$(dirname "$env_file")"
 touch "$env_file"
 
 set_env() {

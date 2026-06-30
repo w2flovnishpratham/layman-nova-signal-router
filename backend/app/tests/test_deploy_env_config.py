@@ -62,6 +62,15 @@ def test_configure_vps_env_imports_razorpay_and_aws_secret_names():
     assert 'set_env "$optional_key" "$value"' in script
 
 
+def test_configure_vps_env_targets_systemd_layman_env_file_when_configured():
+    script = _deploy_script_text()
+
+    assert "systemctl show layman-nova-signal-router.service -p Environment" in script
+    assert "LAYMAN_ENV_FILE=*)" in script
+    assert 'env_file="${LAYMAN_ENV_FILE:-${service_env_file:-$repo_dir/backend/.env}}"' in script
+    assert 'mkdir -p "$(dirname "$env_file")"' in script
+
+
 def test_configure_vps_env_armed_live_requires_razorpay_and_aws_secrets():
     script = _deploy_script_text()
     live_required_block = script.split("for live_required_key in \\", 1)[1].split("do", 1)[0]
