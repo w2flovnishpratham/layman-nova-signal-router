@@ -118,7 +118,8 @@ def validate_command(state: SetupState, command_type: str, data: dict[str, Any])
             }
 
         if command_type == "setup.risk":
-            _require_state(state, SetupState.BROKER_CONNECTED, command_type)
+            if state not in {SetupState.BROKER_CONNECTED, SetupState.RISK_CONFIGURED}:
+                _require_state(state, SetupState.BROKER_CONNECTED, command_type)
             payload = RiskPayload.model_validate(data).model_dump()
             return SetupState.RISK_CONFIGURED, {"risk": payload}
 

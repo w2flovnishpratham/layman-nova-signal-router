@@ -42,11 +42,17 @@ export function SetupPanel({
   onStep,
 }: Props) {
   const pendingExitsRef = useRef<ClientCommand['data'] | null>(null)
+  const exitsSentForRiskRef = useRef(false)
 
   useEffect(() => {
-    if (state !== 'RISK_CONFIGURED' || !pendingExitsRef.current) return
+    if (state !== 'RISK_CONFIGURED') {
+      exitsSentForRiskRef.current = false
+      return
+    }
+    if (exitsSentForRiskRef.current || !pendingExitsRef.current) return
     const exitsPayload = pendingExitsRef.current
     pendingExitsRef.current = null
+    exitsSentForRiskRef.current = true
     onSend({ type: 'setup.exits', data: exitsPayload })
   }, [onSend, state])
 
@@ -93,16 +99,12 @@ export function SetupPanel({
     ))
     onStep('limits')
   }} />
-  if (flowStep === 'limits') return <DailyLimitsStep draft={draft} onSubmit={(patch) => {
+  if (flowStep === 'limits') return <DailyLimitsStep draft={draft} pending={commandPending || state === 'RISK_CONFIGURED'} onSubmit={(patch) => {
     const finalDraft = { ...draft, ...patch }
     onDraft(patch)
     onUserReply(limitsReply(finalDraft.maxTrades, finalDraft.maxLoss))
-    pendingExitsRef.current = {
-      mode: finalDraft.exitMode,
-      targetProfit: finalDraft.exitMode === 'flip_only' ? null : Math.max(100, finalDraft.targetPct * 100),
-      targetPct: finalDraft.targetPct,
-      stopLossPct: finalDraft.stopLossPct,
-    }
+    pendingExitsRef.current = exitsPayloadFromDraft(finalDraft)
+    exitsSentForRiskRef.current = false
     onSend({
       type: 'setup.risk',
       data: {
@@ -450,9 +452,11 @@ function ExitRulesStep({
 
 function DailyLimitsStep({
   draft,
+  pending,
   onSubmit,
 }: {
   draft: SetupDraft
+  pending: boolean
   onSubmit: (patch: Pick<SetupDraft, 'maxTrades' | 'maxLoss'>) => void
 }) {
   const [maxTrades, setMaxTrades] = useState(draft.maxTrades)
@@ -460,6 +464,7 @@ function DailyLimitsStep({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (pending) return
     onSubmit({ maxTrades, maxLoss })
   }
 
@@ -467,11 +472,11 @@ function DailyLimitsStep({
     <form className="setup-card form-card launch-card" onSubmit={submit}>
       <label>
         Max trades per day
-        <input type="number" min={0} max={50} value={maxTrades} onChange={(event) => setMaxTrades(Number(event.target.value))} />
+        <input type="number" min={0} max={50} value={maxTrades} disabled={pending} onChange={(event) => setMaxTrades(Number(event.target.value))} />
       </label>
       <label>
         Max daily loss in INR
-        <input type="number" min={0} step={100} value={maxLoss} onChange={(event) => setMaxLoss(Number(event.target.value))} />
+        <input type="number" min={0} step={100} value={maxLoss} disabled={pending} onChange={(event) => setMaxLoss(Number(event.target.value))} />
       </label>
       <p className="form-hint">Use 0 for no limit.</p>
       <div className="trust-grid">
@@ -479,9 +484,20 @@ function DailyLimitsStep({
         <div><span>Margin check</span><strong>{draft.engineMode === 'paper' ? 'Virtual balance before fill' : 'Dhan margin API before order'}</strong></div>
         <div><span>Charges</span><strong>{draft.engineMode === 'paper' ? 'Simulated Dhan charge formula' : 'From real Dhan fills/reporting'}</strong></div>
       </div>
-      <button className="live-confirm" type="submit">Save Limits & Finish</button>
+      <button className="live-confirm" type="submit" disabled={pending}>
+        {pending ? 'Saving Setup...' : 'Save Limits & Finish'}
+      </button>
     </form>
   )
+}
+
+function exitsPayloadFromDraft(draft: SetupDraft): ClientCommand['data'] {
+  return {
+    mode: draft.exitMode,
+    targetProfit: draft.exitMode === 'flip_only' ? null : Math.max(100, draft.targetPct * 100),
+    targetPct: draft.targetPct,
+    stopLossPct: draft.stopLossPct,
+  }
 }
 
 function exitReply(mode: ExitRules['mode'], targetPct: number, stopLossPct: number): string {

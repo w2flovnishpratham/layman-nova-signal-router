@@ -1050,6 +1050,15 @@ def test_chat_risk_command_does_not_write_backend_quantity_cap(tmp_path, monkeyp
     assert runtime["max_daily_loss"] == 3000
 
 
+def test_duplicate_risk_command_is_idempotent_before_exits():
+    data = {"lots": 1, "side": "BOTH", "maxTrades": 5, "maxLoss": 3000}
+
+    state, patch = validate_command(SetupState.RISK_CONFIGURED, "setup.risk", data)
+
+    assert state == SetupState.RISK_CONFIGURED
+    assert patch["risk"] == data
+
+
 def test_confirm_live_hydrates_runtime_risk_from_session_config(tmp_path, monkeypatch):
     _isolate_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("live")
