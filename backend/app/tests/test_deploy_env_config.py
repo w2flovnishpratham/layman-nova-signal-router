@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -103,3 +106,28 @@ def test_configure_vps_env_syncs_runtime_webhook_state_for_explicit_deploy_modes
     assert 'data["webhook_trading_enabled"] = enabled' in script
     assert "set_webhook_runtime_state true" in script
     assert "set_webhook_runtime_state false" in script
+
+
+def test_backend_settings_load_systemd_configured_layman_env_file(tmp_path):
+    env_file = tmp_path / "layman.env"
+    env_file.write_text("RAZORPAY_PLAN_PREMIUM_MONTHLY=plan_from_layman_env\n", encoding="utf-8")
+    env = {
+        **os.environ,
+        "LAYMAN_ENV_FILE": str(env_file),
+        "PYTHONPATH": str(REPO_ROOT / "backend"),
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from app.config import settings; print(settings.RAZORPAY_PLAN_PREMIUM_MONTHLY)",
+        ],
+        cwd=REPO_ROOT / "backend",
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "plan_from_layman_env"

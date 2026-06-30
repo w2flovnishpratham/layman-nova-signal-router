@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -63,7 +64,7 @@ DEFAULT_RUNTIME_SETTINGS = {
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(BACKEND_DIR / ".env"),
+        env_file=os.environ.get("LAYMAN_ENV_FILE", str(BACKEND_DIR / ".env")),
         case_sensitive=True,
         extra="ignore",
     )
