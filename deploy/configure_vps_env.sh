@@ -88,6 +88,7 @@ set_env FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED false
 set_env AUTH_REQUIRED true
 set_env GOOGLE_REDIRECT_URI https://layman-api.manyacare.com/api/auth/google/callback
 set_env ADMIN_EMAILS ""
+set_env WEBHOOK_HMAC_REQUIRED true
 set_env SESSION_COOKIE_SECURE true
 set_env SESSION_COOKIE_SAMESITE lax
 set_env SESSION_COOKIE_DOMAIN ""
@@ -99,7 +100,7 @@ if [[ -z "$deploy_secrets_file" || ! -f "$deploy_secrets_file" ]]; then
   exit 1
 fi
 
-for required_key in DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
+for required_key in DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET STRATEGY_WEBHOOK_SECRET; do
   value="$(grep -m1 "^${required_key}=" "$deploy_secrets_file" | cut -d= -f2- || true)"
   if [[ -z "$value" ]]; then
     echo "Production deployment secret is missing: ${required_key}" >&2

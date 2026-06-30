@@ -64,6 +64,16 @@ def test_configure_vps_env_imports_razorpay_and_aws_secret_names():
     assert 'set_env "$optional_key" "$value"' in script
 
 
+def test_production_deploy_requires_shared_webhook_secret_and_enforces_hmac():
+    workflow = _workflow_text()
+    script = _deploy_script_text()
+
+    assert "STRATEGY_WEBHOOK_SECRET: ${{ secrets.STRATEGY_WEBHOOK_SECRET }}" in workflow
+    assert "DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET STRATEGY_WEBHOOK_SECRET" in workflow
+    assert "DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET STRATEGY_WEBHOOK_SECRET" in script
+    assert "set_env WEBHOOK_HMAC_REQUIRED true" in script
+
+
 def test_configure_vps_env_targets_systemd_layman_env_file_when_configured():
     script = _deploy_script_text()
 
@@ -131,3 +141,9 @@ def test_backend_settings_load_systemd_configured_layman_env_file(tmp_path):
     )
 
     assert result.stdout.strip() == "plan_from_layman_env"
+
+
+def test_failed_vps_health_check_prints_service_journal():
+    deploy_script = (REPO_ROOT / "deploy" / "deploy_vps.sh").read_text(encoding="utf-8")
+
+    assert "journalctl -u layman-nova-signal-router.service -n 160 --no-pager -l" in deploy_script

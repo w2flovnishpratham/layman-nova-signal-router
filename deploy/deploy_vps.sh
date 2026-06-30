@@ -59,6 +59,7 @@ done
 
 if [[ "$healthy" != "true" ]]; then
   systemctl status layman-nova-signal-router.service --no-pager -l
+  journalctl -u layman-nova-signal-router.service -n 160 --no-pager -l
   exit 1
 fi
 

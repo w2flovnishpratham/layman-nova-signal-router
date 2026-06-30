@@ -71,6 +71,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          STRATEGY_WEBHOOK_SECRET: ${{ secrets.STRATEGY_WEBHOOK_SECRET }}
           PAYMENT_PROVIDER: ${{ secrets.PAYMENT_PROVIDER }}
           RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
           RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
@@ -91,7 +92,7 @@ jobs:
           LIVE_TRADING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_trading_mode || 'preserve' }}
           LIVE_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.live_confirmation || '' }}
         run: |
-          for required_name in DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
+          for required_name in DATABASE_URL GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET STRATEGY_WEBHOOK_SECRET; do
             if [ -z "${!required_name}" ]; then
               echo "Missing production environment secret: $required_name" >&2
               exit 1
@@ -115,6 +116,7 @@ jobs:
             printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
             printf 'GOOGLE_CLIENT_ID=%s\n' "$GOOGLE_CLIENT_ID"
             printf 'GOOGLE_CLIENT_SECRET=%s\n' "$GOOGLE_CLIENT_SECRET"
+            printf 'STRATEGY_WEBHOOK_SECRET=%s\n' "$STRATEGY_WEBHOOK_SECRET"
             printf 'LIVE_TRADING_ARMED=%s\n' "$live_trading_armed"
             for optional_name in \
               PAYMENT_PROVIDER \
