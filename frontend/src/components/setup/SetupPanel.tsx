@@ -207,6 +207,12 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
   }, [entitlement?.static_ip_enabled, paymentPolling, refreshEntitlement, staticIpReady])
 
   const staticIpEntitled = Boolean(entitlement?.valid && entitlement.static_ip_enabled)
+  useEffect(() => {
+    if (!staticIpEntitled) {
+      setStaticIpReady(false)
+    }
+  }, [staticIpEntitled])
+
   return (
     <article className="setup-card live-access-step">
       <div className="live-access-heading">
@@ -216,19 +222,23 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
           <p>Live setup can continue after Razorpay confirms static IP access and the assigned Nova Static IP is verified.</p>
         </div>
       </div>
-      <RazorpayTestCheckoutCard
-        accessReady={staticIpEntitled}
-        onCheckoutCreated={() => {
-          setPaymentPolling(true)
-          setRefreshKey((current) => current + 1)
-          void refreshEntitlement()
-        }}
-      />
-      <SetupInfoCard onReadyChange={setStaticIpReady} refreshKey={refreshKey} />
+      {staticIpEntitled ? (
+        <>
+          <NovaPremiumActiveNotice />
+          <SetupInfoCard onReadyChange={setStaticIpReady} refreshKey={refreshKey} />
+        </>
+      ) : (
+        <RazorpayTestCheckoutCard
+          onCheckoutCreated={() => {
+            setPaymentPolling(true)
+            void refreshEntitlement()
+          }}
+        />
+      )}
       <button type="button" className="primary-button" disabled={!staticIpReady} onClick={onContinue}>
         Continue to Strategy
       </button>
-      {!staticIpReady ? <p className="form-hint">Complete static IP checkout, refresh access, select an IP, then verify it before continuing. Live and strategy access are checked again before deployment.</p> : null}
+      {!staticIpReady ? <p className="form-hint">Complete Nova Premium checkout, wait for Razorpay confirmation, then verify the assigned IP before continuing. Live and strategy access are checked again before deployment.</p> : null}
     </article>
   )
 }
@@ -487,22 +497,14 @@ function DeploymentSummary({ draft, lotSize, onDeploy }: { draft: SetupDraft; lo
 }
 
 function RazorpayTestCheckoutCard({
-  accessReady = false,
   onCheckoutCreated,
 }: {
-  accessReady?: boolean
   onCheckoutCreated?: () => void
 }) {
   const [pending, setPending] = useState(false)
   const [status, setStatus] = useState<'not_active' | 'pending_confirmation' | 'confirmed'>('not_active')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (!accessReady) return
-    setStatus('confirmed')
-    setMessage('Static IP entitlement confirmed. Select and verify the assigned IP below.')
-  }, [accessReady])
 
   async function startCheckout() {
     setPending(true)
@@ -532,8 +534,8 @@ function RazorpayTestCheckoutCard({
     <section className="subscription-access-card" aria-live="polite">
       <div className="subscription-access-header">
         <h4>Activate Nova Premium</h4>
-        <span className={status === 'confirmed' ? 'subscription-confirmed' : status === 'pending_confirmation' ? 'subscription-pending' : ''}>
-          {status === 'confirmed' ? 'Static IP active' : status === 'pending_confirmation' ? 'Pending payment confirmation' : 'Not active'}
+        <span className={status === 'pending_confirmation' ? 'subscription-pending' : ''}>
+          {status === 'pending_confirmation' ? 'Pending payment confirmation' : 'Not active'}
         </span>
       </div>
       <p>Premium includes live orders, Nova Static IP, and strategy access. Test mode only; access activates after Razorpay webhook confirms payment.</p>
@@ -547,6 +549,18 @@ function RazorpayTestCheckoutCard({
       </button>
       {message ? <p className="subscription-status-row">{message}</p> : null}
       {error ? <p className="subscription-error">{error}</p> : null}
+    </section>
+  )
+}
+
+function NovaPremiumActiveNotice() {
+  return (
+    <section className="subscription-active-note" aria-live="polite">
+      <div>
+        <h4>Nova Premium active</h4>
+        <p>Payment is confirmed. Verify the assigned Nova Static IP, then continue to strategy setup.</p>
+      </div>
+      <span>Active</span>
     </section>
   )
 }

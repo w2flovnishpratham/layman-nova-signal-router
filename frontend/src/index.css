@@ -1524,6 +1524,41 @@ code {
   color: var(--success);
 }
 
+.subscription-active-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--success) 38%, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--success) 7%, rgba(255, 255, 255, 0.03));
+}
+
+.subscription-active-note h4,
+.subscription-active-note p {
+  margin: 0;
+}
+
+.subscription-active-note h4 {
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.subscription-active-note p {
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.subscription-active-note span {
+  flex: 0 0 auto;
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 900;
+}
+
 .checkout-button {
   justify-self: stretch;
   min-height: 40px;
