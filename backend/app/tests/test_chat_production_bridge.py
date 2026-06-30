@@ -114,6 +114,37 @@ def test_live_setup_strategy_requires_static_ip_entitlement(mu_db):
         )
 
 
+def test_websocket_http_error_message_includes_readiness_blockers():
+    from fastapi import HTTPException
+
+    from app.api.ws import _http_error_message
+
+    message = _http_error_message(
+        HTTPException(
+            status_code=400,
+            detail={
+                "message": "Engine setup is incomplete.",
+                "readiness": {
+                    "ready": False,
+                    "blockers": [
+                        "No saved Dhan credentials found.",
+                        "Webhook secret is missing.",
+                    ],
+                },
+                "checks": {
+                    "dhan_token_valid": False,
+                    "static_ip_verified": True,
+                },
+            },
+        )
+    )
+
+    assert message == (
+        "Engine setup is incomplete. Missing: No saved Dhan credentials found.; "
+        "Webhook secret is missing.; dhan token valid."
+    )
+
+
 def test_live_setup_broker_credentials_require_static_ip_before_dhan_validation(mu_db, monkeypatch):
     user = current_user_from_model(make_user("live-flow-no-egress@example.com"))
     _grant_static_ip_entitlement(user.id)

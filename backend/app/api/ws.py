@@ -501,8 +501,50 @@ async def _error(session_id: str, message: str) -> None:
 def _http_error_message(exc: HTTPException) -> str:
     detail = exc.detail
     if isinstance(detail, dict):
-        return str(detail.get("message") or detail)
+        message = str(detail.get("message") or "Request failed.")
+        specific = _readiness_failure_summary(detail)
+        return f"{message} {specific}" if specific else message
     return str(detail)
+
+
+def _readiness_failure_summary(detail: dict[str, Any]) -> str:
+    readiness = detail.get("readiness")
+    checks = detail.get("checks")
+    failures: list[str] = []
+
+    if isinstance(readiness, dict):
+        blockers = readiness.get("blockers")
+        if isinstance(blockers, list):
+            failures.extend(str(item) for item in blockers if item)
+        for key, value in readiness.items():
+            if key in {"blockers", "ready"}:
+                continue
+            if value is False:
+                failures.append(key.replace("_", " "))
+
+    if isinstance(checks, dict):
+        for key, value in checks.items():
+            if value is False:
+                failures.append(key.replace("_", " "))
+            elif isinstance(value, dict):
+                ok = value.get("ok")
+                if ok is False:
+                    failures.append(str(value.get("message") or key).replace("_", " "))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for failure in failures:
+        normalized = failure.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+        if len(deduped) >= 3:
+            break
+
+    if not deduped:
+        return ""
+    return "Missing: " + "; ".join(deduped) + "."
 
 
 def _number(value: Any) -> float:

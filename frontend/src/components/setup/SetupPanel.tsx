@@ -18,6 +18,7 @@ interface Props {
   draft: SetupDraft
   lastError: string
   verifyPending: boolean
+  commandPending: boolean
   lotSize: number
   sharedMarketData?: boolean
   onSend: (command: ClientCommand) => void
@@ -32,6 +33,7 @@ export function SetupPanel({
   draft,
   lastError,
   verifyPending,
+  commandPending,
   lotSize,
   sharedMarketData = false,
   onSend,
@@ -105,7 +107,7 @@ export function SetupPanel({
       },
     })
   }} />
-  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} onDeploy={() => {
+  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} pending={commandPending} onDeploy={() => {
     onUserReply(draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Deploy Live Strategy & Start Listening')
     onSend({ type: 'setup.confirm_live', data: {} })
   }} />
@@ -455,7 +457,7 @@ function limitsReply(maxTrades: number, maxLoss: number): string {
   return `Daily limits: ${trades} / ${loss}`
 }
 
-function DeploymentSummary({ draft, lotSize, onDeploy }: { draft: SetupDraft; lotSize: number; onDeploy: () => void }) {
+function DeploymentSummary({ draft, lotSize, pending, onDeploy }: { draft: SetupDraft; lotSize: number; pending: boolean; onDeploy: () => void }) {
   return (
     <article className="setup-card deployment-summary">
       <h3>Deployment Configuration Summary</h3>
@@ -489,8 +491,8 @@ function DeploymentSummary({ draft, lotSize, onDeploy }: { draft: SetupDraft; lo
           <strong>{draft.maxTrades ? `${draft.maxTrades} trades` : 'None'} | {draft.maxLoss ? formatCurrency(draft.maxLoss) : 'None'}</strong>
         </div>
       </div>
-      <button className="live-confirm" type="button" onClick={onDeploy}>
-        {draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Trade Real Money - Confirm'}
+      <button className="live-confirm" type="button" onClick={onDeploy} disabled={pending}>
+        {pending ? 'Starting Engine...' : draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Trade Real Money - Confirm'}
       </button>
     </article>
   )

@@ -278,6 +278,7 @@ function App() {
       draft={setupDraft}
       lastError={lastSetupError}
       verifyPending={typing && setupFlowStep === 'broker'}
+      commandPending={typing}
       lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
       sharedMarketData={session?.sharedMarketData ?? false}
       onSend={send}
