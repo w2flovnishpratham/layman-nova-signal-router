@@ -1050,6 +1050,47 @@ def test_chat_risk_command_does_not_write_backend_quantity_cap(tmp_path, monkeyp
     assert runtime["max_daily_loss"] == 3000
 
 
+def test_risk_and_exits_saves_setup_in_one_transition():
+    state, patch = validate_command(
+        SetupState.BROKER_CONNECTED,
+        "setup.risk_and_exits",
+        {
+            "risk": {"lots": 1, "side": "BOTH", "maxTrades": 5, "maxLoss": 3000},
+            "exits": {"mode": "custom", "targetProfit": 2300, "targetPct": 23, "stopLossPct": 10},
+        },
+    )
+
+    assert state == SetupState.EXITS_CONFIGURED
+    assert patch["risk"]["maxTrades"] == 5
+    assert patch["risk"]["maxLoss"] == 3000
+    assert patch["exits"]["mode"] == "custom"
+    assert patch["exits"]["targetPct"] == 23
+    assert patch["exits"]["stopLossPct"] == 10
+
+
+def test_chat_risk_and_exits_command_writes_runtime_atomically(tmp_path, monkeypatch):
+    _isolate_runtime(tmp_path, monkeypatch)
+    data = {
+        "risk": {"lots": 1, "side": "BOTH", "maxTrades": 5, "maxLoss": 3000},
+        "exits": {"mode": "custom", "targetProfit": 2300, "targetPct": 23, "stopLossPct": 10},
+    }
+
+    state, patch = validate_command(SetupState.BROKER_CONNECTED, "setup.risk_and_exits", data)
+    asyncio.run(_apply_production_command("setup.risk_and_exits", data))
+    runtime = state_store.get_runtime_settings()
+
+    assert state == SetupState.EXITS_CONFIGURED
+    assert patch["risk"]["maxTrades"] == 5
+    assert patch["exits"]["targetPct"] == 23
+    assert runtime["allowed_option_side"] == "BOTH"
+    assert runtime["max_trades_per_day"] == 5
+    assert runtime["max_daily_loss"] == 3000
+    assert runtime["option_exit_mode"] == "DHAN_SUPER"
+    assert runtime["option_disable_sl"] is False
+    assert runtime["option_sl_percent"] == 10
+    assert runtime["option_tp_percent"] == 23
+
+
 def test_duplicate_risk_command_is_idempotent_before_exits():
     data = {"lots": 1, "side": "BOTH", "maxTrades": 5, "maxLoss": 3000}
 

@@ -41,21 +41,6 @@ export function SetupPanel({
   onDraft,
   onStep,
 }: Props) {
-  const pendingExitsRef = useRef<ClientCommand['data'] | null>(null)
-  const exitsSentForRiskRef = useRef(false)
-
-  useEffect(() => {
-    if (state !== 'RISK_CONFIGURED') {
-      exitsSentForRiskRef.current = false
-      return
-    }
-    if (exitsSentForRiskRef.current || !pendingExitsRef.current) return
-    const exitsPayload = pendingExitsRef.current
-    pendingExitsRef.current = null
-    exitsSentForRiskRef.current = true
-    onSend({ type: 'setup.exits', data: exitsPayload })
-  }, [onSend, state])
-
   if (state === 'LIVE' || state === 'PAUSED' || state === 'ENDED' || flowStep === 'complete') return null
   if (flowStep === 'mode') return <ModeStep draft={draft} onSelect={(engineMode, paperStartingBalance) => {
     onDraft({ engineMode, paperStartingBalance })
@@ -99,19 +84,20 @@ export function SetupPanel({
     ))
     onStep('limits')
   }} />
-  if (flowStep === 'limits') return <DailyLimitsStep draft={draft} pending={commandPending || state === 'RISK_CONFIGURED'} onSubmit={(patch) => {
+  if (flowStep === 'limits') return <DailyLimitsStep draft={draft} pending={commandPending} onSubmit={(patch) => {
     const finalDraft = { ...draft, ...patch }
     onDraft(patch)
     onUserReply(limitsReply(finalDraft.maxTrades, finalDraft.maxLoss))
-    pendingExitsRef.current = exitsPayloadFromDraft(finalDraft)
-    exitsSentForRiskRef.current = false
     onSend({
-      type: 'setup.risk',
+      type: 'setup.risk_and_exits',
       data: {
-        maxTrades: finalDraft.maxTrades === 0 ? null : finalDraft.maxTrades,
-        maxLoss: finalDraft.maxLoss === 0 ? null : finalDraft.maxLoss,
-        lots: finalDraft.lots,
-        side: finalDraft.side,
+        risk: {
+          maxTrades: finalDraft.maxTrades === 0 ? null : finalDraft.maxTrades,
+          maxLoss: finalDraft.maxLoss === 0 ? null : finalDraft.maxLoss,
+          lots: finalDraft.lots,
+          side: finalDraft.side,
+        },
+        exits: exitsPayloadFromDraft(finalDraft),
       },
     })
   }} />

@@ -257,6 +257,18 @@ async def _apply_production_command(
         )
         return
 
+    if command_type == "setup.risk_and_exits":
+        risk_data = data.get("risk") if isinstance(data.get("risk"), dict) else {}
+        exits_data = data.get("exits") if isinstance(data.get("exits"), dict) else {}
+        await asyncio.to_thread(
+            update_runtime_settings,
+            allowed_option_side=str(risk_data.get("side") or "BOTH").upper(),
+            max_trades_per_day=int(risk_data.get("maxTrades") or 0),
+            max_daily_loss=float(risk_data.get("maxLoss") or 0),
+            **_exit_runtime_settings(exits_data),
+        )
+        return
+
     if command_type == "setup.exits":
         await asyncio.to_thread(update_runtime_settings, **_exit_runtime_settings(data))
         return

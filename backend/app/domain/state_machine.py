@@ -62,6 +62,11 @@ class ExitRulesPayload(BaseModel):
         return self
 
 
+class RiskAndExitsPayload(BaseModel):
+    risk: RiskPayload
+    exits: ExitRulesPayload
+
+
 class PatchRiskPayload(BaseModel):
     maxLoss: int | None = Field(default=None, ge=100)
     side: Literal["CE", "PE", "BOTH"] | None = None
@@ -122,6 +127,14 @@ def validate_command(state: SetupState, command_type: str, data: dict[str, Any])
                 _require_state(state, SetupState.BROKER_CONNECTED, command_type)
             payload = RiskPayload.model_validate(data).model_dump()
             return SetupState.RISK_CONFIGURED, {"risk": payload}
+
+        if command_type == "setup.risk_and_exits":
+            _require_state(state, SetupState.BROKER_CONNECTED, command_type)
+            payload = RiskAndExitsPayload.model_validate(data)
+            return SetupState.EXITS_CONFIGURED, {
+                "risk": payload.risk.model_dump(),
+                "exits": payload.exits.model_dump(),
+            }
 
         if command_type == "setup.exits":
             _require_state(state, SetupState.RISK_CONFIGURED, command_type)
