@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import ws as ws_router
-from app.api.ws import _apply_production_command
+from app.api.ws import _apply_production_command, _error
 from app.db import models
 from app.db.engine import session_scope
 from app.config import DISABLED_OPTION_SL_PERCENT, settings
@@ -248,6 +248,69 @@ def test_live_setup_broker_credentials_reaches_dhan_validation_after_verified_st
     )
 
     assert calls == {"validated": True, "saved": True, "wallet": True}
+
+
+def test_setup_broker_credential_failure_is_user_safe(monkeypatch):
+    def fake_validate(_client_id, _access_token):
+        return (
+            False,
+            "Dhan connection failed: token invalid. Dhan token validation request failed: Client ID or user generated access token is invalid or expired.",
+            None,
+            {
+                "status_code": 401,
+                "error_kind": "token invalid",
+                "interpreted_error": {
+                    "category": "AUTH",
+                    "userMessage": "Dhan could not authenticate with this account.",
+                    "technicalMessage": "Client ID or user generated access token is invalid or expired.",
+                    "debugPack": {"access_token": "raw-token-secret", "rawStatusCode": 401},
+                },
+            },
+        )
+
+    monkeypatch.setattr("app.api.ws.validate_dhan_credentials", fake_validate)
+
+    with pytest.raises(ValueError) as excinfo:
+        asyncio.run(
+            _apply_production_command(
+                "setup.broker_creds",
+                {"clientId": "1110131436", "accessToken": "raw-token-secret"},
+                session=SimpleNamespace(config={"engineMode": "paper"}),
+            )
+        )
+
+    message = str(excinfo.value)
+    assert message == (
+        "Dhan authentication failed. The access token is invalid or expired. "
+        "Generate a fresh Dhan access token for this Client ID and try again."
+    )
+    assert "raw-token-secret" not in message
+    assert "interpreted_error" not in message
+    assert "debugPack" not in message
+    assert "rawStatusCode" not in message
+    assert "status_code" not in message
+
+
+def test_session_error_event_sanitizes_diagnostic_payload():
+    async def run():
+        session = await session_store.create(state=SetupState.BROKER_CONNECTED)
+        await _error(
+            session.id,
+            "Dhan connection failed: token invalid. {'status_code': 401, 'error_kind': 'token invalid', "
+            "'interpreted_error': {'debugPack': {'access_token': 'raw-token-secret'}}}",
+        )
+        return await session_store.get(session.id)
+
+    session = asyncio.run(run())
+    assert session is not None
+    message = session.events[-1].data["message"]
+    assert message == (
+        "Dhan authentication failed. The access token is invalid or expired. "
+        "Generate a fresh Dhan access token for this Client ID and try again."
+    )
+    assert "{" not in message
+    assert "raw-token-secret" not in message
+    assert "interpreted_error" not in message
 
 
 def test_chat_session_uses_persistent_production_webhook(tmp_path, monkeypatch):

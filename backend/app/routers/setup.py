@@ -41,6 +41,7 @@ from app.services.dhan_response_safety import sanitize_dhan_response_surface, sa
 from app.services.paper_portfolio import paper_wallet_snapshot, reset_paper_portfolio
 from app.services.dhan_debugger import get_outgoing_ip
 from app.services.dhan_error_interpreter import interpret_dhan_error
+from app.services.setup_error_messages import safe_dhan_failure_detail
 from app.services.state_store import (
     SettingsVersionMismatch,
     clear_paper_position,
@@ -633,7 +634,7 @@ def connect_dhan(body: DhanConnectRequest, request: Request) -> dict[str, Any]:
     ok, message, funds, details = validate_dhan_credentials(client_id, access_token)
     if not ok:
         log_audit_event("DHAN_CONNECT_FAILED", message, severity="WARNING", metadata=details)
-        raise HTTPException(status_code=400, detail={"message": message, **details})
+        raise HTTPException(status_code=400, detail=safe_dhan_failure_detail(message, details))
 
     previous_dhan = dhan_credentials_snapshot()
     previous_wallet = get_wallet_snapshot()

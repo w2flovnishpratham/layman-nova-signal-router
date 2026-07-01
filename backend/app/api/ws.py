@@ -17,6 +17,7 @@ from app.services.chat_event_publisher import active_trade_from_position
 from app.services.execution_context import bind_user_execution_context
 from app.services.state_store import get_engine_mode, get_open_position, get_wallet_snapshot, set_open_position, update_runtime_settings, utc_now
 from app.services import entitlements, strategy_fanout
+from app.services.setup_error_messages import dhan_connection_failure_message, safe_client_error_message
 from app.services.wallet_service import refresh_wallet_snapshot
 from app.store.redis_session import session_store
 from app.store.session_token import SessionTokenError, verify_session_token
@@ -233,7 +234,7 @@ async def _apply_production_command(
             access_token,
         )
         if not ok:
-            raise ValueError(f"{message} {details}".strip())
+            raise ValueError(dhan_connection_failure_message(message, details))
         await asyncio.to_thread(save_dhan_credentials, client_id, access_token)
         await asyncio.to_thread(refresh_wallet_snapshot, force=True, log_event=True)
         return
@@ -531,7 +532,7 @@ def _apply_sr_suggestion() -> dict[str, Any]:
 
 
 async def _error(session_id: str, message: str) -> None:
-    await session_store.append_event(session_id, event("session.error", message=message))
+    await session_store.append_event(session_id, event("session.error", message=safe_client_error_message(message)))
 
 
 def _http_error_message(exc: HTTPException) -> str:

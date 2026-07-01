@@ -629,6 +629,54 @@ def test_setup_dhan_connect_redacts_identity_mismatch(monkeypatch):
     _assert_no_raw_dhan_surface(body)
 
 
+def test_setup_dhan_connect_returns_user_safe_auth_failure(monkeypatch):
+    from app.config import settings
+    from app.routers import setup as setup_router
+    from app.services.dhan_client import DhanValidationResult
+
+    class FakeDhanClient:
+        def validate_token(self, *, client_id, access_token):
+            return DhanValidationResult(
+                success=False,
+                message="Dhan token validation request failed: Client ID or user generated access token is invalid or expired.",
+                status_code=401,
+                raw_response={
+                    "errorCode": "DH-901",
+                    "errorMessage": "Client ID or user generated access token is invalid or expired.",
+                    "access_token": "raw-token-secret",
+                },
+            )
+
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False, raising=False)
+    monkeypatch.setattr(setup_router, "vault_status", lambda: {"ready": True, "local_mock_allowed": False})
+    monkeypatch.setattr(setup_router, "RealDhanClient", FakeDhanClient)
+    setup_router._DHAN_CONNECT_RATE_LIMIT.clear()
+
+    app = FastAPI()
+    app.include_router(setup_router.router)
+    response = TestClient(app).post(
+        "/setup/dhan/connect",
+        json={"client_id": "1000000001", "access_token": "raw-token-secret"},
+        headers={"x-real-ip": "203.0.113.11"},
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["detail"] == {
+        "message": (
+            "Dhan authentication failed. The access token is invalid or expired. "
+            "Generate a fresh Dhan access token for this Client ID and try again."
+        ),
+        "error_code": "TOKEN_EXPIRED",
+    }
+    assert "raw-token-secret" not in str(body)
+    assert "interpreted_error" not in str(body)
+    assert "debugPack" not in str(body)
+    assert "rawStatusCode" not in str(body)
+    _assert_no_raw_dhan_surface(body)
+
+
 def test_wallet_refresh_sanitizes_raw_dhan_response(monkeypatch):
     from app.services import wallet_service
     from app.services.credential_vault import DhanCredentials
