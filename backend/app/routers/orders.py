@@ -296,16 +296,6 @@ def update_active_position_exit_levels(body: ExitLevelsRequest) -> dict[str, Any
         return {"ok": False, "message": error["userMessage"], "normalizedError": error}
 
     mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
-    if str(position.get("exit_management") or "").upper() == "DHAN_SUPER":
-        error = classify_failure(
-            "SL/TP update blocked: Dhan Super Order leg modification is not enabled from this panel yet.",
-            source="RISK_ENGINE",
-            mode=mode,
-            order_sent_to_broker=False,
-            money_at_risk=mode == "live",
-        )
-        return {"ok": False, "message": error["userMessage"], "normalizedError": error}
-
     stop_loss = round(float(body.stopLossPrice), 2)
     target = round(float(body.targetPrice), 2)
     live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
@@ -315,6 +305,24 @@ def update_active_position_exit_levels(body: ExitLevelsRequest) -> dict[str, Any
         return _exit_level_error("Stop loss must be below target price.", mode=mode)
     if ltp is not None and (stop_loss >= ltp or target <= ltp):
         return _exit_level_error("SL must be below current LTP and TP must be above current LTP.", mode=mode)
+
+    # Live Dhan Super Order: push the new SL/TP to the broker legs. Paper and
+    # server-managed positions are handled locally below (no broker call).
+    if str(position.get("exit_management") or "").upper() == "DHAN_SUPER":
+        from app.services.execution_router import apply_manual_super_order_exit_levels
+
+        broker_update = apply_manual_super_order_exit_levels(
+            position, stop_loss_price=stop_loss, target_price=target
+        )
+        if not broker_update.get("ok"):
+            error = classify_failure(
+                f"SL/TP update blocked: {broker_update.get('message') or 'Dhan Super Order modification failed.'}",
+                source="DHAN",
+                mode=mode,
+                order_sent_to_broker=False,
+                money_at_risk=mode == "live",
+            )
+            return {"ok": False, "message": error["userMessage"], "normalizedError": error}
 
     levels = {
         "source": "manual",

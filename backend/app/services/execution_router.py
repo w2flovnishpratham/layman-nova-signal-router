@@ -597,6 +597,87 @@ def _cancel_super_order_exit_legs(position: dict[str, Any]) -> dict[str, Any] | 
     return summary
 
 
+def apply_manual_super_order_exit_levels(
+    position: dict[str, Any],
+    *,
+    stop_loss_price: float,
+    target_price: float,
+) -> dict[str, Any]:
+    """Apply user-entered SL/TP to an open position.
+
+    Paper (or non-Super) positions are handled locally by the caller and need no
+    broker call. For a LIVE Dhan Super Order, this modifies the TARGET_LEG and
+    STOP_LOSS_LEG using the exact same tested ``modify_super_order`` path the
+    engine already uses to sync exit levels after fill - routed through the
+    user's verified static-IP egress. Never raises; returns an {ok,...} dict.
+    """
+    if str(position.get("exit_management") or "").upper() != "DHAN_SUPER":
+        return {"ok": True, "reason": "not_super_order"}
+
+    engine_mode = get_engine_mode()
+    if engine_mode != "live":
+        # Paper Super positions keep SL/TP locally; no real broker modify needed.
+        return {"ok": True, "reason": "paper_local"}
+
+    order_id = str(position.get("entry_order_id") or "").strip()
+    if not order_id:
+        return {"ok": False, "reason": "missing_super_order_id", "message": "No Dhan Super Order id on this position."}
+
+    creds = get_dhan_credentials()
+    if not creds:
+        return {"ok": False, "reason": "missing_dhan_credentials", "message": "Dhan credentials are not connected."}
+    try:
+        require_verified_live_egress()
+    except LiveEgressGuardError as exc:
+        return {"ok": False, "reason": "egress_not_verified", "message": str(exc)}
+
+    client = _live_broker_client()
+    client_id = creds.client_id
+    access_token = creds.access_token
+    sl = round(float(stop_loss_price), 2)
+    tp = round(float(target_price), 2)
+
+    target_result = client.modify_super_order(
+        client_id=client_id,
+        access_token=access_token,
+        order_id=order_id,
+        payload={"dhanClientId": client_id, "orderId": order_id, "legName": "TARGET_LEG", "targetPrice": tp},
+    )
+    stop_result = client.modify_super_order(
+        client_id=client_id,
+        access_token=access_token,
+        order_id=order_id,
+        payload={"dhanClientId": client_id, "orderId": order_id, "legName": "STOP_LOSS_LEG", "stopLossPrice": sl, "trailingJump": 0},
+    )
+
+    target_snap = _order_result_snapshot(target_result)
+    stop_snap = _order_result_snapshot(stop_result)
+    ok = bool(target_snap.get("success")) and bool(stop_snap.get("success"))
+    summary: dict[str, Any] = {
+        "ok": ok,
+        "order_id": order_id,
+        "stop_loss_price": sl,
+        "target_price": tp,
+        "target_result": target_snap,
+        "stop_result": stop_snap,
+    }
+    if not ok:
+        summary["message"] = (
+            target_snap.get("error")
+            or stop_snap.get("error")
+            or "Dhan rejected the SL/TP modification."
+        )
+    log_order_event(
+        {
+            "event": "DHAN_SUPER_ORDER_MANUAL_LEVEL_UPDATE",
+            "summary": summary,
+            "trading_symbol": position.get("trading_symbol"),
+            "security_id": position.get("security_id"),
+        }
+    )
+    return summary
+
+
 def _blocked(
     status: str,
     reason: str,
