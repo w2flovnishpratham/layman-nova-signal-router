@@ -1,4 +1,4 @@
-import { LogOut, Repeat2, ShoppingCart, Sliders } from 'lucide-react'
+import { Loader2, LogOut, Repeat2, ShoppingCart, Sliders } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -28,6 +28,10 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const [stopLossPct, setStopLossPct] = useState(10)
   const [stage, setStage] = useState<Stage>('idle')
   const [pending, setPending] = useState(false)
+  // Synchronous single-flight guard: blocks a rapid second click BEFORE the
+  // `pending` state re-render disables the buttons (state updates are async).
+  const inFlightRef = useRef(false)
+  const [activeAction, setActiveAction] = useState<'entry-CE' | 'entry-PE' | 'exit' | 'reverse' | null>(null)
   const [quotePending, setQuotePending] = useState(false)
   const [quote, setQuote] = useState<OrderQuote | null>(null)
   const [message, setMessage] = useState('')
@@ -96,7 +100,10 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   }, [reduceMotion, showAdvanced])
 
   async function runOrder(action: 'entry' | 'exit' | 'reverse', entrySide: 'CE' | 'PE' = side) {
-    if (pending) return
+    // Ref guard fires synchronously, so a double-click can't send two orders.
+    if (inFlightRef.current || pending) return
+    inFlightRef.current = true
+    setActiveAction(action === 'entry' ? (entrySide === 'CE' ? 'entry-CE' : 'entry-PE') : action)
     setPending(true)
     setMessage('')
     try {
@@ -107,7 +114,9 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
       setStage('Failed')
       setMessage(error instanceof Error ? error.message : 'Manual order failed.')
     } finally {
+      inFlightRef.current = false
       setPending(false)
+      setActiveAction(null)
     }
   }
 
@@ -143,6 +152,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
           live={live}
           disabled={pending || marketClosed}
           onConfirm={() => void runOrder('entry', 'CE')}
+          loading={activeAction === 'entry-CE'}
           ariaLabel="Buy CE market"
           className="flex-1 py-3 px-4 rounded-xl font-semibold border border-emerald-500/20 hover:border-emerald-500/50 bg-emerald-500/10 text-emerald-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
@@ -153,6 +163,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
           live={live}
           disabled={pending || marketClosed}
           onConfirm={() => void runOrder('entry', 'PE')}
+          loading={activeAction === 'entry-PE'}
           ariaLabel="Buy PE market"
           className="flex-1 py-3 px-4 rounded-xl font-semibold border border-rose-500/20 hover:border-rose-500/50 bg-rose-500/10 text-rose-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
@@ -246,6 +257,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
                   live={live}
                   disabled={pending || marketClosed || !activeTrade}
                   onConfirm={() => void runOrder('exit')}
+                  loading={activeAction === 'exit'}
                   ariaLabel="Exit current position"
                   className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
@@ -256,6 +268,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
                   live={live}
                   disabled={pending || marketClosed || !activeTrade}
                   onConfirm={() => void runOrder('reverse')}
+                  loading={activeAction === 'reverse'}
                   ariaLabel="Reverse position"
                   className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
@@ -279,30 +292,35 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   )
 }
 
-function ActionButton({ live, disabled, onConfirm, ariaLabel, className, children }: {
+function ActionButton({ live, disabled, loading = false, onConfirm, ariaLabel, className, children }: {
   live: boolean
   disabled: boolean
+  loading?: boolean
   onConfirm: () => void
   ariaLabel: string
   className?: string
   children: ReactNode
 }) {
+  const content = loading
+    ? (<><Loader2 size={13} className="animate-spin" /> Working…</>)
+    : children
   if (!live) {
     return (
-      <button type="button" className={className || "manual-action-button"} disabled={disabled} onClick={onConfirm} aria-label={ariaLabel}>
-        {children}
+      <button type="button" className={className || "manual-action-button"} disabled={disabled || loading} aria-busy={loading} onClick={onConfirm} aria-label={ariaLabel}>
+        {content}
       </button>
     )
   }
   return (
-    <HoldButton disabled={disabled} onConfirm={onConfirm} ariaLabel={`${ariaLabel}, hold to confirm`} className={className}>
-      {children}
+    <HoldButton disabled={disabled || loading} loading={loading} onConfirm={onConfirm} ariaLabel={`${ariaLabel}, hold to confirm`} className={className}>
+      {content}
     </HoldButton>
   )
 }
 
-function HoldButton({ disabled, onConfirm, ariaLabel, className, children }: {
+function HoldButton({ disabled, loading = false, onConfirm, ariaLabel, className, children }: {
   disabled: boolean
+  loading?: boolean
   onConfirm: () => void
   ariaLabel: string
   className?: string
@@ -335,6 +353,7 @@ function HoldButton({ disabled, onConfirm, ariaLabel, className, children }: {
       type="button"
       className={`${className || "manual-action-button hold-live"} ${holding ? 'holding' : ''}`}
       disabled={disabled}
+      aria-busy={loading}
       onPointerDown={start}
       onPointerUp={cancel}
       onPointerLeave={cancel}

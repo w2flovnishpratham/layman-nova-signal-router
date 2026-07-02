@@ -1,7 +1,8 @@
-import { BarChart3, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, X, Zap } from 'lucide-react'
+import { BarChart3, Check, Copy, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, Wifi, X, Zap } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AuthUser } from '../api'
+import { getEgressStatus } from '../api'
 import { modeBadgeText } from '../lib/mode'
 import { MotionPing, MotionProgressFill, softEase, useAppReducedMotion } from './MotionPrimitives'
 import type { EngineMode, NovaView, SetupState, SystemHealth, WsStatus } from '../types'
@@ -38,7 +39,28 @@ export function Header({
   const [killDialogOpen, setKillDialogOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [holdingKill, setHoldingKill] = useState(false)
+  const [staticIp, setStaticIp] = useState<string | null>(null)
+  const [ipCopied, setIpCopied] = useState(false)
   const holdTimer = useRef<number | null>(null)
+
+  // Fetch the assigned Nova Static IP whenever the account menu opens, so a
+  // paid user can view/copy their dedicated IP at any time (e.g. to whitelist
+  // it in Dhan), not only during the one-time setup step.
+  useEffect(() => {
+    if (!menuOpen) return
+    let active = true
+    getEgressStatus()
+      .then((egress) => { if (active) setStaticIp(egress?.public_ip ?? null) })
+      .catch(() => { if (active) setStaticIp(null) })
+    return () => { active = false }
+  }, [menuOpen])
+
+  function copyStaticIp() {
+    if (!staticIp) return
+    void navigator.clipboard?.writeText(staticIp)
+    setIpCopied(true)
+    window.setTimeout(() => setIpCopied(false), 1500)
+  }
   const reduceMotion = useAppReducedMotion()
   const popTransition = reduceMotion ? { duration: 0 } : { duration: 0.18, ease: softEase }
 
@@ -145,6 +167,24 @@ export function Header({
                   <div className="text-xs text-white/70 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/5 flex justify-between items-center">
                     <span className="opacity-70">Client ID:</span>
                     <strong className="font-mono">{maskClientId(clientId)}</strong>
+                  </div>
+                )}
+
+                {staticIp && (
+                  <div className="text-xs text-white/70 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/5 flex justify-between items-center gap-2">
+                    <span className="opacity-70 flex items-center gap-1.5"><Wifi size={12} /> Nova Static IP:</span>
+                    <span className="flex items-center gap-2 min-w-0">
+                      <strong className="font-mono truncate">{staticIp}</strong>
+                      <button
+                        type="button"
+                        onClick={copyStaticIp}
+                        aria-label="Copy static IP"
+                        title="Copy static IP"
+                        className="p-1 rounded-md border border-white/10 hover:bg-white/10 transition-colors text-white/70 hover:text-white"
+                      >
+                        {ipCopied ? <Check size={12} /> : <Copy size={12} />}
+                      </button>
+                    </span>
                   </div>
                 )}
 
