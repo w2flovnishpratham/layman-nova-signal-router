@@ -181,6 +181,7 @@ export function ExitCard({ message }: { message: RenderableMessage }) {
         <div><span>Net</span><strong>{formatOptionalCurrency(netPnl)}</strong></div>
       </div>
       <OrderTimeline steps={journey(message)} />
+      <ReconfigureAction label="Reconfigure setup" />
     </article>
   )
 }
@@ -188,14 +189,17 @@ export function ExitCard({ message }: { message: RenderableMessage }) {
 export function EodCard({ message }: { message: RenderableMessage }) {
   const pdfUrl = String(message.data.reportUrl ?? '')
   const paper = message.data.mode === 'paper'
+  const grossPnl = summaryNumber(message.data.grossPnl ?? message.data.realizedPnl ?? message.data.netPnl)
+  const charges = summaryNumber(message.data.charges)
+  const netPnl = summaryNumber(message.data.netPnl ?? message.data.realizedPnl ?? grossPnl - charges)
   return (
     <article className="rich-event-card eod-card">
       <EventEyebrow label="EOD" mode={paper ? 'paper' : stringValue(message.data.mode)} />
       <h3>{paper ? 'Paper session summary' : 'Session summary'}</h3>
       <div className="event-grid">
-        <div><span>Gross</span><strong>{formatOptionalCurrency(optionalNumber(message.data.grossPnl))}</strong></div>
-        <div><span>Charges</span><strong>{formatOptionalCurrency(optionalNumber(message.data.charges))}</strong></div>
-        <div><span>Net</span><strong>{formatOptionalCurrency(optionalNumber(message.data.netPnl))}</strong></div>
+        <div><span>Gross</span><strong>{formatCurrency(grossPnl)}</strong></div>
+        <div><span>Charges</span><strong>{formatCurrency(charges)}</strong></div>
+        <div><span>Net</span><strong>{formatCurrency(netPnl)}</strong></div>
       </div>
       {pdfUrl ? (
         <a className="event-link" href={pdfUrl} target="_blank" rel="noreferrer">
@@ -203,6 +207,7 @@ export function EodCard({ message }: { message: RenderableMessage }) {
           <ExternalLink size={13} />
         </a>
       ) : null}
+      <ReconfigureAction label={paper ? 'Start new paper setup' : 'Reconfigure setup'} />
     </article>
   )
 }
@@ -230,6 +235,21 @@ function EventEyebrow({ label, mode }: { label: string; mode: string | null }) {
       <span className="eyebrow">{label}</span>
       {mode ? <span className={`event-mode-chip ${mode === 'live' ? 'live' : ''}`}>{mode}</span> : null}
     </span>
+  )
+}
+
+function ReconfigureAction({ label }: { label: string }) {
+  return (
+    <div className="event-action-row">
+      <button
+        type="button"
+        className="event-action-button"
+        onClick={() => window.dispatchEvent(new CustomEvent('nova:reconfigure-request'))}
+      >
+        <RotateCcw size={13} />
+        {label}
+      </button>
+    </div>
   )
 }
 
@@ -329,6 +349,10 @@ function optionalNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function summaryNumber(value: unknown): number {
+  return optionalNumber(value) ?? 0
 }
 
 function formatOptionalCurrency(value: number | null): string {
