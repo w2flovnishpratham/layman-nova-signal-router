@@ -188,14 +188,6 @@ export async function getEgressOptions(): Promise<EgressOptionsResponse> {
   return response.json() as Promise<EgressOptionsResponse>
 }
 
-// Lightweight read of just the current user's assigned static-IP status, used
-// to show the IP in the account menu at any time after payment.
-export async function getEgressStatus(): Promise<EgressStatus | null> {
-  const response = await apiFetch('/api/strategies/egress/status', { cache: 'no-store' })
-  if (!response.ok) return null
-  return response.json().catch(() => null) as Promise<EgressStatus | null>
-}
-
 export async function selectEgressIp(publicIp: string): Promise<void> {
   const response = await apiFetch('/api/strategies/egress/select', {
     method: 'POST',
@@ -308,23 +300,10 @@ export async function patchActiveQuantity(payload: QuantityPayload): Promise<Qua
   return body ?? { ok: false, message: 'Could not update qty.' }
 }
 
-function newIdempotencyKey(): string {
-  try {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-      return crypto.randomUUID()
-    }
-  } catch {
-    // fall through to the timestamp-based key
-  }
-  return `nova-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-}
-
 async function postManualOrder(path: `/${string}`, payload: unknown): Promise<ManualOrderResponse> {
-  // Live manual orders require a unique Idempotency-Key so the backend can
-  // dedupe a retried request instead of placing a second real order.
   const response = await apiFetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
   const body = await response.json().catch(() => null) as ManualOrderResponse | null

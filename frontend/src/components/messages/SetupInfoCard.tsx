@@ -1,5 +1,5 @@
 import { CheckCircle2, Copy, LoaderCircle, RefreshCw } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { getEgressOptions, selectEgressIp, verifyEgressIp, type EgressOptionsResponse } from '../../api'
 
 interface Props {
@@ -49,49 +49,19 @@ export function SetupInfoCard({ autoAssign = true, onReadyChange, refreshKey = 0
     onReadyChange?.(Boolean(options?.egress.public_ip && options.egress.verified))
   }, [onReadyChange, options])
 
-  const autoVerifiedRef = useRef<string | null>(null)
-  const assignPollRef = useRef(0)
-
-  const verifyIp = useCallback(async () => {
+  async function verifyIp() {
     setVerifying(true)
     setError(null)
     try {
       await verifyEgressIp()
-      const refreshed = await getEgressOptions().catch(() => null)
-      if (refreshed) setOptions(refreshed)
+      setOptions(await getEgressOptions())
     } catch (verifyError) {
       setError(verifyError instanceof Error ? verifyError.message : 'Could not verify static IP.')
-      const refreshed = await getEgressOptions().catch(() => null)
-      if (refreshed) setOptions(refreshed)
+      setOptions(await getEgressOptions().catch(() => options))
     } finally {
       setVerifying(false)
     }
-  }, [])
-
-  // Auto-verify once as soon as an IP is assigned, so the user doesn't have to
-  // click "Verify" - Continue unlocks automatically when the proxy is reachable.
-  useEffect(() => {
-    const ip = options?.egress.public_ip
-    if (!ip || options?.egress.verified || verifying) return
-    if (autoVerifiedRef.current === ip) return
-    autoVerifiedRef.current = ip
-    void verifyIp()
-  }, [options, verifying, verifyIp])
-
-  // Auto-poll for the assigned IP right after payment so it appears without a
-  // manual refresh. Bounded so it never polls forever.
-  useEffect(() => {
-    if (options?.egress.public_ip) {
-      assignPollRef.current = 0
-      return
-    }
-    if (loading || assigning || assignPollRef.current >= 12) return
-    const timer = window.setTimeout(() => {
-      assignPollRef.current += 1
-      void loadOptions()
-    }, 4000)
-    return () => window.clearTimeout(timer)
-  }, [options, loading, assigning, loadOptions])
+  }
 
   const assignedIp = options?.egress.public_ip ?? null
   const assignedNode = assignedIp
