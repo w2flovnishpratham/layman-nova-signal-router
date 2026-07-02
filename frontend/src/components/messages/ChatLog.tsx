@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { RenderableMessage } from '../../types'
 
+const BOTTOM_LOCK_THRESHOLD_PX = 96
+
 interface Props {
   messages: RenderableMessage[]
   typing: boolean
@@ -15,7 +17,8 @@ interface Props {
 
 export function ChatLog({ messages, typing, children, panelKey, inlinePanel }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const bottomRef = useRef<HTMLDivElement | null>(null)
+  const stickToBottomRef = useRef(true)
+  const lastClientAutoScrollIdRef = useRef<string | null>(null)
   const prefersReducedMotion = useReducedMotion()
   const reduceMotion = appReducedMotion(prefersReducedMotion)
   const { visibleMessages, stagedTyping } = useMessageReveal(messages, reduceMotion)
@@ -23,21 +26,52 @@ export function ChatLog({ messages, typing, children, panelKey, inlinePanel }: P
   const showTyping = stagedTyping || (typing && !hasQueuedMessages)
   const inlinePanelTargetId = inlinePanel ? latestPromptMessageId(visibleMessages) : null
   const panelChildren = hasQueuedMessages || showTyping ? null : children
+  const latestVisibleMessage = visibleMessages.at(-1)
+  const latestVisibleMessageId = latestVisibleMessage?.id ?? ''
 
   useEffect(() => {
+    const shouldAutoScroll = shouldAutoScrollChat(
+      stickToBottomRef.current,
+      latestVisibleMessage,
+      lastClientAutoScrollIdRef.current,
+    )
+    if (!shouldAutoScroll) return
+
     const scrollToBottom = () => {
-      bottomRef.current?.scrollIntoView({
-        block: 'end',
+      if (
+        !shouldAutoScrollChat(
+          stickToBottomRef.current,
+          latestVisibleMessage,
+          lastClientAutoScrollIdRef.current,
+        )
+      ) {
+        return
+      }
+      const container = scrollRef.current
+      if (!container) return
+      container.scrollTo({
+        top: container.scrollHeight,
         behavior: reduceMotion ? 'auto' : 'smooth',
       })
+      stickToBottomRef.current = true
+      if (latestVisibleMessage?.type === 'client.message') {
+        lastClientAutoScrollIdRef.current = latestVisibleMessage.id
+      }
     }
+
     const frame = window.requestAnimationFrame(scrollToBottom)
     const timeout = window.setTimeout(scrollToBottom, reduceMotion ? 0 : 320)
     return () => {
       window.cancelAnimationFrame(frame)
       window.clearTimeout(timeout)
     }
-  }, [visibleMessages.length, showTyping, children, inlinePanelTargetId, reduceMotion])
+  }, [latestVisibleMessage?.type, latestVisibleMessageId, showTyping, panelKey, inlinePanelTargetId, reduceMotion])
+
+  function handleScroll() {
+    const container = scrollRef.current
+    if (!container) return
+    stickToBottomRef.current = distanceFromBottom(container) <= BOTTOM_LOCK_THRESHOLD_PX
+  }
 
   const slotMotion = reduceMotion
     ? {
@@ -76,7 +110,7 @@ export function ChatLog({ messages, typing, children, panelKey, inlinePanel }: P
   }
 
   return (
-    <div ref={scrollRef} className="chat-log" aria-live="polite">
+    <div ref={scrollRef} className="chat-log" aria-live="polite" onScroll={handleScroll}>
       <AnimatePresence initial={false}>
         {visibleMessages.map((message) => (
           <motion.div key={message.id} className={motionClass(message.type)} {...slotMotion}>
@@ -100,8 +134,23 @@ export function ChatLog({ messages, typing, children, panelKey, inlinePanel }: P
           </motion.div>
         ) : null}
       </AnimatePresence>
-      <div ref={bottomRef} className="chat-bottom-anchor" aria-hidden="true" />
+      <div className="chat-bottom-anchor" aria-hidden="true" />
     </div>
+  )
+}
+
+function distanceFromBottom(container: HTMLDivElement): number {
+  return container.scrollHeight - container.scrollTop - container.clientHeight
+}
+
+function shouldAutoScrollChat(
+  isPinnedToBottom: boolean,
+  latestMessage: RenderableMessage | undefined,
+  lastClientAutoScrollId: string | null,
+): boolean {
+  return (
+    isPinnedToBottom ||
+    (latestMessage?.type === 'client.message' && latestMessage.id !== lastClientAutoScrollId)
   )
 }
 
