@@ -288,7 +288,8 @@ def test_service_does_not_accept_frontend_payment_or_identity_flags():
 
 
 def test_entitlement_migration_imports_cleanly():
-    path = Path("alembic/versions/20260629_0004_entitlements_payment_events.py")
+    backend_root = Path(__file__).resolve().parents[2]
+    path = backend_root / "alembic" / "versions" / "20260629_0004_entitlements_payment_events.py"
     spec = importlib.util.spec_from_file_location("migration_check", path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None

@@ -27,10 +27,20 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import CHAR, JSON, TypeDecorator
+
+from app.core.enums import (
+    ExpiryMode,
+    StrategyCatalogStatus,
+    StrategyExecutionMode,
+    StrategyInstanceStatus,
+    StrategySourceType,
+    StrikeMode,
+)
 
 
 def utcnow() -> datetime:
@@ -323,6 +333,172 @@ class StrategySubscription(Base):
     )
 
 
+class StrategyCatalog(Base):
+    """Catalog entry for a strategy Nova can offer or track in future phases."""
+
+    __tablename__ = "strategy_catalog"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_strategy_catalog_code"),
+        Index("ix_strategy_catalog_status", "status"),
+        Index("ix_strategy_catalog_source_type", "source_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(80), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_type: Mapped[str] = mapped_column(
+        String(50),
+        default=StrategySourceType.NOVA_OWNED_TRADINGVIEW.value,
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default=StrategyCatalogStatus.COMING_SOON.value,
+        nullable=False,
+    )
+    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class StrategyVersion(Base):
+    """Versioned strategy definition; not read by live execution in Phase 1."""
+
+    __tablename__ = "strategy_versions"
+    __table_args__ = (
+        UniqueConstraint("strategy_id", "version", name="uq_strategy_version"),
+        Index("ix_strategy_versions_strategy_status", "strategy_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_catalog.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default=StrategyCatalogStatus.COMING_SOON.value,
+        nullable=False,
+    )
+    payload_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    config_schema: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class StrategyBacktestReport(Base):
+    """Stored backtest metadata for a strategy version."""
+
+    __tablename__ = "strategy_backtest_reports"
+    __table_args__ = (
+        Index("ix_strategy_backtest_reports_version_created", "strategy_version_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="available", nullable=False)
+    report_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class UserStrategyInstance(Base):
+    """Future per-user strategy instance model.
+
+    Phase 1 only creates/backfills this table. Existing routing still reads
+    strategy_subscriptions.
+    """
+
+    __tablename__ = "user_strategy_instances"
+    __table_args__ = (
+        UniqueConstraint("legacy_subscription_id", name="uq_user_strategy_instances_legacy_subscription"),
+        Index("ix_user_strategy_instances_user_status", "user_id", "status"),
+        Index("ix_user_strategy_instances_strategy_status", "strategy_id", "status"),
+        Index(
+            "uq_user_strategy_instances_active_real_orders_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("execution_mode = 'real_orders' AND status = 'active'"),
+            sqlite_where=text("execution_mode = 'real_orders' AND status = 'active'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    strategy_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_catalog.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    legacy_subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_subscriptions.id", ondelete="SET NULL"), nullable=True
+    )
+    instance_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    source_type: Mapped[str] = mapped_column(
+        String(50),
+        default=StrategySourceType.NOVA_OWNED_TRADINGVIEW.value,
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default=StrategyInstanceStatus.ACTIVE.value,
+        nullable=False,
+    )
+    execution_mode: Mapped[str] = mapped_column(
+        String(30),
+        default=StrategyExecutionMode.SIGNAL_ONLY.value,
+        nullable=False,
+    )
+    lots: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    side_preference: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    config_json: Mapped[dict | None] = mapped_column("config", JSONType, nullable=True)
+    risk_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class UserStrategyWebhookCredential(Base):
+    """Hashed credential material for future custom strategy webhooks."""
+
+    __tablename__ = "user_strategy_webhook_credentials"
+    __table_args__ = (
+        UniqueConstraint("webhook_key_hash", name="uq_user_strategy_webhook_key_hash"),
+        Index("ix_user_strategy_webhook_credentials_instance", "instance_id"),
+        Index("ix_user_strategy_webhook_credentials_active", "instance_id", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    instance_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("user_strategy_instances.id", ondelete="CASCADE"), nullable=False
+    )
+    webhook_key_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    message_secret_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class UserEntitlement(Base):
     """Server-owned paid/trial entitlement state for one user."""
 
@@ -396,12 +572,59 @@ class StrategySignal(Base):
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     strategy_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     signal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("user_strategy_instances.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    payload_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    source_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    received_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(30), default="accepted", nullable=False)
     result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
+
+
+class NormalizedOptionSignal(Base):
+    """Future persisted nova.v1 option signal mapping.
+
+    Phase 1 does not write this table from the live webhook.
+    """
+
+    __tablename__ = "normalized_option_signals"
+    __table_args__ = (
+        Index("ix_normalized_option_signals_strategy_signal", "strategy_signal_id"),
+        Index("ix_normalized_option_signals_instance_created", "instance_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_signal_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_signals.id", ondelete="CASCADE"), nullable=False
+    )
+    instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("user_strategy_instances.id", ondelete="SET NULL"), nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    intent: Mapped[str] = mapped_column(String(20), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(40), nullable=False)
+    instrument_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    option_side: Mapped[str] = mapped_column(String(8), nullable=False)
+    strike_mode: Mapped[str] = mapped_column(String(20), default=StrikeMode.ATM.value, nullable=False)
+    resolved_strike: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expiry_mode: Mapped[str] = mapped_column(String(20), default=ExpiryMode.NEXT_WEEKLY.value, nullable=False)
+    resolved_expiry: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    qty_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    lots: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    order_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    product_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    raw_mapping_details: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class StrategyExecutionJob(Base):
@@ -425,6 +648,15 @@ class StrategyExecutionJob(Base):
         nullable=False,
         index=True,
     )
+    instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("user_strategy_instances.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    normalized_signal_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("normalized_option_signals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -440,9 +672,11 @@ class StrategyExecutionJob(Base):
         DateTime(timezone=True), default=utcnow, nullable=False
     )
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dead_letter_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False

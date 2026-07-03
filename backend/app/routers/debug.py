@@ -6,6 +6,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT, settings
+from app.core.feature_flags import feature_flag_states
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_order_event, read_jsonl
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret
@@ -40,6 +41,11 @@ def _public_signal(signal: NormalizedSignal) -> dict[str, Any]:
     data["secret"] = mask_secret(data.get("secret"))
     data.pop("raw_payload", None)
     return data
+
+
+@router.get("/feature-flags")
+def get_feature_flags() -> dict[str, bool]:
+    return feature_flag_states()
 
 
 def _risk_decision(signal: NormalizedSignal) -> dict[str, Any]:
