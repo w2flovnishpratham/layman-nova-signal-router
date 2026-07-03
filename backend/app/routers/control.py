@@ -115,10 +115,18 @@ def panic_exit() -> dict:
         symbol=open_position.get("trading_symbol") or "MANUAL",
         security_id=open_position.get("security_id"),
         trading_symbol=open_position.get("trading_symbol"),
+        option_side=open_position.get("option_side"),
+        strike=open_position.get("strike"),
+        expiry=open_position.get("expiry"),
         qty=open_position.get("qty") or 1,
         order_type="MARKET",
         product_type="INTRADAY",
-        raw_payload={"manual_panic_exit": True}
+        raw_payload={
+            "manual_panic_exit": True,
+            # Entry reference so the exit chat card can show gross/charges/net.
+            "entry_price": open_position.get("entry_price"),
+            "live_pnl": open_position.get("live_pnl") if isinstance(open_position.get("live_pnl"), dict) else None,
+        },
     )
 
     log_audit_event("PANIC_EXIT_TRIGGERED", "Panic exit triggered from control endpoint.")

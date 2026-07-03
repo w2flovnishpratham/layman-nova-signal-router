@@ -14,7 +14,7 @@ export function SignalCard({ message }: { message: RenderableMessage }) {
       <div className="event-grid compact">
         <div><span>Action</span><strong>{String(message.data.action ?? 'Pending')}</strong></div>
         <div><span>Option</span><strong>{String(message.data.optionSide ?? 'NIFTY')}</strong></div>
-        <div><span>Order sent</span><strong>No decision yet</strong></div>
+        <div><span>Routing</span><strong>Processing...</strong></div>
       </div>
       {message.data.signalId ? <code>{String(message.data.signalId)}</code> : null}
     </article>
@@ -177,7 +177,7 @@ export function ExitCard({ message }: { message: RenderableMessage }) {
       <h3>{paper ? 'Paper trade closed' : 'Trade closed'}</h3>
       <div className="event-grid">
         <div><span>Gross</span><strong>{formatOptionalCurrency(optionalNumber(message.data.grossPnl) ?? netPnl)}</strong></div>
-        <div><span>Charges</span><strong>{formatOptionalCurrency(optionalNumber(message.data.charges))}</strong></div>
+        <div><span>{message.data.chargesEstimated ? 'Charges (est.)' : 'Charges'}</span><strong>{formatOptionalCurrency(optionalNumber(message.data.charges))}</strong></div>
         <div><span>Net</span><strong>{formatOptionalCurrency(netPnl)}</strong></div>
       </div>
       <OrderTimeline steps={journey(message)} />

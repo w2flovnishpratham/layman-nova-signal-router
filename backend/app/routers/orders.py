@@ -165,7 +165,13 @@ def manual_exit(request: Request, body: ManualExitRequest) -> Any:
         order_type=position.get("order_type") or DEFAULT_ORDER_TYPE,
         product_type=position.get("product_type") or DEFAULT_PRODUCT_TYPE,
         source="manual_panel",
-        raw_payload={"manual_order": True, "manual_exit_reason": body.reason or "manual_panel"},
+        raw_payload={
+            "manual_order": True,
+            "manual_exit_reason": body.reason or "manual_panel",
+            # Entry reference so the exit chat card can show gross/charges/net.
+            "entry_price": position.get("entry_price"),
+            "live_pnl": position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else None,
+        },
     )
     blocked = _attach_manual_idempotency_or_block(signal, request)
     if blocked is not None:

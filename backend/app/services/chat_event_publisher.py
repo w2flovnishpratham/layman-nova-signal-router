@@ -258,6 +258,14 @@ async def append_chat_result_to_session(
 
     if payload.action == "EXIT" and execution_result.get("status") != "PARTIAL_EXIT_FILLED":
         await session_store.update_active_trade(session_id, None)
+        if paper_exit:
+            gross_pnl = _paper_gross_pnl(paper_exit)
+            charges = _paper_charges(paper_exit)
+            net_pnl = paper_exit.get("realized_pnl")
+            charges_estimated = False
+        else:
+            gross_pnl, charges, net_pnl = _live_exit_pnl(payload, execution_result)
+            charges_estimated = charges is not None
         await session_store.append_event(
             session_id,
             event(
@@ -268,9 +276,10 @@ async def append_chat_result_to_session(
                 symbol=payload.trading_symbol or payload.symbol,
                 qty=execution_result.get("filled_qty") or payload.qty,
                 exitPrice=execution_result.get("avg_price"),
-                grossPnl=_paper_gross_pnl(paper_exit) if paper_exit else _exit_gross_pnl(payload),
-                charges=_paper_charges(paper_exit) if paper_exit else None,
-                netPnl=paper_exit.get("realized_pnl") if paper_exit else None,
+                grossPnl=gross_pnl,
+                charges=charges,
+                chargesEstimated=charges_estimated,
+                netPnl=net_pnl,
                 reason=_exit_reason(payload),
                 status=execution_result.get("status"),
                 mode=mode,
@@ -445,6 +454,45 @@ def _exit_reason(payload: NormalizedSignal) -> str | None:
     raw_payload = payload.raw_payload if isinstance(payload.raw_payload, dict) else {}
     reason = raw_payload.get("exit_reason")
     return str(reason) if reason not in (None, "") else None
+
+
+def _live_exit_pnl(payload: NormalizedSignal, execution_result: dict[str, Any]) -> tuple[float | None, float | None, float | None]:
+    """Gross / estimated charges / net for a LIVE exit.
+
+    Gross comes from actual fill prices: (exit avg - entry price) x qty.
+    Charges use the same statutory model as paper mode (brokerage, STT,
+    exchange txn, GST, SEBI, stamp) and are therefore estimates until the
+    broker statement is reconciled.
+    """
+    raw_payload = payload.raw_payload if isinstance(payload.raw_payload, dict) else {}
+    live_pnl = raw_payload.get("live_pnl") if isinstance(raw_payload.get("live_pnl"), dict) else {}
+
+    def _num(value: Any) -> float | None:
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    exit_price = _num(execution_result.get("avg_price"))
+    entry_price = _num(raw_payload.get("entry_price")) or _num(live_pnl.get("entry_price"))
+    qty = _num(execution_result.get("filled_qty")) or _num(payload.qty)
+
+    if exit_price is None or entry_price is None or not qty:
+        # Fall back to the last unrealized-PnL snapshot if fills are unknown.
+        return _exit_gross_pnl(payload), None, None
+
+    gross = round((exit_price - entry_price) * qty, 2)
+    try:
+        from app.services.paper_broker import _simulated_charges
+
+        charges = round(
+            _simulated_charges(int(qty), entry_price, "BUY") + _simulated_charges(int(qty), exit_price, "SELL"),
+            2,
+        )
+    except Exception:
+        charges = None
+    net = round(gross - charges, 2) if charges is not None else None
+    return gross, charges, net
 
 
 def _exit_gross_pnl(payload: NormalizedSignal) -> float | None:

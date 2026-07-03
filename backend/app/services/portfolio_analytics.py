@@ -94,12 +94,42 @@ def _is_live(ev: dict) -> bool:
     return False
 
 
+def _dedupe_legs_by_order_id(legs: list[dict]) -> list[dict]:
+    """One leg per broker order.
+
+    A single order can produce two after_response events: the immediate
+    placement echo (avg_price null for MARKET orders in TRANSIT) and the
+    post-poll fill update (avg_price set). Keep one record per order_id,
+    preferring the one that carries a fill price, at its ORIGINAL position in
+    the chronological sequence so ENTRY/EXIT pairing is unaffected.
+    Legs without an order_id are kept as-is.
+    """
+    slot_by_order: dict[str, int] = {}
+    deduped: list[dict] = []
+    for ev in legs:
+        order_id = str(ev.get("order_id") or "").strip()
+        if not order_id:
+            deduped.append(ev)
+            continue
+        slot = slot_by_order.get(order_id)
+        if slot is None:
+            slot_by_order[order_id] = len(deduped)
+            deduped.append(ev)
+            continue
+        kept = deduped[slot]
+        # Later events win when they add a fill price (or the kept one has none).
+        if ev.get("avg_price") is not None or kept.get("avg_price") is None:
+            deduped[slot] = ev
+    return deduped
+
+
 def _pair_round_trips(events: list[dict]) -> tuple[list[dict[str, Any]], dict | None]:
     """Walk filled LIVE order legs chronologically and pair each ENTRY with the
     next EXIT. The engine holds at most one position at a time, so a stack of
     depth one is correct and robust."""
     legs = [ev for ev in events if _is_filled(ev) and _is_live(ev)]
     legs.sort(key=lambda ev: _parse_ts(ev.get("timestamp")))
+    legs = _dedupe_legs_by_order_id(legs)
 
     trades: list[dict[str, Any]] = []
     open_entry: dict | None = None

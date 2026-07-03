@@ -1614,6 +1614,38 @@ def _place_order(
             },
         )
 
+    # The first after_response event is written BEFORE polling, when a MARKET
+    # order's avg_price is still null (TRANSIT). Without this enriched event
+    # the portfolio ledger never learns the fill price (entry/exit show "-",
+    # every realized-PnL metric reads 0). Emit a second after_response event
+    # carrying the polled fill; portfolio_analytics dedupes by order_id and
+    # prefers the leg that has avg_price.
+    if order_status_poll is not None and (final_avg_price != result.avg_price or final_status != result.status):
+        log_order_event(
+            {
+                "phase": "after_response",
+                "fill_poll_update": True,
+                "signal_id": signal.signal_id,
+                "action": action,
+                "side": signal.side,
+                "place_method": place_method,
+                "engine_mode": engine_mode,
+                "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
+                "success": final_success,
+                "blocked": False,
+                "order_id": result.order_id,
+                "status": final_status,
+                "avg_price": final_avg_price,
+                "filled_qty": final_filled_qty,
+                "remaining_qty": final_remaining_qty,
+                "order_status_poll": order_status_poll,
+                "security_id": request_payload.get("securityId"),
+                "trading_symbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
+                "qty": qty,
+                **_normalized_log_fields(signal),
+            }
+        )
+
     if use_super_order and final_success and final_status == "TRADED" and final_avg_price is not None:
         active_super_order_levels, super_order_post_fill_update = _sync_super_order_exit_levels(
             client=client,
