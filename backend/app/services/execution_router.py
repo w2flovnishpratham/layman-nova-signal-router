@@ -373,15 +373,41 @@ def _round_option_tick(price: float) -> float:
     return round(max(round(price / 0.05) * 0.05, 0.05), 2)
 
 
-def _broker_exit_levels(reference_price: float, runtime: dict[str, Any]) -> tuple[float, float, float, float]:
-    sl_percent = _runtime_float(runtime, "option_sl_percent", 10.0)
-    tp_percent = _runtime_float(runtime, "option_tp_percent", 20.0)
+def _signal_exit_overrides(signal: Any) -> dict[str, float]:
+    """Per-signal TP/SL overrides (e.g. typed into the manual order panel).
+
+    Manual entries carry targetProfitPct/stopLossPct in raw_payload; before this
+    they were accepted by the API but silently ignored at placement time.
+    """
+    raw = getattr(signal, "raw_payload", None)
+    if not isinstance(raw, dict):
+        return {}
+    overrides: dict[str, float] = {}
+    tp = _number(raw.get("targetProfitPct"))
+    if tp is not None and tp > 0:
+        overrides["tp_percent"] = float(tp)
+    sl = _number(raw.get("stopLossPct"))
+    if sl is not None and sl > 0:
+        overrides["sl_percent"] = float(sl)
+    return overrides
+
+
+def _broker_exit_levels(
+    reference_price: float,
+    runtime: dict[str, Any],
+    overrides: dict[str, float] | None = None,
+) -> tuple[float, float, float, float]:
+    overrides = overrides or {}
+    sl_percent = float(overrides.get("sl_percent") or _runtime_float(runtime, "option_sl_percent", 10.0))
+    tp_percent = float(overrides.get("tp_percent") or _runtime_float(runtime, "option_tp_percent", 20.0))
 
     # SL disable — Dhan Super Order schema requires a stopLossPrice, so we
     # plant a floor that normal intraday price action will never touch
     # (max of Rs.0.10 and 0.1% of entry). The position is then exited by the
     # opposite Supertrend reversal, the TP leg, or the 15:15 IST EOD task.
-    disable_sl = bool(runtime.get("option_disable_sl", True))
+    # An explicit per-signal stopLossPct override takes precedence over the
+    # global disable flag: the user asked for a real SL on this order.
+    disable_sl = bool(runtime.get("option_disable_sl", True)) and "sl_percent" not in overrides
     if disable_sl:
         sl_percent = DISABLED_OPTION_SL_PERCENT
         stop_loss_price = _round_option_tick(max(0.10, reference_price * DISABLED_OPTION_SL_PRICE_FRACTION))
@@ -409,8 +435,9 @@ def _build_dhan_super_order_payload(
     base_payload: dict[str, Any],
     reference_ltp: float,
     runtime: dict[str, Any],
+    overrides: dict[str, float] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    sl_percent, tp_percent, stop_loss_price, target_price = _broker_exit_levels(reference_ltp, runtime)
+    sl_percent, tp_percent, stop_loss_price, target_price = _broker_exit_levels(reference_ltp, runtime, overrides)
     payload = {
         "dhanClientId": base_payload["dhanClientId"],
         "correlationId": base_payload["correlationId"],
@@ -433,9 +460,33 @@ def _build_dhan_super_order_payload(
         "stop_loss_price": stop_loss_price,
         "target_price": target_price,
         "levels_source": "pre_entry_ltp",
-        "sl_disabled": bool(runtime.get("option_disable_sl", True)),
+        "sl_disabled": bool(runtime.get("option_disable_sl", True)) and "sl_percent" not in (overrides or {}),
+        "overrides": overrides or {},
     }
     return payload, levels
+
+
+def _is_super_order_level_rejection(result: Any) -> bool:
+    """True when Dhan rejected a Super Order because the TP/SL leg prices are on
+    the wrong side of the current market price (a transient, race-driven error,
+    e.g. 'Profit Price Should be greater than Order price')."""
+    parts = [
+        getattr(result, "error", None),
+        getattr(result, "status", None),
+        getattr(result, "raw_response", None),
+        getattr(result, "interpreted_error", None),
+    ]
+    text = " ".join(str(part) for part in parts if part).lower()
+    return any(
+        term in text
+        for term in (
+            "profit price should be",
+            "profit price must be",
+            "stop loss price should be",
+            "stoploss price should be",
+            "target price should be",
+        )
+    )
 
 
 def _order_result_snapshot(result: Any) -> dict[str, Any]:
@@ -1361,6 +1412,7 @@ def _place_order(
             base_payload=request_payload,
             reference_ltp=float(ltp_result.ltp),
             runtime=runtime,
+            overrides=_signal_exit_overrides(signal),
         )
         place_method = "super_orders"
 
@@ -1425,6 +1477,39 @@ def _place_order(
 
     if use_super_order:
         result = client.place_super_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
+        # Dhan validates targetPrice/stopLossPrice against the CURRENT price on
+        # their side ("Profit Price Should be greater than Order price"). Our
+        # reference LTP is fetched moments earlier, so a fast premium move can
+        # invalidate the levels in transit. That rejection is transient:
+        # refetch LTP, recompute the legs, and retry exactly once.
+        if not result.success and _is_super_order_level_rejection(result):
+            retry_ltp = client.get_ltp(
+                client_id=client_id,
+                access_token=access_token,
+                exchange_segment=str(request_payload.get("exchangeSegment") or ""),
+                security_id=str(request_payload.get("securityId") or ""),
+            )
+            if retry_ltp.success and retry_ltp.ltp is not None and float(retry_ltp.ltp) > 0:
+                order_request_payload, super_order_levels = _build_dhan_super_order_payload(
+                    base_payload=request_payload,
+                    reference_ltp=float(retry_ltp.ltp),
+                    runtime=runtime,
+                    overrides=_signal_exit_overrides(signal),
+                )
+                super_order_levels["levels_source"] = "pre_entry_ltp_retry"
+                super_order_levels["retry_reason"] = str(result.error or result.status or "super_order_level_rejection")
+                log_order_event(
+                    {
+                        "phase": "super_order_level_retry",
+                        "signal_id": signal.signal_id,
+                        "first_error": result.error,
+                        "first_status": result.status,
+                        "retry_reference_ltp": float(retry_ltp.ltp),
+                        "request": _public_order_request(order_request_payload),
+                        "super_order_levels": super_order_levels,
+                    }
+                )
+                result = client.place_super_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
     else:
         result = client.place_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
 

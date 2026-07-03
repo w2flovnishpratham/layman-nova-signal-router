@@ -65,6 +65,15 @@ def interpret_dhan_error(status_code: int | None, response_text_or_json: Any) ->
             "nextAction": "This is expected after market close; test read-only endpoint or wait for market.",
         }
 
+    if any(term in lowered for term in ("profit price", "stop loss price", "stoploss price", "target price")):
+        return {
+            **normalized,
+            "category": "LTP",
+            "message": "Dhan rejected the Super Order because the TP/SL leg prices went stale against the live premium (price moved between Nova's LTP snapshot and Dhan's validation).",
+            "next_action": "Nova retries once automatically with fresh LTP. If it still fails, resend the signal; consider a wider TP percent.",
+            "nextAction": "Nova retries once automatically with fresh LTP. If it still fails, resend the signal; consider a wider TP percent.",
+        }
+
     if any(term in lowered for term in ("invalid field", "missing field", "security id", "securityid", "quantity", "invalid input", "invalid request", "expired instrument", "invalid security")):
         return {
             **normalized,

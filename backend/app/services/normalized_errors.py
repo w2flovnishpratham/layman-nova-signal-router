@@ -246,6 +246,25 @@ def classify_failure(
             debug_pack=debug_pack,
         )
 
+    if any(term in lowered for term in ("profit price", "stop loss price", "stoploss price", "target price")):
+        return build_error(
+            source="DHAN",
+            category="LTP",
+            severity="warning",
+            user_title="Exit legs went stale",
+            user_message="Dhan rejected the Super Order because the premium moved between Nova's LTP snapshot and Dhan's validation, putting the TP/SL legs on the wrong side of the market. Nova retries once with fresh LTP automatically.",
+            technical_message=technical or raw_text,
+            next_action="If the retry also failed, resend the signal; consider a wider TP percent for fast markets.",
+            retryable=True,
+            money_at_risk=False,
+            order_sent_to_broker=order_sent_to_broker,
+            signal_id=_signal_id(signal),
+            correlation_id=correlation_id,
+            raw_status_code=status_code,
+            mode=mode,
+            debug_pack=debug_pack,
+        )
+
     if any(term in lowered for term in ("ltp", "last traded price", "market-feed", "market feed", "tick")):
         return build_error(
             source=source if source != "NOVA_BACKEND" else "DHAN",
