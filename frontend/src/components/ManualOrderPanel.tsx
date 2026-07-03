@@ -33,7 +33,11 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const inFlightRef = useRef(false)
   const [activeAction, setActiveAction] = useState<'entry-CE' | 'entry-PE' | 'exit' | 'reverse' | null>(null)
   const [quotePending, setQuotePending] = useState(false)
-  const [quote, setQuote] = useState<OrderQuote | null>(null)
+  // Two-sided quote cache: Buy CE / Buy PE each resolve their own contract,
+  // regardless of which side the advanced panel dropdown is set to.
+  const [quotes, setQuotes] = useState<{ CE: OrderQuote | null; PE: OrderQuote | null }>({ CE: null, PE: null })
+  const [quoteStatus, setQuoteStatus] = useState<'loading' | 'ready' | 'stale' | 'error'>('loading')
+  const [lastQuoteError, setLastQuoteError] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const advancedToggleRef = useRef<HTMLButtonElement | null>(null)
@@ -43,7 +47,10 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const reduceMotion = useAppReducedMotion()
   
   const live = engineMode === 'live'
+  const quote = quotes[side]
   const marketClosed = quote?.atm?.marketOpen === false
+  const ceContract = getContractForSide(quotes.CE, 'CE')
+  const peContract = getContractForSide(quotes.PE, 'PE')
   const advancedTransition = reduceMotion ? { duration: 0 } : { duration: 0.26, ease: softEase }
 
   useEffect(() => {
@@ -51,28 +58,44 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
     let cancelled = false
     let inFlight = false
 
-    async function loadQuote() {
+    async function loadQuotes() {
       if (inFlight) return
       inFlight = true
       setQuotePending(true)
-      try {
-        const nextQuote = await getOrderQuote(side, lots)
-        if (!cancelled) setQuote(nextQuote)
-      } catch {
-        // Keep the last usable quote visible while the auto quote poll recovers.
-      } finally {
+      const [ceResult, peResult] = await Promise.allSettled([
+        getOrderQuote('CE', lots),
+        getOrderQuote('PE', lots),
+      ])
+      if (cancelled) {
         inFlight = false
-        if (!cancelled) setQuotePending(false)
+        return
       }
+      const anySuccess = ceResult.status === 'fulfilled' || peResult.status === 'fulfilled'
+      setQuotes((prev) => ({
+        // Keep the last usable quote visible while a failed poll recovers.
+        CE: ceResult.status === 'fulfilled' ? ceResult.value : prev.CE,
+        PE: peResult.status === 'fulfilled' ? peResult.value : prev.PE,
+      }))
+      if (anySuccess) {
+        setQuoteStatus('ready')
+        setLastQuoteError(null)
+      } else {
+        const failure = ceResult.status === 'rejected' ? ceResult.reason : peResult.status === 'rejected' ? peResult.reason : null
+        // Sanitized: only the error message, never headers/tokens/payloads.
+        setLastQuoteError(failure instanceof Error ? failure.message : 'Quote request failed.')
+        setQuoteStatus((prev) => (prev === 'ready' || prev === 'stale' ? 'stale' : 'error'))
+      }
+      inFlight = false
+      setQuotePending(false)
     }
 
-    void loadQuote()
-    const interval = window.setInterval(() => void loadQuote(), 4000)
+    void loadQuotes()
+    const interval = window.setInterval(() => void loadQuotes(), 4000)
     return () => {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [engineMode, lots, pending, side])
+  }, [engineMode, lots, pending])
 
   useEffect(() => {
     if (!advancedScrollReadyRef.current) {
@@ -102,6 +125,13 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   async function runOrder(action: 'entry' | 'exit' | 'reverse', entrySide: 'CE' | 'PE' = side) {
     // Ref guard fires synchronously, so a double-click can't send two orders.
     if (inFlightRef.current || pending) return
+    // Never submit an entry without a fully resolved contract for the CLICKED
+    // side. The backend live guard would block it anyway; catch it here first.
+    if (action === 'entry' && !getContractForSide(quotes[entrySide], entrySide)) {
+      setStage('Failed')
+      setMessage(`Quote not ready for ${entrySide}. Please wait for ATM ${entrySide} contract to resolve.`)
+      return
+    }
     inFlightRef.current = true
     setActiveAction(action === 'entry' ? (entrySide === 'CE' ? 'entry-CE' : 'entry-PE') : action)
     setPending(true)
@@ -128,7 +158,9 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
     setStage('Validating risk')
     await pause(120)
     setStage('Placing order')
-    const quotedContract = quote?.side === entrySide ? quoteContractPayload(quote, entrySide) : {}
+    // Resolve the contract for the CLICKED side from that side's own quote —
+    // not from whichever side the panel happened to be polling for.
+    const quotedContract = getContractForSide(quotes[entrySide], entrySide) ?? {}
     const response = action === 'entry'
       ? await postManualEntry({ side: entrySide, lots, targetProfitPct, stopLossPct, ...quotedContract })
       : action === 'exit'
@@ -150,9 +182,10 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
       <div className="flex gap-2 mt-4">
         <ActionButton
           live={live}
-          disabled={pending || marketClosed}
+          disabled={pending || marketClosed || !ceContract}
           onConfirm={() => void runOrder('entry', 'CE')}
           loading={activeAction === 'entry-CE'}
+          loadingLabel="Buying CE…"
           ariaLabel="Buy CE market"
           className="flex-1 py-3 px-4 rounded-xl font-semibold border border-emerald-500/20 hover:border-emerald-500/50 bg-emerald-500/10 text-emerald-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
@@ -161,9 +194,10 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
         </ActionButton>
         <ActionButton
           live={live}
-          disabled={pending || marketClosed}
+          disabled={pending || marketClosed || !peContract}
           onConfirm={() => void runOrder('entry', 'PE')}
           loading={activeAction === 'entry-PE'}
+          loadingLabel="Buying PE…"
           ariaLabel="Buy PE market"
           className="flex-1 py-3 px-4 rounded-xl font-semibold border border-rose-500/20 hover:border-rose-500/50 bg-rose-500/10 text-rose-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
@@ -171,6 +205,14 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
           Buy PE
         </ActionButton>
       </div>
+      {!marketClosed && (!ceContract || !peContract) ? (
+        <p className="manual-quote-hint mt-2" role="status">
+          {quoteStatus === 'error' || quoteStatus === 'stale'
+            ? 'ATM contract unavailable. Retrying quote…'
+            : 'Resolving ATM contract…'}
+          {lastQuoteError && (quoteStatus === 'error' || quoteStatus === 'stale') ? ` (${lastQuoteError})` : ''}
+        </p>
+      ) : null}
 
       {/* Lots Stepper Stepper Component */}
       <div className="flex flex-col gap-1.5 mt-4 select-none">
@@ -292,17 +334,18 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   )
 }
 
-function ActionButton({ live, disabled, loading = false, onConfirm, ariaLabel, className, children }: {
+function ActionButton({ live, disabled, loading = false, loadingLabel, onConfirm, ariaLabel, className, children }: {
   live: boolean
   disabled: boolean
   loading?: boolean
+  loadingLabel?: string
   onConfirm: () => void
   ariaLabel: string
   className?: string
   children: ReactNode
 }) {
   const content = loading
-    ? (<><Loader2 size={13} className="animate-spin" /> Working…</>)
+    ? (<><Loader2 size={13} className="animate-spin" /> {loadingLabel ?? 'Working…'}</>)
     : children
   if (!live) {
     return (
@@ -387,12 +430,27 @@ function quoteSourceLabel(quote: OrderQuote | null): string {
   return source.replace(/_/g, ' ')
 }
 
-function quoteContractPayload(quote: OrderQuote, side: 'CE' | 'PE') {
+export interface SideContract {
+  securityId: string
+  tradingSymbol: string | null
+  strike: number
+  expiry: string
+}
+
+/** Resolve the tradeable ATM contract for a given side from that side's quote.
+ *
+ * Returns null unless securityId, strike, AND expiry are all present — a
+ * partial contract must never be submitted (live mode does not auto-resolve).
+ * Does NOT require `quote.side === side`: if the quote payload carries the
+ * requested side in `atm.options`, that contract is used directly.
+ */
+export function getContractForSide(quote: OrderQuote | null, side: 'CE' | 'PE'): SideContract | null {
+  if (!quote) return null
   const option = quote.atm?.options?.[side]
-  return {
-    securityId: quote.securityId ?? option?.securityId ?? null,
-    tradingSymbol: quote.tradingSymbol ?? option?.tradingSymbol ?? null,
-    strike: option?.strike ?? quote.atm?.atmStrike ?? null,
-    expiry: option?.expiry ?? null,
-  }
+  const securityId = (quote.side === side ? quote.securityId : null) ?? option?.securityId ?? null
+  const tradingSymbol = (quote.side === side ? quote.tradingSymbol : null) ?? option?.tradingSymbol ?? null
+  const strike = option?.strike ?? quote.atm?.atmStrike ?? null
+  const expiry = option?.expiry ?? null
+  if (!securityId || strike === null || strike === undefined || !expiry) return null
+  return { securityId, tradingSymbol: tradingSymbol ?? null, strike, expiry }
 }

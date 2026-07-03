@@ -45,9 +45,9 @@ export function MarketCard({ snapshot, collapseControl }: { snapshot: MarketSnap
           <span>NIFTY spot</span>
           <strong>{snapshot?.niftySpot === null || snapshot?.niftySpot === undefined ? 'Pending' : formatCurrency(snapshot.niftySpot, { decimals: 2 })}</strong>
         </div>
-        <div className={change === null ? '' : change >= 0 ? 'text-up' : 'text-down'}>
+        <div className={change === null ? '' : change >= 0 ? 'text-up' : 'text-down'} title={change === null ? 'Day change appears after the first strategy signal of the day' : 'Day change'}>
           {change === null ? <Activity size={15} /> : change >= 0 ? <TrendingUp size={15} /> : <TrendingDown size={15} />}
-          <strong>{change === null ? 'Pending' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`}</strong>
+          <strong>{change === null ? '—' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`}</strong>
         </div>
       </div>
       {pendingReason ? (
@@ -86,7 +86,7 @@ function AtmCell({ label, ltp }: { label: string; ltp?: number | null }) {
 
 function MiniSparkline({ values }: { values: number[] }) {
   if (values.length < 2) {
-    return <div className="mini-sparkline empty"><span>No tick history</span></div>
+    return <div className="mini-sparkline empty"><span>Chart appears after a position opens</span></div>
   }
   const min = Math.min(...values)
   const max = Math.max(...values)

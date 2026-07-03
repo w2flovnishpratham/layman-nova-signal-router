@@ -2662,6 +2662,12 @@ code {
   align-items: center;
 }
 
+.manual-quote-hint {
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .market-feed-warning {
   display: flex;
   align-items: center;
