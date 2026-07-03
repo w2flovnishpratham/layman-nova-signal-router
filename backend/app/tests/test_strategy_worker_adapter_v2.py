@@ -119,6 +119,34 @@ def _create_v2_job(db, payload):
     return db.get(models.StrategyExecutionJob, job_result.jobs[0].job_id)
 
 
+def _isolate_runtime(monkeypatch, tmp_path):
+    from app.services import audit_logger, state_store
+
+    state_root = tmp_path / "state"
+    log_root = tmp_path / "logs"
+    for name, filename in {
+        "APP_STATE_FILE": "app_state.json",
+        "OPEN_POSITION_FILE": "open_position.json",
+        "PAPER_POSITION_FILE": "paper_position.json",
+        "PAPER_PORTFOLIO_FILE": "paper_portfolio.json",
+        "EXTERNAL_POSITIONS_FILE": "external_positions.json",
+        "SEEN_SIGNALS_FILE": "seen_signals.json",
+        "SETTINGS_FILE": "settings.json",
+    }.items():
+        monkeypatch.setattr(state_store, name, state_root / filename)
+    log_files = {
+        "webhook": log_root / "webhook_events.jsonl",
+        "order": log_root / "order_events.jsonl",
+        "audit": log_root / "audit_events.jsonl",
+        "error": log_root / "errors.jsonl",
+        "paper_orders": log_root / "paper_orders.jsonl",
+    }
+    monkeypatch.setattr(state_store, "LOG_FILES", log_files)
+    monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
+    state_store.init_runtime_files()
+    return log_files
+
+
 def test_process_next_v2_job_dry_run_claims_and_completes_job(mu_db, monkeypatch):
     from app.services.strategy_execution_queue_v2 import V2_COMPLETED_DRY_RUN
     from app.services.strategy_worker_adapter_v2 import process_next_v2_job_dry_run
@@ -161,6 +189,257 @@ def test_process_next_v2_job_dry_run_claims_and_completes_job(mu_db, monkeypatch
         assert saved.status == V2_COMPLETED_DRY_RUN
         assert saved.locked_by == "phase2c1-worker"
         assert saved.result_summary["details"]["normalized_signal_preview"]["qty"] == 130
+
+
+def test_paper_job_calls_route_signal_once_and_completes(mu_db, monkeypatch, tmp_path):
+    from app.services import state_store
+    from app.services.strategy_worker_adapter_v2 import (
+        V2_COMPLETED_PAPER,
+        process_next_v2_job_paper_once,
+    )
+
+    monkeypatch.setenv("MULTI_STRATEGY_FANOUT", "1")
+    monkeypatch.setattr("app.services.strategy_worker_adapter_v2._current_lot_size", lambda: 65)
+    _isolate_runtime(monkeypatch, tmp_path)
+    calls = []
+
+    def fake_route(signal):
+        assert state_store.get_engine_mode(legacy_fallback=False) == "paper"
+        calls.append(signal)
+        return {
+            "success": True,
+            "status": "PAPER_OK",
+            "order_id": "paper-1",
+            "access_token": "token-secret",
+            "raw_response": {"secret": "broker-secret"},
+            "nested": {"proxy_url": "http://proxy-secret", "keep": "safe"},
+        }
+
+    monkeypatch.setattr("app.services.strategy_worker_adapter_v2._route_signal", fake_route)
+    user = make_user("phase2c2-paper@example.com")
+
+    with session_scope() as db:
+        catalog, version = _seed_supertrend(db)
+        instance = _add_instance(
+            db,
+            user_id=user.id,
+            catalog=catalog,
+            version=version,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+        )
+        job = _create_v2_job(db, _raw_payload(signal_id="phase2c2-paper"))
+
+        result = process_next_v2_job_paper_once(db, "phase2c2-worker")
+
+        assert result is not None
+        assert result.ok is True
+        assert result.status == V2_COMPLETED_PAPER
+        assert len(calls) == 1
+        signal = calls[0]
+        assert isinstance(signal, NormalizedSignal)
+        assert signal.raw_payload["instance_id"] == str(instance.id)
+        assert signal.raw_payload["strategy_version_id"] == str(version.id)
+        assert signal.raw_payload["v2_job_id"] == str(job.id)
+        assert signal.raw_payload["execution_mode"] == StrategyExecutionMode.PAPER_LIVE_DATA.value
+        assert result.route_result_summary == {
+            "success": True,
+            "status": "PAPER_OK",
+            "order_id": "paper-1",
+            "nested": {"keep": "safe"},
+        }
+        saved = db.get(models.StrategyExecutionJob, job.id)
+        assert saved is not None
+        assert saved.status == V2_COMPLETED_PAPER
+        details = saved.result_summary["details"]
+        assert details["route_result"] == result.route_result_summary
+        assert details["normalized_signal_preview"]["raw_payload"]["v2_job_id"] == str(job.id)
+        assert details["paper_mode"]["active_mode"] == "paper"
+        assert details["manual_test_only"] is True
+
+
+def test_real_orders_job_is_blocked_before_route_signal_and_dhan(mu_db, monkeypatch):
+    from app.services.dhan_client import RealDhanClient
+    from app.services.strategy_worker_adapter_v2 import (
+        V2_FAILED_PAPER,
+        V2_LIVE_BLOCKED,
+        process_next_v2_job_paper_once,
+    )
+
+    monkeypatch.setenv("MULTI_STRATEGY_FANOUT", "1")
+    route_calls = []
+    dhan_calls = []
+    monkeypatch.setattr(
+        "app.services.strategy_worker_adapter_v2._route_signal",
+        lambda signal: route_calls.append(signal) or {"success": True},
+    )
+    monkeypatch.setattr(
+        RealDhanClient,
+        "place_order",
+        lambda self, **kwargs: dhan_calls.append(kwargs) or None,
+    )
+    user = make_user("phase2c2-real-block@example.com")
+
+    with session_scope() as db:
+        catalog, version = _seed_supertrend(db)
+        _add_instance(
+            db,
+            user_id=user.id,
+            catalog=catalog,
+            version=version,
+            execution_mode=StrategyExecutionMode.REAL_ORDERS.value,
+        )
+        job = _create_v2_job(db, _raw_payload(signal_id="phase2c2-real-block"))
+
+        result = process_next_v2_job_paper_once(db, "phase2c2-worker")
+
+        assert result is not None
+        assert result.ok is False
+        assert result.status == V2_FAILED_PAPER
+        assert result.error_code == V2_LIVE_BLOCKED
+        assert route_calls == []
+        assert dhan_calls == []
+        saved = db.get(models.StrategyExecutionJob, job.id)
+        assert saved is not None
+        assert saved.status == V2_FAILED_PAPER
+        assert saved.dead_letter_reason == V2_LIVE_BLOCKED
+
+
+def test_unsupported_execution_mode_is_blocked_before_route_signal(mu_db, monkeypatch):
+    from app.services.strategy_worker_adapter_v2 import (
+        UNSUPPORTED_EXECUTION_MODE,
+        process_next_v2_job_paper_once,
+    )
+
+    monkeypatch.setenv("MULTI_STRATEGY_FANOUT", "1")
+    route_calls = []
+    monkeypatch.setattr(
+        "app.services.strategy_worker_adapter_v2._route_signal",
+        lambda signal: route_calls.append(signal) or {"success": True},
+    )
+    user = make_user("phase2c2-signal-only-block@example.com")
+
+    with session_scope() as db:
+        catalog, version = _seed_supertrend(db)
+        _add_instance(db, user_id=user.id, catalog=catalog, version=version)
+        _create_v2_job(db, _raw_payload(signal_id="phase2c2-signal-only-block"))
+
+        result = process_next_v2_job_paper_once(db, "phase2c2-worker")
+
+    assert result is not None
+    assert result.ok is False
+    assert result.error_code == UNSUPPORTED_EXECUTION_MODE
+    assert route_calls == []
+
+
+def test_paper_bridge_missing_normalized_signal_fails_before_route_signal(mu_db, monkeypatch):
+    from app.services.strategy_worker_adapter_v2 import (
+        MISSING_NORMALIZED_SIGNAL_ID,
+        process_next_v2_job_paper_once,
+    )
+
+    route_calls = []
+    monkeypatch.setattr(
+        "app.services.strategy_worker_adapter_v2._route_signal",
+        lambda signal: route_calls.append(signal) or {"success": True},
+    )
+    user = make_user("phase2c2-missing-normalized@example.com")
+
+    with session_scope() as db:
+        signal = models.StrategySignal(
+            strategy_name="SUPERTREND_V1",
+            signal_id="phase2c2-missing-normalized",
+            status="planned",
+        )
+        db.add(signal)
+        db.flush()
+        db.add(
+            models.StrategyExecutionJob(
+                strategy_signal_id=signal.id,
+                user_id=user.id,
+                strategy_name="SUPERTREND_V1",
+                signal_id="phase2c2-missing-normalized:v2",
+                signal_payload={"payload_format": "NOVA_V2_EXECUTION_JOB"},
+                lots=1,
+                execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+                status="v2_pending",
+            )
+        )
+
+        result = process_next_v2_job_paper_once(db, "phase2c2-worker")
+
+    assert result is not None
+    assert result.ok is False
+    assert result.error_code == MISSING_NORMALIZED_SIGNAL_ID
+    assert route_calls == []
+
+
+def test_route_signal_exception_marks_v2_failed_paper(mu_db, monkeypatch, tmp_path):
+    from app.services.strategy_worker_adapter_v2 import (
+        V2_FAILED_PAPER,
+        V2_ROUTE_SIGNAL_FAILED,
+        process_next_v2_job_paper_once,
+    )
+
+    monkeypatch.setenv("MULTI_STRATEGY_FANOUT", "1")
+    monkeypatch.setattr("app.services.strategy_worker_adapter_v2._current_lot_size", lambda: 65)
+    _isolate_runtime(monkeypatch, tmp_path)
+
+    def fake_route(_signal):
+        raise RuntimeError("paper bridge test failure")
+
+    monkeypatch.setattr("app.services.strategy_worker_adapter_v2._route_signal", fake_route)
+    user = make_user("phase2c2-route-error@example.com")
+
+    with session_scope() as db:
+        catalog, version = _seed_supertrend(db)
+        _add_instance(
+            db,
+            user_id=user.id,
+            catalog=catalog,
+            version=version,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+        )
+        job = _create_v2_job(db, _raw_payload(signal_id="phase2c2-route-error"))
+
+        result = process_next_v2_job_paper_once(db, "phase2c2-worker")
+
+        assert result is not None
+        assert result.ok is False
+        assert result.status == V2_FAILED_PAPER
+        assert result.error_code == V2_ROUTE_SIGNAL_FAILED
+        saved = db.get(models.StrategyExecutionJob, job.id)
+        assert saved is not None
+        assert saved.status == V2_FAILED_PAPER
+        assert saved.dead_letter_reason == V2_ROUTE_SIGNAL_FAILED
+
+
+def test_paper_bridge_ignores_legacy_queued_jobs(mu_db):
+    from app.services.strategy_worker_adapter_v2 import process_next_v2_job_paper_once
+
+    user = make_user("phase2c2-legacy-ignore@example.com")
+
+    with session_scope() as db:
+        signal = models.StrategySignal(
+            strategy_name="supertrend",
+            signal_id="phase2c2-legacy",
+            status="queued",
+        )
+        db.add(signal)
+        db.flush()
+        db.add(
+            models.StrategyExecutionJob(
+                strategy_signal_id=signal.id,
+                user_id=user.id,
+                strategy_name="supertrend",
+                signal_id="phase2c2-legacy",
+                signal_payload=_legacy_signal("phase2c2-legacy").model_dump(mode="json"),
+                lots=1,
+                execution_mode=StrategyExecutionMode.SIGNAL_ONLY.value,
+                status="queued",
+            )
+        )
+
+        assert process_next_v2_job_paper_once(db, "phase2c2-worker") is None
 
 
 def test_build_normalized_signal_from_v2_job_returns_existing_schema(mu_db, monkeypatch):
@@ -398,18 +677,32 @@ def test_legacy_worker_behavior_still_processes_legacy_signal_only_job(mu_db, mo
         assert job.result_summary["status"] == "accepted"
 
 
-def test_strategy_worker_adapter_v2_has_no_execution_or_broker_imports():
+def test_paper_bridge_not_registered_in_startup_or_workers():
+    app_root = Path(__file__).resolve().parents[1]
+    checked_paths = [
+        app_root / "main.py",
+        app_root / "workers" / "strategy_job_worker.py",
+        app_root / "routers" / "strategies.py",
+        app_root / "services" / "strategy_fanout.py",
+        app_root / "services" / "strategy_fanout_v2.py",
+    ]
+
+    for path in checked_paths:
+        source = path.read_text(encoding="utf-8")
+        assert "process_next_v2_job_paper_once" not in source
+        assert "process_v2_job_paper_once" not in source
+
+
+def test_strategy_worker_adapter_v2_has_no_live_or_broker_imports():
     import app.services.strategy_worker_adapter_v2 as adapter
 
     source = inspect.getsource(adapter)
 
-    assert "route_signal" not in source
-    assert "execution_router" not in source
     assert "dhan_client" not in source
     assert "RealDhanClient" not in source
     assert "get_broker_client" not in source
     assert "PaperBroker" not in source
     assert "paper_broker" not in source
-    assert "state_store" not in source
+    assert "_place_order" not in source
     assert "set_open_position" not in source
     assert "get_open_position" not in source

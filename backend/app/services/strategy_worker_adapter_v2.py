@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import date
-from typing import Any
+from typing import Any, Iterator
 
 from pydantic import ValidationError
 
@@ -26,6 +27,9 @@ from app.services.strategy_execution_queue_v2 import (
 )
 
 
+V2_COMPLETED_PAPER = "v2_completed_paper"
+V2_FAILED_PAPER = "v2_failed_paper"
+
 MISSING_NORMALIZED_SIGNAL_ID = "MISSING_NORMALIZED_SIGNAL_ID"
 MISSING_NORMALIZED_SIGNAL = "MISSING_NORMALIZED_SIGNAL"
 MISSING_STRATEGY_SIGNAL = "MISSING_STRATEGY_SIGNAL"
@@ -35,6 +39,9 @@ UNSUPPORTED_ACTION = "UNSUPPORTED_ACTION"
 UNSUPPORTED_OPTION_SIDE = "UNSUPPORTED_OPTION_SIDE"
 QTY_UNRESOLVED = "QTY_UNRESOLVED"
 ROUTE_SIGNAL_INCOMPATIBLE = "ROUTE_SIGNAL_INCOMPATIBLE"
+V2_LIVE_BLOCKED = "V2_LIVE_BLOCKED"
+V2_PAPER_MODE_UNAVAILABLE = "V2_PAPER_MODE_UNAVAILABLE"
+V2_ROUTE_SIGNAL_FAILED = "V2_ROUTE_SIGNAL_FAILED"
 
 SUPPORTED_EXECUTION_MODES = {
     StrategyExecutionMode.SIGNAL_ONLY.value,
@@ -68,6 +75,26 @@ class V2DryRunBuildError(ValueError):
         super().__init__(user_message)
         self.error_code = error_code
         self.user_message = user_message
+
+
+@dataclass
+class V2PaperExecutionResult:
+    ok: bool
+    job_id: str
+    status: str
+    route_result_summary: dict[str, Any] | None = None
+    error_code: str | None = None
+    user_message: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "job_id": self.job_id,
+            "status": self.status,
+            "route_result_summary": self.route_result_summary,
+            "error_code": self.error_code,
+            "user_message": self.user_message,
+        }
 
 
 def build_normalized_signal_from_v2_job(
@@ -194,6 +221,117 @@ def process_next_v2_job_dry_run(
     return process_v2_job_dry_run(db, job, worker_id)
 
 
+def process_v2_job_paper_once(
+    db: Any,
+    job: models.StrategyExecutionJob,
+    worker_id: str,
+) -> V2PaperExecutionResult:
+    """Manually execute one v2 paper job through route_signal.
+
+    This is intentionally not registered in startup or the legacy worker. Paper
+    mode is forced with state_store.set_engine_mode("paper") because the existing
+    execution router selects the paper routing path only through get_engine_mode().
+    """
+    mode = str(job.execution_mode or "").strip().lower()
+    if mode != StrategyExecutionMode.PAPER_LIVE_DATA.value:
+        error_code = V2_LIVE_BLOCKED if mode in {"real_orders", "live"} else UNSUPPORTED_EXECUTION_MODE
+        message = "V2 paper bridge only supports paper_live_data jobs."
+        _mark_v2_job_failed_paper(db, job.id, message, category=error_code)
+        return V2PaperExecutionResult(
+            ok=False,
+            job_id=str(job.id),
+            status=V2_FAILED_PAPER,
+            error_code=error_code,
+            user_message=message,
+        )
+
+    try:
+        signal = build_normalized_signal_from_v2_job(db, job)
+    except V2DryRunBuildError as exc:
+        _mark_v2_job_failed_paper(db, job.id, exc.user_message, category=exc.error_code)
+        return V2PaperExecutionResult(
+            ok=False,
+            job_id=str(job.id),
+            status=V2_FAILED_PAPER,
+            error_code=exc.error_code,
+            user_message=exc.user_message,
+        )
+
+    try:
+        with _force_paper_mode() as paper_guard:
+            route_result = _route_signal(signal)
+            paper_guard["route_completed"] = True
+    except V2DryRunBuildError as exc:
+        _mark_v2_job_failed_paper(db, job.id, exc.user_message, category=exc.error_code)
+        return V2PaperExecutionResult(
+            ok=False,
+            job_id=str(job.id),
+            status=V2_FAILED_PAPER,
+            error_code=exc.error_code,
+            user_message=exc.user_message,
+        )
+    except Exception as exc:
+        message = f"V2 paper route_signal failed: {exc}"
+        _mark_v2_job_failed_paper(db, job.id, message, category=V2_ROUTE_SIGNAL_FAILED)
+        return V2PaperExecutionResult(
+            ok=False,
+            job_id=str(job.id),
+            status=V2_FAILED_PAPER,
+            error_code=V2_ROUTE_SIGNAL_FAILED,
+            user_message=message,
+        )
+
+    summary = {
+        "route_result": _sanitize_route_result(route_result),
+        "normalized_signal_preview": _signal_preview(signal),
+        "paper_mode": _jsonable(paper_guard),
+        "worker_id": worker_id,
+        "manual_test_only": True,
+    }
+    route_ok = bool(route_result.get("success", True)) and not bool(route_result.get("blocked"))
+    if not route_ok:
+        reason = str(
+            route_result.get("reason")
+            or route_result.get("error")
+            or route_result.get("status")
+            or "route_signal returned an unsuccessful paper result."
+        )
+        _mark_v2_job_failed_paper(
+            db,
+            job.id,
+            reason,
+            category=V2_ROUTE_SIGNAL_FAILED,
+            route_result_summary=summary["route_result"],
+        )
+        return V2PaperExecutionResult(
+            ok=False,
+            job_id=str(job.id),
+            status=V2_FAILED_PAPER,
+            route_result_summary=summary["route_result"],
+            error_code=V2_ROUTE_SIGNAL_FAILED,
+            user_message=reason,
+        )
+
+    _mark_v2_job_completed_paper(db, job.id, summary)
+    return V2PaperExecutionResult(
+        ok=True,
+        job_id=str(job.id),
+        status=V2_COMPLETED_PAPER,
+        route_result_summary=summary["route_result"],
+    )
+
+
+def process_next_v2_job_paper_once(
+    db: Any,
+    worker_id: str,
+) -> V2PaperExecutionResult | None:
+    """Claim one v2 job and run the manual paper-only bridge."""
+    job = claim_v2_job_for_test_or_future_worker(db, worker_id)
+    if job is None:
+        return None
+    return process_v2_job_paper_once(db, job, worker_id)
+
+
 def _execution_action_and_side(action: str) -> tuple[str, str]:
     normalized = str(action or "").upper()
     if normalized == "ENTRY":
@@ -285,6 +423,126 @@ def _source_from_normalized_signal(normalized: models.NormalizedOptionSignal) ->
 
 def _signal_preview(signal: NormalizedSignal) -> dict[str, Any]:
     return _jsonable(signal.model_dump(mode="json"))
+
+
+def _route_signal(signal: NormalizedSignal) -> dict[str, Any]:
+    from app.services.execution_router import route_signal
+
+    return route_signal(signal)
+
+
+@contextmanager
+def _force_paper_mode() -> Iterator[dict[str, Any]]:
+    from app.services import state_store
+
+    previous_explicit_mode = state_store.get_engine_mode(legacy_fallback=False)
+    guard = {
+        "forced": True,
+        "previous_explicit_mode": previous_explicit_mode,
+        "active_mode": None,
+        "route_completed": False,
+        "restored": False,
+        "restore_error": None,
+    }
+    try:
+        state_store.set_engine_mode("paper")
+        active_mode = state_store.get_engine_mode(legacy_fallback=False)
+        guard["active_mode"] = active_mode
+        if active_mode != "paper":
+            raise V2DryRunBuildError(
+                V2_PAPER_MODE_UNAVAILABLE,
+                "Could not force explicit paper mode for v2 paper execution.",
+            )
+    except ValueError as exc:
+        raise V2DryRunBuildError(
+            V2_PAPER_MODE_UNAVAILABLE,
+            f"Could not force paper mode for v2 paper execution: {exc}",
+        ) from exc
+    try:
+        yield guard
+    finally:
+        if previous_explicit_mode != "paper":
+            try:
+                state_store.set_engine_mode(previous_explicit_mode)
+                guard["restored"] = True
+            except Exception as exc:
+                # If paper route created a position, restoring may be refused.
+                # Leaving explicit paper mode is safer than risking live routing.
+                guard["restore_error"] = str(exc)
+
+
+def _mark_v2_job_completed_paper(
+    db: Any,
+    job_id: uuid.UUID | str,
+    details: dict[str, Any],
+) -> models.StrategyExecutionJob | None:
+    job = db.get(models.StrategyExecutionJob, _coerce_uuid(job_id))
+    if job is None:
+        return None
+    job.status = V2_COMPLETED_PAPER
+    job.completed_at = models.utcnow()
+    job.result_summary = {
+        "status": V2_COMPLETED_PAPER,
+        "details": _jsonable(details),
+    }
+    job.updated_at = models.utcnow()
+    db.flush()
+    return job
+
+
+def _mark_v2_job_failed_paper(
+    db: Any,
+    job_id: uuid.UUID | str,
+    reason: str,
+    *,
+    category: str | None = None,
+    route_result_summary: dict[str, Any] | None = None,
+) -> models.StrategyExecutionJob | None:
+    job = db.get(models.StrategyExecutionJob, _coerce_uuid(job_id))
+    if job is None:
+        return None
+    job.status = V2_FAILED_PAPER
+    job.completed_at = models.utcnow()
+    job.last_error = reason
+    job.dead_letter_reason = category
+    job.result_summary = {
+        "status": V2_FAILED_PAPER,
+        "reason": reason,
+        "category": category,
+        "route_result_summary": _sanitize_route_result(route_result_summary or {}),
+    }
+    job.updated_at = models.utcnow()
+    db.flush()
+    return job
+
+
+def _sanitize_route_result(value: Any) -> Any:
+    redacted_keys = {
+        "access_token",
+        "secret",
+        "proxy_url",
+        "raw_response",
+        "response_text",
+        "response_json",
+        "request",
+        "headers",
+    }
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if str(key).lower() in redacted_keys:
+                continue
+            sanitized[str(key)] = _sanitize_route_result(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_route_result(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_route_result(item) for item in value]
+    return _jsonable(value)
+
+
+def _coerce_uuid(value: uuid.UUID | str) -> uuid.UUID:
+    return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
 
 
 def _jsonable(value: Any) -> Any:
