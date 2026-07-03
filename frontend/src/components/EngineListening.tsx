@@ -10,27 +10,28 @@ interface Props {
   engineMode: EngineMode | null
 }
 
+/** Compact router-status banner (the old full-height waiting panel now lives
+ * above the NIFTY chart as a single line). */
 export function EngineListening({ paused, activeTrade, side, engineMode }: Props) {
   const status = listeningStatus(paused, activeTrade, side)
   const reduceMotion = useAppReducedMotion()
 
   return (
     <motion.div
-      className={`engine-listening ${paused ? 'paused' : ''}`}
-      initial={reduceMotion ? { opacity: 1 } : { opacity: 0, y: 8 }}
+      className={`router-status-banner ${paused ? 'paused' : ''}`}
+      initial={reduceMotion ? { opacity: 1 } : { opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={reduceMotion ? { duration: 0 } : { duration: 0.24, ease: softEase }}
+      transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: softEase }}
+      role="status"
     >
-      <div className="engine-orb">
-        <span className="engine-pulse" aria-hidden="true">
-          <Activity size={28} />
-        </span>
-      </div>
-      <div>
-        <strong>{status.title}</strong>
-        <p>{status.detail}</p>
-        <p className="engine-mode-detail">{engineMode === 'paper' ? 'Paper simulator listening for TradingView signals.' : 'Live router listening for TradingView signals.'}</p>
-      </div>
+      <span className="router-status-pulse" aria-hidden="true">
+        <Activity size={14} />
+      </span>
+      <strong>Router: {status.title}</strong>
+      <span className="router-status-detail">- {status.detail}</span>
+      <span className="router-status-mode">
+        {engineMode === 'paper' ? '- Paper simulator listening' : '- Live router listening'}
+      </span>
     </motion.div>
   )
 }
@@ -40,45 +41,32 @@ function listeningStatus(paused: boolean, activeTrade: ActiveTrade | null, side:
     return {
       title: 'Entry requests blocked',
       detail: activeTrade
-        ? `Backend will reject new entries; exits remain enabled for active ${activeTrade.optType}.`
-        : 'Backend will reject ENTRY webhooks until entry requests are allowed.',
+        ? `Exits remain enabled for active ${activeTrade.optType}`
+        : 'ENTRY webhooks rejected until entries are allowed',
     }
   }
 
   if (activeTrade?.optType === 'CE') {
     return {
       title: 'Waiting for sell / flip signal',
-      detail: side === 'CE'
-        ? 'A SELL signal will close the active CE without opening a PE position.'
-        : 'A SELL Supertrend signal will close the active CE and route a PE entry.',
+      detail: side === 'CE' ? 'SELL closes the active CE' : 'SELL closes CE and routes PE',
     }
   }
 
   if (activeTrade?.optType === 'PE') {
     return {
       title: 'Waiting for buy / flip signal',
-      detail: side === 'PE'
-        ? 'A BUY signal will close the active PE without opening a CE position.'
-        : 'A BUY Supertrend signal will close the active PE and route a CE entry.',
+      detail: side === 'PE' ? 'BUY closes the active PE' : 'BUY closes PE and routes CE',
     }
   }
 
   if (side === 'CE') {
-    return {
-      title: 'Waiting for buy signal',
-      detail: 'The next BUY Supertrend signal will route a CE entry.',
-    }
+    return { title: 'Waiting for buy signal', detail: 'Next BUY routes a CE entry' }
   }
 
   if (side === 'PE') {
-    return {
-      title: 'Waiting for sell signal',
-      detail: 'The next SELL Supertrend signal will route a PE entry.',
-    }
+    return { title: 'Waiting for sell signal', detail: 'Next SELL routes a PE entry' }
   }
 
-  return {
-    title: 'Waiting for buy or sell signal',
-    detail: 'BUY routes CE. SELL routes PE.',
-  }
+  return { title: 'Waiting for TradingView signal', detail: 'BUY routes CE / SELL routes PE' }
 }

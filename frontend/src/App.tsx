@@ -4,6 +4,7 @@ import { BarChart3, ChevronLeft, ChevronRight, LineChart, Loader2, Sliders, Wall
 import { AuthScreen } from './components/AuthScreen'
 import { EngineLeftPanel } from './components/EngineLeftPanel'
 import { EngineListening } from './components/EngineListening'
+import { NiftyLiveChart } from './components/NiftyLiveChart'
 import { EngineSidebar } from './components/EngineSidebar'
 import { Header } from './components/Header'
 import { MotionPulseText, MotionSpinner, softEase, useAppReducedMotion } from './components/MotionPrimitives'
@@ -390,6 +391,7 @@ function App() {
                     side={config.risk?.side ?? 'BOTH'}
                     engineMode={engineMode}
                   />
+                  <NiftyLiveChart />
                 </div>
               ) : null}
 

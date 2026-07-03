@@ -2301,8 +2301,155 @@ code {
   display: grid;
   flex: 0 0 auto;
   width: 100%;
-  gap: 0;
+  gap: 10px;
+  padding: 10px 12px 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+/* Compact router-status banner (replaces the old full-height waiting panel) */
+.router-status-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(19, 17, 27, 0.88);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.router-status-banner strong {
+  color: var(--success);
+  font-size: 11px;
+}
+
+.router-status-banner.paused strong {
+  color: var(--warning);
+}
+
+.router-status-pulse {
+  display: inline-flex;
+  color: var(--success);
+}
+
+.router-status-banner.paused .router-status-pulse {
+  color: var(--warning);
+}
+
+.router-status-detail,
+.router-status-mode {
+  color: var(--text-3);
+}
+
+/* NIFTY 5m live chart */
+.nifty-chart-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(15, 14, 20, 0.84);
+}
+
+.nifty-chart-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.nifty-chart-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.nifty-chart-meta {
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.nifty-chart-meta strong {
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.nifty-chart-note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.nifty-chart-empty {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.nifty-chart-svg {
+  width: 100%;
+  height: 260px;
+  display: block;
+}
+
+.nifty-grid-line {
+  stroke: rgba(255, 255, 255, 0.06);
+  stroke-width: 1;
+}
+
+.nifty-grid-label {
+  fill: var(--text-3);
+  font-size: 9px;
+}
+
+.nifty-candle line {
+  stroke-width: 1;
+}
+
+.nifty-candle.up line,
+.nifty-candle.up rect {
+  stroke: #34d399;
+  fill: #34d399;
+}
+
+.nifty-candle.down line,
+.nifty-candle.down rect {
+  stroke: #fb7185;
+  fill: #fb7185;
+}
+
+.nifty-last-line {
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.nifty-marker path {
+  stroke: none;
+}
+
+.nifty-marker.buy path {
+  fill: #34d399;
+}
+
+.nifty-marker.sell path {
+  fill: #fb7185;
+}
+
+.nifty-marker text {
+  fill: var(--text-2);
+  font-size: 8px;
+  font-weight: 700;
 }
 
 .engine-listening.paused {
@@ -2687,37 +2834,6 @@ code {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-}
-
-.mini-sparkline {
-  display: flex;
-  align-items: end;
-  gap: 3px;
-  height: 58px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(15, 14, 20, 0.84);
-  padding: 8px;
-}
-
-.mini-sparkline span {
-  flex: 1;
-  min-width: 3px;
-  border-radius: 999px 999px 0 0;
-  background: linear-gradient(180deg, var(--accent-paper), color-mix(in srgb, var(--accent) 38%, transparent));
-}
-
-.mini-sparkline.empty {
-  align-items: center;
-  justify-content: center;
-  color: var(--text-3);
-  font-size: 10px;
-}
-
-.mini-sparkline.empty span {
-  flex: 0 0 auto;
-  min-width: 0;
-  background: transparent;
 }
 
 .market-detail-grid,

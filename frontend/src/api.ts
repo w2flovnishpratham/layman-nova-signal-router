@@ -152,6 +152,57 @@ export interface OrderQuote {
   atm?: AtmLtpSnapshot | null
 }
 
+export interface NiftyCandle {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface NiftyCandleSeries {
+  symbol: string
+  interval: string
+  source: string
+  status: 'ready' | 'unavailable' | string
+  market_state: 'open' | 'closed' | string
+  token_status?: string
+  updated_at?: string | null
+  candle_count?: number
+  candles: NiftyCandle[]
+  reason?: string | null
+  message?: string | null
+  stale?: boolean
+}
+
+export interface NiftyTradeMarker {
+  time: number
+  side: 'BUY' | 'SELL'
+  option_side?: 'CE' | 'PE' | null
+  label: string
+  price?: number | null
+  approximate?: boolean
+  mode?: string | null
+  source?: string
+}
+
+export async function getNiftyCandles(): Promise<NiftyCandleSeries> {
+  const response = await apiFetch('/api/market/nifty/candles?interval=5m', { cache: 'no-store' })
+  if (!response.ok) {
+    throw new Error(`Could not load NIFTY candles: ${response.status}`)
+  }
+  return response.json() as Promise<NiftyCandleSeries>
+}
+
+export async function getNiftyMarkers(): Promise<NiftyTradeMarker[]> {
+  const response = await apiFetch('/api/market/nifty/markers', { cache: 'no-store' })
+  if (!response.ok) {
+    throw new Error(`Could not load chart markers: ${response.status}`)
+  }
+  return response.json() as Promise<NiftyTradeMarker[]>
+}
+
 export async function startSession(options: { restoreRecent?: boolean } = {}): Promise<SessionBootstrap> {
   const path: `/${string}` = options.restoreRecent ? '/api/session/start?restore_recent=true' : '/api/session/start'
   const response = await apiFetch(path, { method: 'POST' })

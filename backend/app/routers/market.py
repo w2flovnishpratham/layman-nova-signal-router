@@ -29,6 +29,73 @@ def atm_ltp(
     return get_atm_option_snapshot(option_side=side, lots=lots, allow_rest_fallback=True)
 
 
+@router.get("/market/nifty/candles")
+def nifty_candles(interval: str = Query(default="5m", pattern="^5m$")) -> dict[str, Any]:
+    """Global NIFTY candles from the shared Dhan market-data identity.
+
+    Served from a global cache - no per-user Dhan credentials, entitlement,
+    or egress required. Never includes tokens or client ids.
+    """
+    from app.services.market_chart_service import get_nifty_candles
+
+    return get_nifty_candles(interval=interval)
+
+
+@router.get("/market/nifty/chart-status")
+def nifty_chart_status() -> dict[str, Any]:
+    from app.services.market_chart_service import chart_status
+
+    return chart_status()
+
+
+@router.get("/market/nifty/markers")
+def nifty_markers(limit: int = Query(default=200, ge=1, le=1000)) -> list[dict[str, Any]]:
+    """Current user's BUY/SELL execution markers for the NIFTY chart.
+
+    read_jsonl("order") resolves through scoped_runtime_path, so records come
+    from the AUTHENTICATED user's private order log - another user's trades
+    are physically in a different directory and cannot appear here.
+    """
+    from datetime import datetime, timezone
+
+    from app.services.audit_logger import read_jsonl
+    from app.services.portfolio_analytics import _dedupe_legs_by_order_id, _is_filled
+
+    events = read_jsonl("order", limit=1000)
+    legs = [ev for ev in events if isinstance(ev, dict) and _is_filled(ev)]
+    legs = _dedupe_legs_by_order_id(legs)
+
+    markers: list[dict[str, Any]] = []
+    for ev in legs[-limit:]:
+        action = str(ev.get("normalized_action") or ev.get("action") or "").upper()
+        if action not in {"ENTRY", "EXIT"}:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(ev.get("timestamp")).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            epoch = int(ts.timestamp())
+        except (TypeError, ValueError):
+            continue
+        side = "BUY" if action == "ENTRY" else "SELL"
+        option_side = str(ev.get("normalized_option_side") or ev.get("option_side") or "").upper() or None
+        markers.append(
+            {
+                "time": epoch,
+                "side": side,
+                "option_side": option_side,
+                "label": f"{side} {option_side}" if option_side else side,
+                # Execution price is the option premium, not the index level, so
+                # the frontend snaps the marker to the nearest NIFTY candle.
+                "price": None,
+                "approximate": True,
+                "mode": str(ev.get("mode") or "").lower() or None,
+                "source": "trade_execution",
+            }
+        )
+    return markers
+
+
 @router.get("/system/health-strip")
 def system_health_strip() -> dict[str, Any]:
     app_state = get_app_state()

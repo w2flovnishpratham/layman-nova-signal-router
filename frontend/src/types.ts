@@ -108,8 +108,8 @@ export interface MarketSnapshot {
   }
   activeOptionLtp: number | null
   activeOptionSide?: 'CE' | 'PE' | null
-  sparkline: number[]
-  markers: Array<{ side?: string | null; optionSide?: string | null; timestamp?: string | null }>
+  sparkline?: number[]
+  markers?: Array<{ side?: string | null; optionSide?: string | null; timestamp?: string | null }>
 }
 
 export interface AtmOptionLtp {

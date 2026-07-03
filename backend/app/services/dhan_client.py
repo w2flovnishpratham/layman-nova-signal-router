@@ -1182,6 +1182,94 @@ class RealDhanClient:
                 error=str(exc),
             )
 
+    def get_intraday_candles(
+        self,
+        *,
+        client_id: str,
+        access_token: str,
+        security_id: str,
+        exchange_segment: str,
+        instrument: str,
+        interval: str,
+        from_date: str,
+        to_date: str,
+    ) -> dict[str, Any]:
+        """Fetch intraday OHLC candles with POST /charts/intraday.
+
+        Dhan returns parallel arrays keyed open/high/low/close/volume/timestamp
+        (timestamp is epoch seconds). Result: {"success", "candles", "error",
+        "status_code", "message"} where candles is a list of dicts with
+        time/open/high/low/close/volume. Never includes credentials.
+        """
+        url = f"{DHAN_BASE_URL}/charts/intraday"
+        body = {
+            "securityId": str(security_id),
+            "exchangeSegment": str(exchange_segment).upper(),
+            "instrument": str(instrument).upper(),
+            "interval": str(interval),
+            "oi": False,
+            "fromDate": from_date,
+            "toDate": to_date,
+        }
+        try:
+            dhan_quote_rate_limiter.wait()
+            with self._client(timeout=10.0) as client:
+                response = client.post(url, json=body, headers=self._headers(client_id, access_token))
+            dhan_quote_rate_limiter.observe_response(response)
+            parsed = self._parse_response(response)
+            if not (200 <= response.status_code <= 299):
+                reason = self._error_message(parsed, f"Dhan intraday chart request failed ({response.status_code}).")
+                return {
+                    "success": False,
+                    "candles": [],
+                    "status_code": response.status_code,
+                    "error": reason,
+                    "message": f"Dhan intraday chart request failed: {reason}",
+                }
+            if not isinstance(parsed, dict):
+                return {
+                    "success": False,
+                    "candles": [],
+                    "status_code": response.status_code,
+                    "error": "invalid_chart_response",
+                    "message": "Dhan intraday chart response was not a JSON object.",
+                }
+            source = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
+            timestamps = source.get("timestamp") or source.get("start_Time") or []
+            opens = source.get("open") or []
+            highs = source.get("high") or []
+            lows = source.get("low") or []
+            closes = source.get("close") or []
+            volumes = source.get("volume") or []
+            count = min(len(timestamps), len(opens), len(highs), len(lows), len(closes))
+            candles: list[dict[str, Any]] = []
+            for i in range(count):
+                try:
+                    candles.append(
+                        {
+                            "time": int(float(timestamps[i])),
+                            "open": float(opens[i]),
+                            "high": float(highs[i]),
+                            "low": float(lows[i]),
+                            "close": float(closes[i]),
+                            "volume": float(volumes[i]) if i < len(volumes) and volumes[i] is not None else 0.0,
+                        }
+                    )
+                except (TypeError, ValueError):
+                    continue
+            return {
+                "success": True,
+                "candles": candles,
+                "status_code": response.status_code,
+                "error": None,
+                "message": f"Fetched {len(candles)} candles.",
+            }
+        except httpx.TimeoutException:
+            return {"success": False, "candles": [], "status_code": None, "error": "timeout", "message": "Dhan intraday chart request timed out."}
+        except Exception as exc:
+            logger.exception("Dhan intraday chart request error")
+            return {"success": False, "candles": [], "status_code": None, "error": str(exc), "message": "Dhan intraday chart request failed."}
+
     # TODO (Phase 2): GET /trades - trade book
     # def get_trade_book(self, *, client_id: str, access_token: str) -> list[dict[str, Any]]:
     #     url = f"{DHAN_BASE_URL}/trades"
