@@ -306,6 +306,17 @@ function App() {
         onLogout={handleLogout}
       />
 
+      {engineLive && view !== 'dashboard' ? (
+        <div className="router-banner-slot">
+          <EngineListening
+            paused={effectiveSetupState === 'PAUSED'}
+            activeTrade={activeTrade}
+            side={config.risk?.side ?? 'BOTH'}
+            engineMode={engineMode}
+          />
+        </div>
+      ) : null}
+
       {view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : (
@@ -385,13 +396,7 @@ function App() {
               </ChatLog>
               {engineLive ? (
                 <div className="live-engine-stack">
-                  <EngineListening
-                    paused={effectiveSetupState === 'PAUSED'}
-                    activeTrade={activeTrade}
-                    side={config.risk?.side ?? 'BOTH'}
-                    engineMode={engineMode}
-                  />
-                  <NiftyLiveChart />
+                  <NiftyLiveChart engineMode={engineMode} />
                 </div>
               ) : null}
 

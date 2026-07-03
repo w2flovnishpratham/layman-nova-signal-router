@@ -2347,11 +2347,19 @@ code {
 /* NIFTY 5m live chart */
 .nifty-chart-card {
   display: grid;
+  grid-template-rows: auto auto 1fr;
   gap: 8px;
   padding: 12px;
+  min-height: 480px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: rgba(15, 14, 20, 0.84);
+}
+
+@media (max-width: 900px) {
+  .nifty-chart-card {
+    min-height: 340px;
+  }
 }
 
 .nifty-chart-header {
@@ -2398,8 +2406,22 @@ code {
 
 .nifty-chart-svg {
   width: 100%;
-  height: 260px;
+  height: clamp(360px, 52vh, 560px);
   display: block;
+}
+
+@media (max-width: 900px) {
+  .nifty-chart-svg {
+    height: 340px;
+  }
+}
+
+/* Router banner slot: full-width strip directly under the app header */
+.router-banner-slot {
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 6px 16px 0;
 }
 
 .nifty-grid-line {

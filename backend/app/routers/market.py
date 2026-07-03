@@ -49,20 +49,43 @@ def nifty_chart_status() -> dict[str, Any]:
 
 
 @router.get("/market/nifty/markers")
-def nifty_markers(limit: int = Query(default=200, ge=1, le=1000)) -> list[dict[str, Any]]:
-    """Current user's BUY/SELL execution markers for the NIFTY chart.
+def nifty_markers(
+    mode: str | None = Query(default=None, pattern="^(paper|live)$"),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Current user's BUY/SELL execution markers for TODAY's NIFTY chart.
 
-    read_jsonl("order") resolves through scoped_runtime_path, so records come
-    from the AUTHENTICATED user's private order log - another user's trades
-    are physically in a different directory and cannot appear here.
+    Isolation guarantees:
+    - USER: read_jsonl("order") resolves through scoped_runtime_path, so
+      records come from the AUTHENTICATED user's private order log - another
+      user's trades are physically in a different directory. The mode query
+      param is a display filter only, never a permission boundary.
+    - MODE: paper markers derive from paper legs in the user's runtime order
+      log (temporary display data, never DB rows); live markers derive from
+      the same durable per-user log's live legs. A paper leg can never appear
+      when mode=live and vice versa.
+    - DAY: only events on today's IST trading date are returned, so paper
+      markers automatically expire when the trading date rolls over.
     """
     from datetime import datetime, timezone
 
     from app.services.audit_logger import read_jsonl
+    from app.services.market_chart_service import _IST, trading_date_ist
     from app.services.portfolio_analytics import _dedupe_legs_by_order_id, _is_filled
+    from app.services.state_store import get_engine_mode
+
+    active_mode = (mode or get_engine_mode(legacy_fallback=False) or get_engine_mode() or "").lower()
+    today = trading_date_ist()
+    base = {"symbol": "NIFTY", "trading_date": today.isoformat(), "mode": active_mode or None}
+    if active_mode not in {"paper", "live"}:
+        return {**base, "markers": []}
 
     events = read_jsonl("order", limit=1000)
-    legs = [ev for ev in events if isinstance(ev, dict) and _is_filled(ev)]
+    legs = [
+        ev
+        for ev in events
+        if isinstance(ev, dict) and _is_filled(ev) and str(ev.get("mode") or "").lower() == active_mode
+    ]
     legs = _dedupe_legs_by_order_id(legs)
 
     markers: list[dict[str, Any]] = []
@@ -77,6 +100,9 @@ def nifty_markers(limit: int = Query(default=200, ge=1, le=1000)) -> list[dict[s
             epoch = int(ts.timestamp())
         except (TypeError, ValueError):
             continue
+        # Today-only: markers from previous trading days never render.
+        if ts.astimezone(_IST).date() != today:
+            continue
         side = "BUY" if action == "ENTRY" else "SELL"
         option_side = str(ev.get("normalized_option_side") or ev.get("option_side") or "").upper() or None
         markers.append(
@@ -89,11 +115,11 @@ def nifty_markers(limit: int = Query(default=200, ge=1, le=1000)) -> list[dict[s
                 # the frontend snaps the marker to the nearest NIFTY candle.
                 "price": None,
                 "approximate": True,
-                "mode": str(ev.get("mode") or "").lower() or None,
-                "source": "trade_execution",
+                "mode": active_mode,
+                "source": "paper_trade" if active_mode == "paper" else "trade_execution",
             }
         )
-    return markers
+    return {**base, "markers": markers}
 
 
 @router.get("/system/health-strip")

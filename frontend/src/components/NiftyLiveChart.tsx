@@ -1,10 +1,27 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Activity } from 'lucide-react'
 import { getNiftyCandles, getNiftyMarkers, type NiftyCandle, type NiftyCandleSeries, type NiftyTradeMarker } from '../api'
+import type { EngineMode } from '../types'
 
 const CANDLE_POLL_MS = 20_000
 const MARKER_POLL_MS = 12_000
-const VISIBLE_CANDLES = 75 // one 5m session
+
+/** Keep only candles inside the response's own session window (defense in
+ * depth; the backend already filters to today's IST session). */
+export function sessionOnly(series: NiftyCandleSeries): NiftyCandle[] {
+  const start = series.session_start ? Math.floor(new Date(series.session_start).getTime() / 1000) : null
+  const end = series.session_end ? Math.floor(new Date(series.session_end).getTime() / 1000) : null
+  const seen = new Set<number>()
+  return (series.candles ?? [])
+    .filter((c) => {
+      if (start !== null && c.time < start) return false
+      if (end !== null && c.time > end) return false
+      if (seen.has(c.time)) return false
+      seen.add(c.time)
+      return true
+    })
+    .sort((a, b) => a.time - b.time)
+}
 
 /** Snap a marker to the nearest candle by time; null when out of range. */
 export function nearestCandleIndex(candles: NiftyCandle[], time: number): number | null {
@@ -22,10 +39,11 @@ export function nearestCandleIndex(candles: NiftyCandle[], time: number): number
   return bestDelta <= 30 * 60 ? best : null
 }
 
-export function NiftyLiveChart() {
+export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }) {
   const [series, setSeries] = useState<NiftyCandleSeries | null>(null)
   const [markers, setMarkers] = useState<NiftyTradeMarker[]>([])
   const [loadFailed, setLoadFailed] = useState(false)
+  const tradingDateRef = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -34,10 +52,14 @@ export function NiftyLiveChart() {
       if (document.hidden) return
       try {
         const next = await getNiftyCandles()
-        if (!cancelled) {
-          setSeries(next)
-          setLoadFailed(false)
+        if (cancelled) return
+        // New trading date -> REPLACE everything; never merge across days.
+        if (next.trading_date && tradingDateRef.current && next.trading_date !== tradingDateRef.current) {
+          setMarkers([])
         }
+        tradingDateRef.current = next.trading_date ?? tradingDateRef.current
+        setSeries(next)
+        setLoadFailed(false)
       } catch {
         if (!cancelled) setLoadFailed(true)
       }
@@ -45,9 +67,16 @@ export function NiftyLiveChart() {
 
     async function loadMarkers() {
       if (document.hidden) return
+      if (engineMode !== 'paper' && engineMode !== 'live') return
       try {
-        const next = await getNiftyMarkers()
-        if (!cancelled) setMarkers(next)
+        const next = await getNiftyMarkers(engineMode)
+        if (cancelled) return
+        // Drop markers that belong to another trading date entirely.
+        if (tradingDateRef.current && next.trading_date && next.trading_date !== tradingDateRef.current) {
+          setMarkers([])
+          return
+        }
+        setMarkers(next.markers ?? [])
       } catch {
         // Markers are additive; keep the last known set on poll failure.
       }
@@ -62,9 +91,9 @@ export function NiftyLiveChart() {
       window.clearInterval(candleTimer)
       window.clearInterval(markerTimer)
     }
-  }, [])
+  }, [engineMode])
 
-  const candles = useMemo(() => (series?.candles ?? []).slice(-VISIBLE_CANDLES), [series])
+  const candles = useMemo(() => (series ? sessionOnly(series) : []), [series])
 
   if (!series && !loadFailed) {
     return (
@@ -75,7 +104,7 @@ export function NiftyLiveChart() {
     )
   }
 
-  if (loadFailed || !series || (series.status !== 'ready' && candles.length === 0)) {
+  if (loadFailed || !series || series.status === 'unavailable') {
     return (
       <section className="nifty-chart-card">
         <ChartHeader series={series} />
@@ -84,11 +113,20 @@ export function NiftyLiveChart() {
     )
   }
 
+  if (candles.length === 0) {
+    return (
+      <section className="nifty-chart-card">
+        <ChartHeader series={series} />
+        <div className="nifty-chart-empty">No NIFTY 5m candles available for today yet.</div>
+      </section>
+    )
+  }
+
   return (
     <section className="nifty-chart-card">
       <ChartHeader series={series} />
       {series.market_state === 'closed' ? (
-        <p className="nifty-chart-note">Market closed - showing latest available candles.</p>
+        <p className="nifty-chart-note">Market closed - showing today's latest candles.</p>
       ) : null}
       <CandleSvg candles={candles} markers={markers} />
     </section>
@@ -114,9 +152,9 @@ function ChartHeader({ series }: { series: NiftyCandleSeries | null }) {
 
 function CandleSvg({ candles, markers }: { candles: NiftyCandle[]; markers: NiftyTradeMarker[] }) {
   const width = 720
-  const height = 260
-  const padTop = 12
-  const padBottom = 26
+  const height = 420
+  const padTop = 14
+  const padBottom = 28
   const padLeft = 8
   const padRight = 56
 

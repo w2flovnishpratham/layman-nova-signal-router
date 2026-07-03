@@ -165,6 +165,10 @@ export interface NiftyCandleSeries {
   symbol: string
   interval: string
   source: string
+  timezone?: string
+  trading_date?: string
+  session_start?: string
+  session_end?: string
   status: 'ready' | 'unavailable' | string
   market_state: 'open' | 'closed' | string
   token_status?: string
@@ -174,6 +178,7 @@ export interface NiftyCandleSeries {
   reason?: string | null
   message?: string | null
   stale?: boolean
+  note?: string | null
 }
 
 export interface NiftyTradeMarker {
@@ -195,12 +200,20 @@ export async function getNiftyCandles(): Promise<NiftyCandleSeries> {
   return response.json() as Promise<NiftyCandleSeries>
 }
 
-export async function getNiftyMarkers(): Promise<NiftyTradeMarker[]> {
-  const response = await apiFetch('/api/market/nifty/markers', { cache: 'no-store' })
+export interface NiftyMarkerResponse {
+  symbol: string
+  trading_date: string
+  mode?: string | null
+  markers: NiftyTradeMarker[]
+}
+
+export async function getNiftyMarkers(mode?: 'paper' | 'live'): Promise<NiftyMarkerResponse> {
+  const path: `/${string}` = mode ? `/api/market/nifty/markers?mode=${mode}` : '/api/market/nifty/markers'
+  const response = await apiFetch(path, { cache: 'no-store' })
   if (!response.ok) {
     throw new Error(`Could not load chart markers: ${response.status}`)
   }
-  return response.json() as Promise<NiftyTradeMarker[]>
+  return response.json() as Promise<NiftyMarkerResponse>
 }
 
 export async function startSession(options: { restoreRecent?: boolean } = {}): Promise<SessionBootstrap> {
