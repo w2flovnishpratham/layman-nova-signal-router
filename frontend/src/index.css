@@ -1180,6 +1180,19 @@ code {
   padding-top: 0;
 }
 
+.engine-shell .engine-main-pane.engine-live-layout {
+  display: grid;
+  grid-template-rows: minmax(0, 3fr) minmax(240px, 2fr);
+  gap: 10px;
+}
+
+.engine-shell .engine-main-pane.engine-live-layout .chat-log {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 12px;
+}
+
 .chat-shell .engine-main-pane {
   display: flex;
   flex: 1 1 auto;
@@ -2304,6 +2317,30 @@ code {
   gap: 10px;
   padding: 10px 12px 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.engine-live-layout .live-engine-stack {
+  display: flex;
+  min-height: 0;
+  padding: 10px 12px 0;
+}
+
+.engine-live-layout .nifty-chart-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.engine-live-layout .nifty-chart-svg {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.engine-live-layout .nifty-chart-empty {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* Compact router-status banner (replaces the old full-height waiting panel) */

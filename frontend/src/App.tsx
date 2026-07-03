@@ -376,7 +376,11 @@ function App() {
           </motion.aside>
         ) : null}
 
-        <motion.div layout transition={panelLayoutTransition} className="engine-main-pane lg:h-full flex flex-col min-h-[450px] lg:min-h-0">
+        <motion.div
+          layout
+          transition={panelLayoutTransition}
+          className={`engine-main-pane lg:h-full flex flex-col min-h-[450px] lg:min-h-0${engineLive ? ' engine-live-layout' : ''}`}
+        >
           {!snapshotLoaded && !bootError ? (
             <div className="flex flex-col items-center justify-center flex-grow min-h-[350px] gap-3 text-white/40">
               <MotionSpinner className="text-[#9d5bff]">
