@@ -1,13 +1,34 @@
-import { Activity, Clock, TrendingDown, TrendingUp } from 'lucide-react'
+import { Activity, AlertTriangle, Clock, TrendingDown, TrendingUp } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { formatCurrency } from '../lib/format'
-import type { MarketSnapshot } from '../types'
+import type { AtmLtpSnapshot, MarketSnapshot } from '../types'
+
+const SPOT_STATUS_LABELS: Record<string, string> = {
+  ws_waiting: 'Waiting for first Dhan feed tick',
+  ws_tick_missing: 'Waiting for first Dhan feed tick',
+  ws_tick_stale: 'Dhan feed ticks are stale',
+  credentials_missing: 'Dhan market-data credentials missing',
+  shared_market_data_unavailable: 'Shared market-data token unavailable',
+  rest_error: 'Dhan REST quote failed',
+  rest_disabled: 'REST fallback disabled; feed has no ticks',
+  market_closed: 'Market closed',
+}
+
+function spotPendingReason(atm: AtmLtpSnapshot | null): string | null {
+  if (!atm || atm.niftySpot !== null && atm.niftySpot !== undefined) return null
+  const status = atm.niftySpotStatus ?? null
+  const feedError = atm.marketfeed?.last_error ?? null
+  const label = status ? SPOT_STATUS_LABELS[status] ?? `Feed status: ${status}` : 'Feed status unknown'
+  return feedError ? `${label} — ${feedError}` : label
+}
 
 export function MarketCard({ snapshot, collapseControl }: { snapshot: MarketSnapshot | null; collapseControl?: ReactNode }) {
   const change = snapshot?.dayChangePct ?? null
   const atm = snapshot?.atm ?? null
   const ce = atm?.options?.CE
   const pe = atm?.options?.PE
+  const spotPending = snapshot?.niftySpot === null || snapshot?.niftySpot === undefined
+  const pendingReason = spotPending ? spotPendingReason(atm) : null
   return (
     <section className="sidebar-card market-card">
       <div className="sidebar-title market-panel-header">
@@ -29,6 +50,12 @@ export function MarketCard({ snapshot, collapseControl }: { snapshot: MarketSnap
           <strong>{change === null ? 'Pending' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`}</strong>
         </div>
       </div>
+      {pendingReason ? (
+        <div className="market-feed-warning" role="status" title={pendingReason}>
+          <AlertTriangle size={12} className="inline mr-1" />
+          <span>{pendingReason}</span>
+        </div>
+      ) : null}
       <MiniSparkline values={snapshot?.sparkline ?? []} />
       <div className="atm-strip">
         <div>

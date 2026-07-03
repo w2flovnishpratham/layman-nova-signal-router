@@ -121,6 +121,9 @@ def manual_entry(request: Request, body: ManualEntryRequest) -> Any:
             "stopLossPct": body.stopLossPct,
         },
     )
+    blocked = _unresolved_contract_block_or_none(signal)
+    if blocked is not None:
+        return blocked
     blocked = _attach_manual_idempotency_or_block(signal, request)
     if blocked is not None:
         return blocked
@@ -202,6 +205,9 @@ def manual_reverse(request: Request, body: ManualReverseRequest) -> Any:
             "fromOptionSide": current_side,
         },
     )
+    blocked = _unresolved_contract_block_or_none(signal)
+    if blocked is not None:
+        return blocked
     blocked = _attach_manual_idempotency_or_block(signal, request)
     if blocked is not None:
         return blocked
@@ -631,6 +637,43 @@ def _attach_manual_idempotency_or_block(signal: NormalizedSignal, request: Reque
         reason = "Manual live order blocked: Idempotency-Key header is required."
         return _manual_block_response(signal, reason, status_code=409, block_code="IDEMPOTENCY_KEY_REQUIRED")
     return None
+
+
+def _unresolved_contract_block_or_none(signal: NormalizedSignal) -> JSONResponse | None:
+    """Block ENTRY signals whose option contract never resolved (no securityId and
+    no strike/expiry) BEFORE they reach the execution router, with a reason that
+    explains WHY resolution failed instead of a generic 'securityId not resolved'."""
+    if signal.security_id or (signal.strike is not None and signal.expiry):
+        return None
+
+    from app.services.dhan_marketfeed_ws import marketfeed_ws_status
+
+    atm = get_atm_option_snapshot(option_side=signal.option_side or "CE", lots=1, allow_rest_fallback=True)
+    spot_status = str(atm.get("niftySpotStatus") or "unknown")
+    spot_available = atm.get("niftySpot") is not None
+    feed = atm.get("marketfeed") if isinstance(atm.get("marketfeed"), dict) else marketfeed_ws_status()
+    feed_error = feed.get("last_error") if isinstance(feed, dict) else None
+    feed_connected = bool(feed.get("connected")) if isinstance(feed, dict) else False
+
+    if spot_available:
+        # Market data is fine — the contract simply wasn't supplied (live mode
+        # does not auto-resolve ATM contracts; the quote panel must provide one).
+        reason = (
+            "Entry blocked before broker: no securityId/strike/expiry was supplied and "
+            "auto ATM contract resolution is disabled in live mode. "
+            "Wait for the quote panel to show a resolved contract, then retry."
+        )
+        return _manual_block_response(signal, reason, status_code=422, block_code="CONTRACT_NOT_SUPPLIED")
+
+    detail = f"spot status: {spot_status}; feed connected: {feed_connected}"
+    if feed_error:
+        detail += f"; feed error: {feed_error}"
+    reason = (
+        "Entry blocked before broker: NIFTY spot is unavailable from the Dhan market feed, "
+        f"so the ATM strike and option contract could not be resolved ({detail}). "
+        "No order was sent. Wait for the market feed to recover, then resend."
+    )
+    return _manual_block_response(signal, reason, status_code=503, block_code="MARKET_DATA_UNAVAILABLE")
 
 
 def _manual_block_response(

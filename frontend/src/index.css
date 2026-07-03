@@ -2662,6 +2662,27 @@ code {
   align-items: center;
 }
 
+.market-feed-warning {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--warning) 34%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  color: var(--warning);
+  font-size: 10px;
+  line-height: 1.35;
+  padding: 6px 8px;
+}
+
+.market-feed-warning span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 .mini-sparkline {
   display: flex;
   align-items: end;

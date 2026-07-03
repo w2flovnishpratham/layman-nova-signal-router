@@ -335,23 +335,45 @@ function HealthStrip({ setupState, health }: { setupState: SetupState; health: S
       tone: health?.market === 'open' ? 'ok' : 'muted',
     },
     {
+      key: 'feed',
+      label: 'Feed',
+      value: feedLabel(health?.feed),
+      tone: feedTone(health?.feed),
+      title: health?.feedReason ?? undefined,
+    },
+    {
       key: 'engine',
       label: 'Engine',
       value: setupState === 'PAUSED' ? 'Paused' : health?.engine === 'listening' ? 'Listening' : 'Idle',
       tone: setupState === 'PAUSED' ? 'warn' : health?.engine === 'listening' ? 'ok' : 'muted',
     },
-  ]
+  ] as Array<{ key: string; label: string; value: string; tone: string; title?: string }>
 
   return (
     <div className="health-strip" aria-label="System health">
       {chips.map((chip) => (
-        <span key={chip.key} className={`health-chip ${chip.tone}`} title={`${chip.label}: ${chip.value}`}>
+        <span key={chip.key} className={`health-chip ${chip.tone}`} title={chip.title ?? `${chip.label}: ${chip.value}`}>
           <span>{chip.label}</span>
           <strong>{chip.value}</strong>
         </span>
       ))}
     </div>
   )
+}
+
+function feedLabel(value: SystemHealth['feed'] | undefined): string {
+  if (value === 'live') return 'Live'
+  if (value === 'stale') return 'Stale'
+  if (value === 'down') return 'Down'
+  if (value === 'off') return 'Idle'
+  return 'Unknown'
+}
+
+function feedTone(value: SystemHealth['feed'] | undefined): string {
+  if (value === 'live') return 'ok'
+  if (value === 'stale') return 'warn'
+  if (value === 'down') return 'bad'
+  return 'muted'
 }
 
 function maskClientId(clientId: string): string {

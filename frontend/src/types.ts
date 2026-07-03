@@ -145,12 +145,25 @@ export interface AtmLtpSnapshot {
   computedAt: string
   options: Partial<Record<'CE' | 'PE', AtmOptionLtp>>
   message?: string | null
+  marketfeed?: MarketFeedWsStatus | null
+}
+
+export interface MarketFeedWsStatus {
+  source?: string
+  thread_alive?: boolean
+  connected?: boolean
+  last_error?: string | null
+  last_connected_at?: string | null
+  last_message_at?: string | null
+  reconnect_count?: number
 }
 
 export interface SystemHealth {
   dhan: 'connected' | 'auth_issue' | 'unknown'
   staticIp: 'verified' | 'failed' | 'unknown'
   market: 'open' | 'closed'
+  feed?: 'live' | 'stale' | 'down' | 'off' | null
+  feedReason?: string | null
   engine: 'listening' | 'paused' | 'idle'
   pubsub: 'healthy' | 'delayed' | 'unknown'
   lastSignalAt?: string | null
