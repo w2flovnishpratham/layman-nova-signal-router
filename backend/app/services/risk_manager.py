@@ -81,6 +81,32 @@ def option_side_is_allowed(payload: NormalizedSignal, runtime: dict) -> bool:
     return allowed == "BOTH" or not payload.option_side or payload.option_side == allowed
 
 
+def _coerce_instance_id(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def get_instance_id_from_signal(signal: NormalizedSignal) -> str | None:
+    raw_payload = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
+    for key in ("instance_id", "strategy_instance_id"):
+        instance_id = _coerce_instance_id(raw_payload.get(key))
+        if instance_id:
+            return instance_id
+
+    v2_payload = raw_payload.get("v2")
+    if isinstance(v2_payload, dict):
+        return _coerce_instance_id(v2_payload.get("instance_id"))
+    return None
+
+
+def _effective_instance_id(payload: NormalizedSignal, instance_id: str | None) -> str | None:
+    if instance_id is not None:
+        return _coerce_instance_id(instance_id)
+    return get_instance_id_from_signal(payload)
+
+
 def _entry_limit_checks(payload: NormalizedSignal, runtime: dict) -> RiskDecision | None:
     if not option_side_is_allowed(payload, runtime):
         return RiskDecision(
@@ -103,7 +129,11 @@ def _entry_limit_checks(payload: NormalizedSignal, runtime: dict) -> RiskDecisio
     return None
 
 
-def evaluate_entry(payload: NormalizedSignal, runtime: dict | None = None) -> RiskDecision:
+def evaluate_entry(
+    payload: NormalizedSignal,
+    runtime: dict | None = None,
+    instance_id: str | None = None,
+) -> RiskDecision:
     # C11 — Use the caller's snapshot if provided; otherwise read live.
     if runtime is None:
         runtime = get_runtime_settings()
@@ -127,7 +157,7 @@ def evaluate_entry(payload: NormalizedSignal, runtime: dict | None = None) -> Ri
     if entry_limits:
         return entry_limits
 
-    open_position = get_open_position()
+    open_position = get_open_position(instance_id=_effective_instance_id(payload, instance_id)) or {}
     if open_position.get("has_open_position"):
         return RiskDecision(
             False,
@@ -145,7 +175,11 @@ def _is_opposite_option_side(left: str | None, right: str | None) -> bool:
     return {left_side, right_side} == {"CE", "PE"}
 
 
-def evaluate_reversal_entry(payload: NormalizedSignal, runtime: dict | None = None) -> RiskDecision:
+def evaluate_reversal_entry(
+    payload: NormalizedSignal,
+    runtime: dict | None = None,
+    instance_id: str | None = None,
+) -> RiskDecision:
     # C11 — Use the caller's snapshot if provided; otherwise read live.
     if runtime is None:
         runtime = get_runtime_settings()
@@ -172,7 +206,7 @@ def evaluate_reversal_entry(payload: NormalizedSignal, runtime: dict | None = No
     if entry_limits:
         return entry_limits
 
-    open_position = get_open_position()
+    open_position = get_open_position(instance_id=_effective_instance_id(payload, instance_id)) or {}
     if not open_position.get("has_open_position"):
         return RiskDecision(False, "Reversal blocked: no open position exists.")
 
@@ -187,7 +221,11 @@ def evaluate_reversal_entry(payload: NormalizedSignal, runtime: dict | None = No
     return RiskDecision(True, "Opposite option-side reversal checks passed.", final_qty=payload.qty)
 
 
-def evaluate_exit(payload: NormalizedSignal, runtime: dict | None = None) -> RiskDecision:
+def evaluate_exit(
+    payload: NormalizedSignal,
+    runtime: dict | None = None,
+    instance_id: str | None = None,
+) -> RiskDecision:
     # C11 — Use the caller's snapshot if provided; otherwise read live.
     if runtime is None:
         runtime = get_runtime_settings()
@@ -202,7 +240,7 @@ def evaluate_exit(payload: NormalizedSignal, runtime: dict | None = None) -> Ris
         if GLOBAL_KILL_SWITCH_BLOCKS_EXITS:
             return RiskDecision(False, "Exit blocked: GLOBAL_KILL_SWITCH=true and exits are blocked.")
 
-    open_position = get_open_position()
+    open_position = get_open_position(instance_id=_effective_instance_id(payload, instance_id)) or {}
     if not open_position.get("has_open_position"):
         return RiskDecision(False, "Exit blocked: no open position exists.")
 
