@@ -247,7 +247,12 @@ def test_position_reconciler_with_instance_clears_only_that_instance(monkeypatch
 
     _fake_flat_dhan(monkeypatch, position_reconciler)
 
-    result = position_reconciler.get_reconciled_open_position(force=True, reason="test", instance_id="A")
+    result = position_reconciler.get_reconciled_open_position(
+        force=True,
+        reason="test",
+        instance_id="A",
+        allow_live_broker_sync=True,
+    )
 
     assert result["has_open_position"] is False
     assert result["broker_sync"]["cleared"] is True
@@ -255,6 +260,32 @@ def test_position_reconciler_with_instance_clears_only_that_instance(monkeypatch
     assert state_store.get_open_position("B")["trading_symbol"] == "NIFTY INSTANCE B CE"
     assert state_store.get_open_position()["trading_symbol"] == "NIFTY LEGACY CE"
     assert state_store.get_app_state()["state"] == "WAITING_EXIT"
+
+
+def test_position_reconciler_with_instance_live_skips_broker_by_default(monkeypatch, tmp_path):
+    _isolate_runtime(monkeypatch, tmp_path)
+    state_store.set_engine_mode("live")
+    _seed_legacy_and_instances()
+    from app.services import position_reconciler
+
+    monkeypatch.setattr(position_reconciler.settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(
+        position_reconciler,
+        "get_dhan_credentials",
+        lambda: (_ for _ in ()).throw(AssertionError("broker credentials should not be read")),
+    )
+    monkeypatch.setattr(
+        position_reconciler,
+        "RealDhanClient",
+        lambda: (_ for _ in ()).throw(AssertionError("broker client should not be constructed")),
+    )
+
+    result = position_reconciler.get_reconciled_open_position(force=True, reason="test", instance_id="A")
+
+    assert result["trading_symbol"] == "NIFTY INSTANCE A CE"
+    assert state_store.get_open_position("A")["trading_symbol"] == "NIFTY INSTANCE A CE"
+    assert state_store.get_open_position("B")["trading_symbol"] == "NIFTY INSTANCE B CE"
+    assert state_store.get_open_position()["trading_symbol"] == "NIFTY LEGACY CE"
 
 
 def test_startup_reconciler_with_instance_clears_only_that_instance(monkeypatch, tmp_path):
@@ -266,11 +297,40 @@ def test_startup_reconciler_with_instance_clears_only_that_instance(monkeypatch,
 
     _fake_flat_dhan(monkeypatch, startup_reconciler)
 
-    sync = startup_reconciler.reconcile_open_position_on_startup(instance_id="A")
+    sync = startup_reconciler.reconcile_open_position_on_startup(instance_id="A", allow_live_broker_sync=True)
 
     assert sync["status"] == "broker_missing_local"
     assert sync["cleared"] is True
     assert state_store.get_open_position("A") is None
+    assert state_store.get_open_position("B")["trading_symbol"] == "NIFTY INSTANCE B CE"
+    assert state_store.get_open_position()["trading_symbol"] == "NIFTY LEGACY CE"
+    assert state_store.get_app_state()["state"] == "WAITING_EXIT"
+
+
+def test_startup_reconciler_with_instance_live_skips_broker_by_default(monkeypatch, tmp_path):
+    _isolate_runtime(monkeypatch, tmp_path)
+    state_store.set_engine_mode("live")
+    _seed_legacy_and_instances()
+    state_store.update_app_state(state="WAITING_EXIT")
+    from app.services import startup_reconciler
+
+    monkeypatch.setattr(startup_reconciler.settings, "DHAN_MODE", "REAL", raising=False)
+    monkeypatch.setattr(
+        startup_reconciler,
+        "get_dhan_credentials",
+        lambda: (_ for _ in ()).throw(AssertionError("broker credentials should not be read")),
+    )
+    monkeypatch.setattr(
+        startup_reconciler,
+        "RealDhanClient",
+        lambda: (_ for _ in ()).throw(AssertionError("broker client should not be constructed")),
+    )
+
+    sync = startup_reconciler.reconcile_open_position_on_startup(instance_id="A")
+
+    assert sync["status"] == "skipped"
+    assert sync["reason"] == "instance_live_broker_sync_blocked"
+    assert state_store.get_open_position("A")["trading_symbol"] == "NIFTY INSTANCE A CE"
     assert state_store.get_open_position("B")["trading_symbol"] == "NIFTY INSTANCE B CE"
     assert state_store.get_open_position()["trading_symbol"] == "NIFTY LEGACY CE"
     assert state_store.get_app_state()["state"] == "WAITING_EXIT"
@@ -286,3 +346,35 @@ def test_list_open_positions_by_instance_returns_all_v2_positions(monkeypatch, t
     assert set(positions) == {"A", "B"}
     assert positions["A"]["trading_symbol"] == "NIFTY INSTANCE A CE"
     assert positions["B"]["trading_symbol"] == "NIFTY INSTANCE B CE"
+
+
+def test_market_snapshot_defaults_to_legacy_position(monkeypatch, tmp_path):
+    _isolate_runtime(monkeypatch, tmp_path)
+    state_store.set_engine_mode("paper")
+    _seed_legacy_and_instances()
+    from app.services import market_snapshot
+
+    monkeypatch.setattr(market_snapshot, "get_atm_option_snapshot", lambda **_kwargs: {})
+
+    snapshot = market_snapshot.build_nifty_snapshot(allow_rest_fallback=False)
+
+    assert snapshot["activeOptionLtp"] == 100.0
+    assert snapshot["activeOptionSide"] == "CE"
+
+
+def test_market_snapshot_with_instance_reads_scoped_position(monkeypatch, tmp_path):
+    _isolate_runtime(monkeypatch, tmp_path)
+    state_store.set_engine_mode("paper")
+    state_store.set_open_position(_position(trading_symbol="NIFTY LEGACY CE", option_side="CE", entry_price=100.0))
+    state_store.set_open_position(
+        _position(trading_symbol="NIFTY INSTANCE A PE", option_side="PE", entry_price=88.0),
+        instance_id="A",
+    )
+    from app.services import market_snapshot
+
+    monkeypatch.setattr(market_snapshot, "get_atm_option_snapshot", lambda **_kwargs: {})
+
+    snapshot = market_snapshot.build_nifty_snapshot(allow_rest_fallback=False, instance_id="A")
+
+    assert snapshot["activeOptionLtp"] == 88.0
+    assert snapshot["activeOptionSide"] == "PE"

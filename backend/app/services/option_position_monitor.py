@@ -606,6 +606,7 @@ def _exit_signal(
     }
     scoped_instance_id = _normalized_instance_id(instance_id)
     if scoped_instance_id is not None:
+        raw_payload["v2_internal"] = True
         raw_payload["instance_id"] = scoped_instance_id
         for key in ("strategy_version_id", "execution_mode", "v2_job_id", "source_signal_id"):
             value = position.get(key)
@@ -613,7 +614,7 @@ def _exit_signal(
                 raw_payload[key] = str(value)
     return NormalizedSignal(
         payload_format="NOVA",
-        secret=get_webhook_secret() or "",
+        secret="" if scoped_instance_id is not None else get_webhook_secret() or "",
         signal_id=f"SERVER_EXIT_{reason}_{int(time.time())}_{position.get('security_id') or 'UNKNOWN'}",
         strategy_code=position.get("strategy_code") or "TRADINGVIEW_NIFTY_V1",
         action="EXIT",

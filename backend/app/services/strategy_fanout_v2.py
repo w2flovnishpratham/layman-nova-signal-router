@@ -36,6 +36,7 @@ DISABLED_INSTANCE = "DISABLED_INSTANCE"
 INACTIVE_INSTANCE = "INACTIVE_INSTANCE"
 STRATEGY_VERSION_MISMATCH = "STRATEGY_VERSION_MISMATCH"
 UNSUPPORTED_EXECUTION_MODE = "UNSUPPORTED_EXECUTION_MODE"
+REAL_ORDERS_NOT_SUPPORTED_YET = "REAL_ORDERS_NOT_SUPPORTED_YET"
 VALIDATION_FAILED = "VALIDATION_FAILED"
 NORMALIZATION_FAILED = "NORMALIZATION_FAILED"
 
@@ -309,6 +310,12 @@ def _skip_for_instance(
             instance,
             STRATEGY_VERSION_MISMATCH,
             details={"expected_strategy_version_id": str(strategy_version_id)},
+        )
+    if str(instance.execution_mode or "") == StrategyExecutionMode.REAL_ORDERS.value:
+        return _instance_skip(
+            instance,
+            REAL_ORDERS_NOT_SUPPORTED_YET,
+            details={"execution_mode": instance.execution_mode},
         )
     if str(instance.execution_mode or "") not in SUPPORTED_EXECUTION_MODES:
         return _instance_skip(

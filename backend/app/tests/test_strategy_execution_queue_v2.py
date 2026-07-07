@@ -138,6 +138,51 @@ def test_create_v2_jobs_from_plan_creates_one_job_per_valid_instance(mu_db, monk
         assert {job.signal_payload["payload_format"] for job in jobs} == {"NOVA_V2_EXECUTION_JOB"}
 
 
+def test_real_orders_plan_is_skipped_and_creates_no_v2_pending_job(mu_db, monkeypatch):
+    from app.services.strategy_execution_queue_v2 import V2_PENDING, create_v2_jobs_from_plan
+    from app.services.strategy_fanout_v2 import REAL_ORDERS_NOT_SUPPORTED_YET
+
+    monkeypatch.setenv("MULTI_STRATEGY_FANOUT", "1")
+    paper_user = make_user("phase2d6-queue-paper@example.com")
+    real_user = make_user("phase2d6-queue-real@example.com")
+
+    with session_scope() as db:
+        catalog, version = _seed_supertrend(db)
+        paper_instance = _add_instance(
+            db,
+            user_id=paper_user.id,
+            catalog=catalog,
+            version=version,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+        )
+        real_instance = _add_instance(
+            db,
+            user_id=real_user.id,
+            catalog=catalog,
+            version=version,
+            execution_mode=StrategyExecutionMode.REAL_ORDERS.value,
+        )
+        plan_result = _persisted_plan(db, _raw_payload(signal_id="phase2d6-real-queue-skip"))
+
+        assert plan_result.planned_count == 1
+        assert plan_result.skipped_count == 1
+        assert plan_result.skips[0].reason == REAL_ORDERS_NOT_SUPPORTED_YET
+        assert plan_result.skips[0].instance_id == real_instance.id
+
+        result = create_v2_jobs_from_plan(db, plan_result)
+        jobs = db.scalars(select(models.StrategyExecutionJob)).all()
+
+        assert result.ok is True
+        assert result.created_count == 1
+        assert result.skipped_count == 1
+        assert result.skips[0].reason == REAL_ORDERS_NOT_SUPPORTED_YET
+        assert len(jobs) == 1
+        assert jobs[0].status == V2_PENDING
+        assert jobs[0].instance_id == paper_instance.id
+        assert jobs[0].execution_mode == StrategyExecutionMode.PAPER_LIVE_DATA.value
+        assert jobs[0].instance_id != real_instance.id
+
+
 def test_skipped_and_error_plans_create_no_v2_jobs(mu_db, monkeypatch):
     from app.services.option_intent_mapper import OPTION_SIDE_BLOCKED
     from app.services.strategy_execution_queue_v2 import create_v2_jobs_from_plan

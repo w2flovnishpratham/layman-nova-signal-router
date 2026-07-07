@@ -41,9 +41,10 @@ def _event(
 
 
 def _signal(raw_payload: dict[str, Any]) -> NormalizedSignal:
+    trusted_payload = {"v2_internal": True, **raw_payload}
     return NormalizedSignal(
         payload_format="NOVA",
-        secret="do-not-log",
+        secret="",
         signal_id="metadata-signal",
         strategy_code="SUPERTREND_V1",
         action="ENTRY",
@@ -60,7 +61,7 @@ def _signal(raw_payload: dict[str, Any]) -> NormalizedSignal:
         order_type="MARKET",
         product_type="INTRADAY",
         source="strategy_worker_adapter_v2",
-        raw_payload=raw_payload,
+        raw_payload=trusted_payload,
     )
 
 

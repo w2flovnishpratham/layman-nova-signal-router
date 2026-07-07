@@ -86,11 +86,13 @@ def _signal(
     side: str | None = None,
     option_side: str = "CE",
     qty: int = 75,
+    source: str | None = None,
     raw_payload: dict[str, Any] | None = None,
 ) -> NormalizedSignal:
+    payload = raw_payload or {}
     return NormalizedSignal(
         payload_format="NOVA",
-        secret="test-secret",
+        secret="" if payload.get("v2_internal") is True else "test-secret",
         signal_id=signal_id,
         strategy_code="TRADINGVIEW_NIFTY_V1",
         action=action,
@@ -106,13 +108,14 @@ def _signal(
         qty=qty,
         order_type="MARKET",
         product_type="INTRADAY",
-        source="strategy_worker_adapter_v2" if raw_payload else "tradingview",
-        raw_payload=raw_payload or {},
+        source=source or ("strategy_worker_adapter_v2" if raw_payload else "tradingview"),
+        raw_payload=payload,
     )
 
 
 def _v2_payload(instance_id: str, **overrides: Any) -> dict[str, Any]:
     payload = {
+        "v2_internal": True,
         "instance_id": instance_id,
         "strategy_version_id": "version-1",
         "v2_job_id": "job-1",
@@ -219,6 +222,45 @@ def test_v2_entry_with_instance_ignores_legacy_open_position(monkeypatch, tmp_pa
     assert result["status"] == "ORDER_PLACED"
     assert state_store.get_paper_position()["trading_symbol"] == "NIFTY LEGACY CE"
     assert state_store.get_open_position("A")["entry_order_id"] == "PAPER-ENTRY-v2-entry-a"
+
+
+def test_external_injected_instance_id_does_not_bypass_legacy_open_position(monkeypatch, tmp_path):
+    _isolate_runtime(monkeypatch, tmp_path)
+    _install_fake_order_router(monkeypatch)
+    state_store.set_open_position(_position(trading_symbol="NIFTY LEGACY CE"))
+
+    result = execution_router.route_entry_signal(
+        _signal(
+            signal_id="legacy-injected-entry",
+            source="tradingview",
+            raw_payload={"instance_id": "A"},
+        ),
+        runtime=_runtime(),
+    )
+
+    assert result["status"] == "BLOCKED"
+    assert "open position already exists for NIFTY LEGACY CE" in result["reason"]
+    assert state_store.get_open_position("A") is None
+    assert state_store.get_paper_position()["trading_symbol"] == "NIFTY LEGACY CE"
+
+
+def test_external_injected_instance_id_writes_legacy_position_not_instance(monkeypatch, tmp_path):
+    _isolate_runtime(monkeypatch, tmp_path)
+    _install_fake_order_router(monkeypatch)
+
+    result = execution_router.route_entry_signal(
+        _signal(
+            signal_id="legacy-injected-entry",
+            source="tradingview",
+            raw_payload={"instance_id": "A"},
+        ),
+        runtime=_runtime(),
+    )
+
+    assert result["status"] == "ORDER_PLACED"
+    assert state_store.get_paper_position()["entry_order_id"] == "PAPER-ENTRY-legacy-injected-entry"
+    assert state_store.get_open_position("A") is None
+    assert state_store.list_open_positions_by_instance() == {}
 
 
 def test_v2_exit_with_instance_clears_only_that_instance(monkeypatch, tmp_path):

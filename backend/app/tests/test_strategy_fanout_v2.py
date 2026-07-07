@@ -201,6 +201,45 @@ def test_paused_and_disabled_instances_are_skipped(mu_db, monkeypatch):
     }
 
 
+def test_real_orders_instances_are_skipped_before_v2_queue_creation(mu_db, monkeypatch):
+    from app.services.strategy_fanout_v2 import REAL_ORDERS_NOT_SUPPORTED_YET, plan_strategy_fanout_v2
+
+    monkeypatch.setenv("MULTI_STRATEGY_FANOUT", "1")
+    paper_user = make_user("phase2d6-paper@example.com")
+    real_user = make_user("phase2d6-real@example.com")
+
+    with session_scope() as db:
+        catalog, version = _seed_supertrend(db)
+        _add_instance(
+            db,
+            user_id=paper_user.id,
+            catalog=catalog,
+            version=version,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+        )
+        real_instance = _add_instance(
+            db,
+            user_id=real_user.id,
+            catalog=catalog,
+            version=version,
+            execution_mode=StrategyExecutionMode.REAL_ORDERS.value,
+        )
+
+        result = plan_strategy_fanout_v2(
+            db,
+            _raw_payload(signal_id="phase2d6-real-skip"),
+            "SUPERTREND_V1",
+            dry_run=False,
+        )
+
+    assert result.ok is True
+    assert result.planned_count == 1
+    assert result.skipped_count == 1
+    assert result.skips[0].reason == REAL_ORDERS_NOT_SUPPORTED_YET
+    assert result.skips[0].instance_id == real_instance.id
+    assert result.plans[0].execution_mode == StrategyExecutionMode.PAPER_LIVE_DATA.value
+
+
 def test_alias_tradingview_nifty_resolves_to_supertrend_version(mu_db, monkeypatch):
     from app.services.strategy_fanout_v2 import plan_strategy_fanout_v2
 

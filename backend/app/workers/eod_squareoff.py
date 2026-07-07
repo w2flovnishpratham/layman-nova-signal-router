@@ -142,6 +142,7 @@ def _build_eod_exit_signal(position: dict, *, instance_id: str | None = None) ->
     }
     scoped_instance_id = _normalized_instance_id(instance_id)
     if scoped_instance_id is not None:
+        raw_payload["v2_internal"] = True
         raw_payload["instance_id"] = scoped_instance_id
         for key in ("strategy_version_id", "execution_mode", "v2_job_id", "source_signal_id"):
             value = position.get(key)
@@ -150,7 +151,7 @@ def _build_eod_exit_signal(position: dict, *, instance_id: str | None = None) ->
 
     return NormalizedSignal(
         payload_format="NOVA",
-        secret=get_webhook_secret() or "",
+        secret="" if scoped_instance_id is not None else get_webhook_secret() or "",
         signal_id=f"SERVER_EOD_FLATTEN_{now_ts}_{sec_id}",
         strategy_code=position.get("strategy_code") or "TRADINGVIEW_NIFTY_V1",
         action="EXIT",

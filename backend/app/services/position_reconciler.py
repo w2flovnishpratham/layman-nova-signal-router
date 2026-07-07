@@ -177,12 +177,21 @@ def get_reconciled_open_position(
     force: bool = False,
     reason: str = "positions",
     instance_id: str | None = None,
+    allow_live_broker_sync: bool = False,
 ) -> dict[str, Any]:
     scoped_instance_id = _normalized_instance_id(instance_id)
     position = _get_open_position_for_instance(scoped_instance_id) or default_open_position()
     if not position.get("has_open_position"):
         return position
     if get_engine_mode() == "paper":
+        return position
+    if scoped_instance_id is not None and settings.DHAN_MODE.upper() == "REAL" and not allow_live_broker_sync:
+        log_audit_event(
+            "INSTANCE_OPEN_POSITION_DHAN_SYNC_BLOCKED",
+            "Instance-scoped broker reconciliation skipped because broker exposure is global.",
+            severity="WARNING",
+            metadata={"reason": reason, "instance_id": scoped_instance_id},
+        )
         return position
 
     if settings.DHAN_MODE.upper() != "REAL":

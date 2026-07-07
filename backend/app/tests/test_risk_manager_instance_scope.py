@@ -78,9 +78,13 @@ def _signal(
     qty: int = 75,
     raw_payload: dict[str, Any] | None = None,
 ) -> NormalizedSignal:
+    payload = raw_payload or {}
+    internal = payload.get("v2_internal") is True or (
+        isinstance(payload.get("v2"), dict) and payload["v2"].get("internal") is True
+    )
     return NormalizedSignal(
         payload_format="NOVA",
-        secret="test-secret",
+        secret="" if internal else "test-secret",
         signal_id="risk-instance-signal",
         strategy_code="TRADINGVIEW_NIFTY_V1",
         action=action,
@@ -97,7 +101,7 @@ def _signal(
         order_type="MARKET",
         product_type="INTRADAY",
         source="tradingview",
-        raw_payload=raw_payload or {},
+        raw_payload=payload,
     )
 
 
@@ -213,8 +217,30 @@ def test_evaluate_reversal_entry_with_instance_id_does_not_use_other_instance_po
         {"v2": {"instance_id": "A"}},
     ],
 )
-def test_instance_id_can_be_extracted_from_signal_raw_payload(monkeypatch, tmp_path, raw_payload):
+def test_external_instance_id_raw_payload_is_ignored(monkeypatch, tmp_path, raw_payload):
     _isolate_runtime(monkeypatch, tmp_path)
+    state_store.set_open_position(_position(trading_symbol="NIFTY GLOBAL CE"))
+    state_store.set_open_position(_position(trading_symbol="NIFTY INSTANCE A CE"), instance_id="A")
+
+    decision = risk_manager.evaluate_entry(
+        _signal(raw_payload=raw_payload),
+        runtime=state_store.get_runtime_settings(),
+    )
+
+    assert decision.allowed is False
+    assert "open position already exists for NIFTY GLOBAL CE" in decision.reason
+
+
+@pytest.mark.parametrize(
+    "raw_payload",
+    [
+        {"v2_internal": True, "instance_id": "A"},
+        {"v2": {"internal": True, "instance_id": "A"}},
+    ],
+)
+def test_trusted_internal_v2_payload_can_provide_instance_id(monkeypatch, tmp_path, raw_payload):
+    _isolate_runtime(monkeypatch, tmp_path)
+    state_store.set_open_position(_position(trading_symbol="NIFTY GLOBAL CE"))
     state_store.set_open_position(_position(trading_symbol="NIFTY INSTANCE A CE"), instance_id="A")
 
     decision = risk_manager.evaluate_entry(
@@ -238,6 +264,33 @@ def test_explicit_instance_id_wins_over_signal_raw_payload(monkeypatch, tmp_path
 
     assert decision.allowed is False
     assert "open position already exists for NIFTY INSTANCE A CE" in decision.reason
+
+
+def test_external_injected_instance_id_cannot_bypass_global_one_open_position(monkeypatch, tmp_path):
+    _isolate_runtime(monkeypatch, tmp_path)
+    state_store.set_open_position(_position(trading_symbol="NIFTY GLOBAL CE"))
+
+    decision = risk_manager.evaluate_entry(
+        _signal(raw_payload={"instance_id": "A"}),
+        runtime=state_store.get_runtime_settings(),
+    )
+
+    assert decision.allowed is False
+    assert "open position already exists for NIFTY GLOBAL CE" in decision.reason
+
+
+def test_external_payload_with_spoofed_internal_marker_is_ignored(monkeypatch, tmp_path):
+    _isolate_runtime(monkeypatch, tmp_path)
+    state_store.set_open_position(_position(trading_symbol="NIFTY GLOBAL CE"))
+    state_store.set_open_position(_position(trading_symbol="NIFTY INSTANCE A CE"), instance_id="A")
+
+    signal = _signal(raw_payload={"v2_internal": True, "instance_id": "A"})
+    signal = signal.model_copy(update={"secret": "valid-webhook-secret"})
+
+    decision = risk_manager.evaluate_entry(signal, runtime=state_store.get_runtime_settings())
+
+    assert decision.allowed is False
+    assert "open position already exists for NIFTY GLOBAL CE" in decision.reason
 
 
 def test_no_instance_id_uses_legacy_global_position(monkeypatch, tmp_path):

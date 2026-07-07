@@ -179,6 +179,8 @@ def test_process_next_v2_job_dry_run_claims_and_completes_job(mu_db, monkeypatch
         assert preview["strike"] == 24500
         assert preview["expiry"] == "2026-07-09"
         assert preview["qty"] == 130
+        assert "secret" not in preview
+        assert preview["raw_payload"]["v2_internal"] is True
         assert preview["raw_payload"]["instance_id"] == str(instance.id)
         assert preview["raw_payload"]["strategy_version_id"] == str(version.id)
         assert preview["raw_payload"]["v2_job_id"] == str(job.id)
@@ -237,6 +239,7 @@ def test_paper_job_calls_route_signal_once_and_completes(mu_db, monkeypatch, tmp
         assert len(calls) == 1
         signal = calls[0]
         assert isinstance(signal, NormalizedSignal)
+        assert signal.raw_payload["v2_internal"] is True
         assert signal.raw_payload["instance_id"] == str(instance.id)
         assert signal.raw_payload["strategy_version_id"] == str(version.id)
         assert signal.raw_payload["v2_job_id"] == str(job.id)
@@ -252,12 +255,15 @@ def test_paper_job_calls_route_signal_once_and_completes(mu_db, monkeypatch, tmp
         assert saved.status == V2_COMPLETED_PAPER
         details = saved.result_summary["details"]
         assert details["route_result"] == result.route_result_summary
+        assert "secret" not in details["normalized_signal_preview"]
+        assert details["normalized_signal_preview"]["raw_payload"]["v2_internal"] is True
         assert details["normalized_signal_preview"]["raw_payload"]["v2_job_id"] == str(job.id)
         assert details["paper_mode"]["active_mode"] == "paper"
         assert details["manual_test_only"] is True
 
 
 def test_real_orders_job_is_blocked_before_route_signal_and_dhan(mu_db, monkeypatch):
+    from app.services.strategy_execution_queue_v2 import V2_PENDING
     from app.services.dhan_client import RealDhanClient
     from app.services.strategy_worker_adapter_v2 import (
         V2_FAILED_PAPER,
@@ -281,14 +287,58 @@ def test_real_orders_job_is_blocked_before_route_signal_and_dhan(mu_db, monkeypa
 
     with session_scope() as db:
         catalog, version = _seed_supertrend(db)
-        _add_instance(
+        instance = _add_instance(
             db,
             user_id=user.id,
             catalog=catalog,
             version=version,
             execution_mode=StrategyExecutionMode.REAL_ORDERS.value,
         )
-        job = _create_v2_job(db, _raw_payload(signal_id="phase2c2-real-block"))
+        strategy_signal = models.StrategySignal(
+            strategy_name="SUPERTREND_V1",
+            signal_id="phase2c2-real-block",
+            strategy_version_id=version.id,
+            payload_version="nova.v1",
+            status="planned",
+        )
+        db.add(strategy_signal)
+        db.flush()
+        normalized = models.NormalizedOptionSignal(
+            strategy_signal_id=strategy_signal.id,
+            instance_id=instance.id,
+            action="ENTRY",
+            intent="BULLISH",
+            symbol="NIFTY",
+            instrument_type="OPTIDX",
+            option_side="CE",
+            strike_mode="MANUAL",
+            resolved_strike=24500,
+            expiry_mode="MANUAL",
+            resolved_expiry=date(2026, 7, 9),
+            qty_mode="LOTS",
+            lots=2,
+            quantity=None,
+            order_type="MARKET",
+            product_type="INTRADAY",
+            raw_mapping_details={"source": "tradingview"},
+        )
+        db.add(normalized)
+        db.flush()
+        job = models.StrategyExecutionJob(
+            strategy_signal_id=strategy_signal.id,
+            instance_id=instance.id,
+            strategy_version_id=version.id,
+            normalized_signal_id=normalized.id,
+            user_id=user.id,
+            strategy_name="SUPERTREND_V1",
+            signal_id="phase2c2-real-block:v2",
+            signal_payload={"payload_format": "NOVA_V2_EXECUTION_JOB"},
+            lots=2,
+            execution_mode=StrategyExecutionMode.REAL_ORDERS.value,
+            status=V2_PENDING,
+        )
+        db.add(job)
+        db.flush()
 
         result = process_next_v2_job_paper_once(db, "phase2c2-worker")
 
@@ -470,7 +520,7 @@ def test_build_normalized_signal_from_v2_job_returns_existing_schema(mu_db, monk
     assert signal.option_side == "PE"
     assert signal.strike == 24600
     assert signal.qty == 150
-    assert signal.source == "tradingview"
+    assert signal.source == "strategy_worker_adapter_v2"
     assert signal.security_id is None
     assert signal.trading_symbol is None
 
@@ -691,6 +741,44 @@ def test_paper_bridge_not_registered_in_startup_or_workers():
         source = path.read_text(encoding="utf-8")
         assert "process_next_v2_job_paper_once" not in source
         assert "process_v2_job_paper_once" not in source
+
+
+def test_signal_preview_sanitizes_secret_fields_and_keeps_safe_v2_metadata():
+    from app.services.strategy_worker_adapter_v2 import _signal_preview
+
+    signal = NormalizedSignal(
+        payload_format="NOVA",
+        secret="top-level-secret",
+        signal_id="preview-secret-test",
+        strategy_code="SUPERTREND_V1",
+        action="ENTRY",
+        side="BUY",
+        symbol="NIFTY",
+        qty=75,
+        order_type="MARKET",
+        product_type="INTRADAY",
+        raw_payload={
+            "v2_internal": True,
+            "instance_id": "instance-1",
+            "v2_job_id": "job-1",
+            "strategy_version_id": "version-1",
+            "secret": "raw-secret",
+            "access_token": "token-secret",
+            "headers": {"authorization": "Bearer token-secret"},
+            "raw_response": {"secret": "broker-secret"},
+            "unsafe_extra": "drop-me",
+        },
+    )
+
+    preview = _signal_preview(signal)
+
+    assert "secret" not in preview
+    assert preview["raw_payload"] == {
+        "instance_id": "instance-1",
+        "strategy_version_id": "version-1",
+        "v2_internal": True,
+        "v2_job_id": "job-1",
+    }
 
 
 def test_strategy_worker_adapter_v2_has_no_live_or_broker_imports():

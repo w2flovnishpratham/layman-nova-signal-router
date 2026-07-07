@@ -115,7 +115,11 @@ def _active_waiting_message(position: dict[str, Any], sync: dict[str, Any]) -> s
     return f"Startup verified {option_side}; server-side exit monitor will resume tracking."
 
 
-def reconcile_open_position_on_startup(instance_id: str | None = None) -> dict[str, Any]:
+def reconcile_open_position_on_startup(
+    instance_id: str | None = None,
+    *,
+    allow_live_broker_sync: bool = False,
+) -> dict[str, Any]:
     scoped_instance_id = _normalized_instance_id(instance_id)
     checked_at = utc_now()
     if get_engine_mode() == "paper":
@@ -123,6 +127,21 @@ def reconcile_open_position_on_startup(instance_id: str | None = None) -> dict[s
     position = _get_open_position_for_instance(scoped_instance_id) or {}
     if not position.get("has_open_position"):
         return {"status": "skipped", "reason": "no_local_open_position", "checked_at": checked_at}
+
+    if scoped_instance_id is not None and settings.DHAN_MODE.upper() == "REAL" and not allow_live_broker_sync:
+        sync = {
+            "source": "startup_reconciler",
+            "status": "skipped",
+            "reason": "instance_live_broker_sync_blocked",
+            "checked_at": checked_at,
+        }
+        log_audit_event(
+            "STARTUP_INSTANCE_OPEN_POSITION_RECONCILE_BLOCKED",
+            "Instance-scoped startup broker reconciliation skipped because broker exposure is global.",
+            severity="WARNING",
+            metadata={"instance_id": scoped_instance_id, "open_position": position, "broker_restart_sync": sync},
+        )
+        return sync
 
     if settings.DHAN_MODE.upper() != "REAL":
         sync = {

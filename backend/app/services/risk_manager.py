@@ -31,6 +31,9 @@ class RiskDecision:
     final_qty: int = 0
 
 
+V2_INTERNAL_TRUST_MARKER = "v2_internal"
+
+
 def _setting_bool(runtime: dict, key: str, env_value: bool) -> bool:
     return bool(runtime.get(key, env_value))
 
@@ -88,15 +91,19 @@ def _coerce_instance_id(value: object) -> str | None:
     return text or None
 
 
+def _has_internal_signal_secret(signal: NormalizedSignal) -> bool:
+    return str(signal.secret or "").strip() == ""
+
+
 def get_instance_id_from_signal(signal: NormalizedSignal) -> str | None:
     raw_payload = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
-    for key in ("instance_id", "strategy_instance_id"):
-        instance_id = _coerce_instance_id(raw_payload.get(key))
-        if instance_id:
-            return instance_id
+    if not _has_internal_signal_secret(signal):
+        return None
+    if raw_payload.get(V2_INTERNAL_TRUST_MARKER) is True:
+        return _coerce_instance_id(raw_payload.get("instance_id"))
 
     v2_payload = raw_payload.get("v2")
-    if isinstance(v2_payload, dict):
+    if isinstance(v2_payload, dict) and v2_payload.get("internal") is True:
         return _coerce_instance_id(v2_payload.get("instance_id"))
     return None
 

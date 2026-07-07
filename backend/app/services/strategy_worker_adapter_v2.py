@@ -42,6 +42,7 @@ ROUTE_SIGNAL_INCOMPATIBLE = "ROUTE_SIGNAL_INCOMPATIBLE"
 V2_LIVE_BLOCKED = "V2_LIVE_BLOCKED"
 V2_PAPER_MODE_UNAVAILABLE = "V2_PAPER_MODE_UNAVAILABLE"
 V2_ROUTE_SIGNAL_FAILED = "V2_ROUTE_SIGNAL_FAILED"
+V2_INTERNAL_TRUST_MARKER = "v2_internal"
 
 SUPPORTED_EXECUTION_MODES = {
     StrategyExecutionMode.SIGNAL_ONLY.value,
@@ -389,6 +390,7 @@ def _raw_payload(
 ) -> dict[str, Any]:
     job_payload = job.signal_payload if isinstance(job.signal_payload, dict) else {}
     return {
+        V2_INTERNAL_TRUST_MARKER: True,
         "dry_run_adapter": True,
         "adapter_phase": "phase2c_1",
         "v2_job_id": str(job.id),
@@ -413,16 +415,76 @@ def _raw_payload(
 
 
 def _source_from_normalized_signal(normalized: models.NormalizedOptionSignal) -> str:
-    mapping = normalized.raw_mapping_details or {}
-    if isinstance(mapping, dict):
-        source = str(mapping.get("source") or "").strip()
-        if source:
-            return source
     return "strategy_worker_adapter_v2"
 
 
 def _signal_preview(signal: NormalizedSignal) -> dict[str, Any]:
-    return _jsonable(signal.model_dump(mode="json"))
+    return _sanitize_signal_preview(signal.model_dump(mode="json"))
+
+
+_SIGNAL_PREVIEW_REDACTED_KEYS = {
+    "access_token",
+    "headers",
+    "proxy_url",
+    "raw_response",
+    "request",
+    "response_json",
+    "response_text",
+    "secret",
+}
+
+_SAFE_RAW_PAYLOAD_PREVIEW_KEYS = {
+    V2_INTERNAL_TRUST_MARKER,
+    "adapter_phase",
+    "dry_run_adapter",
+    "execution_mode",
+    "expiry_mode",
+    "instance_id",
+    "job_signal_id",
+    "needs_resolution",
+    "normalized_action",
+    "normalized_intent",
+    "normalized_option_side",
+    "normalized_signal_id",
+    "payload_version",
+    "queue_contract",
+    "source_signal_id",
+    "source_type",
+    "strategy_signal_id",
+    "strategy_version_id",
+    "strike_mode",
+    "user_id",
+    "v2_job_id",
+}
+
+
+def _sanitize_signal_preview(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if lowered in _SIGNAL_PREVIEW_REDACTED_KEYS:
+                continue
+            if lowered == "raw_payload":
+                sanitized["raw_payload"] = _safe_raw_payload_preview(item)
+                continue
+            sanitized[str(key)] = _sanitize_signal_preview(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_signal_preview(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_signal_preview(item) for item in value]
+    return _jsonable(value)
+
+
+def _safe_raw_payload_preview(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: _sanitize_signal_preview(value[key])
+        for key in _SAFE_RAW_PAYLOAD_PREVIEW_KEYS
+        if key in value
+    }
 
 
 def _route_signal(signal: NormalizedSignal) -> dict[str, Any]:
