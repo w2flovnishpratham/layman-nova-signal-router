@@ -4,9 +4,17 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT, settings
-from app.core.feature_flags import feature_flag_states
+from app.core.enums import StrategyExecutionMode
+from app.core.feature_flags import (
+    MULTI_STRATEGY_FANOUT,
+    V2_PAPER_RUNNER_DEBUG,
+    feature_flag_states,
+    is_feature_enabled,
+)
+from app.db.engine import session_scope
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_order_event, read_jsonl
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret
@@ -26,6 +34,29 @@ from app.services.security_id_resolver import DEFAULT_SECURITY_ID_WARNING, resol
 from app.services.signal_parser import PayloadParseError, UnsupportedPayloadFormatError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
 from app.services.state_store import get_app_state, get_runtime_settings
+from app.services.strategy_paper_fanout_runner_v2 import (
+    process_ready_v2_paper_jobs_once,
+    run_v2_paper_fanout_once,
+)
+
+
+V2_PAPER_DEBUG_MAX_JOBS = 5
+
+
+class V2PaperFanoutRunOnceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_code: str = Field(min_length=1)
+    payload: dict[str, Any]
+    max_jobs: int = Field(default=1, ge=1, le=V2_PAPER_DEBUG_MAX_JOBS)
+    confirm_paper_only: bool = False
+
+
+class V2PaperFanoutProcessReadyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_jobs: int = Field(default=1, ge=1, le=V2_PAPER_DEBUG_MAX_JOBS)
+    confirm_paper_only: bool = False
 
 
 def require_debug_enabled() -> None:
@@ -46,6 +77,93 @@ def _public_signal(signal: NormalizedSignal) -> dict[str, Any]:
 @router.get("/feature-flags")
 def get_feature_flags() -> dict[str, bool]:
     return feature_flag_states()
+
+
+def _require_v2_paper_runner_debug_enabled() -> None:
+    if not is_feature_enabled(MULTI_STRATEGY_FANOUT):
+        raise HTTPException(status_code=403, detail="MULTI_STRATEGY_FANOUT is disabled.")
+    if not is_feature_enabled(V2_PAPER_RUNNER_DEBUG):
+        raise HTTPException(status_code=403, detail="V2 paper runner debug trigger is disabled.")
+
+
+def _require_paper_confirmation(confirm_paper_only: bool) -> None:
+    if confirm_paper_only is not True:
+        raise HTTPException(status_code=403, detail="confirm_paper_only must be true.")
+
+
+def _reject_non_paper_execution_marker(payload: dict[str, Any]) -> None:
+    values: list[Any] = []
+    if isinstance(payload, dict):
+        values.append(payload.get("execution_mode"))
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            values.append(metadata.get("execution_mode"))
+    for value in values:
+        if value in (None, ""):
+            continue
+        if str(value).strip().lower() != StrategyExecutionMode.PAPER_LIVE_DATA.value:
+            raise HTTPException(status_code=403, detail="Only paper_live_data execution is allowed.")
+
+
+def _runner_response(value: Any) -> dict[str, Any]:
+    data = value.as_dict() if hasattr(value, "as_dict") else value
+    if not isinstance(data, dict):
+        return {"ok": False, "errors": [{"reason": "INVALID_RUNNER_RESPONSE"}]}
+    return _sanitize_v2_paper_debug_response(data)
+
+
+def _sanitize_v2_paper_debug_response(value: Any) -> Any:
+    redacted_keys = {
+        "access_token",
+        "client_id",
+        "headers",
+        "payload",
+        "proxy_url",
+        "raw_payload",
+        "raw_response",
+        "request",
+        "response_json",
+        "response_text",
+        "secret",
+    }
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if str(key).lower() in redacted_keys:
+                continue
+            sanitized[str(key)] = _sanitize_v2_paper_debug_response(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_v2_paper_debug_response(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_v2_paper_debug_response(item) for item in value]
+    return value
+
+
+@router.post("/v2/paper-fanout/run-once")
+def run_v2_paper_fanout_debug(request: V2PaperFanoutRunOnceRequest) -> dict[str, Any]:
+    _require_v2_paper_runner_debug_enabled()
+    _require_paper_confirmation(request.confirm_paper_only)
+    _reject_non_paper_execution_marker(request.payload)
+
+    with session_scope() as db:
+        result = run_v2_paper_fanout_once(
+            db,
+            dict(request.payload),
+            request.strategy_code,
+            max_jobs=request.max_jobs,
+        )
+    return _runner_response(result)
+
+
+@router.post("/v2/paper-fanout/process-ready")
+def process_ready_v2_paper_jobs_debug(request: V2PaperFanoutProcessReadyRequest) -> dict[str, Any]:
+    _require_v2_paper_runner_debug_enabled()
+    _require_paper_confirmation(request.confirm_paper_only)
+
+    with session_scope() as db:
+        result = process_ready_v2_paper_jobs_once(db, max_jobs=request.max_jobs)
+    return _runner_response(result)
 
 
 def _risk_decision(signal: NormalizedSignal) -> dict[str, Any]:
