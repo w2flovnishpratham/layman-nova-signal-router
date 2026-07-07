@@ -23,6 +23,7 @@ _LOCK = threading.RLock()
 APP_STATE_FILE = RUNTIME_STATE_DIR / "app_state.json"
 OPEN_POSITION_FILE = RUNTIME_STATE_DIR / "open_position.json"
 PAPER_POSITION_FILE = RUNTIME_STATE_DIR / "paper_position.json"
+OPEN_POSITIONS_BY_INSTANCE_FILE = RUNTIME_STATE_DIR / "open_positions_by_instance.json"
 PAPER_PORTFOLIO_FILE = RUNTIME_STATE_DIR / "paper_portfolio.json"
 EXTERNAL_POSITIONS_FILE = RUNTIME_STATE_DIR / "external_positions.json"
 SEEN_SIGNALS_FILE = RUNTIME_STATE_DIR / "seen_signals.json"
@@ -231,6 +232,30 @@ def _write_json(path: Path, data: dict[str, Any]) -> dict[str, Any]:
         return deepcopy(data)
 
 
+def _get_open_positions_by_instance_path() -> Path:
+    return scoped_runtime_path(OPEN_POSITIONS_BY_INSTANCE_FILE)
+
+
+def _read_open_positions_by_instance() -> dict[str, Any]:
+    path = _get_open_positions_by_instance_path()
+    with _LOCK:
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            _write_open_positions_by_instance({})
+            return {}
+        if not isinstance(data, dict):
+            _write_open_positions_by_instance({})
+            return {}
+        return deepcopy(data)
+
+
+def _write_open_positions_by_instance(data: dict[str, Any]) -> dict[str, Any]:
+    return _write_json(OPEN_POSITIONS_BY_INSTANCE_FILE, data)
+
+
 def init_runtime_files() -> None:
     scoped_runtime_path(RUNTIME_STATE_DIR).mkdir(parents=True, exist_ok=True)
     scoped_runtime_path(RUNTIME_LOG_DIR).mkdir(parents=True, exist_ok=True)
@@ -303,8 +328,10 @@ def update_app_state(**changes: Any) -> dict[str, Any]:
     return set_app_state(state)
 
 
-def get_open_position() -> dict[str, Any]:
+def get_open_position(instance_id: str | None = None) -> dict[str, Any] | None:
     """Return the tracked position for the currently selected engine mode."""
+    if instance_id is not None:
+        return deepcopy(_read_open_positions_by_instance().get(instance_id))
     if get_engine_mode() == "paper":
         return get_paper_position()
     return get_live_open_position()
@@ -314,21 +341,39 @@ def get_live_open_position() -> dict[str, Any]:
     return _read_json(OPEN_POSITION_FILE, default_open_position)
 
 
-def set_open_position(data: dict[str, Any]) -> dict[str, Any]:
+def set_open_position(position: dict[str, Any], instance_id: str | None = None) -> dict[str, Any]:
     """Persist the tracked position for the currently selected engine mode."""
+    if instance_id is not None:
+        with _LOCK:
+            positions = _read_open_positions_by_instance()
+            positions[instance_id] = deepcopy(position)
+            _write_open_positions_by_instance(positions)
+            return deepcopy(positions[instance_id])
     if get_engine_mode() == "paper":
-        return set_paper_position(data)
-    return set_live_open_position(data)
+        return set_paper_position(position)
+    return set_live_open_position(position)
 
 
 def set_live_open_position(data: dict[str, Any]) -> dict[str, Any]:
     return _write_json(OPEN_POSITION_FILE, data)
 
 
-def clear_open_position() -> dict[str, Any]:
+def clear_open_position(instance_id: str | None = None) -> dict[str, Any] | None:
+    if instance_id is not None:
+        with _LOCK:
+            positions = _read_open_positions_by_instance()
+            if instance_id not in positions:
+                return None
+            positions.pop(instance_id, None)
+            _write_open_positions_by_instance(positions)
+            return None
     if get_engine_mode() == "paper":
         return clear_paper_position()
     return clear_live_open_position()
+
+
+def list_open_positions_by_instance() -> dict[str, Any]:
+    return _read_open_positions_by_instance()
 
 
 def clear_live_open_position() -> dict[str, Any]:
