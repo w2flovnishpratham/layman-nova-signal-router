@@ -55,6 +55,14 @@ The script will:
 
 The payload uses `source="backend"` with metadata identifying the script because `manual_debug` is not valid under the current `nova.v1` schema.
 
+By default, the script installs an in-process simulated paper LTP shim. This keeps the check independent of real Dhan/shared market-data credentials and market hours while still exercising the runner, paper bridge, execution router, paper broker fill path, and instance-scoped state. To use real shared paper market data instead, add:
+
+```powershell
+python -m scripts.manual_v2_paper_fanout_check --confirm-paper-only --max-jobs 1 --use-real-paper-market-data
+```
+
+Only use that opt-out when staging shared market-data credentials are configured and market-data access is expected to work.
+
 ## Expected Success Output
 
 You should see JSON lines similar to:
@@ -85,6 +93,7 @@ Do not delete unrelated strategy instances.
 - Do not expose `/api/debug/*` publicly.
 - Do not use this as a TradingView webhook.
 - Do not add this to startup, scheduler, cron, or worker loops.
+- Do not use `--use-real-paper-market-data` unless you intentionally want the paper broker to fetch real shared-market LTP.
 
 ## Optional Debug Endpoint Smoke Example
 

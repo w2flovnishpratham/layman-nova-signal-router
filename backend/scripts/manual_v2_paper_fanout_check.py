@@ -59,6 +59,7 @@ class ManualCheckError(RuntimeError):
 class ManualCheckConfig:
     dry_run: bool = False
     confirm_paper_only: bool = False
+    simulate_paper_ltp: bool = True
     strategy_code: str = SUPERTREND_CODE
     user_email: str = TEST_USER_EMAIL
     strike: float = 25000.0
@@ -145,6 +146,8 @@ def run_manual_check(
         return _sanitize(summary)
 
     state_store.init_runtime_files()
+    runtime_snapshot = _prepare_runtime_for_manual_check()
+    paper_market_shim = _install_simulated_paper_market_data() if config.simulate_paper_ltp else None
     legacy_before = state_store.get_paper_position()
     instance_id: str | None = None
     try:
@@ -201,6 +204,9 @@ def run_manual_check(
     finally:
         if instance_id:
             cleanup_instance_position(instance_id)
+        if paper_market_shim is not None:
+            _restore_simulated_paper_market_data(paper_market_shim)
+        _restore_runtime_after_manual_check(runtime_snapshot)
 
     sanitized = _sanitize(summary)
     _emit(out, "success_summary", sanitized)
@@ -283,10 +289,16 @@ def parse_args(argv: list[str] | None = None) -> ManualCheckConfig:
     parser.add_argument("--expiry", default="2026-07-09")
     parser.add_argument("--lots", type=int, default=1)
     parser.add_argument("--max-jobs", type=int, default=1)
+    parser.add_argument(
+        "--use-real-paper-market-data",
+        action="store_true",
+        help="Do not install the local simulated LTP shim. Requires shared paper market-data credentials and market hours.",
+    )
     args = parser.parse_args(argv)
     return ManualCheckConfig(
         dry_run=bool(args.dry_run),
         confirm_paper_only=bool(args.confirm_paper_only),
+        simulate_paper_ltp=not bool(args.use_real_paper_market_data),
         user_email=args.user_email,
         strike=args.strike,
         expiry=args.expiry,
@@ -396,6 +408,125 @@ def _settings_summary() -> dict[str, Any]:
         "explicit_engine_mode": _read_explicit_engine_mode_without_init(),
         "fallback_engine_mode": _fallback_engine_mode(),
     }
+
+
+def _prepare_runtime_for_manual_check() -> dict[str, Any]:
+    snapshot = {
+        "app_state": state_store.get_app_state(),
+        "runtime_settings": state_store.get_runtime_settings(),
+    }
+    if state_store.get_engine_mode(legacy_fallback=False) != "paper":
+        state_store.set_engine_mode("paper")
+    state_store.update_app_state(webhook_trading_enabled=True, engine_started=True)
+    state_store.update_runtime_settings(
+        allow_entry=True,
+        allow_exit=True,
+        emergency_stop=False,
+        global_kill_switch=False,
+        max_trades_per_day=0,
+        max_daily_loss=0,
+        allowed_option_side="BOTH",
+        option_exit_mode="SERVER",
+    )
+    return snapshot
+
+
+def _restore_runtime_after_manual_check(snapshot: dict[str, Any]) -> None:
+    try:
+        runtime_settings = snapshot.get("runtime_settings")
+        app_state = snapshot.get("app_state")
+        if isinstance(runtime_settings, dict):
+            state_store.set_runtime_settings(runtime_settings)
+        if isinstance(app_state, dict):
+            state_store.set_app_state(app_state)
+    except Exception:
+        # Verification outcome should not be hidden by best-effort restoration.
+        pass
+
+
+def _install_simulated_paper_market_data() -> dict[str, Any]:
+    from app.services import execution_router, paper_broker, risk_manager, shared_market_data
+    from app.services.credential_vault import DhanCredentials
+    from app.services.dhan_client import DhanLtpResult
+    from app.services.security_id_resolver import SecurityIdResolution
+
+    originals = {
+        "risk_market_is_open": risk_manager._market_is_open,
+        "execution_market_is_open": execution_router._market_is_open,
+        "execution_resolve_security_id": execution_router.resolve_security_id,
+        "paper_market_is_open": paper_broker._market_is_open,
+        "paper_ltp": paper_broker.PaperBroker._ltp,
+        "shared_configured": shared_market_data.shared_market_data_configured,
+        "shared_credentials": shared_market_data.get_shared_market_credentials,
+        "shared_status": shared_market_data.shared_market_data_status,
+    }
+
+    def always_open() -> bool:
+        return True
+
+    def simulated_ltp(self, *, client_id: str, access_token: str, payload: dict[str, Any]) -> DhanLtpResult:
+        return DhanLtpResult(
+            success=True,
+            message="Manual v2 paper check simulated LTP.",
+            ltp=100.0,
+            exchange_segment=str(payload.get("exchangeSegment") or "NSE_FNO"),
+            security_id=str(payload.get("securityId") or ""),
+            raw_response={"mode": "manual_v2_paper_check_simulated_ltp"},
+        )
+
+    def simulated_resolution(signal: Any) -> SecurityIdResolution:
+        return SecurityIdResolution(
+            ok=True,
+            security_id="57046",
+            method="MANUAL_V2_PAPER_CHECK_SIMULATED",
+            reason="Manual v2 paper check simulated contract resolution.",
+            trading_symbol=f"{signal.symbol} CHECK {int(float(signal.strike or 0))} {signal.option_side or 'CE'}",
+            lot_size=75,
+        )
+
+    def shared_configured() -> bool:
+        return True
+
+    def shared_credentials() -> DhanCredentials:
+        return DhanCredentials(
+            client_id="manual-paper-data-client",
+            access_token="manual-paper-data-token",
+            source="manual_v2_paper_check",
+        )
+
+    def shared_status() -> dict[str, Any]:
+        return {
+            "configured": True,
+            "enabled": True,
+            "has_token": True,
+            "client_id_masked": "****************lient",
+            "token_valid": True,
+            "last_error": None,
+            "source": "manual_v2_paper_check",
+        }
+
+    risk_manager._market_is_open = always_open
+    execution_router._market_is_open = always_open
+    execution_router.resolve_security_id = simulated_resolution
+    paper_broker._market_is_open = always_open
+    paper_broker.PaperBroker._ltp = simulated_ltp
+    shared_market_data.shared_market_data_configured = shared_configured
+    shared_market_data.get_shared_market_credentials = shared_credentials
+    shared_market_data.shared_market_data_status = shared_status
+    return originals
+
+
+def _restore_simulated_paper_market_data(originals: dict[str, Any]) -> None:
+    from app.services import execution_router, paper_broker, risk_manager, shared_market_data
+
+    risk_manager._market_is_open = originals["risk_market_is_open"]
+    execution_router._market_is_open = originals["execution_market_is_open"]
+    execution_router.resolve_security_id = originals["execution_resolve_security_id"]
+    paper_broker._market_is_open = originals["paper_market_is_open"]
+    paper_broker.PaperBroker._ltp = originals["paper_ltp"]
+    shared_market_data.shared_market_data_configured = originals["shared_configured"]
+    shared_market_data.get_shared_market_credentials = originals["shared_credentials"]
+    shared_market_data.shared_market_data_status = originals["shared_status"]
 
 
 def _read_explicit_engine_mode_without_init() -> str | None:
