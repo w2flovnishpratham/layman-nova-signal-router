@@ -29,6 +29,7 @@ from app.services.risk_manager import (
     evaluate_entry,
     evaluate_exit,
     evaluate_reversal_entry,
+    get_instance_id_from_signal,
     option_side_is_allowed,
 )
 from app.services.security_id_resolver import resolve_security_id
@@ -142,6 +143,29 @@ def _build_dhan_payload(signal: NormalizedSignal, qty: int, action: str) -> dict
 
 def _is_manual_order_signal(signal: NormalizedSignal) -> bool:
     return bool(isinstance(signal.raw_payload, dict) and signal.raw_payload.get("manual_order") is True)
+
+
+def _raw_payload_metadata(signal: NormalizedSignal, key: str) -> Any:
+    raw_payload = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
+    if key in raw_payload:
+        return raw_payload.get(key)
+    v2_payload = raw_payload.get("v2")
+    if isinstance(v2_payload, dict):
+        return v2_payload.get(key)
+    return None
+
+
+def _position_metadata_from_signal(signal: NormalizedSignal) -> dict[str, Any]:
+    instance_id = get_instance_id_from_signal(signal)
+    if not instance_id:
+        return {}
+
+    metadata: dict[str, Any] = {"instance_id": instance_id}
+    for key in ("strategy_version_id", "execution_mode", "v2_job_id", "source_signal_id"):
+        value = _raw_payload_metadata(signal, key)
+        if value is not None and str(value).strip():
+            metadata[key] = str(value)
+    return metadata
 
 
 def _live_order_scope_and_key(signal: NormalizedSignal, action: str, place_method: str) -> tuple[str, str | None]:
@@ -1178,7 +1202,8 @@ def _dhan_entry_preflight(client: Any, *, client_id: str, access_token: str, sig
 
 
 def _reconcile_tracked_position_before_entry(signal: NormalizedSignal) -> RiskDecision | None:
-    open_position = get_open_position()
+    instance_id = get_instance_id_from_signal(signal)
+    open_position = get_open_position(instance_id=instance_id) or {}
     if not open_position.get("has_open_position"):
         return None
     if get_engine_mode() != "live" or not settings.ENABLE_LIVE_ORDERS:
@@ -1206,7 +1231,7 @@ def _reconcile_tracked_position_before_entry(signal: NormalizedSignal) -> RiskDe
         signal=signal,
     )
     if preflight.get("allowed"):
-        clear_open_position()
+        clear_open_position(instance_id=instance_id)
         message = "Tracked open position cleared because Dhan positions/orders are flat before entry."
         log_audit_event(
             "OPEN_POSITION_RECONCILED",
@@ -1761,7 +1786,7 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
             message = "Dhan Super Order SL/TP is active; backend is display-only."
     else:
         message = "Server-side option premium monitor is armed."
-    return {
+    position = {
         "has_open_position": True,
         "strategy_code": signal.strategy_code,
         "symbol": signal.symbol,
@@ -1801,6 +1826,8 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
             "last_checked_at": utc_now(),
         },
     }
+    position.update(_position_metadata_from_signal(signal))
+    return position
 
 
 def _entry_filled_qty(order_result: dict[str, Any], requested_qty: int) -> int:
@@ -1815,7 +1842,13 @@ def _failed_order_status(order_result: dict[str, Any]) -> str:
     return "ORDER_STATE_UNKNOWN" if order_result.get("status") == "ORDER_STATE_UNKNOWN" else "ORDER_REJECTED"
 
 
-def _apply_partial_exit_fill(position: dict[str, Any], order_result: dict[str, Any], signal: NormalizedSignal) -> dict[str, Any] | None:
+def _apply_partial_exit_fill(
+    position: dict[str, Any],
+    order_result: dict[str, Any],
+    signal: NormalizedSignal,
+    *,
+    instance_id: str | None = None,
+) -> dict[str, Any] | None:
     if not order_result.get("partial_fill"):
         return None
     filled_qty = _int_value(order_result.get("filled_qty")) or 0
@@ -1845,7 +1878,7 @@ def _apply_partial_exit_fill(position: dict[str, Any], order_result: dict[str, A
         }
     )
     updated["live_pnl"] = live_pnl
-    set_open_position(updated)
+    set_open_position(updated, instance_id=instance_id)
     log_audit_event(
         "PARTIAL_EXIT_FILL",
         f"Exit partially filled; {remaining_qty} quantity remains open.",
@@ -1862,8 +1895,13 @@ def _apply_partial_exit_fill(position: dict[str, Any], order_result: dict[str, A
     return updated
 
 
-def _is_opposite_option_entry(signal: NormalizedSignal, position: dict[str, Any] | None = None) -> bool:
-    position = position or get_open_position()
+def _is_opposite_option_entry(
+    signal: NormalizedSignal,
+    position: dict[str, Any] | None = None,
+    *,
+    instance_id: str | None = None,
+) -> bool:
+    position = position or get_open_position(instance_id=instance_id) or {}
     if signal.action != "ENTRY" or signal.side != "BUY" or not position.get("has_open_position"):
         return False
     current_side = str(position.get("option_side") or "").upper()
@@ -1885,6 +1923,7 @@ def _exit_signal_from_position(
         "reversal_from_option_side": position.get("option_side"),
         "reversal_to_option_side": trigger_signal.option_side,
     }
+    raw_payload.update(_position_metadata_from_signal(trigger_signal))
     if source != "opposite_option_reversal":
         raw_payload.update(
             {
@@ -1929,7 +1968,8 @@ def route_reversal_signal(
     if runtime is None:
         runtime = get_runtime_settings()
 
-    open_position = get_open_position()
+    instance_id = get_instance_id_from_signal(signal)
+    open_position = get_open_position(instance_id=instance_id) or {}
     update_app_state(
         state="REVERSAL_SIGNAL_RECEIVED",
         last_signal_id=signal.signal_id,
@@ -1940,12 +1980,12 @@ def route_reversal_signal(
         ),
     )
 
-    reversal_decision = evaluate_reversal_entry(signal, runtime=runtime)
+    reversal_decision = evaluate_reversal_entry(signal, runtime=runtime, instance_id=instance_id)
     if not reversal_decision.allowed:
         return _blocked("BLOCKED", reversal_decision.reason, signal)
 
     exit_signal = _exit_signal_from_position(open_position, signal)
-    exit_decision = evaluate_exit(exit_signal, runtime=runtime)
+    exit_decision = evaluate_exit(exit_signal, runtime=runtime, instance_id=instance_id)
     if not exit_decision.allowed:
         return _blocked("BLOCKED", exit_decision.reason, exit_signal)
 
@@ -1983,8 +2023,8 @@ def route_reversal_signal(
 
     if exit_result.get("status") != "TRADED":
         reason = "Reversal exit accepted but not confirmed TRADED; opposite entry was not sent."
-        _apply_partial_exit_fill(open_position, exit_result, exit_signal)
-        current = dict(get_open_position())
+        _apply_partial_exit_fill(open_position, exit_result, exit_signal, instance_id=instance_id)
+        current = dict(get_open_position(instance_id=instance_id) or {})
         if current.get("has_open_position"):
             current["reversal_exit"] = {
                 "status": exit_result.get("status"),
@@ -1992,7 +2032,7 @@ def route_reversal_signal(
                 "checked_at": utc_now(),
                 "message": reason,
             }
-            set_open_position(current)
+            set_open_position(current, instance_id=instance_id)
         log_audit_event(
             "REVERSAL_EXIT_PENDING",
             reason,
@@ -2014,7 +2054,7 @@ def route_reversal_signal(
         }
 
     super_order_leg_cancellations = _cancel_super_order_exit_legs(open_position)
-    clear_open_position()
+    clear_open_position(instance_id=instance_id)
     refresh_wallet_snapshot(force=True, log_event=True)
 
     update_app_state(
@@ -2045,7 +2085,7 @@ def route_reversal_signal(
         position = _entry_position(signal, entry_result, _entry_filled_qty(entry_result, reversal_decision.final_qty))
         entry_result["sr_suggestion"] = position.get("sr_suggestion")
         entry_result["active_exit_levels"] = position.get("active_exit_levels")
-        set_open_position(position)
+        set_open_position(position, instance_id=instance_id)
         record_entry_trade(signal.signal_id)
         update_app_state(
             state="WAITING_EXIT",
@@ -2098,7 +2138,8 @@ def route_reversal_signal(
 
 
 def _route_side_filter_exit_only(signal: NormalizedSignal, runtime: dict[str, Any]) -> dict[str, Any]:
-    open_position = get_open_position()
+    instance_id = get_instance_id_from_signal(signal)
+    open_position = get_open_position(instance_id=instance_id) or {}
     exit_signal = _exit_signal_from_position(
         open_position,
         signal,
@@ -2144,6 +2185,7 @@ def route_entry_signal(
     if runtime is None:
         runtime = get_runtime_settings()
 
+    instance_id = get_instance_id_from_signal(signal)
     update_app_state(
         state="ENTRY_SIGNAL_RECEIVED",
         last_signal_id=signal.signal_id,
@@ -2169,18 +2211,18 @@ def route_entry_signal(
 
     broker_reconcile = _reconcile_tracked_position_before_entry(signal)
     if broker_reconcile and not broker_reconcile.allowed:
-        if _is_opposite_option_entry(signal):
+        if _is_opposite_option_entry(signal, instance_id=instance_id):
             if not option_side_is_allowed(signal, runtime):
                 return _route_side_filter_exit_only(signal, runtime)
             return route_reversal_signal(signal, runtime=runtime)
         return _blocked("BLOCKED", broker_reconcile.reason, signal)
 
-    if _is_opposite_option_entry(signal):
+    if _is_opposite_option_entry(signal, instance_id=instance_id):
         if not option_side_is_allowed(signal, runtime):
             return _route_side_filter_exit_only(signal, runtime)
         return route_reversal_signal(signal, runtime=runtime)
 
-    decision = evaluate_entry(signal, runtime=runtime)
+    decision = evaluate_entry(signal, runtime=runtime, instance_id=instance_id)
     if not decision.allowed:
         return _blocked("BLOCKED", decision.reason, signal)
 
@@ -2195,7 +2237,7 @@ def route_entry_signal(
         position = _entry_position(signal, order_result, _entry_filled_qty(order_result, decision.final_qty))
         order_result["sr_suggestion"] = position.get("sr_suggestion")
         order_result["active_exit_levels"] = position.get("active_exit_levels")
-        set_open_position(position)
+        set_open_position(position, instance_id=instance_id)
         record_entry_trade(signal.signal_id)
         update_app_state(
             state="WAITING_EXIT",
@@ -2231,6 +2273,7 @@ def route_exit_signal(
     if runtime is None:
         runtime = get_runtime_settings()
 
+    instance_id = get_instance_id_from_signal(signal)
     update_app_state(
         state="EXIT_SIGNAL_RECEIVED",
         last_signal_id=signal.signal_id,
@@ -2245,11 +2288,11 @@ def route_exit_signal(
     )
     if existing_intent is not None:
         return existing_intent
-    decision: RiskDecision = evaluate_exit(signal, runtime=runtime)
+    decision: RiskDecision = evaluate_exit(signal, runtime=runtime, instance_id=instance_id)
     if not decision.allowed:
         return _blocked("BLOCKED", decision.reason, signal)
 
-    open_position = get_open_position()
+    open_position = get_open_position(instance_id=instance_id) or {}
     raw_payload = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
     exit_signal = _exit_signal_from_position(
         open_position,
@@ -2265,7 +2308,7 @@ def route_exit_signal(
         return order_result
 
     if order_result.get("success"):
-        partial_position = _apply_partial_exit_fill(open_position, order_result, exit_signal)
+        partial_position = _apply_partial_exit_fill(open_position, order_result, exit_signal, instance_id=instance_id)
         if partial_position is not None:
             refresh_wallet_snapshot(force=True, log_event=True)
             update_app_state(
@@ -2282,7 +2325,7 @@ def route_exit_signal(
             }
 
         super_order_leg_cancellations = _cancel_super_order_exit_legs(open_position)
-        clear_open_position()
+        clear_open_position(instance_id=instance_id)
         refresh_wallet_snapshot(force=True, log_event=True)
         update_app_state(
             state="WAITING_ENTRY",
