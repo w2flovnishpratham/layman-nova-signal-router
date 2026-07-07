@@ -155,14 +155,33 @@ def _raw_payload_metadata(signal: NormalizedSignal, key: str) -> Any:
     return None
 
 
-def _position_metadata_from_signal(signal: NormalizedSignal) -> dict[str, Any]:
+def strategy_metadata_from_signal(signal: NormalizedSignal) -> dict[str, Any]:
     instance_id = get_instance_id_from_signal(signal)
     if not instance_id:
         return {}
 
     metadata: dict[str, Any] = {"instance_id": instance_id}
+    strategy_code = _raw_payload_metadata(signal, "strategy_code") or signal.strategy_code
+    if strategy_code is not None and str(strategy_code).strip():
+        metadata["strategy_code"] = str(strategy_code)
     for key in ("strategy_version_id", "execution_mode", "v2_job_id", "source_signal_id"):
         value = _raw_payload_metadata(signal, key)
+        if value is not None and str(value).strip():
+            metadata[key] = str(value)
+    return metadata
+
+
+def _position_metadata_from_signal(signal: NormalizedSignal) -> dict[str, Any]:
+    return strategy_metadata_from_signal(signal)
+
+
+def _strategy_metadata_from_position(position: dict[str, Any]) -> dict[str, Any]:
+    instance_id = position.get("instance_id")
+    if instance_id is None or not str(instance_id).strip():
+        return {}
+    metadata = {"instance_id": str(instance_id)}
+    for key in ("strategy_code", "strategy_version_id", "execution_mode", "v2_job_id", "source_signal_id"):
+        value = position.get(key)
         if value is not None and str(value).strip():
             metadata[key] = str(value)
     return metadata
@@ -667,6 +686,7 @@ def _cancel_super_order_exit_legs(position: dict[str, Any]) -> dict[str, Any] | 
             "summary": summary,
             "trading_symbol": position.get("trading_symbol"),
             "security_id": position.get("security_id"),
+            **_strategy_metadata_from_position(position),
         }
     )
     return summary
@@ -748,6 +768,7 @@ def apply_manual_super_order_exit_levels(
             "summary": summary,
             "trading_symbol": position.get("trading_symbol"),
             "security_id": position.get("security_id"),
+            **_strategy_metadata_from_position(position),
         }
     )
     return summary
@@ -801,6 +822,7 @@ def _blocked(
             "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
             **(result_extra or {}),
             **_normalized_log_fields(signal),
+            **strategy_metadata_from_signal(signal),
             "normalized_error": normalized_error,
         }
     )
@@ -1184,6 +1206,7 @@ def _dhan_entry_preflight(client: Any, *, client_id: str, access_token: str, sig
             "action": signal.action,
             "allowed": allowed,
             "engine_mode": get_engine_mode(),
+            **strategy_metadata_from_signal(signal),
             **details,
         }
     )
@@ -1244,6 +1267,7 @@ def _reconcile_tracked_position_before_entry(signal: NormalizedSignal) -> RiskDe
                 "signal_id": signal.signal_id,
                 "previous_open_position": open_position,
                 "dhan_preflight": preflight.get("details"),
+                **strategy_metadata_from_signal(signal),
             }
         )
         return None
@@ -1477,6 +1501,7 @@ def _place_order(
             "order_type": order_request_payload["orderType"],
             "product_type": request_payload["productType"],
             **_normalized_log_fields(signal),
+            **strategy_metadata_from_signal(signal),
         }
     )
 
@@ -1532,6 +1557,7 @@ def _place_order(
                         "retry_reference_ltp": float(retry_ltp.ltp),
                         "request": _public_order_request(order_request_payload),
                         "super_order_levels": super_order_levels,
+                        **strategy_metadata_from_signal(signal),
                     }
                 )
                 result = client.place_super_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
@@ -1564,6 +1590,7 @@ def _place_order(
             "order_type": order_request_payload["orderType"],
             "product_type": request_payload["productType"],
             **_normalized_log_fields(signal),
+            **strategy_metadata_from_signal(signal),
         }
     )
 
@@ -1668,6 +1695,7 @@ def _place_order(
                 "trading_symbol": request_payload.get("tradingSymbol") or signal.trading_symbol,
                 "qty": qty,
                 **_normalized_log_fields(signal),
+                **strategy_metadata_from_signal(signal),
             }
         )
 

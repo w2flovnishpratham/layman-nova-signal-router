@@ -28,6 +28,15 @@ logger = logging.getLogger("nova_signal_router.portfolio")
 _IST = ZoneInfo("Asia/Kolkata")
 _ORDER_LOG_LIMIT = 5000
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_LEGACY_POSITION_GROUP = "__legacy__"
+_STRATEGY_METADATA_FIELDS = (
+    "strategy_code",
+    "instance_id",
+    "strategy_version_id",
+    "execution_mode",
+    "v2_job_id",
+    "source_signal_id",
+)
 
 
 def _parse_ts(value: Any) -> datetime:
@@ -94,6 +103,23 @@ def _is_live(ev: dict) -> bool:
     return False
 
 
+def _position_group_key(ev: dict) -> str:
+    instance_id = str(ev.get("instance_id") or "").strip()
+    return instance_id or _LEGACY_POSITION_GROUP
+
+
+def _strategy_metadata(entry: dict, exit_event: dict | None = None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    exit_event = exit_event or {}
+    for key in _STRATEGY_METADATA_FIELDS:
+        value = exit_event.get(key)
+        if value in (None, ""):
+            value = entry.get(key)
+        if value not in (None, ""):
+            metadata[key] = value
+    return metadata
+
+
 def _dedupe_legs_by_order_id(legs: list[dict]) -> list[dict]:
     """One leg per broker order.
 
@@ -124,23 +150,26 @@ def _dedupe_legs_by_order_id(legs: list[dict]) -> list[dict]:
 
 
 def _pair_round_trips(events: list[dict]) -> tuple[list[dict[str, Any]], dict | None]:
-    """Walk filled LIVE order legs chronologically and pair each ENTRY with the
-    next EXIT. The engine holds at most one position at a time, so a stack of
-    depth one is correct and robust."""
+    """Walk filled LIVE order legs chronologically and pair ENTRY/EXIT legs.
+
+    Legacy records without instance_id continue to use the single global stream.
+    Instance-aware records are paired only inside their own instance bucket, so
+    an EXIT for one strategy instance cannot close another instance's ENTRY.
+    """
     legs = [ev for ev in events if _is_filled(ev) and _is_live(ev)]
     legs.sort(key=lambda ev: _parse_ts(ev.get("timestamp")))
     legs = _dedupe_legs_by_order_id(legs)
 
     trades: list[dict[str, Any]] = []
-    open_entry: dict | None = None
+    open_entries: dict[str, dict] = {}
 
     for ev in legs:
         action = (_action(ev) or "").upper()
+        group_key = _position_group_key(ev)
         if action == "ENTRY":
-            open_entry = ev
-        elif action == "EXIT" and open_entry is not None:
-            entry = open_entry
-            open_entry = None
+            open_entries[group_key] = ev
+        elif action == "EXIT" and group_key in open_entries:
+            entry = open_entries.pop(group_key)
             qty = _qty(entry) or _qty(ev)
             entry_price = _num(entry.get("avg_price"))
             exit_price = _num(ev.get("avg_price"))
@@ -179,9 +208,13 @@ def _pair_round_trips(events: list[dict]) -> tuple[list[dict[str, Any]], dict | 
                     "closed_at": ev.get("timestamp"),
                     "hold_minutes": _round(hold_minutes, 1),
                     "result": "win" if realized > 0 else "loss" if realized < 0 else "flat",
+                    **_strategy_metadata(entry, ev),
                 }
             )
 
+    open_entry = open_entries.get(_LEGACY_POSITION_GROUP)
+    if open_entry is None and open_entries:
+        open_entry = min(open_entries.values(), key=lambda ev: _parse_ts(ev.get("timestamp")))
     return trades, open_entry
 
 
@@ -463,6 +496,7 @@ def build_portfolio_analytics(persist: bool = True) -> dict[str, Any]:
             "entry_price": _round(_num(open_entry.get("avg_price"))),
             "opened_at": open_entry.get("timestamp"),
             "entry_order_id": open_entry.get("order_id"),
+            **_strategy_metadata(open_entry),
         }
 
     payload = {
