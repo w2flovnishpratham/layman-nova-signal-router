@@ -38,6 +38,11 @@ from app.services.strategy_paper_fanout_runner_v2 import (
     process_ready_v2_paper_jobs_once,
     run_v2_paper_fanout_once,
 )
+from app.services.strategy_paper_fanout_inspector_v2 import (
+    get_v2_paper_fanout_status,
+    list_v2_paper_fanout_jobs,
+    list_v2_paper_strategy_instances,
+)
 
 
 V2_PAPER_DEBUG_MAX_JOBS = 5
@@ -116,15 +121,23 @@ def _sanitize_v2_paper_debug_response(value: Any) -> Any:
     redacted_keys = {
         "access_token",
         "client_id",
+        "credential_hash",
+        "credentials_hash",
         "headers",
         "payload",
+        "password",
+        "pin",
         "proxy_url",
         "raw_payload",
         "raw_response",
         "request",
+        "response",
         "response_json",
         "response_text",
         "secret",
+        "signal_payload",
+        "token",
+        "webhook_key_hash",
     }
     if isinstance(value, dict):
         sanitized: dict[str, Any] = {}
@@ -138,6 +151,27 @@ def _sanitize_v2_paper_debug_response(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_sanitize_v2_paper_debug_response(item) for item in value]
     return value
+
+
+@router.get("/v2/paper-fanout/status")
+def get_v2_paper_fanout_status_debug(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+    _require_v2_paper_runner_debug_enabled()
+    with session_scope() as db:
+        return _sanitize_v2_paper_debug_response(get_v2_paper_fanout_status(db, limit=limit))
+
+
+@router.get("/v2/paper-fanout/jobs")
+def list_v2_paper_fanout_jobs_debug(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+    _require_v2_paper_runner_debug_enabled()
+    with session_scope() as db:
+        return _sanitize_v2_paper_debug_response(list_v2_paper_fanout_jobs(db, limit=limit))
+
+
+@router.get("/v2/paper-fanout/instances")
+def list_v2_paper_strategy_instances_debug(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+    _require_v2_paper_runner_debug_enabled()
+    with session_scope() as db:
+        return _sanitize_v2_paper_debug_response(list_v2_paper_strategy_instances(db, limit=limit))
 
 
 @router.post("/v2/paper-fanout/run-once")
