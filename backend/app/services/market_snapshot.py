@@ -43,9 +43,14 @@ def get_shared_nifty_snapshot(
     return snapshot
 
 
-def build_nifty_snapshot(*, allow_rest_fallback: bool = True) -> dict[str, Any]:
+def build_nifty_snapshot(
+    *,
+    allow_rest_fallback: bool = True,
+    instance_id: str | None = None,
+) -> dict[str, Any]:
     app_state = get_app_state()
-    position = get_open_position()
+    position = get_open_position() if instance_id is None else get_open_position(instance_id=instance_id)
+    position = position or {}
     latest_signal = app_state.get("last_signal") if isinstance(app_state.get("last_signal"), dict) else {}
     live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
     active_ltp = _number(live_pnl.get("ltp") or position.get("entry_price"))

@@ -32,6 +32,7 @@ from app.services.audit_logger import log_audit_event, log_error_event, log_orde
 from app.services.credential_vault import get_webhook_secret
 from app.services.state_store import (
     get_app_state,
+    get_engine_mode,
     get_open_position,
     get_runtime_settings,
     update_app_state,
@@ -63,6 +64,41 @@ _THREAD_LOCK = threading.RLock()
 _LAST_FIRED_KEY = "eod_squareoff_last_fired_date_ist"
 
 
+def _normalized_instance_id(instance_id: str | None) -> str | None:
+    if instance_id is None:
+        return None
+    value = str(instance_id).strip()
+    return value or None
+
+
+def _get_open_position_for_instance(instance_id: str | None) -> dict | None:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return get_open_position()
+    return get_open_position(instance_id=scoped_instance_id)
+
+
+def _last_fired_key(instance_id: str | None = None) -> str:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return _LAST_FIRED_KEY
+    return f"{_LAST_FIRED_KEY}:{scoped_instance_id}"
+
+
+def _instance_eod_routing_allowed(instance_id: str | None) -> bool:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return True
+    if get_engine_mode() == "paper":
+        return True
+    log_error_event(
+        "EOD_SQUAREOFF_INSTANCE_LIVE_BLOCKED",
+        "Instance-scoped EOD square-off is blocked outside paper mode.",
+        metadata={"instance_id": scoped_instance_id, "engine_mode": get_engine_mode()},
+    )
+    return False
+
+
 def _today_ist_date_str() -> str:
     return datetime.now(IST).strftime("%Y-%m-%d")
 
@@ -80,16 +116,16 @@ def _in_eod_window() -> bool:
     return _EOD_WINDOW_START <= t < _EOD_WINDOW_END
 
 
-def _already_fired_today() -> bool:
+def _already_fired_today(instance_id: str | None = None) -> bool:
     app = get_app_state()
-    return app.get(_LAST_FIRED_KEY) == _today_ist_date_str()
+    return app.get(_last_fired_key(instance_id)) == _today_ist_date_str()
 
 
-def _mark_fired_today() -> None:
-    update_app_state(**{_LAST_FIRED_KEY: _today_ist_date_str()})
+def _mark_fired_today(instance_id: str | None = None) -> None:
+    update_app_state(**{_last_fired_key(instance_id): _today_ist_date_str()})
 
 
-def _build_eod_exit_signal(position: dict) -> NormalizedSignal:
+def _build_eod_exit_signal(position: dict, *, instance_id: str | None = None) -> NormalizedSignal:
     """Construct an internal EXIT signal mirroring webhook-triggered exits."""
     now_ts = int(time.time())
     sec_id = position.get("security_id") or "UNKNOWN"
@@ -98,6 +134,19 @@ def _build_eod_exit_signal(position: dict) -> NormalizedSignal:
         qty_int = int(qty) if qty not in (None, "") else 1
     except (TypeError, ValueError):
         qty_int = 1
+
+    raw_payload = {
+        "server_side_exit": True,
+        "exit_reason": "EOD_FLATTEN",
+        "triggered_at_ist": datetime.now(IST).isoformat(),
+    }
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is not None:
+        raw_payload["instance_id"] = scoped_instance_id
+        for key in ("strategy_version_id", "execution_mode", "v2_job_id", "source_signal_id"):
+            value = position.get(key)
+            if value is not None and str(value).strip():
+                raw_payload[key] = str(value)
 
     return NormalizedSignal(
         payload_format="NOVA",
@@ -118,29 +167,37 @@ def _build_eod_exit_signal(position: dict) -> NormalizedSignal:
         order_type=position.get("order_type") or DEFAULT_ORDER_TYPE,
         product_type=position.get("product_type") or DEFAULT_PRODUCT_TYPE,
         source="server_side_eod_squareoff",
-        raw_payload={
-            "server_side_exit": True,
-            "exit_reason": "EOD_FLATTEN",
-            "triggered_at_ist": datetime.now(IST).isoformat(),
-        },
+        raw_payload=raw_payload,
     )
 
 
-def _try_flatten_once() -> None:
+def _try_flatten_once(instance_id: str | None = None) -> None:
     """Fire one EOD flatten attempt. Safe to call repeatedly; guards inside."""
-    if _already_fired_today():
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    already_fired = (
+        _already_fired_today()
+        if scoped_instance_id is None
+        else _already_fired_today(instance_id=scoped_instance_id)
+    )
+    if already_fired:
         return
 
-    position = get_open_position()
+    position = _get_open_position_for_instance(scoped_instance_id) or {}
     if not position.get("has_open_position"):
         # No NOVA position. Mark today as "no-op done" so we don't spend
         # the rest of the day polling.
-        _mark_fired_today()
+        if scoped_instance_id is None:
+            _mark_fired_today()
+        else:
+            _mark_fired_today(instance_id=scoped_instance_id)
         log_audit_event(
             "EOD_SQUAREOFF_NO_POSITION",
             "EOD window reached and no open NOVA position to flatten.",
-            metadata={"date_ist": _today_ist_date_str()},
+            metadata={"date_ist": _today_ist_date_str(), "instance_id": scoped_instance_id},
         )
+        return
+
+    if not _instance_eod_routing_allowed(scoped_instance_id):
         return
 
     log_audit_event(
@@ -149,6 +206,7 @@ def _try_flatten_once() -> None:
         severity="WARNING",
         metadata={
             "date_ist": _today_ist_date_str(),
+            "instance_id": scoped_instance_id,
             "trading_symbol": position.get("trading_symbol"),
             "security_id": position.get("security_id"),
             "qty": position.get("qty"),
@@ -159,13 +217,14 @@ def _try_flatten_once() -> None:
         # Local import to avoid module-load cycles.
         from app.services.execution_router import route_signal
 
-        exit_signal = _build_eod_exit_signal(position)
+        exit_signal = _build_eod_exit_signal(position, instance_id=scoped_instance_id)
         result = route_signal(exit_signal)
 
         log_order_event(
             {
                 "event": "EOD_SQUAREOFF_ROUTED",
                 "date_ist": _today_ist_date_str(),
+                "instance_id": scoped_instance_id,
                 "result_success": bool(result.get("success")),
                 "result_status": result.get("status"),
                 "order_id": result.get("order_id"),
@@ -181,10 +240,14 @@ def _try_flatten_once() -> None:
                 metadata={
                     "order_id": result.get("order_id"),
                     "status": result.get("status"),
+                    "instance_id": scoped_instance_id,
                     "trading_symbol": position.get("trading_symbol"),
                 },
             )
-            _mark_fired_today()
+            if scoped_instance_id is None:
+                _mark_fired_today()
+            else:
+                _mark_fired_today(instance_id=scoped_instance_id)
         else:
             # Don't mark as fired — retry on the next 60s tick within the window.
             log_error_event(
@@ -192,6 +255,7 @@ def _try_flatten_once() -> None:
                 f"EOD square-off attempt failed; will retry within the window. "
                 f"reason={result.get('reason') or result.get('error') or 'unknown'}",
                 metadata={
+                    "instance_id": scoped_instance_id,
                     "trading_symbol": position.get("trading_symbol"),
                     "security_id": position.get("security_id"),
                     "result": result,
@@ -202,7 +266,7 @@ def _try_flatten_once() -> None:
         log_error_event(
             "EOD_SQUAREOFF_EXCEPTION",
             f"EOD square-off routing raised an exception: {exc}",
-            metadata={"position": position},
+            metadata={"instance_id": scoped_instance_id, "position": position},
         )
 
 

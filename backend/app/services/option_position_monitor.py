@@ -78,6 +78,55 @@ def _monitor_should_run(runtime: dict[str, Any]) -> bool:
     return get_engine_mode() in {"paper", "live"}
 
 
+def _normalized_instance_id(instance_id: str | None) -> str | None:
+    if instance_id is None:
+        return None
+    value = str(instance_id).strip()
+    return value or None
+
+
+def _get_open_position_for_instance(instance_id: str | None) -> dict[str, Any] | None:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return get_open_position()
+    return get_open_position(instance_id=scoped_instance_id)
+
+
+def _set_open_position_for_instance(position: dict[str, Any], instance_id: str | None) -> dict[str, Any]:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return set_open_position(position)
+    return set_open_position(position, instance_id=scoped_instance_id)
+
+
+def _instance_exit_routing_allowed(instance_id: str | None) -> bool:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return True
+    if get_engine_mode() == "paper":
+        return True
+    log_error_event(
+        "SERVER_SIDE_OPTION_EXIT_INSTANCE_LIVE_BLOCKED",
+        "Instance-scoped server-side option exit routing is blocked outside paper mode.",
+        metadata={"instance_id": scoped_instance_id, "engine_mode": get_engine_mode()},
+    )
+    return False
+
+
+def _instance_monitor_allowed(instance_id: str | None) -> bool:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return True
+    if get_engine_mode() == "paper":
+        return True
+    log_error_event(
+        "OPTION_MONITOR_INSTANCE_LIVE_BLOCKED",
+        "Instance-scoped option monitoring is blocked outside paper mode.",
+        metadata={"instance_id": scoped_instance_id, "engine_mode": get_engine_mode()},
+    )
+    return False
+
+
 def _poll_seconds(runtime: dict[str, Any]) -> float:
     value = _as_positive_float(runtime.get("option_ltp_poll_seconds"), 0.5)
     return max(0.25, value)
@@ -187,10 +236,15 @@ def _pnl_snapshot(
     }
 
 
-def _with_live_pnl(position: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
+def _with_live_pnl(
+    position: dict[str, Any],
+    snapshot: dict[str, Any],
+    *,
+    instance_id: str | None = None,
+) -> dict[str, Any]:
     updated = dict(position)
     updated["live_pnl"] = snapshot
-    return set_open_position(updated)
+    return _set_open_position_for_instance(updated, instance_id)
 
 
 def _client() -> Any:
@@ -392,7 +446,14 @@ def _broker_entry_price_fallback(
     return None, None, None
 
 
-def _sync_entry_fill_if_needed(position: dict[str, Any], client: Any, client_id: str, access_token: str) -> dict[str, Any]:
+def _sync_entry_fill_if_needed(
+    position: dict[str, Any],
+    client: Any,
+    client_id: str,
+    access_token: str,
+    *,
+    instance_id: str | None = None,
+) -> dict[str, Any]:
     if _as_float(position.get("entry_price")) is not None:
         return position
 
@@ -428,7 +489,7 @@ def _sync_entry_fill_if_needed(position: dict[str, Any], client: Any, client_id:
             "order_status": poll.order_status,
             "error": poll.error,
         }
-        return set_open_position(updated)
+        return _set_open_position_for_instance(updated, instance_id)
 
     updated = dict(position)
     updated["entry_price"] = avg_price
@@ -471,7 +532,7 @@ def _sync_entry_fill_if_needed(position: dict[str, Any], client: Any, client_id:
             "security_id": position.get("security_id"),
         }
     )
-    return set_open_position(updated)
+    return _set_open_position_for_instance(updated, instance_id)
 
 
 def _exit_cooldown_active(position: dict[str, Any]) -> bool:
@@ -484,7 +545,13 @@ def _exit_cooldown_active(position: dict[str, Any]) -> bool:
     return (time.time() - last_attempt_at) < EXIT_COOLDOWN_SECONDS
 
 
-def _mark_exit_attempt(position: dict[str, Any], reason: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+def _mark_exit_attempt(
+    position: dict[str, Any],
+    reason: str,
+    snapshot: dict[str, Any],
+    *,
+    instance_id: str | None = None,
+) -> dict[str, Any]:
     updated = dict(position)
     updated["live_pnl"] = snapshot
     updated["server_exit"] = {
@@ -493,11 +560,16 @@ def _mark_exit_attempt(position: dict[str, Any], reason: str, snapshot: dict[str
         "last_attempt_epoch": time.time(),
         "reason": reason,
     }
-    return set_open_position(updated)
+    return _set_open_position_for_instance(updated, instance_id)
 
 
-def _unlock_exit_attempt(position: dict[str, Any], result: dict[str, Any]) -> None:
-    current = get_open_position()
+def _unlock_exit_attempt(
+    position: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    instance_id: str | None = None,
+) -> None:
+    current = dict(_get_open_position_for_instance(instance_id) or {})
     if not current.get("has_open_position"):
         return
     server_exit = current.get("server_exit")
@@ -517,10 +589,28 @@ def _unlock_exit_attempt(position: dict[str, Any], result: dict[str, Any]) -> No
     )
     updated = dict(current)
     updated["server_exit"] = server_exit
-    set_open_position(updated)
+    _set_open_position_for_instance(updated, instance_id)
 
 
-def _exit_signal(position: dict[str, Any], reason: str, snapshot: dict[str, Any]) -> NormalizedSignal:
+def _exit_signal(
+    position: dict[str, Any],
+    reason: str,
+    snapshot: dict[str, Any],
+    *,
+    instance_id: str | None = None,
+) -> NormalizedSignal:
+    raw_payload = {
+        "server_side_exit": True,
+        "exit_reason": reason,
+        "live_pnl": snapshot,
+    }
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is not None:
+        raw_payload["instance_id"] = scoped_instance_id
+        for key in ("strategy_version_id", "execution_mode", "v2_job_id", "source_signal_id"):
+            value = position.get(key)
+            if value is not None and str(value).strip():
+                raw_payload[key] = str(value)
     return NormalizedSignal(
         payload_format="NOVA",
         secret=get_webhook_secret() or "",
@@ -540,19 +630,23 @@ def _exit_signal(position: dict[str, Any], reason: str, snapshot: dict[str, Any]
         order_type=position.get("order_type") or DEFAULT_ORDER_TYPE,
         product_type=position.get("product_type") or DEFAULT_PRODUCT_TYPE,
         source="server_side_option_monitor",
-        raw_payload={
-            "server_side_exit": True,
-            "exit_reason": reason,
-            "live_pnl": snapshot,
-        },
+        raw_payload=raw_payload,
     )
 
 
-def _route_server_exit(position: dict[str, Any], reason: str, snapshot: dict[str, Any]) -> None:
+def _route_server_exit(
+    position: dict[str, Any],
+    reason: str,
+    snapshot: dict[str, Any],
+    *,
+    instance_id: str | None = None,
+) -> None:
     if _exit_cooldown_active(position):
         return
+    if not _instance_exit_routing_allowed(instance_id):
+        return
 
-    marked = _mark_exit_attempt(position, reason, snapshot)
+    marked = _mark_exit_attempt(position, reason, snapshot, instance_id=instance_id)
     log_audit_event(
         "SERVER_SIDE_OPTION_EXIT_TRIGGERED",
         f"Server-side option {reason} triggered from Dhan LTP.",
@@ -561,6 +655,7 @@ def _route_server_exit(position: dict[str, Any], reason: str, snapshot: dict[str
             "reason": reason,
             "trading_symbol": marked.get("trading_symbol"),
             "security_id": marked.get("security_id"),
+            "instance_id": _normalized_instance_id(instance_id),
             "live_pnl": snapshot,
         },
     )
@@ -570,6 +665,7 @@ def _route_server_exit(position: dict[str, Any], reason: str, snapshot: dict[str
             "reason": reason,
             "trading_symbol": marked.get("trading_symbol"),
             "security_id": marked.get("security_id"),
+            "instance_id": _normalized_instance_id(instance_id),
             "live_pnl": snapshot,
         }
     )
@@ -577,14 +673,14 @@ def _route_server_exit(position: dict[str, Any], reason: str, snapshot: dict[str
     try:
         from app.services.execution_router import route_signal
 
-        result = route_signal(_exit_signal(marked, reason, snapshot))
+        result = route_signal(_exit_signal(marked, reason, snapshot, instance_id=instance_id))
     except Exception as exc:
         log_error_event(
             "SERVER_SIDE_OPTION_EXIT_FAILED",
             f"Server-side option exit routing failed: {exc}",
             metadata={"reason": reason, "position": marked, "live_pnl": snapshot},
         )
-        _unlock_exit_attempt(marked, {"success": False, "status": "ERROR", "error": str(exc)})
+        _unlock_exit_attempt(marked, {"success": False, "status": "ERROR", "error": str(exc)}, instance_id=instance_id)
         return
 
     if result.get("success"):
@@ -595,24 +691,29 @@ def _route_server_exit(position: dict[str, Any], reason: str, snapshot: dict[str
                 "reason": reason,
                 "order_id": result.get("order_id"),
                 "status": result.get("status"),
+                "instance_id": _normalized_instance_id(instance_id),
                 "live_pnl": snapshot,
             },
         )
         return
 
-    _unlock_exit_attempt(marked, result)
+    _unlock_exit_attempt(marked, result, instance_id=instance_id)
 
 
-def monitor_once(*, force_rest: bool = False) -> None:
+def monitor_once(*, force_rest: bool = False, instance_id: str | None = None) -> None:
+    scoped_instance_id = _normalized_instance_id(instance_id)
     runtime = get_runtime_settings()
     if not _monitor_should_run(runtime):
         return
 
-    position = get_open_position()
+    position = _get_open_position_for_instance(scoped_instance_id) or {}
+    if not _instance_monitor_allowed(scoped_instance_id):
+        return
+
     if not _market_is_open():
-        if not force_rest:
+        if not force_rest and scoped_instance_id is None:
             clear_marketfeed_subscription()
-        current = dict(get_open_position())
+        current = dict(_get_open_position_for_instance(scoped_instance_id) or {})
         if current.get("has_open_position"):
             current["live_pnl"] = {
                 "source": "market_closed",
@@ -622,12 +723,16 @@ def monitor_once(*, force_rest: bool = False) -> None:
                 "last_checked_at": utc_now(),
                 "ws_status": marketfeed_ws_status(),
             }
-            set_open_position(current)
+            _set_open_position_for_instance(current, scoped_instance_id)
         return
 
-    snapshot_published = _publish_market_snapshot_from_monitor()
+    snapshot_published = (
+        _publish_market_snapshot_from_monitor()
+        if scoped_instance_id is None
+        else _publish_market_snapshot_from_monitor(instance_id=scoped_instance_id)
+    )
     if not position.get("has_open_position"):
-        if not force_rest and not snapshot_published:
+        if not force_rest and not snapshot_published and scoped_instance_id is None:
             clear_marketfeed_subscription()
         return
 
@@ -647,7 +752,13 @@ def monitor_once(*, force_rest: bool = False) -> None:
     if entry_price_before_sync is None and not order_creds:
         return
     sync_creds = order_creds or market_creds
-    position = _sync_entry_fill_if_needed(position, order_client, sync_creds.client_id, sync_creds.access_token)
+    position = _sync_entry_fill_if_needed(
+        position,
+        order_client,
+        sync_creds.client_id,
+        sync_creds.access_token,
+        instance_id=scoped_instance_id,
+    )
     entry_price = _as_float(position.get("entry_price"))
     if entry_price is None or entry_price <= 0:
         return
@@ -673,18 +784,18 @@ def monitor_once(*, force_rest: bool = False) -> None:
                 security_id=security_id,
             )
         else:
-            current = dict(get_open_position())
+            current = dict(_get_open_position_for_instance(scoped_instance_id) or {})
             if current.get("has_open_position"):
                 current["live_pnl"] = _ltp_error_snapshot(
                     quote=quote,
                     status="ws_waiting" if quote is None or quote.error == "ws_tick_missing" else "ws_stale",
                     ws_status=marketfeed_ws_status(),
                 )
-                set_open_position(current)
+                _set_open_position_for_instance(current, scoped_instance_id)
             return
 
     if not quote.success or quote.ltp is None:
-        current = dict(get_open_position())
+        current = dict(_get_open_position_for_instance(scoped_instance_id) or {})
         if current.get("has_open_position"):
             current["live_pnl"] = {
                 "source": getattr(quote, "source", "dhan_marketfeed_ltp"),
@@ -694,7 +805,7 @@ def monitor_once(*, force_rest: bool = False) -> None:
                 "last_checked_at": utc_now(),
                 "ws_status": marketfeed_ws_status(),
             }
-            set_open_position(current)
+            _set_open_position_for_instance(current, scoped_instance_id)
         log_order_event(
             {
                 "event": "OPTION_LTP_FETCH_FAILED",
@@ -746,7 +857,7 @@ def monitor_once(*, force_rest: bool = False) -> None:
             snapshot = confirmed_snapshot
         exit_reason = confirmed_reason
 
-    updated = _with_live_pnl(position, snapshot)
+    updated = _with_live_pnl(position, snapshot, instance_id=scoped_instance_id)
     publish_tick_pnl_from_sync(
         symbol=str(position.get("trading_symbol") or position.get("symbol") or "NIFTY option"),
         security_id=security_id,
@@ -761,14 +872,25 @@ def monitor_once(*, force_rest: bool = False) -> None:
         and (_runtime_bool(runtime, "server_side_exit_enabled", True) or _active_exit_levels(updated) is not None)
         and (get_engine_mode() == "paper" or not _broker_managed_exit(updated))
     ):
-        _route_server_exit(updated, exit_reason, snapshot)
+        if scoped_instance_id is None:
+            _route_server_exit(updated, exit_reason, snapshot)
+        else:
+            _route_server_exit(updated, exit_reason, snapshot, instance_id=scoped_instance_id)
 
 
-def _publish_market_snapshot_from_monitor() -> bool:
+def _publish_market_snapshot_from_monitor(*, instance_id: str | None = None) -> bool:
+    scoped_instance_id = _normalized_instance_id(instance_id)
     try:
         # WS-only build: the fast (sub-second) push loop must never call the Dhan
         # REST quote API (1 req/sec limit). It reads only cached WebSocket ticks,
         # so it can fan out as fast as the loop runs with zero REST load.
+        if scoped_instance_id is not None:
+            return publish_market_snapshot_from_sync(
+                snapshot_factory=lambda: build_nifty_snapshot(
+                    allow_rest_fallback=False,
+                    instance_id=scoped_instance_id,
+                )
+            )
         return publish_market_snapshot_from_sync(
             snapshot_factory=lambda: get_shared_nifty_snapshot(allow_rest_fallback=False)
         )

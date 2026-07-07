@@ -8,6 +8,7 @@ from app.services.audit_logger import log_audit_event, log_order_event
 from app.services.credential_vault import get_dhan_credentials
 from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, RealDhanClient
 from app.services.state_store import (
+    clear_open_position,
     default_open_position,
     get_app_state,
     get_engine_mode,
@@ -20,6 +21,27 @@ from app.services.state_store import (
 
 BROKER_SYNC_TTL_SECONDS = 10
 EXIT_WAITING_STATES = {"WAITING_EXIT", "EXIT_SIGNAL_RECEIVED", "EXIT_ORDER_SENDING"}
+
+
+def _normalized_instance_id(instance_id: str | None) -> str | None:
+    if instance_id is None:
+        return None
+    value = str(instance_id).strip()
+    return value or None
+
+
+def _get_open_position_for_instance(instance_id: str | None) -> dict[str, Any] | None:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return get_open_position()
+    return get_open_position(instance_id=scoped_instance_id)
+
+
+def _set_open_position_for_instance(position: dict[str, Any], instance_id: str | None) -> dict[str, Any]:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return set_open_position(position)
+    return set_open_position(position, instance_id=scoped_instance_id)
 
 
 def _pick(row: dict[str, Any], *keys: str) -> Any:
@@ -110,10 +132,16 @@ def _summarize_dhan_order(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _with_sync(position: dict[str, Any], sync: dict[str, Any], *, persist: bool) -> dict[str, Any]:
+def _with_sync(
+    position: dict[str, Any],
+    sync: dict[str, Any],
+    *,
+    persist: bool,
+    instance_id: str | None = None,
+) -> dict[str, Any]:
     updated = {**position, "broker_sync": sync}
     if persist:
-        return set_open_position(updated)
+        return _set_open_position_for_instance(updated, instance_id)
     return updated
 
 
@@ -144,8 +172,14 @@ def _sync_metadata(
     }
 
 
-def get_reconciled_open_position(*, force: bool = False, reason: str = "positions") -> dict[str, Any]:
-    position = get_open_position()
+def get_reconciled_open_position(
+    *,
+    force: bool = False,
+    reason: str = "positions",
+    instance_id: str | None = None,
+) -> dict[str, Any]:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    position = _get_open_position_for_instance(scoped_instance_id) or default_open_position()
     if not position.get("has_open_position"):
         return position
     if get_engine_mode() == "paper":
@@ -159,6 +193,7 @@ def get_reconciled_open_position(*, force: bool = False, reason: str = "position
                 message="Broker sync skipped because Dhan mode is not REAL.",
             ),
             persist=True,
+            instance_id=scoped_instance_id,
         )
 
     if not force and _recently_synced(position):
@@ -174,6 +209,7 @@ def get_reconciled_open_position(*, force: bool = False, reason: str = "position
                 failures=["missing_dhan_credentials"],
             ),
             persist=True,
+            instance_id=scoped_instance_id,
         )
 
     checked_at = utc_now()
@@ -191,6 +227,7 @@ def get_reconciled_open_position(*, force: bool = False, reason: str = "position
                 failures=[str(exc)],
             ),
             persist=True,
+            instance_id=scoped_instance_id,
         )
 
     active_positions = [_summarize_dhan_position(row) for row in positions.items if _is_active_dhan_position(row)]
@@ -212,6 +249,7 @@ def get_reconciled_open_position(*, force: bool = False, reason: str = "position
             "active_positions": active_positions[:3],
             "open_orders": open_orders[:3],
             "failures": failures,
+            "instance_id": scoped_instance_id,
         }
     )
 
@@ -227,6 +265,7 @@ def get_reconciled_open_position(*, force: bool = False, reason: str = "position
                 failures=failures,
             ),
             persist=True,
+            instance_id=scoped_instance_id,
         )
 
     if active_positions or open_orders:
@@ -240,6 +279,7 @@ def get_reconciled_open_position(*, force: bool = False, reason: str = "position
                 open_orders=open_orders,
             ),
             persist=True,
+            instance_id=scoped_instance_id,
         )
 
     sync = _sync_metadata(
@@ -249,10 +289,13 @@ def get_reconciled_open_position(*, force: bool = False, reason: str = "position
         cleared=True,
     )
     cleared_position = {**default_open_position(), "broker_sync": sync}
-    set_open_position(cleared_position)
+    if scoped_instance_id is None:
+        set_open_position(cleared_position)
+    else:
+        clear_open_position(instance_id=scoped_instance_id)
 
     app_state = get_app_state()
-    if app_state.get("state") in EXIT_WAITING_STATES:
+    if scoped_instance_id is None and app_state.get("state") in EXIT_WAITING_STATES:
         update_app_state(
             state="WAITING_ENTRY",
             last_message="Local open position cleared after Dhan confirmed broker is flat.",
@@ -261,12 +304,18 @@ def get_reconciled_open_position(*, force: bool = False, reason: str = "position
     log_audit_event(
         "OPEN_POSITION_RECONCILED_FLAT",
         "Local open position cleared after Dhan positions/orders returned flat.",
-        metadata={"reason": reason, "previous_open_position": position, "broker_sync": sync},
+        metadata={
+            "reason": reason,
+            "instance_id": scoped_instance_id,
+            "previous_open_position": position,
+            "broker_sync": sync,
+        },
     )
     log_order_event(
         {
             "event": "LOCAL_OPEN_POSITION_CLEARED_AFTER_DHAN_SYNC",
             "reason": reason,
+            "instance_id": scoped_instance_id,
             "previous_open_position": position,
             "broker_sync": sync,
         }

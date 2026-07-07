@@ -6,7 +6,36 @@ from app.config import settings
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.credential_vault import get_dhan_credentials
 from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, RealDhanClient
-from app.services.state_store import default_open_position, get_engine_mode, get_open_position, set_open_position, update_app_state, utc_now
+from app.services.state_store import (
+    clear_open_position,
+    default_open_position,
+    get_engine_mode,
+    get_open_position,
+    set_open_position,
+    update_app_state,
+    utc_now,
+)
+
+
+def _normalized_instance_id(instance_id: str | None) -> str | None:
+    if instance_id is None:
+        return None
+    value = str(instance_id).strip()
+    return value or None
+
+
+def _get_open_position_for_instance(instance_id: str | None) -> dict[str, Any] | None:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return get_open_position()
+    return get_open_position(instance_id=scoped_instance_id)
+
+
+def _set_open_position_for_instance(position: dict[str, Any], instance_id: str | None) -> dict[str, Any]:
+    scoped_instance_id = _normalized_instance_id(instance_id)
+    if scoped_instance_id is None:
+        return set_open_position(position)
+    return set_open_position(position, instance_id=scoped_instance_id)
 
 
 def _pick(row: dict[str, Any], *keys: str) -> Any:
@@ -86,11 +115,12 @@ def _active_waiting_message(position: dict[str, Any], sync: dict[str, Any]) -> s
     return f"Startup verified {option_side}; server-side exit monitor will resume tracking."
 
 
-def reconcile_open_position_on_startup() -> dict[str, Any]:
+def reconcile_open_position_on_startup(instance_id: str | None = None) -> dict[str, Any]:
+    scoped_instance_id = _normalized_instance_id(instance_id)
     checked_at = utc_now()
     if get_engine_mode() == "paper":
         return {"status": "skipped", "reason": "paper_mode", "checked_at": checked_at}
-    position = get_open_position()
+    position = _get_open_position_for_instance(scoped_instance_id) or {}
     if not position.get("has_open_position"):
         return {"status": "skipped", "reason": "no_local_open_position", "checked_at": checked_at}
 
@@ -101,7 +131,7 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
             "reason": "not_real_mode",
             "checked_at": checked_at,
         }
-        set_open_position({**position, "broker_restart_sync": sync})
+        _set_open_position_for_instance({**position, "broker_restart_sync": sync}, scoped_instance_id)
         return sync
 
     creds = get_dhan_credentials()
@@ -112,16 +142,17 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
             "reason": "missing_dhan_credentials",
             "checked_at": checked_at,
         }
-        set_open_position({**position, "broker_restart_sync": sync})
-        update_app_state(
-            state="RESTART_RECONCILE_FAILED",
-            last_message="Startup could not verify the tracked open position because Dhan credentials are missing.",
-        )
+        _set_open_position_for_instance({**position, "broker_restart_sync": sync}, scoped_instance_id)
+        if scoped_instance_id is None:
+            update_app_state(
+                state="RESTART_RECONCILE_FAILED",
+                last_message="Startup could not verify the tracked open position because Dhan credentials are missing.",
+            )
         log_audit_event(
             "STARTUP_OPEN_POSITION_RECONCILE_FAILED",
             "Startup could not verify the tracked open position because Dhan credentials are missing.",
             severity="WARNING",
-            metadata={"open_position": position, "broker_restart_sync": sync},
+            metadata={"instance_id": scoped_instance_id, "open_position": position, "broker_restart_sync": sync},
         )
         return sync
 
@@ -137,12 +168,17 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
             "error": str(exc),
             "checked_at": checked_at,
         }
-        set_open_position({**position, "broker_restart_sync": sync})
-        update_app_state(
-            state="RESTART_RECONCILE_FAILED",
-            last_message="Startup could not verify Dhan open position. Keeping local tracker for safety.",
+        _set_open_position_for_instance({**position, "broker_restart_sync": sync}, scoped_instance_id)
+        if scoped_instance_id is None:
+            update_app_state(
+                state="RESTART_RECONCILE_FAILED",
+                last_message="Startup could not verify Dhan open position. Keeping local tracker for safety.",
+            )
+        log_error_event(
+            "STARTUP_OPEN_POSITION_RECONCILE_EXCEPTION",
+            str(exc),
+            metadata={"instance_id": scoped_instance_id, "open_position": position},
         )
-        log_error_event("STARTUP_OPEN_POSITION_RECONCILE_EXCEPTION", str(exc), metadata={"open_position": position})
         return sync
 
     failures: list[str] = []
@@ -158,16 +194,17 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
             "failures": failures,
             "checked_at": checked_at,
         }
-        set_open_position({**position, "broker_restart_sync": sync})
-        update_app_state(
-            state="RESTART_RECONCILE_FAILED",
-            last_message="Startup could not verify Dhan open position. Keeping local tracker for safety.",
-        )
+        _set_open_position_for_instance({**position, "broker_restart_sync": sync}, scoped_instance_id)
+        if scoped_instance_id is None:
+            update_app_state(
+                state="RESTART_RECONCILE_FAILED",
+                last_message="Startup could not verify Dhan open position. Keeping local tracker for safety.",
+            )
         log_audit_event(
             "STARTUP_OPEN_POSITION_RECONCILE_FAILED",
             "Startup could not verify Dhan open position.",
             severity="WARNING",
-            metadata={"open_position": position, "broker_restart_sync": sync},
+            metadata={"instance_id": scoped_instance_id, "open_position": position, "broker_restart_sync": sync},
         )
         return sync
 
@@ -187,16 +224,20 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
             "active_positions_count": len(active_positions),
             "open_orders_count": len(open_orders),
         }
-        set_open_position({**default_open_position(), "broker_restart_sync": sync})
-        update_app_state(
-            state="WAITING_ENTRY",
-            last_message="Startup reconciliation cleared stale local position; Dhan appears flat for NOVA's tracked contract.",
-        )
+        if scoped_instance_id is None:
+            set_open_position({**default_open_position(), "broker_restart_sync": sync})
+            update_app_state(
+                state="WAITING_ENTRY",
+                last_message="Startup reconciliation cleared stale local position; Dhan appears flat for NOVA's tracked contract.",
+            )
+        else:
+            clear_open_position(instance_id=scoped_instance_id)
         log_audit_event(
             "STARTUP_STALE_OPEN_POSITION_CLEARED",
             "Startup reconciliation cleared a stale local open position after Dhan verification.",
             severity="WARNING",
             metadata={
+                "instance_id": scoped_instance_id,
                 "previous_open_position": position,
                 "broker_restart_sync": sync,
                 "active_positions": active_positions[:5],
@@ -235,17 +276,19 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
         }
     )
     updated["live_pnl"] = live_pnl
-    set_open_position(updated)
-    update_app_state(state="WAITING_EXIT", last_message=_active_waiting_message(updated, sync))
+    _set_open_position_for_instance(updated, scoped_instance_id)
+    if scoped_instance_id is None:
+        update_app_state(state="WAITING_EXIT", last_message=_active_waiting_message(updated, sync))
     log_audit_event(
         "STARTUP_OPEN_POSITION_VERIFIED",
         "Startup verified NOVA's tracked open position against Dhan.",
-        metadata={"open_position": updated, "broker_restart_sync": sync},
+        metadata={"instance_id": scoped_instance_id, "open_position": updated, "broker_restart_sync": sync},
     )
     log_order_event(
         {
             "event": "STARTUP_OPEN_POSITION_VERIFIED",
             "status": sync["status"],
+            "instance_id": scoped_instance_id,
             "security_id": position.get("security_id"),
             "trading_symbol": position.get("trading_symbol"),
             "exit_management": exit_management,
