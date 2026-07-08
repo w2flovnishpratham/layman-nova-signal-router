@@ -1,4 +1,4 @@
-import { BarChart3, Check, Copy, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, Wifi, X, Zap } from 'lucide-react'
+import { BarChart3, BookOpen, Check, Copy, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, Wifi, X, Zap } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import type { AuthUser } from '../api'
@@ -17,6 +17,7 @@ interface Props {
   user: AuthUser
   view: NovaView
   v2PaperStatusEnabled: boolean
+  strategyCatalogStatusEnabled: boolean
   onNavigate: (view: NovaView) => void
   onKill: () => void
   onReconfigure: () => void
@@ -33,6 +34,7 @@ export function Header({
   user,
   view,
   v2PaperStatusEnabled,
+  strategyCatalogStatusEnabled,
   onNavigate,
   onKill,
   onReconfigure,
@@ -45,6 +47,7 @@ export function Header({
   const [ipCopied, setIpCopied] = useState(false)
   const holdTimer = useRef<number | null>(null)
   const canViewV2PaperStatus = v2PaperStatusEnabled && (user.is_admin || user.is_dev)
+  const canViewStrategyCatalogStatus = strategyCatalogStatusEnabled && (user.is_admin || user.is_dev)
 
   // Fetch the assigned Nova Static IP whenever the account menu opens, so a
   // paid user can view/copy their dedicated IP at any time (e.g. to whitelist
@@ -125,6 +128,17 @@ export function Header({
               >
                 <FlaskConical size={13} />
                 V2 Paper
+              </button>
+            ) : null}
+            {canViewStrategyCatalogStatus ? (
+              <button
+                type="button"
+                className={`nv-nav-tab${view === 'strategy-catalog-status' ? ' active' : ''}`}
+                aria-current={view === 'strategy-catalog-status'}
+                onClick={() => onNavigate('strategy-catalog-status')}
+              >
+                <BookOpen size={13} />
+                Strategies
               </button>
             ) : null}
           </nav>
@@ -213,6 +227,20 @@ export function Header({
                   >
                     <FlaskConical size={14} />
                     V2 Paper Status
+                  </button>
+                ) : null}
+
+                {canViewStrategyCatalogStatus ? (
+                  <button
+                    className="secondary-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-sm font-medium"
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false)
+                      onNavigate('strategy-catalog-status')
+                    }}
+                  >
+                    <BookOpen size={14} />
+                    Strategy Catalog
                   </button>
                 ) : null}
 

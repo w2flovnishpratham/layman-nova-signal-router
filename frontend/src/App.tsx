@@ -11,6 +11,7 @@ import { MotionPulseText, MotionSpinner, softEase, useAppReducedMotion } from '.
 import { ChatLog } from './components/messages/ChatLog'
 import { SetupPanel } from './components/setup/SetupPanel'
 import { PortfolioDashboard } from './dashboard/PortfolioDashboard'
+import { StrategyCatalogStatusPanel } from './debug/StrategyCatalogStatusPanel'
 import { V2PaperStatusPanel } from './debug/V2PaperStatusPanel'
 import type { NovaView } from './types'
 import {
@@ -32,14 +33,19 @@ import type { ClientCommand, MarketSnapshot, SystemHealth } from './types'
 // Frontend-only visibility guard. Backend debug flags and auth gates remain
 // the real protection for the inspector endpoints.
 const V2_PAPER_STATUS_UI_ENABLED = import.meta.env.VITE_ENABLE_V2_PAPER_STATUS === 'true'
+const STRATEGY_CATALOG_STATUS_UI_ENABLED = import.meta.env.VITE_ENABLE_STRATEGY_CATALOG_STATUS === 'true'
+
+function initialViewFromHash(): NovaView {
+  if (window.location.hash === '#v2-paper-status') return 'v2-paper-status'
+  if (window.location.hash === '#strategy-catalog-status') return 'strategy-catalog-status'
+  return 'trading'
+}
 
 function App() {
   const wsRef = useRef<SessionWS | null>(null)
   const lastCommandRef = useRef<{ key: string; at: number } | null>(null)
   const [bootNonce, setBootNonce] = useState(0)
-  const [view, setView] = useState<NovaView>(() => (
-    window.location.hash === '#v2-paper-status' ? 'v2-paper-status' : 'trading'
-  ))
+  const [view, setView] = useState<NovaView>(() => initialViewFromHash())
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState('')
@@ -78,8 +84,11 @@ function App() {
   const updateSetupDraft = useSessionStore((state) => state.updateSetupDraft)
   const setSetupFlowStep = useSessionStore((state) => state.setSetupFlowStep)
   const canViewV2PaperStatus = Boolean(V2_PAPER_STATUS_UI_ENABLED && (authUser?.is_admin || authUser?.is_dev))
+  const canViewStrategyCatalogStatus = Boolean(
+    STRATEGY_CATALOG_STATUS_UI_ENABLED && (authUser?.is_admin || authUser?.is_dev),
+  )
   const activeView: NovaView = view
-  const debugViewActive = activeView === 'v2-paper-status'
+  const internalViewActive = activeView === 'v2-paper-status' || activeView === 'strategy-catalog-status'
 
   const verifyLogin = useCallback(() => {
     setAuthLoading(true)
@@ -114,7 +123,7 @@ function App() {
 
   useEffect(() => {
     if (!authUser) return
-    if (debugViewActive) {
+    if (internalViewActive) {
       wsRef.current?.close()
       resetSession()
       setSnapshotLoaded(false)
@@ -154,10 +163,10 @@ function App() {
       mounted = false
       wsRef.current?.close()
     }
-  }, [applyServerEvent, authUser, bootNonce, debugViewActive, loadBootstrap, loadSnapshot, resetSession, setBootError, setWsStatus])
+  }, [applyServerEvent, authUser, bootNonce, internalViewActive, loadBootstrap, loadSnapshot, resetSession, setBootError, setWsStatus])
 
   useEffect(() => {
-    if (!authUser || debugViewActive) return
+    if (!authUser || internalViewActive) return
     let mounted = true
     let timer: number | null = null
 
@@ -175,7 +184,7 @@ function App() {
       mounted = false
       if (timer !== null) window.clearTimeout(timer)
     }
-  }, [authUser, bootNonce, debugViewActive])
+  }, [authUser, bootNonce, internalViewActive])
 
   const displayedMarketSnapshot = pushedMarketSnapshot ?? marketSnapshot
 
@@ -317,6 +326,7 @@ function App() {
         user={authUser}
         view={activeView}
         v2PaperStatusEnabled={canViewV2PaperStatus}
+        strategyCatalogStatusEnabled={canViewStrategyCatalogStatus}
         onNavigate={setView}
         onKill={() => send({ type: 'session.kill', data: {} })}
         onReconfigure={reconfigure}
@@ -338,6 +348,8 @@ function App() {
         <PortfolioDashboard />
       ) : activeView === 'v2-paper-status' ? (
         <V2PaperStatusPanel enabled={canViewV2PaperStatus} />
+      ) : activeView === 'strategy-catalog-status' ? (
+        <StrategyCatalogStatusPanel enabled={canViewStrategyCatalogStatus} />
       ) : (
         <motion.section
           layout
@@ -496,7 +508,7 @@ function App() {
       )}
 
       {/* Mobile-only sliding drawers and floating action bar */}
-      {engineLive && activeView !== 'v2-paper-status' && (
+      {engineLive && !internalViewActive && (
         <>
           {/* Bottom-to-Top Drawer: Market LTP & Manual Order */}
           <AnimatePresence initial={false}>

@@ -9,13 +9,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.config import settings
-from app.db.engine import database_configured
+from app.db import models
+from app.db.engine import database_configured, session_scope
 from app.services import entitlements, live_engine, strategy_fanout
 from app.services import webhook_replay_store
 from app.services import strategy_risk
@@ -160,9 +162,82 @@ class RiskControlPatch(BaseModel):
         return data
 
 
+def _require_internal_strategy_status_user(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    if user.is_admin or user.is_dev:
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Internal strategy status access required.",
+    )
+
+
 @router.get("/api/strategies/subscriptions")
 def my_subscriptions(user: CurrentUser = Depends(get_current_user)) -> dict:
     return {"subscriptions": strategy_fanout.list_user_subscriptions(user.id)}
+
+
+@router.get("/api/strategies/catalog")
+def strategy_catalog(
+    user: CurrentUser = Depends(_require_internal_strategy_status_user),
+) -> dict:
+    if not database_configured():
+        return {"ok": True, "database_configured": False, "catalog": []}
+    with session_scope() as db:
+        catalog_rows = db.scalars(
+            select(models.StrategyCatalog)
+            .order_by(models.StrategyCatalog.name.asc(), models.StrategyCatalog.code.asc())
+        ).all()
+        version_rows = db.scalars(
+            select(models.StrategyVersion)
+            .order_by(models.StrategyVersion.created_at.asc(), models.StrategyVersion.version.asc())
+        ).all()
+        versions_by_strategy: dict[uuid.UUID, list[models.StrategyVersion]] = {}
+        for version in version_rows:
+            versions_by_strategy.setdefault(version.strategy_id, []).append(version)
+        return {
+            "ok": True,
+            "database_configured": True,
+            "catalog": [
+                _strategy_catalog_public(row, versions_by_strategy.get(row.id, []))
+                for row in catalog_rows
+            ],
+            "viewer": _strategy_status_viewer(user),
+        }
+
+
+@router.get("/api/strategies/instances")
+def strategy_instances(
+    user: CurrentUser = Depends(_require_internal_strategy_status_user),
+) -> dict:
+    if not database_configured():
+        return {"ok": True, "database_configured": False, "instances": []}
+    with session_scope() as db:
+        rows = db.execute(
+            select(
+                models.UserStrategyInstance,
+                models.StrategyCatalog,
+                models.StrategyVersion,
+            )
+            .join(
+                models.StrategyCatalog,
+                models.StrategyCatalog.id == models.UserStrategyInstance.strategy_id,
+            )
+            .outerjoin(
+                models.StrategyVersion,
+                models.StrategyVersion.id == models.UserStrategyInstance.strategy_version_id,
+            )
+            .where(models.UserStrategyInstance.user_id == user.id)
+            .order_by(models.UserStrategyInstance.created_at.desc())
+        ).all()
+        return {
+            "ok": True,
+            "database_configured": True,
+            "instances": [
+                _strategy_instance_public(instance, catalog, version)
+                for instance, catalog, version in rows
+            ],
+            "viewer": _strategy_status_viewer(user),
+        }
 
 
 @router.post("/api/strategies/subscribe")
@@ -459,6 +534,74 @@ def _entitlement_error(message: str) -> JSONResponse:
         status_code=403,
         content={"ok": False, "error": message},
     )
+
+
+def _strategy_status_viewer(user: CurrentUser) -> dict[str, Any]:
+    return {
+        "id": user.id_str,
+        "is_admin": user.is_admin,
+        "is_dev": user.is_dev,
+    }
+
+
+def _strategy_catalog_public(
+    row: models.StrategyCatalog,
+    versions: list[models.StrategyVersion],
+) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "code": row.code,
+        "name": row.name,
+        "description": row.description,
+        "source_type": row.source_type,
+        "status": row.status,
+        "created_at": _dt(row.created_at),
+        "updated_at": _dt(row.updated_at),
+        "versions": [_strategy_version_public(version) for version in versions],
+    }
+
+
+def _strategy_version_public(row: models.StrategyVersion) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "strategy_id": str(row.strategy_id),
+        "version": row.version,
+        "status": row.status,
+        "payload_version": row.payload_version,
+        "created_at": _dt(row.created_at),
+        "updated_at": _dt(row.updated_at),
+    }
+
+
+def _strategy_instance_public(
+    instance: models.UserStrategyInstance,
+    catalog: models.StrategyCatalog,
+    version: models.StrategyVersion | None,
+) -> dict[str, Any]:
+    return {
+        "id": str(instance.id),
+        "strategy_id": str(catalog.id),
+        "strategy_code": catalog.code,
+        "strategy_name": catalog.name,
+        "strategy_status": catalog.status,
+        "strategy_source_type": catalog.source_type,
+        "strategy_version_id": str(version.id) if version else None,
+        "strategy_version": version.version if version else None,
+        "payload_version": version.payload_version if version else None,
+        "version_status": version.status if version else None,
+        "instance_label": instance.instance_label,
+        "source_type": instance.source_type,
+        "status": instance.status,
+        "execution_mode": instance.execution_mode,
+        "lots": instance.lots,
+        "side_preference": instance.side_preference,
+        "created_at": _dt(instance.created_at),
+        "updated_at": _dt(instance.updated_at),
+    }
+
+
+def _dt(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
 
 
 def _require_static_ip_entitlement(user: CurrentUser) -> JSONResponse | None:

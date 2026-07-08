@@ -167,10 +167,77 @@ export interface V2PaperFanoutBundle {
   instances: V2PaperFanoutInstancesResponse
 }
 
+export interface StrategyCatalogVersion {
+  id?: string
+  strategy_id?: string
+  version?: string | null
+  status?: string | null
+  payload_version?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface StrategyCatalogItem {
+  id?: string
+  code?: string | null
+  name?: string | null
+  description?: string | null
+  source_type?: string | null
+  status?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  versions?: StrategyCatalogVersion[]
+}
+
+export interface StrategyCatalogStatusResponse {
+  ok?: boolean
+  database_configured?: boolean
+  catalog?: StrategyCatalogItem[]
+}
+
+export interface UserStrategyInstanceStatus {
+  id?: string
+  strategy_id?: string
+  strategy_code?: string | null
+  strategy_name?: string | null
+  strategy_status?: string | null
+  strategy_source_type?: string | null
+  strategy_version_id?: string | null
+  strategy_version?: string | null
+  payload_version?: string | null
+  version_status?: string | null
+  instance_label?: string | null
+  source_type?: string | null
+  status?: string | null
+  execution_mode?: string | null
+  lots?: number | null
+  side_preference?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface UserStrategyInstancesStatusResponse {
+  ok?: boolean
+  database_configured?: boolean
+  instances?: UserStrategyInstanceStatus[]
+}
+
+export interface StrategyCatalogStatusBundle {
+  catalog: StrategyCatalogStatusResponse
+  instances: UserStrategyInstancesStatusResponse
+}
+
 export class V2PaperStatusDisabledError extends Error {
   constructor() {
     super('V2 Paper Status is disabled.')
     this.name = 'V2PaperStatusDisabledError'
+  }
+}
+
+export class StrategyCatalogStatusDisabledError extends Error {
+  constructor() {
+    super('Strategy Catalog Status is disabled.')
+    this.name = 'StrategyCatalogStatusDisabledError'
   }
 }
 
@@ -448,6 +515,14 @@ export async function getV2PaperFanoutBundle(limit = 20): Promise<V2PaperFanoutB
   return { status, jobs, instances }
 }
 
+export async function getStrategyCatalogStatusBundle(): Promise<StrategyCatalogStatusBundle> {
+  const [catalog, instances] = await Promise.all([
+    readStrategyStatusEndpoint<StrategyCatalogStatusResponse>('/api/strategies/catalog'),
+    readStrategyStatusEndpoint<UserStrategyInstancesStatusResponse>('/api/strategies/instances'),
+  ])
+  return { catalog, instances }
+}
+
 export async function getOrderQuote(side: 'CE' | 'PE', lots: number): Promise<OrderQuote> {
   const params = new URLSearchParams({ side, lots: String(lots) })
   const response = await apiFetch(`/api/orders/quote?${params.toString()}` as `/${string}`, { cache: 'no-store' })
@@ -530,16 +605,32 @@ async function readV2PaperEndpoint<T>(path: `/${string}`): Promise<T> {
     throw new Error(`Could not load V2 paper status: ${response.status}`)
   }
   const body = await response.json().catch(() => ({})) as unknown
-  return sanitizeV2PaperDebugPayload(body) as T
+  return sanitizeInternalStatusPayload(body) as T
 }
 
-const V2_PAPER_SENSITIVE_KEYS = new Set([
+async function readStrategyStatusEndpoint<T>(path: `/${string}`): Promise<T> {
+  const response = await apiFetch(path, { cache: 'no-store' })
+  if (response.status === 403 || response.status === 404) {
+    throw new StrategyCatalogStatusDisabledError()
+  }
+  if (!response.ok) {
+    throw new Error(`Could not load strategy catalog status: ${response.status}`)
+  }
+  const body = await response.json().catch(() => ({})) as unknown
+  return sanitizeInternalStatusPayload(body) as T
+}
+
+const INTERNAL_STATUS_SENSITIVE_KEYS = new Set([
   'access_token',
   'client_id',
+  'config',
+  'config_json',
   'credential_hash',
   'credentials_hash',
   'headers',
   'message_secret_hash',
+  'metadata',
+  'metadata_json',
   'password',
   'payload',
   'pin',
@@ -556,25 +647,26 @@ const V2_PAPER_SENSITIVE_KEYS = new Set([
   'webhook_key_hash',
 ])
 
-function sanitizeV2PaperDebugPayload(value: unknown): unknown {
+function sanitizeInternalStatusPayload(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map(sanitizeV2PaperDebugPayload)
+    return value.map(sanitizeInternalStatusPayload)
   }
   if (value && typeof value === 'object') {
     const result: Record<string, unknown> = {}
     for (const [key, item] of Object.entries(value)) {
       const lowered = key.toLowerCase()
       if (
-        V2_PAPER_SENSITIVE_KEYS.has(lowered)
+        INTERNAL_STATUS_SENSITIVE_KEYS.has(lowered)
         || lowered.includes('access_token')
         || lowered.includes('credential')
         || lowered.includes('headers')
         || lowered.includes('proxy_url')
         || lowered.includes('secret')
+        || lowered.includes('token')
       ) {
         continue
       }
-      result[key] = sanitizeV2PaperDebugPayload(item)
+      result[key] = sanitizeInternalStatusPayload(item)
     }
     return result
   }
