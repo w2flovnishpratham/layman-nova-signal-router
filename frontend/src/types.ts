@@ -11,7 +11,7 @@ export type SetupState =
   | 'ENDED'
 
 export type WsStatus = 'live' | 'degraded' | 'down'
-export type NovaView = 'trading' | 'dashboard'
+export type NovaView = 'trading' | 'dashboard' | 'v2-paper-status'
 export type Tone = 'up' | 'down' | 'flat'
 export type EngineMode = 'paper' | 'live'
 export type SetupFlowStep = 'mode' | 'live_access' | 'strategy' | 'broker' | 'side' | 'lots' | 'exits' | 'limits' | 'confirm' | 'complete'

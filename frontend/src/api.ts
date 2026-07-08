@@ -62,6 +62,118 @@ export interface PaymentEntitlementStatus {
   max_strategy_count: number | null
 }
 
+export interface V2PaperFanoutFlags {
+  debug_enabled?: boolean
+  multi_strategy_fanout?: boolean
+  v2_paper_runner_debug?: boolean
+}
+
+export interface V2PaperFanoutCounts {
+  paper_instances?: number
+  active_paper_instances?: number
+  real_order_instances?: number
+  signal_only_instances?: number
+  v2_paper_jobs?: number
+  v2_non_paper_jobs?: number
+  v2_pending_jobs?: number
+  v2_locked_jobs?: number
+  v2_completed_paper_jobs?: number
+  v2_failed_paper_jobs?: number
+  strategy_signals?: number
+  normalized_option_signals?: number
+  [key: string]: number | undefined
+}
+
+export interface V2PaperFanoutJob {
+  id?: string
+  instance_id?: string | null
+  strategy_code?: string | null
+  signal_id?: string | null
+  execution_mode?: string | null
+  status?: string | null
+  attempts?: number | null
+  max_attempts?: number | null
+  result_status?: string | null
+  error_code?: string | null
+  last_error?: string | null
+  dead_letter_reason?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface V2PaperOpenPositionSummary {
+  has_open_position?: boolean
+  strategy_code?: string | null
+  symbol?: string | null
+  instrument_type?: string | null
+  exchange_segment?: string | null
+  trading_symbol?: string | null
+  option_side?: string | null
+  strike?: number | string | null
+  expiry?: string | null
+  qty?: number | null
+  entry_price?: number | null
+  opened_at?: string | null
+  execution_mode?: string | null
+  source_signal_id?: string | null
+  v2_job_id?: string | null
+}
+
+export interface V2PaperStrategyInstance {
+  id?: string
+  strategy_code?: string | null
+  status?: string | null
+  execution_mode?: string | null
+  lots?: number | null
+  side_preference?: string | null
+  has_open_position?: boolean
+  open_position_summary?: V2PaperOpenPositionSummary
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface V2PaperFanoutStatusResponse {
+  ok?: boolean
+  limit?: number
+  flags?: V2PaperFanoutFlags
+  counts?: V2PaperFanoutCounts
+  jobs_by_status?: Record<string, number>
+  recent_jobs?: V2PaperFanoutJob[]
+  safety?: {
+    read_only?: boolean
+    real_orders_supported?: boolean
+    startup_worker_registered?: string | boolean
+    public_webhook_enabled?: string | boolean
+  }
+}
+
+export interface V2PaperFanoutJobsResponse {
+  ok?: boolean
+  limit?: number
+  count?: number
+  jobs?: V2PaperFanoutJob[]
+}
+
+export interface V2PaperFanoutInstancesResponse {
+  ok?: boolean
+  limit?: number
+  count?: number
+  instances?: V2PaperStrategyInstance[]
+}
+
+export interface V2PaperFanoutBundle {
+  status: V2PaperFanoutStatusResponse
+  jobs: V2PaperFanoutJobsResponse
+  instances: V2PaperFanoutInstancesResponse
+}
+
+export class V2PaperStatusDisabledError extends Error {
+  constructor() {
+    super('V2 Paper Status is disabled.')
+    this.name = 'V2PaperStatusDisabledError'
+  }
+}
+
 async function apiFetch(path: `/${string}`, init: RequestInit = {}): Promise<Response> {
   return fetch(backendHttpUrl(path), {
     ...init,
@@ -325,6 +437,17 @@ export async function getSystemHealth(): Promise<SystemHealth> {
   return response.json() as Promise<SystemHealth>
 }
 
+export async function getV2PaperFanoutBundle(limit = 20): Promise<V2PaperFanoutBundle> {
+  const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit) || 20))
+  const query = `?limit=${safeLimit}`
+  const [status, jobs, instances] = await Promise.all([
+    readV2PaperEndpoint<V2PaperFanoutStatusResponse>(`/api/debug/v2/paper-fanout/status${query}`),
+    readV2PaperEndpoint<V2PaperFanoutJobsResponse>(`/api/debug/v2/paper-fanout/jobs${query}`),
+    readV2PaperEndpoint<V2PaperFanoutInstancesResponse>(`/api/debug/v2/paper-fanout/instances${query}`),
+  ])
+  return { status, jobs, instances }
+}
+
 export async function getOrderQuote(side: 'CE' | 'PE', lots: number): Promise<OrderQuote> {
   const params = new URLSearchParams({ side, lots: String(lots) })
   const response = await apiFetch(`/api/orders/quote?${params.toString()}` as `/${string}`, { cache: 'no-store' })
@@ -396,4 +519,64 @@ async function postManualOrder(path: `/${string}`, payload: unknown): Promise<Ma
     throw new Error(body?.message || `Manual order failed: ${response.status}`)
   }
   return body ?? { ok: false, message: 'Manual order failed.' }
+}
+
+async function readV2PaperEndpoint<T>(path: `/${string}`): Promise<T> {
+  const response = await apiFetch(path, { cache: 'no-store' })
+  if (response.status === 403 || response.status === 404) {
+    throw new V2PaperStatusDisabledError()
+  }
+  if (!response.ok) {
+    throw new Error(`Could not load V2 paper status: ${response.status}`)
+  }
+  const body = await response.json().catch(() => ({})) as unknown
+  return sanitizeV2PaperDebugPayload(body) as T
+}
+
+const V2_PAPER_SENSITIVE_KEYS = new Set([
+  'access_token',
+  'client_id',
+  'credential_hash',
+  'credentials_hash',
+  'headers',
+  'message_secret_hash',
+  'password',
+  'payload',
+  'pin',
+  'proxy_url',
+  'raw_payload',
+  'raw_response',
+  'request',
+  'response',
+  'response_json',
+  'response_text',
+  'secret',
+  'signal_payload',
+  'token',
+  'webhook_key_hash',
+])
+
+function sanitizeV2PaperDebugPayload(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeV2PaperDebugPayload)
+  }
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      const lowered = key.toLowerCase()
+      if (
+        V2_PAPER_SENSITIVE_KEYS.has(lowered)
+        || lowered.includes('access_token')
+        || lowered.includes('credential')
+        || lowered.includes('headers')
+        || lowered.includes('proxy_url')
+        || lowered.includes('secret')
+      ) {
+        continue
+      }
+      result[key] = sanitizeV2PaperDebugPayload(item)
+    }
+    return result
+  }
+  return value
 }

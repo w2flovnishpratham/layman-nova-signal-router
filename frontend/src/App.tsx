@@ -11,6 +11,7 @@ import { MotionPulseText, MotionSpinner, softEase, useAppReducedMotion } from '.
 import { ChatLog } from './components/messages/ChatLog'
 import { SetupPanel } from './components/setup/SetupPanel'
 import { PortfolioDashboard } from './dashboard/PortfolioDashboard'
+import { V2PaperStatusPanel } from './debug/V2PaperStatusPanel'
 import type { NovaView } from './types'
 import {
   getCurrentUser,
@@ -32,7 +33,9 @@ function App() {
   const wsRef = useRef<SessionWS | null>(null)
   const lastCommandRef = useRef<{ key: string; at: number } | null>(null)
   const [bootNonce, setBootNonce] = useState(0)
-  const [view, setView] = useState<NovaView>('trading')
+  const [view, setView] = useState<NovaView>(() => (
+    window.location.hash === '#v2-paper-status' ? 'v2-paper-status' : 'trading'
+  ))
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState('')
@@ -70,6 +73,9 @@ function App() {
   const addUserMessage = useSessionStore((state) => state.addUserMessage)
   const updateSetupDraft = useSessionStore((state) => state.updateSetupDraft)
   const setSetupFlowStep = useSessionStore((state) => state.setSetupFlowStep)
+  const canViewDebug = Boolean(authUser?.is_admin || authUser?.is_dev)
+  const activeView: NovaView = view === 'v2-paper-status' && !canViewDebug ? 'trading' : view
+  const debugViewActive = activeView === 'v2-paper-status'
 
   const verifyLogin = useCallback(() => {
     setAuthLoading(true)
@@ -104,6 +110,12 @@ function App() {
 
   useEffect(() => {
     if (!authUser) return
+    if (debugViewActive) {
+      wsRef.current?.close()
+      resetSession()
+      setSnapshotLoaded(false)
+      return
+    }
     let mounted = true
 
     resetSession()
@@ -138,10 +150,10 @@ function App() {
       mounted = false
       wsRef.current?.close()
     }
-  }, [applyServerEvent, authUser, bootNonce, loadBootstrap, loadSnapshot, resetSession, setBootError, setWsStatus])
+  }, [applyServerEvent, authUser, bootNonce, debugViewActive, loadBootstrap, loadSnapshot, resetSession, setBootError, setWsStatus])
 
   useEffect(() => {
-    if (!authUser) return
+    if (!authUser || debugViewActive) return
     let mounted = true
     let timer: number | null = null
 
@@ -159,7 +171,7 @@ function App() {
       mounted = false
       if (timer !== null) window.clearTimeout(timer)
     }
-  }, [authUser, bootNonce])
+  }, [authUser, bootNonce, debugViewActive])
 
   const displayedMarketSnapshot = pushedMarketSnapshot ?? marketSnapshot
 
@@ -299,14 +311,14 @@ function App() {
         setupState={effectiveSetupState}
         health={systemHealth}
         user={authUser}
-        view={view}
+        view={activeView}
         onNavigate={setView}
         onKill={() => send({ type: 'session.kill', data: {} })}
         onReconfigure={reconfigure}
         onLogout={handleLogout}
       />
 
-      {engineLive && view !== 'dashboard' ? (
+      {engineLive && activeView === 'trading' ? (
         <div className="router-banner-slot">
           <EngineListening
             paused={effectiveSetupState === 'PAUSED'}
@@ -317,8 +329,10 @@ function App() {
         </div>
       ) : null}
 
-      {view === 'dashboard' ? (
+      {activeView === 'dashboard' ? (
         <PortfolioDashboard />
+      ) : activeView === 'v2-paper-status' ? (
+        <V2PaperStatusPanel />
       ) : (
         <motion.section
           layout
@@ -477,7 +491,7 @@ function App() {
       )}
 
       {/* Mobile-only sliding drawers and floating action bar */}
-      {engineLive && (
+      {engineLive && activeView !== 'v2-paper-status' && (
         <>
           {/* Bottom-to-Top Drawer: Market LTP & Manual Order */}
           <AnimatePresence initial={false}>
@@ -578,7 +592,7 @@ function App() {
           <div className="fixed bottom-0 left-0 right-0 h-16 bg-[#0c0a14]/95 backdrop-blur-md border-t border-white/10 flex items-center justify-around z-[90] lg:hidden px-2">
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'trading' && !leftDrawerOpen && !rightDrawerOpen ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${activeView === 'trading' && !leftDrawerOpen && !rightDrawerOpen ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('trading')
                 setLeftDrawerOpen(false)
@@ -591,7 +605,7 @@ function App() {
 
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'dashboard' ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${activeView === 'dashboard' ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('dashboard')
                 setLeftDrawerOpen(false)
