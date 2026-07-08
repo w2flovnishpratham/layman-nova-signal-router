@@ -15,13 +15,19 @@ import './v2PaperStatus.css'
 
 type PanelState = 'loading' | 'ready' | 'disabled' | 'error'
 
-export function V2PaperStatusPanel() {
+export function V2PaperStatusPanel({ enabled }: { enabled: boolean }) {
   const [data, setData] = useState<V2PaperFanoutBundle | null>(null)
-  const [state, setState] = useState<PanelState>('loading')
+  const [state, setState] = useState<PanelState>(enabled ? 'loading' : 'disabled')
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
 
   const load = useCallback(async (soft = false) => {
+    if (!enabled) {
+      setData(null)
+      setState('disabled')
+      setError('')
+      return
+    }
     if (soft) setRefreshing(true)
     try {
       const next = await getV2PaperFanoutBundle(20)
@@ -40,9 +46,15 @@ export function V2PaperStatusPanel() {
     } finally {
       setRefreshing(false)
     }
-  }, [])
+  }, [enabled])
 
   useEffect(() => {
+    if (!enabled) {
+      setData(null)
+      setState('disabled')
+      setError('')
+      return
+    }
     let mounted = true
     getV2PaperFanoutBundle(20)
       .then((next) => {
@@ -65,7 +77,7 @@ export function V2PaperStatusPanel() {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [enabled])
 
   if (state === 'loading') {
     return (
@@ -81,12 +93,16 @@ export function V2PaperStatusPanel() {
   if (state === 'disabled') {
     return (
       <div className="nv-dash v2-paper-status">
-        <PanelHead refreshing={false} onRefresh={() => void load(true)} />
+        <PanelHead refreshing={false} onRefresh={() => void load(true)} refreshDisabled={!enabled} />
         <div className="v2-paper-disabled" role="status">
           <AlertTriangle size={24} />
           <div>
             <h2>V2 Paper Status is disabled.</h2>
-            <p>Enable DEBUG_ENABLED, MULTI_STRATEGY_FANOUT, and V2_PAPER_RUNNER_DEBUG in a safe staging/dev environment.</p>
+            <p>
+              This panel is an internal-only build feature. Set VITE_ENABLE_V2_PAPER_STATUS=true for an internal
+              staging/dev build, and keep DEBUG_ENABLED, MULTI_STRATEGY_FANOUT, and V2_PAPER_RUNNER_DEBUG enabled
+              only in a safe backend environment.
+            </p>
           </div>
         </div>
       </div>
@@ -96,7 +112,7 @@ export function V2PaperStatusPanel() {
   if (state === 'error' && !data) {
     return (
       <div className="nv-dash v2-paper-status">
-        <PanelHead refreshing={refreshing} onRefresh={() => void load(true)} />
+        <PanelHead refreshing={refreshing} onRefresh={() => void load(true)} refreshDisabled={false} />
         <div className="nv-dash-state">
           <p className="nv-dash-error">{error}</p>
           <button className="secondary-button" type="button" onClick={() => void load(true)}>
@@ -121,14 +137,28 @@ export function V2PaperStatusPanel() {
   )
 }
 
-function PanelHead({ refreshing, onRefresh }: { refreshing: boolean; onRefresh: () => void }) {
+function PanelHead({
+  refreshing,
+  refreshDisabled = false,
+  onRefresh,
+}: {
+  refreshing: boolean
+  refreshDisabled?: boolean
+  onRefresh: () => void
+}) {
   return (
     <div className="nv-dash-head">
       <div>
         <h1>V2 Paper Status</h1>
         <p><ShieldCheck size={13} /> Read-only internal inspector</p>
       </div>
-      <button className="secondary-button nv-refresh" type="button" onClick={onRefresh} aria-label="Refresh V2 paper status">
+      <button
+        className="secondary-button nv-refresh"
+        type="button"
+        onClick={onRefresh}
+        aria-label="Refresh V2 paper status"
+        disabled={refreshDisabled}
+      >
         {refreshing ? (
           <MotionSpinner>
             <Loader2 size={14} />

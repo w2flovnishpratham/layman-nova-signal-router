@@ -16,6 +16,7 @@ interface Props {
   health: SystemHealth | null
   user: AuthUser
   view: NovaView
+  v2PaperStatusEnabled: boolean
   onNavigate: (view: NovaView) => void
   onKill: () => void
   onReconfigure: () => void
@@ -31,6 +32,7 @@ export function Header({
   health,
   user,
   view,
+  v2PaperStatusEnabled,
   onNavigate,
   onKill,
   onReconfigure,
@@ -42,7 +44,7 @@ export function Header({
   const [staticIp, setStaticIp] = useState<string | null>(null)
   const [ipCopied, setIpCopied] = useState(false)
   const holdTimer = useRef<number | null>(null)
-  const canViewDebug = user.is_admin || user.is_dev
+  const canViewV2PaperStatus = v2PaperStatusEnabled && (user.is_admin || user.is_dev)
 
   // Fetch the assigned Nova Static IP whenever the account menu opens, so a
   // paid user can view/copy their dedicated IP at any time (e.g. to whitelist
@@ -114,7 +116,7 @@ export function Header({
               <BarChart3 size={13} />
               Dashboard
             </button>
-            {canViewDebug ? (
+            {canViewV2PaperStatus ? (
               <button
                 type="button"
                 className={`nv-nav-tab${view === 'v2-paper-status' ? ' active' : ''}`}
@@ -200,7 +202,7 @@ export function Header({
                   </div>
                 )}
 
-                {canViewDebug ? (
+                {canViewV2PaperStatus ? (
                   <button
                     className="secondary-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-sm font-medium"
                     type="button"

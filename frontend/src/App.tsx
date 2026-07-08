@@ -29,6 +29,10 @@ import { useSessionStore } from './state/sessionStore'
 import { SessionWS } from './ws'
 import type { ClientCommand, MarketSnapshot, SystemHealth } from './types'
 
+// Frontend-only visibility guard. Backend debug flags and auth gates remain
+// the real protection for the inspector endpoints.
+const V2_PAPER_STATUS_UI_ENABLED = import.meta.env.VITE_ENABLE_V2_PAPER_STATUS === 'true'
+
 function App() {
   const wsRef = useRef<SessionWS | null>(null)
   const lastCommandRef = useRef<{ key: string; at: number } | null>(null)
@@ -73,8 +77,8 @@ function App() {
   const addUserMessage = useSessionStore((state) => state.addUserMessage)
   const updateSetupDraft = useSessionStore((state) => state.updateSetupDraft)
   const setSetupFlowStep = useSessionStore((state) => state.setSetupFlowStep)
-  const canViewDebug = Boolean(authUser?.is_admin || authUser?.is_dev)
-  const activeView: NovaView = view === 'v2-paper-status' && !canViewDebug ? 'trading' : view
+  const canViewV2PaperStatus = Boolean(V2_PAPER_STATUS_UI_ENABLED && (authUser?.is_admin || authUser?.is_dev))
+  const activeView: NovaView = view
   const debugViewActive = activeView === 'v2-paper-status'
 
   const verifyLogin = useCallback(() => {
@@ -312,6 +316,7 @@ function App() {
         health={systemHealth}
         user={authUser}
         view={activeView}
+        v2PaperStatusEnabled={canViewV2PaperStatus}
         onNavigate={setView}
         onKill={() => send({ type: 'session.kill', data: {} })}
         onReconfigure={reconfigure}
@@ -332,7 +337,7 @@ function App() {
       {activeView === 'dashboard' ? (
         <PortfolioDashboard />
       ) : activeView === 'v2-paper-status' ? (
-        <V2PaperStatusPanel />
+        <V2PaperStatusPanel enabled={canViewV2PaperStatus} />
       ) : (
         <motion.section
           layout
