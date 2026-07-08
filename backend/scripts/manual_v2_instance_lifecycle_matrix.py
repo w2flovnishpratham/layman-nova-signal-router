@@ -516,6 +516,7 @@ def _scenario_frontend_static_safety(_context: MatrixContext) -> dict[str, Any]:
         "createPaperStrategyInstance",
         "pausePaperStrategyInstance",
         "resumePaperStrategyInstance",
+        "updateStrategyInstanceSettings",
     )
     forbidden_catalog_terms = (
         "run-once",
@@ -759,7 +760,9 @@ class ExecutionGuard:
 
 
 def _lifecycle_api_section(api_text: str) -> str:
-    start = api_text.find("Phase 2F-1: paper strategy instance lifecycle")
+    start = api_text.find("Phase 2F/2G: paper strategy instance lifecycle/settings helpers")
+    if start == -1:
+        start = api_text.find("Phase 2F-1: paper strategy instance lifecycle")
     end = api_text.find("async function apiFetch", start)
     if start == -1 or end == -1:
         return ""

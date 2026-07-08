@@ -1,4 +1,4 @@
-"""Phase 2F-1: paper strategy instance lifecycle mutation tests.
+"""Paper strategy instance lifecycle/settings mutation tests.
 
 Covers gates, born-paused create, pause/resume idempotency, ownership (404 for
 non-owner), real_orders rejection, planner interaction, audit safety, and the
@@ -75,16 +75,28 @@ def _seed_catalog(db, *, code: str = "SUPERTREND_V1", status: str | None = None)
     return catalog, version
 
 
-def _seed_instance(db, *, user_id, catalog, version, status: str, execution_mode: str):
+def _seed_instance(
+    db,
+    *,
+    user_id,
+    catalog,
+    version,
+    status: str,
+    execution_mode: str,
+    instance_label: str = "Seeded",
+    lots: int = 1,
+    side_preference: str | None = None,
+):
     row = models.UserStrategyInstance(
         user_id=user_id,
         strategy_id=catalog.id,
         strategy_version_id=version.id,
-        instance_label="Seeded",
+        instance_label=instance_label,
         source_type=StrategySourceType.NOVA_OWNED_TRADINGVIEW.value,
         status=status,
         execution_mode=execution_mode,
-        lots=1,
+        lots=lots,
+        side_preference=side_preference,
     )
     db.add(row)
     db.flush()
@@ -97,6 +109,17 @@ def _create_body(**overrides: Any) -> dict[str, Any]:
         "instance_label": "My Supertrend Paper",
         "lots": 1,
         "side_preference": "BOTH",
+        "confirm_paper_only": True,
+    }
+    body.update(overrides)
+    return body
+
+
+def _settings_body(**overrides: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "instance_label": "Edited Paper",
+        "lots": 2,
+        "side_preference": "CE",
         "confirm_paper_only": True,
     }
     body.update(overrides)
@@ -333,6 +356,13 @@ def _lifecycle(client: TestClient, instance_id, action: str):
     )
 
 
+def _settings(client: TestClient, instance_id, **overrides: Any):
+    return client.post(
+        f"/api/debug/v2/instances/{instance_id}/settings",
+        json=_settings_body(**overrides),
+    )
+
+
 def test_pause_resume_transitions_and_idempotency(mu_db, monkeypatch, audit_events, execution_spies):
     _enable_mutation_flags(monkeypatch)
     user_row = make_user("lifecycle@example.com", is_admin=True)
@@ -449,6 +479,262 @@ def test_error_status_instance_returns_safe_conflict(mu_db, monkeypatch):
         )
     client = _client(_current_user(user_row), monkeypatch)
     assert _lifecycle(client, instance_id, "resume").status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Paused settings edit
+# ---------------------------------------------------------------------------
+
+
+def test_settings_edit_paused_instance_updates_safe_fields_only(mu_db, monkeypatch, audit_events, execution_spies):
+    _enable_mutation_flags(monkeypatch)
+    monkeypatch.delenv("MULTI_STRATEGY_FANOUT", raising=False)
+    monkeypatch.delenv("V2_PAPER_RUNNER_DEBUG", raising=False)
+    user_row = make_user("settings-edit@example.com", is_admin=True)
+    with session_scope() as db:
+        catalog, version = _seed_catalog(db)
+        instance_id = _seed_instance(
+            db,
+            user_id=user_row.id,
+            catalog=catalog,
+            version=version,
+            status=StrategyInstanceStatus.PAUSED.value,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+            instance_label="Original",
+            lots=1,
+            side_preference="BOTH",
+        )
+    client = _client(_current_user(user_row), monkeypatch)
+
+    response = _settings(
+        client,
+        instance_id,
+        instance_label="  Edited\nPaper\tLabel  ",
+        lots=3,
+        side_preference="PE",
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True and body["changed"] is True
+    assert body["instance"] == {
+        "id": str(instance_id),
+        "strategy_code": "SUPERTREND_V1",
+        "instance_label": "EditedPaperLabel",
+        "execution_mode": StrategyExecutionMode.PAPER_LIVE_DATA.value,
+        "status": StrategyInstanceStatus.PAUSED.value,
+        "lots": 3,
+        "side_preference": "PE",
+    }
+
+    with session_scope() as db:
+        row = db.get(models.UserStrategyInstance, instance_id)
+        assert row.instance_label == "EditedPaperLabel"
+        assert row.status == StrategyInstanceStatus.PAUSED.value
+        assert row.execution_mode == StrategyExecutionMode.PAPER_LIVE_DATA.value
+        assert row.lots == 3
+        assert row.side_preference == "PE"
+        assert row.config_json["last_mutation"]["action"] == "settings_edit"
+        assert db.scalars(select(models.StrategySignal)).all() == []
+        assert db.scalars(select(models.NormalizedOptionSignal)).all() == []
+        assert db.scalars(select(models.StrategyExecutionJob)).all() == []
+        assert db.scalars(select(models.UserStrategyWebhookCredential)).all() == []
+
+    edited = [event for event in audit_events if event["event_type"] == "V2_INSTANCE_SETTINGS_EDITED"]
+    assert len(edited) == 1
+    metadata = edited[0]["metadata"]
+    assert metadata["actor_user_id"] == str(user_row.id)
+    assert metadata["instance_id"] == str(instance_id)
+    assert metadata["strategy_code"] == "SUPERTREND_V1"
+    assert metadata["execution_mode"] == StrategyExecutionMode.PAPER_LIVE_DATA.value
+    assert metadata["changed_fields"] == ["instance_label", "lots", "side_preference"]
+    assert metadata["old_values"] == {
+        "instance_label": "Original",
+        "lots": 1,
+        "side_preference": "BOTH",
+    }
+    assert metadata["new_values"] == {
+        "instance_label": "EditedPaperLabel",
+        "lots": 3,
+        "side_preference": "PE",
+    }
+    assert "feature_flags" in metadata
+    serialized = str(edited[0])
+    assert "confirm_paper_only" not in serialized
+    assert "raw_payload" not in serialized
+    assert "access_token" not in serialized
+    assert sum(execution_spies.values()) == 0
+
+
+def test_settings_edit_noop_returns_changed_false_without_audit(mu_db, monkeypatch, audit_events):
+    _enable_mutation_flags(monkeypatch)
+    user_row = make_user("settings-noop@example.com", is_admin=True)
+    with session_scope() as db:
+        catalog, version = _seed_catalog(db)
+        instance_id = _seed_instance(
+            db,
+            user_id=user_row.id,
+            catalog=catalog,
+            version=version,
+            status=StrategyInstanceStatus.PAUSED.value,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+            instance_label="Same",
+            lots=2,
+            side_preference="CE",
+        )
+        row = db.get(models.UserStrategyInstance, instance_id)
+        before_updated_at = row.updated_at
+        before_config = row.config_json
+    client = _client(_current_user(user_row), monkeypatch)
+
+    response = _settings(client, instance_id, instance_label="Same", lots=2, side_preference="CE")
+    assert response.status_code == 200
+    assert response.json()["changed"] is False
+
+    with session_scope() as db:
+        row = db.get(models.UserStrategyInstance, instance_id)
+        assert row.updated_at == before_updated_at
+        assert row.config_json == before_config
+    assert [event for event in audit_events if event["event_type"] == "V2_INSTANCE_SETTINGS_EDITED"] == []
+
+
+def test_settings_edit_rejects_missing_fields_and_smuggled_fields(mu_db, monkeypatch):
+    _enable_mutation_flags(monkeypatch)
+    user_row = make_user("settings-smuggle@example.com", is_admin=True)
+    with session_scope() as db:
+        catalog, version = _seed_catalog(db)
+        instance_id = _seed_instance(
+            db,
+            user_id=user_row.id,
+            catalog=catalog,
+            version=version,
+            status=StrategyInstanceStatus.PAUSED.value,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+        )
+    client = _client(_current_user(user_row), monkeypatch)
+
+    missing = client.post(f"/api/debug/v2/instances/{instance_id}/settings", json={"confirm_paper_only": True})
+    assert missing.status_code == 400
+
+    for smuggled in (
+        {"execution_mode": "real_orders"},
+        {"mode": "live"},
+        {"status": "active"},
+        {"user_id": str(uuid.uuid4())},
+        {"live": True},
+        {"real": True},
+        {"real_orders": True},
+        {"webhook_secret": "x"},
+        {"secret": "x"},
+        {"credential": "x"},
+        {"access_token": "x"},
+    ):
+        response = _settings(client, instance_id, **smuggled)
+        assert response.status_code == 422, smuggled
+
+
+def test_settings_edit_validates_lots_side_and_truncates_label(mu_db, monkeypatch):
+    _enable_mutation_flags(monkeypatch)
+    user_row = make_user("settings-validate@example.com", is_admin=True)
+    with session_scope() as db:
+        catalog, version = _seed_catalog(db)
+        instance_id = _seed_instance(
+            db,
+            user_id=user_row.id,
+            catalog=catalog,
+            version=version,
+            status=StrategyInstanceStatus.PAUSED.value,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+        )
+    client = _client(_current_user(user_row), monkeypatch)
+
+    assert _settings(client, instance_id, lots=0).status_code == 422
+    assert _settings(client, instance_id, lots=21).status_code == 422
+    assert _settings(client, instance_id, side_preference="CALL").status_code == 422
+
+    response = _settings(client, instance_id, instance_label="x" * 140, lots=1, side_preference="BOTH")
+    assert response.status_code == 200
+    assert response.json()["instance"]["instance_label"] == "x" * 120
+
+
+def test_settings_edit_requires_paused_eligible_instance(mu_db, monkeypatch):
+    _enable_mutation_flags(monkeypatch)
+    user_row = make_user("settings-status@example.com", is_admin=True)
+    with session_scope() as db:
+        catalog, version = _seed_catalog(db)
+        active_id = _seed_instance(
+            db,
+            user_id=user_row.id,
+            catalog=catalog,
+            version=version,
+            status=StrategyInstanceStatus.ACTIVE.value,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+        )
+        error_id = _seed_instance(
+            db,
+            user_id=user_row.id,
+            catalog=catalog,
+            version=version,
+            status=StrategyInstanceStatus.ERROR.value,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+        )
+        disabled_id = _seed_instance(
+            db,
+            user_id=user_row.id,
+            catalog=catalog,
+            version=version,
+            status=StrategyInstanceStatus.DISABLED.value,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+        )
+        real_id = _seed_instance(
+            db,
+            user_id=user_row.id,
+            catalog=catalog,
+            version=version,
+            status=StrategyInstanceStatus.PAUSED.value,
+            execution_mode=StrategyExecutionMode.REAL_ORDERS.value,
+        )
+        unknown_mode_id = _seed_instance(
+            db,
+            user_id=user_row.id,
+            catalog=catalog,
+            version=version,
+            status=StrategyInstanceStatus.PAUSED.value,
+            execution_mode="paper_shadow",
+        )
+    client = _client(_current_user(user_row), monkeypatch)
+
+    active = _settings(client, active_id)
+    assert active.status_code == 409
+    assert active.json()["detail"] == "Pause the instance before editing."
+    assert _settings(client, error_id).status_code == 409
+    assert _settings(client, disabled_id).status_code == 409
+    assert _settings(client, real_id).status_code == 403
+    assert _settings(client, unknown_mode_id).status_code == 409
+
+
+def test_settings_edit_owner_only_and_signal_only_allowed(mu_db, monkeypatch):
+    _enable_mutation_flags(monkeypatch)
+    owner_row = make_user("settings-owner@example.com", is_admin=True)
+    intruder_row = make_user("settings-intruder@example.com", is_admin=True)
+    with session_scope() as db:
+        catalog, version = _seed_catalog(db)
+        instance_id = _seed_instance(
+            db,
+            user_id=owner_row.id,
+            catalog=catalog,
+            version=version,
+            status=StrategyInstanceStatus.PAUSED.value,
+            execution_mode=StrategyExecutionMode.SIGNAL_ONLY.value,
+        )
+    intruder_client = _client(_current_user(intruder_row), monkeypatch)
+    assert _settings(intruder_client, instance_id).status_code == 404
+    assert _settings(intruder_client, "not-a-uuid").status_code == 404
+
+    owner_client = _client(_current_user(owner_row), monkeypatch)
+    response = _settings(owner_client, instance_id, instance_label="Signal only", lots=4, side_preference="CE")
+    assert response.status_code == 200
+    assert response.json()["instance"]["execution_mode"] == StrategyExecutionMode.SIGNAL_ONLY.value
+    assert response.json()["instance"]["lots"] == 4
 
 
 # ---------------------------------------------------------------------------

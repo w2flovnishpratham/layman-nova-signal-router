@@ -242,10 +242,10 @@ export class StrategyCatalogStatusDisabledError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2F-1: paper strategy instance lifecycle (create born paused / pause /
-// resume). These are the ONLY approved mutation helpers for the internal
-// catalog panel. They call debug lifecycle endpoints exclusively - never the
-// paper-fanout runner endpoints, never legacy strategy routes.
+// Phase 2F/2G: paper strategy instance lifecycle/settings helpers. These are
+// the ONLY approved mutation helpers for the internal catalog panel. They call
+// debug instance endpoints exclusively - never the paper-fanout runner
+// endpoints, never legacy strategy routes.
 // ---------------------------------------------------------------------------
 
 export interface StrategyInstanceMutationResult {
@@ -297,6 +297,21 @@ export async function pausePaperStrategyInstance(instanceId: string): Promise<St
 
 export async function resumePaperStrategyInstance(instanceId: string): Promise<StrategyInstanceMutationResult> {
   return lifecycleMutation(`/api/debug/v2/instances/${encodeURIComponent(instanceId)}/resume`, {})
+}
+
+export async function updateStrategyInstanceSettings(
+  instanceId: string,
+  input: {
+    instanceLabel?: string | null
+    lots?: number | null
+    sidePreference?: 'BOTH' | 'CE' | 'PE' | null
+  },
+): Promise<StrategyInstanceMutationResult> {
+  return lifecycleMutation(`/api/debug/v2/instances/${encodeURIComponent(instanceId)}/settings`, {
+    instance_label: input.instanceLabel,
+    lots: input.lots,
+    side_preference: input.sidePreference,
+  })
 }
 
 async function apiFetch(path: `/${string}`, init: RequestInit = {}): Promise<Response> {

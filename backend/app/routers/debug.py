@@ -104,6 +104,15 @@ class V2InstanceLifecycleRequest(BaseModel):
     confirm_paper_only: bool = False
 
 
+class V2InstanceSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instance_label: str | None = None
+    lots: int | None = Field(default=None, ge=1, le=V2_INSTANCE_MAX_LOTS)
+    side_preference: Literal["BOTH", "CE", "PE"] | None = None
+    confirm_paper_only: bool = False
+
+
 def require_debug_enabled() -> None:
     if not settings.DEBUG_ENABLED:
         raise HTTPException(status_code=404, detail="Debug endpoints are disabled.")
@@ -311,6 +320,33 @@ def _audit_instance_mutation(
     )
 
 
+def _audit_instance_settings_edit(
+    *,
+    user: CurrentUser,
+    instance: models.UserStrategyInstance,
+    strategy_code: str,
+    changed_fields: list[str],
+    old_values: dict[str, Any],
+    new_values: dict[str, Any],
+) -> None:
+    # Metadata only. Never request bodies, credentials, or raw payloads.
+    log_audit_event(
+        "V2_INSTANCE_SETTINGS_EDITED",
+        f"V2_INSTANCE_SETTINGS_EDITED for strategy {strategy_code}.",
+        severity="INFO",
+        metadata={
+            "actor_user_id": user.id_str,
+            "instance_id": str(instance.id),
+            "strategy_code": strategy_code,
+            "execution_mode": instance.execution_mode,
+            "changed_fields": changed_fields,
+            "old_values": old_values,
+            "new_values": new_values,
+            "feature_flags": feature_flag_states(),
+        },
+    )
+
+
 def _mutation_breadcrumb(instance: models.UserStrategyInstance, action: str, actor: CurrentUser) -> None:
     # Reassign (not mutate in place) so SQLAlchemy detects the JSON change.
     instance.config_json = {
@@ -432,6 +468,84 @@ def _v2_instance_lifecycle_transition(
             strategy_code=strategy_code,
             previous_status=current_status,
             changed=True,
+        )
+        return {"ok": True, "changed": True, "instance": _instance_mutation_public(instance, strategy_code)}
+
+
+def _settings_fields_present(request: V2InstanceSettingsRequest) -> set[str]:
+    return {"instance_label", "lots", "side_preference"} & set(request.model_fields_set)
+
+
+@router.post("/v2/instances/{instance_id}/settings")
+def update_v2_paper_instance_settings_debug(
+    instance_id: str,
+    request: V2InstanceSettingsRequest,
+    user: CurrentUser = Depends(_require_internal_mutation_user),
+) -> dict[str, Any]:
+    _require_instance_mutation_debug_enabled()
+    _require_paper_confirmation(request.confirm_paper_only)
+
+    requested_fields = _settings_fields_present(request)
+    if not requested_fields:
+        raise HTTPException(status_code=400, detail="At least one settings field must be provided.")
+
+    try:
+        parsed_id = uuid.UUID(str(instance_id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=404, detail="Strategy instance not found.")
+
+    with session_scope() as db:
+        instance = db.get(models.UserStrategyInstance, parsed_id)
+        if instance is None or instance.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Strategy instance not found.")
+
+        if str(instance.execution_mode) == StrategyExecutionMode.REAL_ORDERS.value:
+            raise HTTPException(status_code=403, detail="real_orders instances cannot be mutated here.")
+        if str(instance.execution_mode) not in V2_INSTANCE_LIFECYCLE_MODES:
+            raise HTTPException(status_code=409, detail="This instance execution mode does not support settings edit.")
+
+        current_status = str(instance.status)
+        if current_status == StrategyInstanceStatus.ACTIVE.value:
+            raise HTTPException(status_code=409, detail="Pause the instance before editing.")
+        if current_status != StrategyInstanceStatus.PAUSED.value:
+            raise HTTPException(status_code=409, detail="This instance status does not support settings edit.")
+
+        catalog = db.get(models.StrategyCatalog, instance.strategy_id)
+        strategy_code = catalog.code if catalog is not None else "UNKNOWN"
+
+        candidate_values: dict[str, Any] = {}
+        if "instance_label" in requested_fields:
+            candidate_values["instance_label"] = _sanitized_instance_label(request.instance_label)
+        if "lots" in requested_fields:
+            candidate_values["lots"] = request.lots
+        if "side_preference" in requested_fields:
+            candidate_values["side_preference"] = request.side_preference
+
+        old_values: dict[str, Any] = {}
+        new_values: dict[str, Any] = {}
+        changed_fields: list[str] = []
+        for field, new_value in candidate_values.items():
+            old_value = getattr(instance, field)
+            if old_value != new_value:
+                changed_fields.append(field)
+                old_values[field] = old_value
+                new_values[field] = new_value
+
+        if not changed_fields:
+            return {"ok": True, "changed": False, "instance": _instance_mutation_public(instance, strategy_code)}
+
+        for field in changed_fields:
+            setattr(instance, field, new_values[field])
+        instance.updated_at = models.utcnow()
+        _mutation_breadcrumb(instance, "settings_edit", user)
+        db.flush()
+        _audit_instance_settings_edit(
+            user=user,
+            instance=instance,
+            strategy_code=strategy_code,
+            changed_fields=changed_fields,
+            old_values=old_values,
+            new_values=new_values,
         )
         return {"ok": True, "changed": True, "instance": _instance_mutation_public(instance, strategy_code)}
 

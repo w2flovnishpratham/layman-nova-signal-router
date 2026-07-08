@@ -10,6 +10,14 @@
   gap: 6px;
 }
 
+.strategy-lifecycle-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 150px;
+}
+
 .strategy-lifecycle-button {
   display: inline-flex;
   align-items: center;
@@ -31,6 +39,37 @@
 
 .strategy-lifecycle-muted {
   color: var(--text-3, rgba(255, 255, 255, 0.4));
+}
+
+.strategy-settings-editor {
+  display: grid;
+  gap: 8px;
+  min-width: min(260px, 70vw);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  padding: 10px;
+}
+
+.strategy-settings-editor label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.strategy-settings-editor input,
+.strategy-settings-editor select {
+  min-height: 30px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 12px;
+  padding: 5px 8px;
 }
 
 .strategy-status .nv-dash-head p {

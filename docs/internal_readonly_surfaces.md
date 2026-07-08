@@ -3,7 +3,9 @@
 This document records the current internal observability surfaces for v2 paper
 fanout and multi-strategy catalog visibility. Phase 2F-1 adds one narrow
 debug-gated mutation exception for paper strategy instance lifecycle only:
-create born paused, pause, and resume. These are not execution surfaces.
+create born paused, pause, and resume. Phase 2G-1 adds paused-only settings
+edit for `instance_label`, `lots`, and `side_preference`. These are not
+execution surfaces.
 
 ## Panels And Flags
 
@@ -11,7 +13,7 @@ create born paused, pause, and resume. These are not execution surfaces.
 | --- | --- | --- | --- |
 | V2 Paper Status | `VITE_ENABLE_V2_PAPER_STATUS=true` | Off | `#v2-paper-status` |
 | Strategy Catalog Status | `VITE_ENABLE_STRATEGY_CATALOG_STATUS=true` | Off | `#strategy-catalog-status` |
-| Paper instance lifecycle controls | `VITE_ENABLE_STRATEGY_INSTANCE_MUTATION=true` | Off | `#strategy-catalog-status` |
+| Paper instance lifecycle/settings controls | `VITE_ENABLE_STRATEGY_INSTANCE_MUTATION=true` | Off | `#strategy-catalog-status` |
 
 Both flags are frontend visibility guards only. Backend auth, debug flags, and
 endpoint gates remain the real protection.
@@ -40,11 +42,15 @@ Paper instance lifecycle controls call:
 - `POST /api/debug/v2/instances`
 - `POST /api/debug/v2/instances/{id}/pause`
 - `POST /api/debug/v2/instances/{id}/resume`
+- `POST /api/debug/v2/instances/{id}/settings`
 
-The lifecycle endpoints require backend debug gates and `confirm_paper_only`.
+The mutation endpoints require backend debug gates and `confirm_paper_only`.
 Create always writes `execution_mode="paper_live_data"` and `status="paused"`.
 Pause/resume only flip eligible paper or signal-only instance status between
-`active` and `paused`.
+`active` and `paused`. Settings edit is allowed only while an eligible
+paper/signal-only instance is already paused, and only changes
+`instance_label`, `lots`, `side_preference`, `updated_at`, and the safe
+`config_json.last_mutation` breadcrumb.
 
 ## Never Allowed In These Surfaces
 
@@ -65,8 +71,15 @@ Phase 2F-1 allows only:
 - pause eligible paper/signal-only instance
 - resume eligible paper/signal-only instance
 
+Phase 2G-1 additionally allows only:
+
+- edit paused eligible paper/signal-only instance label
+- edit paused eligible paper/signal-only instance lots
+- edit paused eligible paper/signal-only instance side preference
+
 It does not add execution controls, webhook generation, live mode, Dhan
-placement, workers, schedulers, or startup wiring.
+placement, workers, schedulers, startup wiring, signal writes, job writes,
+credential writes, or runtime state writes.
 
 ## Sensitive Fields
 
@@ -143,6 +156,9 @@ Expected:
 - Lifecycle controls appear only in the catalog status panel.
 - New instances are created paused and paper-only.
 - Pause/resume require confirmation.
+- Settings edit appears only for paused eligible paper/signal-only instances.
+- Active eligible instances show `Pause to edit` and do not show settings save.
+- Settings edit requires confirmation copy: `Paper only. No orders will be placed.`
 - No execution, webhook, live, worker, scheduler, or Dhan calls occur.
 
 ## Required Review Before Further Mutation

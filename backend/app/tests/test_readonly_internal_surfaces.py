@@ -285,10 +285,10 @@ def test_frontend_internal_flags_default_off_and_gate_routes():
 
 
 def test_lifecycle_mutation_controls_are_flag_gated_and_scoped():
-    """Phase 2F-1 static guards.
+    """Phase 2F/2G static guards.
 
     Mutation controls exist ONLY in StrategyCatalogStatusPanel, use ONLY the
-    three approved lifecycle helpers, never reference runner/execution
+    approved lifecycle/settings helpers, never reference runner/execution
     endpoints, and are gated behind VITE_ENABLE_STRATEGY_INSTANCE_MUTATION
     (default OFF) on top of the catalog-status flag.
     """
@@ -311,9 +311,12 @@ def test_lifecycle_mutation_controls_are_flag_gated_and_scoped():
         "createPaperStrategyInstance",
         "pausePaperStrategyInstance",
         "resumePaperStrategyInstance",
+        "updateStrategyInstanceSettings",
     )
     for helper in approved_helpers:
         assert helper in catalog_panel
+    assert "Pause to edit" in catalog_panel
+    assert "Paper only. No orders will be placed." in catalog_panel
     for forbidden in ("run-once", "process-ready", "paper-fanout", "runV2", "processReady"):
         assert forbidden not in catalog_panel, forbidden
 
@@ -324,6 +327,7 @@ def test_lifecycle_mutation_controls_are_flag_gated_and_scoped():
     # The api helpers call only the debug lifecycle endpoints.
     assert "'/api/debug/v2/instances'" in api_text
     assert "/api/debug/v2/instances/" in api_text
+    assert "/settings" in api_text
     for forbidden in ("/api/debug/v2/paper-fanout/run-once", "/api/debug/v2/paper-fanout/process-ready"):
         occurrences = api_text.count(forbidden)
         assert occurrences == 0, f"lifecycle helpers must not reference {forbidden}"

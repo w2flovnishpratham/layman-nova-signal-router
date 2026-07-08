@@ -9,12 +9,16 @@ import {
   type StrategyCatalogItem,
   type StrategyCatalogStatusBundle,
   type UserStrategyInstanceStatus,
+  updateStrategyInstanceSettings,
 } from '../api'
 import { MotionPulseText, MotionSpinner } from '../components/MotionPrimitives'
 import '../dashboard/dashboard.css'
 import './strategyCatalogStatus.css'
 
 type PanelState = 'loading' | 'ready' | 'disabled' | 'error'
+type EditableSidePreference = 'BOTH' | 'CE' | 'PE'
+
+const SIDE_OPTIONS: EditableSidePreference[] = ['BOTH', 'CE', 'PE']
 
 export function StrategyCatalogStatusPanel({
   enabled,
@@ -403,29 +407,146 @@ function InstancesTable({
               <td className="nv-td-time">{formatTime(instance.updated_at)}</td>
               {lifecycleControls ? (
                 <td>
-                  {instance.id && _lifecycleEligible(instance) ? (
-                    instance.status === 'active' ? (
-                      <LifecycleConfirmButton
-                        label="Pause"
-                        onRun={() => pausePaperStrategyInstance(String(instance.id))}
-                        onDone={onMutated}
-                      />
-                    ) : (
-                      <LifecycleConfirmButton
-                        label="Resume"
-                        onRun={() => resumePaperStrategyInstance(String(instance.id))}
-                        onDone={onMutated}
-                      />
-                    )
-                  ) : (
-                    <span className="strategy-lifecycle-muted">-</span>
-                  )}
+                  <InstanceLifecycleCell instance={instance} onMutated={onMutated} />
                 </td>
               ) : null}
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function InstanceLifecycleCell({
+  instance,
+  onMutated,
+}: {
+  instance: UserStrategyInstanceStatus
+  onMutated: () => void
+}) {
+  if (!instance.id || !_lifecycleEligible(instance)) {
+    return <span className="strategy-lifecycle-muted">-</span>
+  }
+
+  if (instance.status === 'active') {
+    return (
+      <div className="strategy-lifecycle-stack">
+        <LifecycleConfirmButton
+          label="Pause"
+          onRun={() => pausePaperStrategyInstance(String(instance.id))}
+          onDone={onMutated}
+        />
+        <span className="strategy-lifecycle-note">Pause to edit</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="strategy-lifecycle-stack">
+      <LifecycleConfirmButton
+        label="Resume"
+        onRun={() => resumePaperStrategyInstance(String(instance.id))}
+        onDone={onMutated}
+      />
+      <InstanceSettingsEditControl instance={instance} onDone={onMutated} />
+    </div>
+  )
+}
+
+function InstanceSettingsEditControl({
+  instance,
+  onDone,
+}: {
+  instance: UserStrategyInstanceStatus
+  onDone: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [label, setLabel] = useState('')
+  const [lots, setLots] = useState('1')
+  const [side, setSide] = useState<EditableSidePreference>('BOTH')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+
+  function openEditor() {
+    setLabel(instance.instance_label ?? '')
+    setLots(String(instance.lots ?? 1))
+    setSide(sidePreferenceValue(instance.side_preference))
+    setMessage('')
+    setEditing(true)
+  }
+
+  async function confirmEdit() {
+    const parsedLots = Number.parseInt(lots, 10)
+    if (!Number.isFinite(parsedLots) || parsedLots < 1 || parsedLots > 20) {
+      setMessage('Lots must be between 1 and 20.')
+      return
+    }
+
+    setBusy(true)
+    setMessage('')
+    try {
+      await updateStrategyInstanceSettings(String(instance.id), {
+        instanceLabel: label.trim() || null,
+        lots: parsedLots,
+        sidePreference: side,
+      })
+      setEditing(false)
+      onDone()
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Request failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="strategy-lifecycle-cell">
+        <button className="secondary-button strategy-lifecycle-button" type="button" onClick={openEditor}>
+          Edit
+        </button>
+        {message ? <span className="strategy-lifecycle-error">{message}</span> : null}
+      </div>
+    )
+  }
+
+  return (
+    <div className="strategy-settings-editor">
+      <label>
+        <span>Label</span>
+        <input value={label} maxLength={120} onChange={(event) => setLabel(event.target.value)} />
+      </label>
+      <label>
+        <span>Lots</span>
+        <input
+          value={lots}
+          inputMode="numeric"
+          min={1}
+          max={20}
+          type="number"
+          onChange={(event) => setLots(event.target.value)}
+        />
+      </label>
+      <label>
+        <span>Side</span>
+        <select value={side} onChange={(event) => setSide(sidePreferenceValue(event.target.value))}>
+          {SIDE_OPTIONS.map((option) => (
+            <option value={option} key={option}>{option}</option>
+          ))}
+        </select>
+      </label>
+      <span className="strategy-lifecycle-note">Paper only. No orders will be placed.</span>
+      <div className="strategy-lifecycle-cell">
+        <button className="secondary-button strategy-lifecycle-button" type="button" disabled={busy} onClick={() => void confirmEdit()}>
+          {busy ? <MotionSpinner><Loader2 size={12} /></MotionSpinner> : null}
+          Confirm edit
+        </button>
+        <button className="secondary-button strategy-lifecycle-button" type="button" disabled={busy} onClick={() => setEditing(false)}>
+          Cancel
+        </button>
+      </div>
+      {message ? <span className="strategy-lifecycle-error">{message}</span> : null}
     </div>
   )
 }
@@ -515,6 +636,11 @@ function versionSummary(strategy: StrategyCatalogItem): string {
 function sourceLabel(value?: string | null): string {
   const source = safeText(value)
   return source.replaceAll('_', ' ')
+}
+
+function sidePreferenceValue(value?: string | null): EditableSidePreference {
+  if (value === 'CE' || value === 'PE' || value === 'BOTH') return value
+  return 'BOTH'
 }
 
 function statusLabel(value?: string | null): string {
