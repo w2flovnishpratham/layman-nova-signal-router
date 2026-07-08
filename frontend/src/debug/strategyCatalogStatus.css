@@ -2,6 +2,37 @@
   max-width: 1220px;
 }
 
+/* Phase 2F-1 paper lifecycle controls */
+.strategy-lifecycle-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.strategy-lifecycle-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 4px 9px;
+}
+
+.strategy-lifecycle-note {
+  color: var(--warning, #f5c96b);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.strategy-lifecycle-error {
+  color: var(--danger, #fb7185);
+  font-size: 10px;
+}
+
+.strategy-lifecycle-muted {
+  color: var(--text-3, rgba(255, 255, 255, 0.4));
+}
+
 .strategy-status .nv-dash-head p {
   display: inline-flex;
   align-items: center;

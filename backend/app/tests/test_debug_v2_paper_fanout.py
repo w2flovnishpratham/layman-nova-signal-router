@@ -12,6 +12,7 @@ from app.core.feature_flags import (
     MULTI_STRATEGY_FANOUT,
     MULTI_STRATEGY_MODEL,
     STRATEGY_CATALOG_UI,
+    STRATEGY_INSTANCE_MUTATION_DEBUG,
     V2_PAPER_RUNNER_DEBUG,
 )
 
@@ -348,5 +349,6 @@ def test_legacy_debug_feature_flags_endpoint_still_works(monkeypatch):
         V2_PAPER_RUNNER_DEBUG: True,
         CUSTOM_WEBHOOKS: False,
         STRATEGY_CATALOG_UI: False,
+        STRATEGY_INSTANCE_MUTATION_DEBUG: False,
     }
     assert all(isinstance(value, bool) for value in response.json().values())

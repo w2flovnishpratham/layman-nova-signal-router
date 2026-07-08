@@ -10,6 +10,7 @@ from app.core.feature_flags import (
     MULTI_STRATEGY_FANOUT,
     MULTI_STRATEGY_MODEL,
     STRATEGY_CATALOG_UI,
+    STRATEGY_INSTANCE_MUTATION_DEBUG,
     V2_PAPER_RUNNER_DEBUG,
     feature_flag_states,
     is_feature_enabled,
@@ -43,12 +44,14 @@ def test_feature_flags_are_env_driven(monkeypatch):
     monkeypatch.setenv(MULTI_STRATEGY_MODEL, "yes")
     monkeypatch.setenv(MULTI_STRATEGY_FANOUT, "0")
     monkeypatch.setenv(V2_PAPER_RUNNER_DEBUG, "true")
+    monkeypatch.setenv(STRATEGY_INSTANCE_MUTATION_DEBUG, "on")
     monkeypatch.setenv(CUSTOM_WEBHOOKS, "on")
     monkeypatch.setenv(STRATEGY_CATALOG_UI, "no")
 
     assert is_feature_enabled(MULTI_STRATEGY_MODEL) is True
     assert is_feature_enabled(MULTI_STRATEGY_FANOUT) is False
     assert is_feature_enabled(V2_PAPER_RUNNER_DEBUG) is True
+    assert is_feature_enabled(STRATEGY_INSTANCE_MUTATION_DEBUG) is True
     assert is_feature_enabled(CUSTOM_WEBHOOKS) is True
     assert is_feature_enabled(STRATEGY_CATALOG_UI) is False
 
@@ -79,6 +82,7 @@ def test_debug_feature_flags_endpoint_returns_only_bool_states(monkeypatch):
         MULTI_STRATEGY_MODEL: True,
         MULTI_STRATEGY_FANOUT: False,
         V2_PAPER_RUNNER_DEBUG: True,
+        STRATEGY_INSTANCE_MUTATION_DEBUG: False,
         CUSTOM_WEBHOOKS: False,
         STRATEGY_CATALOG_UI: False,
     }

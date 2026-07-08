@@ -34,6 +34,9 @@ import type { ClientCommand, MarketSnapshot, SystemHealth } from './types'
 // the real protection for the inspector endpoints.
 const V2_PAPER_STATUS_UI_ENABLED = import.meta.env.VITE_ENABLE_V2_PAPER_STATUS === 'true'
 const STRATEGY_CATALOG_STATUS_UI_ENABLED = import.meta.env.VITE_ENABLE_STRATEGY_CATALOG_STATUS === 'true'
+// Phase 2F-1: paper instance lifecycle controls (default OFF; backend gates
+// DEBUG_ENABLED + STRATEGY_INSTANCE_MUTATION_DEBUG remain the real protection).
+const STRATEGY_INSTANCE_MUTATION_UI_ENABLED = import.meta.env.VITE_ENABLE_STRATEGY_INSTANCE_MUTATION === 'true'
 
 function initialViewFromHash(): NovaView {
   if (window.location.hash === '#v2-paper-status') return 'v2-paper-status'
@@ -349,7 +352,10 @@ function App() {
       ) : activeView === 'v2-paper-status' ? (
         <V2PaperStatusPanel enabled={canViewV2PaperStatus} />
       ) : activeView === 'strategy-catalog-status' ? (
-        <StrategyCatalogStatusPanel enabled={canViewStrategyCatalogStatus} />
+        <StrategyCatalogStatusPanel
+          enabled={canViewStrategyCatalogStatus}
+          mutationEnabled={STRATEGY_INSTANCE_MUTATION_UI_ENABLED && canViewStrategyCatalogStatus}
+        />
       ) : (
         <motion.section
           layout

@@ -2,7 +2,10 @@ import { AlertTriangle, BookOpen, Boxes, Database, Layers3, Loader2, RefreshCw, 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   StrategyCatalogStatusDisabledError,
+  createPaperStrategyInstance,
   getStrategyCatalogStatusBundle,
+  pausePaperStrategyInstance,
+  resumePaperStrategyInstance,
   type StrategyCatalogItem,
   type StrategyCatalogStatusBundle,
   type UserStrategyInstanceStatus,
@@ -13,11 +16,19 @@ import './strategyCatalogStatus.css'
 
 type PanelState = 'loading' | 'ready' | 'disabled' | 'error'
 
-export function StrategyCatalogStatusPanel({ enabled }: { enabled: boolean }) {
+export function StrategyCatalogStatusPanel({
+  enabled,
+  mutationEnabled = false,
+}: {
+  enabled: boolean
+  mutationEnabled?: boolean
+}) {
   const [data, setData] = useState<StrategyCatalogStatusBundle | null>(null)
   const [state, setState] = useState<PanelState>(enabled ? 'loading' : 'disabled')
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
+  // Lifecycle controls render only when BOTH build flags are on.
+  const lifecycleControls = enabled && mutationEnabled
 
   const load = useCallback(async (soft = false) => {
     if (!enabled) {
@@ -127,10 +138,14 @@ export function StrategyCatalogStatusPanel({ enabled }: { enabled: boolean }) {
   return (
     <div className="nv-dash strategy-status">
       <PanelHead refreshing={refreshing} onRefresh={() => void load(true)} />
-      <StatusStrip catalogConfigured={data.catalog.database_configured} instancesConfigured={data.instances.database_configured} />
+      <StatusStrip
+        catalogConfigured={data.catalog.database_configured}
+        instancesConfigured={data.instances.database_configured}
+        lifecycleControls={lifecycleControls}
+      />
       <StrategyKpis catalog={catalog} instances={instances} />
-      <CatalogPanel catalog={catalog} />
-      <InstancesPanel instances={instances} />
+      <CatalogPanel catalog={catalog} lifecycleControls={lifecycleControls} onMutated={() => void load(true)} />
+      <InstancesPanel instances={instances} lifecycleControls={lifecycleControls} onMutated={() => void load(true)} />
     </div>
   )
 }
@@ -173,16 +188,19 @@ function PanelHead({
 function StatusStrip({
   catalogConfigured,
   instancesConfigured,
+  lifecycleControls,
 }: {
   catalogConfigured?: boolean
   instancesConfigured?: boolean
+  lifecycleControls: boolean
 }) {
   return (
     <section className="strategy-status-strip" aria-label="Strategy status safety">
       <Flag label="CATALOG DB" on={catalogConfigured !== false} />
       <Flag label="INSTANCES DB" on={instancesConfigured !== false} />
-      <Flag label="READ ONLY" on={true} />
-      <Flag label="MUTATIONS" on={false} invert />
+      <Flag label="READ ONLY" on={!lifecycleControls} />
+      <Flag label="PAPER LIFECYCLE" on={lifecycleControls} />
+      <Flag label="EXECUTION" on={false} invert />
     </section>
   )
 }
@@ -234,19 +252,39 @@ function StrategyKpis({
   )
 }
 
-function CatalogPanel({ catalog }: { catalog: StrategyCatalogItem[] }) {
+function CatalogPanel({
+  catalog,
+  lifecycleControls,
+  onMutated,
+}: {
+  catalog: StrategyCatalogItem[]
+  lifecycleControls: boolean
+  onMutated: () => void
+}) {
   return (
     <section className="nv-panel">
       <div className="nv-panel-head">
         <h2><BookOpen size={15} /> Strategy Catalog</h2>
         <span className="nv-panel-note">{catalog.length} row{catalog.length === 1 ? '' : 's'}</span>
       </div>
-      {catalog.length ? <CatalogTable catalog={catalog} /> : <EmptyState label="No catalog rows." />}
+      {catalog.length ? (
+        <CatalogTable catalog={catalog} lifecycleControls={lifecycleControls} onMutated={onMutated} />
+      ) : (
+        <EmptyState label="No catalog rows." />
+      )}
     </section>
   )
 }
 
-function CatalogTable({ catalog }: { catalog: StrategyCatalogItem[] }) {
+function CatalogTable({
+  catalog,
+  lifecycleControls,
+  onMutated,
+}: {
+  catalog: StrategyCatalogItem[]
+  lifecycleControls: boolean
+  onMutated: () => void
+}) {
   return (
     <div className="nv-table-wrap">
       <table className="nv-table strategy-status-table">
@@ -258,6 +296,7 @@ function CatalogTable({ catalog }: { catalog: StrategyCatalogItem[] }) {
             <th>Source</th>
             <th>Versions</th>
             <th>Updated</th>
+            {lifecycleControls ? <th>Paper lifecycle</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -272,6 +311,19 @@ function CatalogTable({ catalog }: { catalog: StrategyCatalogItem[] }) {
               <td>{sourceLabel(strategy.source_type)}</td>
               <td>{versionSummary(strategy)}</td>
               <td className="nv-td-time">{formatTime(strategy.updated_at)}</td>
+              {lifecycleControls ? (
+                <td>
+                  {strategy.code && (strategy.status === 'active' || strategy.status === 'beta') ? (
+                    <LifecycleConfirmButton
+                      label="Create paper instance"
+                      onRun={() => createPaperStrategyInstance({ catalogCode: String(strategy.code) })}
+                      onDone={onMutated}
+                    />
+                  ) : (
+                    <span className="strategy-lifecycle-muted">-</span>
+                  )}
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
@@ -280,19 +332,45 @@ function CatalogTable({ catalog }: { catalog: StrategyCatalogItem[] }) {
   )
 }
 
-function InstancesPanel({ instances }: { instances: UserStrategyInstanceStatus[] }) {
+function InstancesPanel({
+  instances,
+  lifecycleControls,
+  onMutated,
+}: {
+  instances: UserStrategyInstanceStatus[]
+  lifecycleControls: boolean
+  onMutated: () => void
+}) {
   return (
     <section className="nv-panel">
       <div className="nv-panel-head">
         <h2><Boxes size={15} /> My Strategy Instances</h2>
         <span className="nv-panel-note">{instances.length} row{instances.length === 1 ? '' : 's'}</span>
       </div>
-      {instances.length ? <InstancesTable instances={instances} /> : <EmptyState label="No strategy instances." />}
+      {instances.length ? (
+        <InstancesTable instances={instances} lifecycleControls={lifecycleControls} onMutated={onMutated} />
+      ) : (
+        <EmptyState label="No strategy instances." />
+      )}
     </section>
   )
 }
 
-function InstancesTable({ instances }: { instances: UserStrategyInstanceStatus[] }) {
+function _lifecycleEligible(instance: UserStrategyInstanceStatus): boolean {
+  const mode = instance.execution_mode
+  if (mode !== 'paper_live_data' && mode !== 'signal_only') return false
+  return instance.status === 'active' || instance.status === 'paused'
+}
+
+function InstancesTable({
+  instances,
+  lifecycleControls,
+  onMutated,
+}: {
+  instances: UserStrategyInstanceStatus[]
+  lifecycleControls: boolean
+  onMutated: () => void
+}) {
   return (
     <div className="nv-table-wrap">
       <table className="nv-table strategy-status-table">
@@ -306,6 +384,7 @@ function InstancesTable({ instances }: { instances: UserStrategyInstanceStatus[]
             <th>Side</th>
             <th>Version</th>
             <th>Updated</th>
+            {lifecycleControls ? <th>Paper lifecycle</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -322,10 +401,86 @@ function InstancesTable({ instances }: { instances: UserStrategyInstanceStatus[]
               <td>{safeText(instance.side_preference)}</td>
               <td>{safeText(instance.strategy_version ?? instance.payload_version)}</td>
               <td className="nv-td-time">{formatTime(instance.updated_at)}</td>
+              {lifecycleControls ? (
+                <td>
+                  {instance.id && _lifecycleEligible(instance) ? (
+                    instance.status === 'active' ? (
+                      <LifecycleConfirmButton
+                        label="Pause"
+                        onRun={() => pausePaperStrategyInstance(String(instance.id))}
+                        onDone={onMutated}
+                      />
+                    ) : (
+                      <LifecycleConfirmButton
+                        label="Resume"
+                        onRun={() => resumePaperStrategyInstance(String(instance.id))}
+                        onDone={onMutated}
+                      />
+                    )
+                  ) : (
+                    <span className="strategy-lifecycle-muted">-</span>
+                  )}
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+/** Two-step confirm control. Always states the paper-only guarantee before
+ * anything is sent; refetches (no optimistic update) when finished. */
+function LifecycleConfirmButton({
+  label,
+  onRun,
+  onDone,
+}: {
+  label: string
+  onRun: () => Promise<unknown>
+  onDone: () => void
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+
+  async function run() {
+    setBusy(true)
+    setMessage('')
+    try {
+      await onRun()
+      setConfirming(false)
+      onDone()
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Request failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!confirming) {
+    return (
+      <div className="strategy-lifecycle-cell">
+        <button className="secondary-button strategy-lifecycle-button" type="button" onClick={() => setConfirming(true)}>
+          {label}
+        </button>
+        {message ? <span className="strategy-lifecycle-error">{message}</span> : null}
+      </div>
+    )
+  }
+
+  return (
+    <div className="strategy-lifecycle-cell">
+      <span className="strategy-lifecycle-note">Paper only. No orders will be placed.</span>
+      <button className="secondary-button strategy-lifecycle-button" type="button" disabled={busy} onClick={() => void run()}>
+        {busy ? <MotionSpinner><Loader2 size={12} /></MotionSpinner> : null}
+        Confirm {label.toLowerCase()}
+      </button>
+      <button className="secondary-button strategy-lifecycle-button" type="button" disabled={busy} onClick={() => setConfirming(false)}>
+        Cancel
+      </button>
+      {message ? <span className="strategy-lifecycle-error">{message}</span> : null}
     </div>
   )
 }

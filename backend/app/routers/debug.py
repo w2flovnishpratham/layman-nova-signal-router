@@ -1,22 +1,34 @@
 from __future__ import annotations
 
-from typing import Any
+import re
+import uuid
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 
+from app.auth.dependencies import get_current_user
 from app.config import DEFAULT_EXCHANGE_SEGMENT, settings
-from app.core.enums import StrategyExecutionMode
+from app.core.enums import (
+    StrategyCatalogStatus,
+    StrategyExecutionMode,
+    StrategyInstanceStatus,
+)
+from app.db import models
+from app.services.user_context import CurrentUser
 from app.core.feature_flags import (
     MULTI_STRATEGY_FANOUT,
+    MULTI_STRATEGY_MODEL,
+    STRATEGY_INSTANCE_MUTATION_DEBUG,
     V2_PAPER_RUNNER_DEBUG,
     feature_flag_states,
     is_feature_enabled,
 )
 from app.db.engine import session_scope
 from app.schemas.signal import NormalizedSignal
-from app.services.audit_logger import log_order_event, read_jsonl
+from app.services.audit_logger import log_audit_event, log_order_event, read_jsonl
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret
 from app.services.dhan_client import DHAN_BASE_URL
 from app.services.dhan_debugger import (
@@ -61,6 +73,34 @@ class V2PaperFanoutProcessReadyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_jobs: int = Field(default=1, ge=1, le=V2_PAPER_DEBUG_MAX_JOBS)
+    confirm_paper_only: bool = False
+
+
+# Phase 2F-1: paper strategy instance lifecycle (create born paused / pause /
+# resume). extra="forbid" rejects any client attempt to smuggle execution_mode,
+# status, user_id, secrets, or live/real markers as extra body fields (422).
+V2_INSTANCE_MAX_LOTS = 20  # matches the manual-order panel's existing safe cap
+
+V2_INSTANCE_LIFECYCLE_MODES = {
+    StrategyExecutionMode.PAPER_LIVE_DATA.value,
+    StrategyExecutionMode.SIGNAL_ONLY.value,
+}
+V2_INSTANCE_TRANSITION_STATUSES = {"active", "paused"}
+
+
+class V2InstanceCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    catalog_code: str = Field(min_length=1, max_length=120)
+    instance_label: str | None = Field(default=None, max_length=120)
+    lots: int = Field(default=1, ge=1, le=V2_INSTANCE_MAX_LOTS)
+    side_preference: Literal["BOTH", "CE", "PE"] | None = None
+    confirm_paper_only: bool = False
+
+
+class V2InstanceLifecycleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     confirm_paper_only: bool = False
 
 
@@ -198,6 +238,234 @@ def process_ready_v2_paper_jobs_debug(request: V2PaperFanoutProcessReadyRequest)
     with session_scope() as db:
         result = process_ready_v2_paper_jobs_once(db, max_jobs=request.max_jobs)
     return _runner_response(result)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2F-1: paper strategy instance lifecycle (create born paused / pause /
+# resume). Data-only mutations: exactly one table (user_strategy_instances) is
+# written. No signals, no jobs, no credentials, no runtime state, and NEVER
+# route_signal / Dhan / PaperBroker. Deliberately NOT gated on the execution
+# flags (MULTI_STRATEGY_FANOUT / V2_PAPER_RUNNER_DEBUG) so "can mutate rows"
+# and "can execute paper jobs" stay separate switches.
+# ---------------------------------------------------------------------------
+
+
+def _require_instance_mutation_debug_enabled() -> None:
+    if not is_feature_enabled(MULTI_STRATEGY_MODEL):
+        raise HTTPException(status_code=403, detail="MULTI_STRATEGY_MODEL is disabled.")
+    if not is_feature_enabled(STRATEGY_INSTANCE_MUTATION_DEBUG):
+        raise HTTPException(status_code=403, detail="Strategy instance mutation debug is disabled.")
+
+
+def _require_internal_mutation_user(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    if user.is_admin or user.is_dev:
+        return user
+    raise HTTPException(status_code=403, detail="Internal strategy mutation access required.")
+
+
+def _sanitized_instance_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", "", str(value))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:120] or None
+
+
+def _instance_mutation_public(instance: models.UserStrategyInstance, strategy_code: str) -> dict[str, Any]:
+    """Safe public projection only — no config internals, no secrets."""
+    return {
+        "id": str(instance.id),
+        "strategy_code": strategy_code,
+        "instance_label": instance.instance_label,
+        "execution_mode": instance.execution_mode,
+        "status": instance.status,
+        "lots": instance.lots,
+        "side_preference": instance.side_preference,
+    }
+
+
+def _audit_instance_mutation(
+    event_type: str,
+    *,
+    user: CurrentUser,
+    instance: models.UserStrategyInstance,
+    strategy_code: str,
+    previous_status: str | None,
+    changed: bool,
+) -> None:
+    # Metadata only. Never request bodies, never secrets, never raw payloads.
+    log_audit_event(
+        event_type,
+        f"{event_type} for strategy {strategy_code}.",
+        severity="INFO",
+        metadata={
+            "actor_user_id": user.id_str,
+            "instance_id": str(instance.id),
+            "strategy_code": strategy_code,
+            "previous_status": previous_status,
+            "new_status": instance.status,
+            "execution_mode": instance.execution_mode,
+            "changed": changed,
+            "feature_flags": feature_flag_states(),
+        },
+    )
+
+
+def _mutation_breadcrumb(instance: models.UserStrategyInstance, action: str, actor: CurrentUser) -> None:
+    # Reassign (not mutate in place) so SQLAlchemy detects the JSON change.
+    instance.config_json = {
+        **(instance.config_json or {}),
+        "last_mutation": {
+            "action": action,
+            "actor_user_id": actor.id_str,
+            "at": models.utcnow().isoformat(),
+            "surface": "debug_lifecycle_v2f1",
+        },
+    }
+
+
+@router.post("/v2/instances")
+def create_v2_paper_instance_debug(
+    request: V2InstanceCreateRequest,
+    user: CurrentUser = Depends(_require_internal_mutation_user),
+) -> dict[str, Any]:
+    _require_instance_mutation_debug_enabled()
+    _require_paper_confirmation(request.confirm_paper_only)
+
+    with session_scope() as db:
+        catalog = db.scalar(
+            select(models.StrategyCatalog).where(models.StrategyCatalog.code == request.catalog_code.strip())
+        )
+        if catalog is None:
+            raise HTTPException(status_code=404, detail="Strategy catalog entry not found.")
+        if str(catalog.status) not in {StrategyCatalogStatus.ACTIVE.value, StrategyCatalogStatus.BETA.value}:
+            raise HTTPException(status_code=409, detail="Strategy is not enabled for paper instances.")
+
+        versions = db.scalars(
+            select(models.StrategyVersion)
+            .where(models.StrategyVersion.strategy_id == catalog.id)
+            .order_by(models.StrategyVersion.created_at.asc())
+        ).all()
+        active_versions = [
+            v
+            for v in versions
+            if v.status in {StrategyCatalogStatus.ACTIVE.value, StrategyCatalogStatus.BETA.value}
+        ]
+        if not active_versions:
+            raise HTTPException(status_code=409, detail="Strategy has no active version.")
+        version = active_versions[-1]
+
+        instance = models.UserStrategyInstance(
+            # SERVER-SIDE HARDCODED SAFETY INVARIANTS (Phase 2F-0 design):
+            # owner is the authenticated user, mode is paper, and the instance
+            # is BORN PAUSED so the debug fanout trigger cannot widen scope.
+            user_id=user.id,
+            strategy_id=catalog.id,
+            strategy_version_id=version.id,
+            instance_label=_sanitized_instance_label(request.instance_label) or f"{catalog.name} Paper",
+            source_type=catalog.source_type,
+            status=StrategyInstanceStatus.PAUSED.value,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+            lots=request.lots,
+            side_preference=request.side_preference,
+            config_json={"created_by": "debug_lifecycle_v2f1", "born_paused": True},
+            risk_config={},
+        )
+        db.add(instance)
+        db.flush()
+        _mutation_breadcrumb(instance, "create", user)
+        _audit_instance_mutation(
+            "V2_INSTANCE_CREATED",
+            user=user,
+            instance=instance,
+            strategy_code=catalog.code,
+            previous_status=None,
+            changed=True,
+        )
+        return {"ok": True, "changed": True, "instance": _instance_mutation_public(instance, catalog.code)}
+
+
+def _v2_instance_lifecycle_transition(
+    instance_id: str,
+    target_status: str,
+    action: str,
+    audit_event: str,
+    request: V2InstanceLifecycleRequest,
+    user: CurrentUser,
+) -> dict[str, Any]:
+    _require_instance_mutation_debug_enabled()
+    _require_paper_confirmation(request.confirm_paper_only)
+
+    try:
+        parsed_id = uuid.UUID(str(instance_id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=404, detail="Strategy instance not found.")
+
+    with session_scope() as db:
+        instance = db.get(models.UserStrategyInstance, parsed_id)
+        # Non-owner gets 404 (not 403) so instance existence is not leaked.
+        if instance is None or instance.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Strategy instance not found.")
+
+        if str(instance.execution_mode) == StrategyExecutionMode.REAL_ORDERS.value:
+            raise HTTPException(status_code=403, detail="real_orders instances cannot be mutated here.")
+        if str(instance.execution_mode) not in V2_INSTANCE_LIFECYCLE_MODES:
+            raise HTTPException(status_code=409, detail="This instance execution mode does not support lifecycle mutation.")
+
+        catalog = db.get(models.StrategyCatalog, instance.strategy_id)
+        strategy_code = catalog.code if catalog is not None else "UNKNOWN"
+
+        current_status = str(instance.status)
+        if current_status == target_status:
+            return {"ok": True, "changed": False, "instance": _instance_mutation_public(instance, strategy_code)}
+        if current_status not in V2_INSTANCE_TRANSITION_STATUSES:
+            raise HTTPException(status_code=409, detail="This instance status does not support lifecycle mutation.")
+
+        instance.status = target_status
+        instance.updated_at = models.utcnow()
+        _mutation_breadcrumb(instance, action, user)
+        db.flush()
+        _audit_instance_mutation(
+            audit_event,
+            user=user,
+            instance=instance,
+            strategy_code=strategy_code,
+            previous_status=current_status,
+            changed=True,
+        )
+        return {"ok": True, "changed": True, "instance": _instance_mutation_public(instance, strategy_code)}
+
+
+@router.post("/v2/instances/{instance_id}/pause")
+def pause_v2_paper_instance_debug(
+    instance_id: str,
+    request: V2InstanceLifecycleRequest,
+    user: CurrentUser = Depends(_require_internal_mutation_user),
+) -> dict[str, Any]:
+    return _v2_instance_lifecycle_transition(
+        instance_id,
+        StrategyInstanceStatus.PAUSED.value,
+        "pause",
+        "V2_INSTANCE_PAUSED",
+        request,
+        user,
+    )
+
+
+@router.post("/v2/instances/{instance_id}/resume")
+def resume_v2_paper_instance_debug(
+    instance_id: str,
+    request: V2InstanceLifecycleRequest,
+    user: CurrentUser = Depends(_require_internal_mutation_user),
+) -> dict[str, Any]:
+    return _v2_instance_lifecycle_transition(
+        instance_id,
+        StrategyInstanceStatus.ACTIVE.value,
+        "resume",
+        "V2_INSTANCE_RESUMED",
+        request,
+        user,
+    )
 
 
 def _risk_decision(signal: NormalizedSignal) -> dict[str, Any]:

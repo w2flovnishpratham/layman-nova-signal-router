@@ -241,6 +241,64 @@ export class StrategyCatalogStatusDisabledError extends Error {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2F-1: paper strategy instance lifecycle (create born paused / pause /
+// resume). These are the ONLY approved mutation helpers for the internal
+// catalog panel. They call debug lifecycle endpoints exclusively - never the
+// paper-fanout runner endpoints, never legacy strategy routes.
+// ---------------------------------------------------------------------------
+
+export interface StrategyInstanceMutationResult {
+  ok: boolean
+  changed: boolean
+  instance?: {
+    id: string
+    strategy_code?: string | null
+    instance_label?: string | null
+    execution_mode?: string | null
+    status?: string | null
+    lots?: number | null
+    side_preference?: string | null
+  }
+  detail?: string
+}
+
+async function lifecycleMutation(path: `/${string}`, body: Record<string, unknown>): Promise<StrategyInstanceMutationResult> {
+  const response = await apiFetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, confirm_paper_only: true }),
+  })
+  const parsed = await response.json().catch(() => null) as StrategyInstanceMutationResult | { detail?: string } | null
+  if (!response.ok) {
+    const detail = (parsed && 'detail' in parsed && parsed.detail) || `Request failed: ${response.status}`
+    throw new Error(String(detail))
+  }
+  return (parsed as StrategyInstanceMutationResult) ?? { ok: false, changed: false }
+}
+
+export async function createPaperStrategyInstance(input: {
+  catalogCode: string
+  instanceLabel?: string
+  lots?: number
+  sidePreference?: 'BOTH' | 'CE' | 'PE'
+}): Promise<StrategyInstanceMutationResult> {
+  return lifecycleMutation('/api/debug/v2/instances', {
+    catalog_code: input.catalogCode,
+    instance_label: input.instanceLabel,
+    lots: input.lots ?? 1,
+    side_preference: input.sidePreference ?? 'BOTH',
+  })
+}
+
+export async function pausePaperStrategyInstance(instanceId: string): Promise<StrategyInstanceMutationResult> {
+  return lifecycleMutation(`/api/debug/v2/instances/${encodeURIComponent(instanceId)}/pause`, {})
+}
+
+export async function resumePaperStrategyInstance(instanceId: string): Promise<StrategyInstanceMutationResult> {
+  return lifecycleMutation(`/api/debug/v2/instances/${encodeURIComponent(instanceId)}/resume`, {})
+}
+
 async function apiFetch(path: `/${string}`, init: RequestInit = {}): Promise<Response> {
   return fetch(backendHttpUrl(path), {
     ...init,
