@@ -93,7 +93,7 @@ export function Header({
       <header className="app-header">
         <div className="brand-lockup">
           <span className="nova-mark" />
-          <strong>NOVA SIGNAL ROUTER</strong>
+          <strong>NOVA LAYMAN FNO TOOL</strong>
           <nav className="nv-nav-tabs hidden lg:flex" aria-label="Primary">
             <button
               type="button"
