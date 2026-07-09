@@ -1,12 +1,15 @@
-import { AlertTriangle, BookOpen, Boxes, Database, Layers3, Loader2, RefreshCw, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, BookOpen, Boxes, Database, Layers3, Loader2, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   StrategyCatalogStatusDisabledError,
   createPaperStrategyInstance,
+  getStrategyInstanceDetails,
   getStrategyCatalogStatusBundle,
   pausePaperStrategyInstance,
   resumePaperStrategyInstance,
   type StrategyCatalogItem,
+  type StrategyInstanceDetailsResponse,
+  type StrategyInstanceHistoryItem,
   type StrategyCatalogStatusBundle,
   type UserStrategyInstanceStatus,
   updateStrategyInstanceSettings,
@@ -31,6 +34,7 @@ export function StrategyCatalogStatusPanel({
   const [state, setState] = useState<PanelState>(enabled ? 'loading' : 'disabled')
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
+  const [detailsInstanceId, setDetailsInstanceId] = useState<string | null>(null)
   // Lifecycle controls render only when BOTH build flags are on.
   const lifecycleControls = enabled && mutationEnabled
 
@@ -39,6 +43,7 @@ export function StrategyCatalogStatusPanel({
       setData(null)
       setState('disabled')
       setError('')
+      setDetailsInstanceId(null)
       return
     }
     if (soft) setRefreshing(true)
@@ -149,7 +154,15 @@ export function StrategyCatalogStatusPanel({
       />
       <StrategyKpis catalog={catalog} instances={instances} />
       <CatalogPanel catalog={catalog} lifecycleControls={lifecycleControls} onMutated={() => void load(true)} />
-      <InstancesPanel instances={instances} lifecycleControls={lifecycleControls} onMutated={() => void load(true)} />
+      <InstancesPanel
+        instances={instances}
+        lifecycleControls={lifecycleControls}
+        onDetails={setDetailsInstanceId}
+        onMutated={() => void load(true)}
+      />
+      {detailsInstanceId ? (
+        <InstanceDetailsDrawer instanceId={detailsInstanceId} onClose={() => setDetailsInstanceId(null)} />
+      ) : null}
     </div>
   )
 }
@@ -339,10 +352,12 @@ function CatalogTable({
 function InstancesPanel({
   instances,
   lifecycleControls,
+  onDetails,
   onMutated,
 }: {
   instances: UserStrategyInstanceStatus[]
   lifecycleControls: boolean
+  onDetails: (instanceId: string) => void
   onMutated: () => void
 }) {
   return (
@@ -352,7 +367,12 @@ function InstancesPanel({
         <span className="nv-panel-note">{instances.length} row{instances.length === 1 ? '' : 's'}</span>
       </div>
       {instances.length ? (
-        <InstancesTable instances={instances} lifecycleControls={lifecycleControls} onMutated={onMutated} />
+        <InstancesTable
+          instances={instances}
+          lifecycleControls={lifecycleControls}
+          onDetails={onDetails}
+          onMutated={onMutated}
+        />
       ) : (
         <EmptyState label="No strategy instances." />
       )}
@@ -369,10 +389,12 @@ function _lifecycleEligible(instance: UserStrategyInstanceStatus): boolean {
 function InstancesTable({
   instances,
   lifecycleControls,
+  onDetails,
   onMutated,
 }: {
   instances: UserStrategyInstanceStatus[]
   lifecycleControls: boolean
+  onDetails: (instanceId: string) => void
   onMutated: () => void
 }) {
   return (
@@ -388,6 +410,7 @@ function InstancesTable({
             <th>Side</th>
             <th>Version</th>
             <th>Updated</th>
+            <th>Details</th>
             {lifecycleControls ? <th>Paper lifecycle</th> : null}
           </tr>
         </thead>
@@ -405,6 +428,19 @@ function InstancesTable({
               <td>{safeText(instance.side_preference)}</td>
               <td>{safeText(instance.strategy_version ?? instance.payload_version)}</td>
               <td className="nv-td-time">{formatTime(instance.updated_at)}</td>
+              <td>
+                {instance.id ? (
+                  <button
+                    className="secondary-button strategy-lifecycle-button"
+                    type="button"
+                    onClick={() => onDetails(String(instance.id))}
+                  >
+                    Details
+                  </button>
+                ) : (
+                  <span className="strategy-lifecycle-muted">-</span>
+                )}
+              </td>
               {lifecycleControls ? (
                 <td>
                   <InstanceLifecycleCell instance={instance} onMutated={onMutated} />
@@ -415,6 +451,132 @@ function InstancesTable({
         </tbody>
       </table>
     </div>
+  )
+}
+
+function InstanceDetailsDrawer({
+  instanceId,
+  onClose,
+}: {
+  instanceId: string
+  onClose: () => void
+}) {
+  const [details, setDetails] = useState<StrategyInstanceDetailsResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const loadDetails = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      setDetails(await getStrategyInstanceDetails(instanceId))
+    } catch (err) {
+      setDetails(null)
+      setError(err instanceof Error ? err.message : 'Could not load instance details.')
+    } finally {
+      setLoading(false)
+    }
+  }, [instanceId])
+
+  useEffect(() => {
+    void loadDetails()
+  }, [loadDetails])
+
+  const instance = details?.instance
+  const history = details?.history ?? []
+
+  return (
+    <div className="strategy-details-backdrop" role="presentation">
+      <section className="strategy-details-drawer" role="dialog" aria-modal="true" aria-labelledby="strategy-details-title">
+        <div className="strategy-details-head">
+          <div>
+            <h2 id="strategy-details-title"><Boxes size={15} /> Instance details</h2>
+            <span>{shortId(instanceId)}</span>
+          </div>
+          <div className="strategy-details-actions">
+            <button className="secondary-button strategy-lifecycle-button" type="button" disabled={loading} onClick={() => void loadDetails()}>
+              {loading ? <MotionSpinner><Loader2 size={12} /></MotionSpinner> : <RefreshCw size={12} />}
+              Refresh
+            </button>
+            <button className="secondary-button strategy-lifecycle-button" type="button" onClick={onClose}>
+              <X size={12} />
+              Close
+            </button>
+          </div>
+        </div>
+
+        {error ? <p className="strategy-lifecycle-error">{error}</p> : null}
+        {loading && !instance ? (
+          <div className="nv-dash-state strategy-details-loading">
+            <MotionSpinner><Loader2 size={22} /></MotionSpinner>
+            <MotionPulseText className="text-sm text-white/60 font-medium">Loading details</MotionPulseText>
+          </div>
+        ) : null}
+
+        {instance ? (
+          <>
+            <div className="strategy-details-grid">
+              <DetailItem label="Strategy" value={instance.strategy_name ?? instance.strategy_code} />
+              <DetailItem label="Code" value={instance.strategy_code} />
+              <DetailItem label="Version" value={instance.strategy_version ?? instance.payload_version} />
+              <DetailItem label="Label" value={instance.instance_label} />
+              <DetailItem label="Status" value={statusLabel(instance.status)} />
+              <DetailItem label="Mode" value={modeLabel(instance.execution_mode)} />
+              <DetailItem label="Lots" value={instance.lots} />
+              <DetailItem label="Side" value={instance.side_preference} />
+              <DetailItem label="Created" value={formatTime(instance.created_at)} />
+              <DetailItem label="Updated" value={formatTime(instance.updated_at)} />
+            </div>
+
+            <div className="strategy-details-section">
+              <div className="nv-panel-head">
+                <h3>History</h3>
+                <span className="nv-panel-note">{history.length} row{history.length === 1 ? '' : 's'}</span>
+              </div>
+              {history.length ? (
+                <ol className="strategy-details-history">
+                  {history.map((item, index) => (
+                    <HistoryRow item={item} key={`${item.event_type ?? 'event'}-${item.created_at ?? index}`} />
+                  ))}
+                </ol>
+              ) : (
+                <EmptyState label="No history rows." />
+              )}
+            </div>
+          </>
+        ) : null}
+      </section>
+    </div>
+  )
+}
+
+function DetailItem({ label, value }: { label: string; value?: string | number | null }) {
+  return (
+    <div className="strategy-details-item">
+      <span>{label}</span>
+      <strong>{safeText(value)}</strong>
+    </div>
+  )
+}
+
+function HistoryRow({ item }: { item: StrategyInstanceHistoryItem }) {
+  const changed = formatHistoryFields(item.changed_fields)
+  const before = formatHistoryValues(item.old_values)
+  const after = formatHistoryValues(item.new_values)
+  return (
+    <li>
+      <div>
+        <strong>{safeText(item.summary ?? item.event_type)}</strong>
+        <span>{formatTime(item.created_at)}</span>
+      </div>
+      {changed ? <p>Changed: {changed}</p> : null}
+      {item.previous_status || item.new_status ? (
+        <p>{statusLabel(item.previous_status)}{' -> '}{statusLabel(item.new_status)}</p>
+      ) : null}
+      {before ? <p>Before: {before}</p> : null}
+      {after ? <p>After: {after}</p> : null}
+      {item.actor_type ? <p>Actor: {statusLabel(item.actor_type)}</p> : null}
+    </li>
   )
 }
 
@@ -672,6 +834,16 @@ function formatCount(value?: number | null): string {
   return typeof value === 'number' && Number.isFinite(value) ? String(value) : '0'
 }
 
+function formatHistoryFields(value?: string[] | null): string {
+  return value?.length ? value.map((field) => statusLabel(field)).join(', ') : ''
+}
+
+function formatHistoryValues(value?: Record<string, string | number | boolean | null>): string {
+  const entries = Object.entries(value ?? {})
+  if (!entries.length) return ''
+  return entries.map(([key, item]) => `${statusLabel(key)}: ${safeText(item)}`).join(', ')
+}
+
 function shortId(value?: string | null): string {
   if (!value) return '-'
   const text = String(value)
@@ -686,7 +858,7 @@ function formatTime(value?: string | null): string {
   return date.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
-function safeText(value?: string | number | null): string {
+function safeText(value?: string | number | boolean | null): string {
   if (value === null || value === undefined || value === '') return '-'
   return String(value)
 }

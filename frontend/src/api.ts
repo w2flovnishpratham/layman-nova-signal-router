@@ -222,6 +222,27 @@ export interface UserStrategyInstancesStatusResponse {
   instances?: UserStrategyInstanceStatus[]
 }
 
+export interface StrategyInstanceHistoryItem {
+  event_type?: string | null
+  created_at?: string | null
+  summary?: string | null
+  changed_fields?: string[]
+  old_values?: Record<string, string | number | boolean | null>
+  new_values?: Record<string, string | number | boolean | null>
+  previous_status?: string | null
+  new_status?: string | null
+  actor_type?: string | null
+}
+
+export interface StrategyInstanceDetailsResponse {
+  ok?: boolean
+  instance?: UserStrategyInstanceStatus
+  history?: StrategyInstanceHistoryItem[]
+  safe_runtime_summary?: {
+    has_open_position?: boolean
+  }
+}
+
 export interface StrategyCatalogStatusBundle {
   catalog: StrategyCatalogStatusResponse
   instances: UserStrategyInstancesStatusResponse
@@ -594,6 +615,12 @@ export async function getStrategyCatalogStatusBundle(): Promise<StrategyCatalogS
     readStrategyStatusEndpoint<UserStrategyInstancesStatusResponse>('/api/strategies/instances'),
   ])
   return { catalog, instances }
+}
+
+export async function getStrategyInstanceDetails(instanceId: string): Promise<StrategyInstanceDetailsResponse> {
+  return readStrategyStatusEndpoint<StrategyInstanceDetailsResponse>(
+    `/api/debug/v2/instances/${encodeURIComponent(instanceId)}/details`,
+  )
 }
 
 export async function getOrderQuote(side: 'CE' | 'PE', lots: number): Promise<OrderQuote> {

@@ -5,7 +5,8 @@ fanout and multi-strategy catalog visibility. Phase 2F-1 adds one narrow
 debug-gated mutation exception for paper strategy instance lifecycle only:
 create born paused, pause, and resume. Phase 2G-1 adds paused-only settings
 edit for `instance_label`, `lots`, and `side_preference`. These are not
-execution surfaces.
+execution surfaces. Phase 2H-1 adds read-only instance details/history
+visibility for safe inspection before any further mutation.
 
 ## Panels And Flags
 
@@ -44,6 +45,10 @@ Paper instance lifecycle controls call:
 - `POST /api/debug/v2/instances/{id}/resume`
 - `POST /api/debug/v2/instances/{id}/settings`
 
+Instance details/history calls:
+
+- `GET /api/debug/v2/instances/{id}/details`
+
 The mutation endpoints require backend debug gates and `confirm_paper_only`.
 Create always writes `execution_mode="paper_live_data"` and `status="paused"`.
 Pause/resume only flip eligible paper or signal-only instance status between
@@ -51,6 +56,12 @@ Pause/resume only flip eligible paper or signal-only instance status between
 paper/signal-only instance is already paused, and only changes
 `instance_label`, `lots`, `side_preference`, `updated_at`, and the safe
 `config_json.last_mutation` breadcrumb.
+
+The details endpoint requires only backend debug access and an internal
+admin/dev user. It does not require mutation, fanout, runner, or confirmation
+flags. It returns only safe instance fields plus sanitized lifecycle/settings
+history. It does not write audit logs for the read, strategy signals, jobs,
+credentials, runtime state, or order logs.
 
 ## Never Allowed In These Surfaces
 
@@ -76,6 +87,12 @@ Phase 2G-1 additionally allows only:
 - edit paused eligible paper/signal-only instance label
 - edit paused eligible paper/signal-only instance lots
 - edit paused eligible paper/signal-only instance side preference
+
+Phase 2H-1 additionally allows only:
+
+- view safe instance details for the current user's own instance
+- view sanitized lifecycle/settings history
+- refresh or close the details drawer
 
 It does not add execution controls, webhook generation, live mode, Dhan
 placement, workers, schedulers, startup wiring, signal writes, job writes,
@@ -159,6 +176,21 @@ Expected:
 - Settings edit appears only for paused eligible paper/signal-only instances.
 - Active eligible instances show `Pause to edit` and do not show settings save.
 - Settings edit requires confirmation copy: `Paper only. No orders will be placed.`
+- No execution, webhook, live, worker, scheduler, or Dhan calls occur.
+
+Details smoke:
+
+```bash
+VITE_ENABLE_STRATEGY_CATALOG_STATUS=true npm --prefix frontend run build
+```
+
+Expected:
+
+- Instance rows show a Details button without requiring the mutation UI flag.
+- Details opens a read-only drawer with safe fields and sanitized history.
+- Details refresh uses only `GET /api/debug/v2/instances/{id}/details`.
+- No raw config/risk/audit body fields, secrets, tokens, headers, or proxy URLs
+  appear.
 - No execution, webhook, live, worker, scheduler, or Dhan calls occur.
 
 ## Required Review Before Further Mutation

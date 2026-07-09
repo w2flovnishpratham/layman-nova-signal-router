@@ -86,6 +86,25 @@ V2_INSTANCE_LIFECYCLE_MODES = {
     StrategyExecutionMode.SIGNAL_ONLY.value,
 }
 V2_INSTANCE_TRANSITION_STATUSES = {"active", "paused"}
+V2_INSTANCE_DETAILS_HISTORY_EVENTS = {
+    "V2_INSTANCE_CREATED",
+    "V2_INSTANCE_PAUSED",
+    "V2_INSTANCE_RESUMED",
+    "V2_INSTANCE_SETTINGS_EDITED",
+}
+V2_INSTANCE_DETAILS_SAFE_HISTORY_FIELDS = {
+    "execution_mode",
+    "instance_label",
+    "lots",
+    "side_preference",
+    "status",
+    "strategy_code",
+}
+V2_INSTANCE_DETAILS_SAFE_STATUSES = {status.value for status in StrategyInstanceStatus}
+V2_INSTANCE_DETAILS_SAFE_EXECUTION_MODES = {mode.value for mode in StrategyExecutionMode}
+V2_INSTANCE_DETAILS_SAFE_SIDE_PREFERENCES = {"BOTH", "CE", "PE"}
+V2_INSTANCE_DETAILS_HISTORY_LIMIT = 100
+V2_INSTANCE_DETAILS_AUDIT_FILE_LIMIT = 500
 
 
 class V2InstanceCreateRequest(BaseModel):
@@ -266,10 +285,14 @@ def _require_instance_mutation_debug_enabled() -> None:
         raise HTTPException(status_code=403, detail="Strategy instance mutation debug is disabled.")
 
 
-def _require_internal_mutation_user(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+def _require_internal_debug_user(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     if user.is_admin or user.is_dev:
         return user
-    raise HTTPException(status_code=403, detail="Internal strategy mutation access required.")
+    raise HTTPException(status_code=403, detail="Internal debug access required.")
+
+
+def _require_internal_mutation_user(user: CurrentUser = Depends(_require_internal_debug_user)) -> CurrentUser:
+    return user
 
 
 def _sanitized_instance_label(value: str | None) -> str | None:
@@ -291,6 +314,218 @@ def _instance_mutation_public(instance: models.UserStrategyInstance, strategy_co
         "lots": instance.lots,
         "side_preference": instance.side_preference,
     }
+
+
+def _v2_details_dt(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _instance_details_public(
+    instance: models.UserStrategyInstance,
+    catalog: models.StrategyCatalog | None,
+    version: models.StrategyVersion | None,
+) -> dict[str, Any]:
+    """Read-only details projection. Never exposes config/risk internals."""
+    return {
+        "id": str(instance.id),
+        "strategy_code": catalog.code if catalog is not None else "UNKNOWN",
+        "strategy_name": catalog.name if catalog is not None else None,
+        "strategy_version": version.version if version is not None else None,
+        "status": instance.status,
+        "execution_mode": instance.execution_mode,
+        "instance_label": instance.instance_label,
+        "lots": instance.lots,
+        "side_preference": instance.side_preference,
+        "created_at": _v2_details_dt(instance.created_at),
+        "updated_at": _v2_details_dt(instance.updated_at),
+    }
+
+
+def _safe_history_strategy_code(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", "", value).strip()[:80]
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", cleaned):
+        return None
+    return cleaned
+
+
+def _safe_history_field_value(field: str, value: Any) -> tuple[bool, Any]:
+    if value is None:
+        return True, None
+    if field == "instance_label":
+        if not isinstance(value, str):
+            return False, None
+        safe_label = _sanitized_instance_label(value)
+        return (safe_label is not None), safe_label
+    if field == "lots":
+        if isinstance(value, bool):
+            return False, None
+        if isinstance(value, int):
+            lots = value
+        elif isinstance(value, float) and value.is_integer():
+            lots = int(value)
+        else:
+            return False, None
+        if 1 <= lots <= V2_INSTANCE_MAX_LOTS:
+            return True, lots
+        return False, None
+    if field == "side_preference":
+        text = str(value).strip().upper()
+        return (text in V2_INSTANCE_DETAILS_SAFE_SIDE_PREFERENCES), text
+    if field == "status":
+        text = str(value).strip().lower()
+        return (text in V2_INSTANCE_DETAILS_SAFE_STATUSES), text
+    if field == "execution_mode":
+        text = str(value).strip().lower()
+        return (text in V2_INSTANCE_DETAILS_SAFE_EXECUTION_MODES), text
+    if field == "strategy_code":
+        safe_code = _safe_history_strategy_code(value)
+        return (safe_code is not None), safe_code
+    return False, None
+
+
+def _safe_history_status(value: Any) -> str | None:
+    if value is None:
+        return None
+    allowed, safe_value = _safe_history_field_value("status", value)
+    return safe_value if allowed else None
+
+
+def _safe_history_values(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    safe: dict[str, Any] = {}
+    for key, item in value.items():
+        field = str(key)
+        if field not in V2_INSTANCE_DETAILS_SAFE_HISTORY_FIELDS:
+            continue
+        allowed, safe_value = _safe_history_field_value(field, item)
+        if allowed:
+            safe[field] = safe_value
+    return safe
+
+
+def _safe_history_changed_fields(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [
+        str(field)
+        for field in value
+        if str(field) in V2_INSTANCE_DETAILS_SAFE_HISTORY_FIELDS
+    ]
+
+
+def _history_summary(event_type: str) -> str:
+    return {
+        "V2_INSTANCE_CREATED": "Instance created paused",
+        "V2_INSTANCE_PAUSED": "Instance paused",
+        "V2_INSTANCE_RESUMED": "Instance resumed",
+        "V2_INSTANCE_SETTINGS_EDITED": "Instance settings edited",
+    }.get(event_type, "Instance event")
+
+
+def _instance_history_item(event_type: str, created_at: Any, metadata: Any) -> dict[str, Any] | None:
+    if event_type not in V2_INSTANCE_DETAILS_HISTORY_EVENTS:
+        return None
+    safe_metadata = metadata if isinstance(metadata, dict) else {}
+    item: dict[str, Any] = {
+        "event_type": event_type,
+        "created_at": _v2_details_dt(created_at),
+        "summary": _history_summary(event_type),
+        "changed_fields": _safe_history_changed_fields(safe_metadata.get("changed_fields")),
+        "previous_status": _safe_history_status(safe_metadata.get("previous_status")),
+        "new_status": _safe_history_status(safe_metadata.get("new_status")),
+    }
+    old_values = _safe_history_values(safe_metadata.get("old_values"))
+    new_values = _safe_history_values(safe_metadata.get("new_values"))
+    if old_values:
+        item["old_values"] = old_values
+    if new_values:
+        item["new_values"] = new_values
+    if safe_metadata.get("actor_user_id"):
+        item["actor_type"] = "internal_user"
+    return item
+
+
+def _instance_history_from_db(
+    db,
+    *,
+    user: CurrentUser,
+    instance_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    rows = db.scalars(
+        select(models.AuditLog)
+        .where(models.AuditLog.user_id == user.id)
+        .where(models.AuditLog.action.in_(V2_INSTANCE_DETAILS_HISTORY_EVENTS))
+        .order_by(models.AuditLog.created_at.asc())
+        .limit(V2_INSTANCE_DETAILS_HISTORY_LIMIT)
+    ).all()
+    history: list[dict[str, Any]] = []
+    for row in rows:
+        metadata = row.audit_metadata if isinstance(row.audit_metadata, dict) else {}
+        if str(metadata.get("instance_id") or "") != str(instance_id):
+            continue
+        event_type = str(metadata.get("event_type") or row.action)
+        item = _instance_history_item(event_type, row.created_at, metadata)
+        if item is not None:
+            history.append(item)
+    return history
+
+
+def _instance_history_from_audit_file(
+    *,
+    user: CurrentUser,
+    instance_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    try:
+        records = read_jsonl("audit", limit=V2_INSTANCE_DETAILS_AUDIT_FILE_LIMIT)
+    except Exception:
+        return []
+
+    history: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        metadata = record.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        if str(metadata.get("instance_id") or "") != str(instance_id):
+            continue
+        actor_user_id = metadata.get("actor_user_id")
+        if actor_user_id and str(actor_user_id) != user.id_str:
+            continue
+        event_type = str(record.get("event_type") or metadata.get("event_type") or "")
+        item = _instance_history_item(event_type, record.get("timestamp"), metadata)
+        if item is not None:
+            history.append(item)
+    return history
+
+
+def _merge_instance_history(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for group in groups:
+        for item in group:
+            key = (
+                item.get("event_type"),
+                item.get("created_at"),
+                tuple(item.get("changed_fields") or []),
+                item.get("previous_status"),
+                item.get("new_status"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    merged.sort(key=lambda item: str(item.get("created_at") or ""))
+    return merged[-V2_INSTANCE_DETAILS_HISTORY_LIMIT:]
 
 
 def _audit_instance_mutation(
@@ -474,6 +709,36 @@ def _v2_instance_lifecycle_transition(
 
 def _settings_fields_present(request: V2InstanceSettingsRequest) -> set[str]:
     return {"instance_label", "lots", "side_preference"} & set(request.model_fields_set)
+
+
+@router.get("/v2/instances/{instance_id}/details")
+def get_v2_instance_details_debug(
+    instance_id: str,
+    user: CurrentUser = Depends(_require_internal_debug_user),
+) -> dict[str, Any]:
+    try:
+        parsed_id = uuid.UUID(str(instance_id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=404, detail="Strategy instance not found.")
+
+    with session_scope() as db:
+        instance = db.get(models.UserStrategyInstance, parsed_id)
+        # Non-owner gets 404 (not 403) so instance existence is not leaked.
+        if instance is None or instance.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Strategy instance not found.")
+
+        catalog = db.get(models.StrategyCatalog, instance.strategy_id)
+        version = db.get(models.StrategyVersion, instance.strategy_version_id) if instance.strategy_version_id else None
+        db_history = _instance_history_from_db(db, user=user, instance_id=parsed_id)
+
+        return {
+            "ok": True,
+            "instance": _instance_details_public(instance, catalog, version),
+            "history": _merge_instance_history(
+                db_history,
+                _instance_history_from_audit_file(user=user, instance_id=parsed_id),
+            ),
+        }
 
 
 @router.post("/v2/instances/{instance_id}/settings")

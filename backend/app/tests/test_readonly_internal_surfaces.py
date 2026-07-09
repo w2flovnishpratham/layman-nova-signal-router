@@ -333,6 +333,71 @@ def test_lifecycle_mutation_controls_are_flag_gated_and_scoped():
         assert occurrences == 0, f"lifecycle helpers must not reference {forbidden}"
 
 
+def test_instance_details_ui_is_readonly_and_catalog_scoped():
+    catalog_panel = (FRONTEND_DEBUG_DIR / "StrategyCatalogStatusPanel.tsx").read_text(encoding="utf-8")
+    paper_panel = (FRONTEND_DEBUG_DIR / "V2PaperStatusPanel.tsx").read_text(encoding="utf-8")
+    api_text = (REPO_ROOT / "frontend" / "src" / "api.ts").read_text(encoding="utf-8")
+
+    assert "getStrategyInstanceDetails" in catalog_panel
+    assert "Details" in catalog_panel
+    assert "getStrategyInstanceDetails" not in paper_panel
+
+    details_api = _details_section(api_text)
+    assert "getStrategyInstanceDetails" in details_api
+    assert "/api/debug/v2/instances/${encodeURIComponent(instanceId)}/details" in details_api
+    assert "readStrategyStatusEndpoint" in details_api
+    for forbidden in (
+        "method:",
+        "POST",
+        "PATCH",
+        "DELETE",
+        "run-once",
+        "process-ready",
+        "paper-fanout",
+        "runV2",
+        "processReady",
+    ):
+        assert forbidden not in details_api, forbidden
+
+    details_ui = _between(catalog_panel, "function InstanceDetailsDrawer", "function InstanceLifecycleCell")
+    assert "getStrategyInstanceDetails" in details_ui
+    assert "VITE_ENABLE_STRATEGY_INSTANCE_MUTATION" not in details_ui
+    for forbidden_label in (
+        "Archive",
+        "Disable",
+        "Delete",
+        "Process",
+        "Activate",
+        "Live",
+        "Run",
+        "Retry",
+        "Square off",
+        "Webhook",
+        "Dhan",
+        "Order",
+    ):
+        assert forbidden_label not in details_ui, forbidden_label
+
+
+def _details_section(text: str) -> str:
+    marker = "getStrategyInstanceDetails"
+    start = text.find(marker)
+    assert start >= 0
+    next_export = text.find("export async function", start + len(marker))
+    next_function = text.find("function InstanceLifecycleCell", start + len(marker))
+    candidates = [idx for idx in (next_export, next_function) if idx >= 0]
+    end = min(candidates) if candidates else len(text)
+    return text[start:end]
+
+
+def _between(text: str, start_marker: str, end_marker: str) -> str:
+    start = text.find(start_marker)
+    assert start >= 0
+    end = text.find(end_marker, start + len(start_marker))
+    assert end >= 0
+    return text[start:end]
+
+
 def test_strategy_status_get_endpoints_do_not_mutate_db(mu_db):
     user = make_user("readonly-db-admin@example.com", is_admin=True)
     with session_scope() as db:
