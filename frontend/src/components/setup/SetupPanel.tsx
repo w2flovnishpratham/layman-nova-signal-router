@@ -1,8 +1,8 @@
 import { FlaskConical, Loader2, Zap } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { createRazorpaySubscription, getPaymentEntitlementStatus } from '../../api'
-import type { PaymentEntitlementStatus } from '../../api'
+import { createRazorpaySubscription, getPaymentEntitlementStatus, getUserCredentialStatus } from '../../api'
+import type { PaymentEntitlementStatus, UserCredentialStatus } from '../../api'
 import { SetupInfoCard } from '../messages/SetupInfoCard'
 import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
@@ -291,6 +291,23 @@ function BrokerStep({
   const [accessTokenInput, setAccessTokenInput] = useState(draft.accessToken)
   const [savedClientId, setSavedClientId] = useState(draft.clientId || null)
   const [savedAccessToken, setSavedAccessToken] = useState(draft.accessToken || null)
+  const [persistedStatus, setPersistedStatus] = useState<UserCredentialStatus | null>(null)
+
+  // Reflects whatever was already saved in a previous session/attempt (e.g.
+  // after "reconfigure"), since the vault persists across setup runs even
+  // though this component's local state does not.
+  useEffect(() => {
+    let cancelled = false
+    getUserCredentialStatus().then((status) => {
+      if (!cancelled) setPersistedStatus(status)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const clientIdHasValue = Boolean(savedClientId || persistedStatus?.has_dhan_client_id)
+  const accessTokenHasValue = Boolean(savedAccessToken || persistedStatus?.has_dhan_access_token)
 
   // Verification fires only from a direct click handler below, never from an
   // effect — this component can remount as unrelated chat messages are
@@ -328,7 +345,9 @@ function BrokerStep({
       <div className="credential-field">
         <label htmlFor="setup-dhan-client-id">
           Dhan Client ID
-          {savedClientId ? <span className="credential-saved-hint">Saved</span> : null}
+          {persistedStatus?.has_dhan_client_id ? (
+            <span className="credential-saved-hint">Saved: {persistedStatus.dhan_client_id_masked}</span>
+          ) : null}
         </label>
         <div className="credential-field-row">
           <input
@@ -345,7 +364,7 @@ function BrokerStep({
             disabled={pending || clientIdInput.trim().length < 3}
             onClick={saveClientId}
           >
-            {savedClientId ? 'Update' : 'Save'}
+            {clientIdHasValue ? 'Update' : 'Save'}
           </button>
         </div>
       </div>
@@ -353,7 +372,9 @@ function BrokerStep({
       <div className="credential-field">
         <label htmlFor="setup-dhan-access-token">
           Access Token
-          {savedAccessToken ? <span className="credential-saved-hint">Saved</span> : null}
+          {persistedStatus?.has_dhan_access_token ? (
+            <span className="credential-saved-hint">Last saved {formatSavedAt(persistedStatus.dhan_token_saved_at)}</span>
+          ) : null}
         </label>
         <div className="credential-field-row">
           <input
@@ -371,7 +392,7 @@ function BrokerStep({
             disabled={pending || accessTokenInput.trim().length < 12}
             onClick={saveAccessToken}
           >
-            {savedAccessToken ? 'Update' : 'Save'}
+            {accessTokenHasValue ? 'Update' : 'Save'}
           </button>
         </div>
       </div>
@@ -688,6 +709,16 @@ function allowedSideSummary(side: SideFilter): string {
 function maskClientId(clientId: string): string {
   const suffix = clientId.slice(-4).padStart(4, '*')
   return `******${suffix}`
+}
+
+function formatSavedAt(value: string | null): string {
+  if (!value) return ''
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return new Intl.DateTimeFormat('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(parsed)
 }
 
 function clampPercent(value: number): number {
