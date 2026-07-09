@@ -1,6 +1,7 @@
 import { Ban, CheckCircle2, LogOut, Play } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ActiveTradeCard } from './ActiveTradeCard'
+import { BrokerCredentialsCard } from './BrokerCredentialsCard'
 import { TickingNumber } from './TickingNumber'
 import { formatCurrency } from '../lib/format'
 import type { ActiveTrade, ClientCommand, EngineMode, SetupState, SideFilter } from '../types'
@@ -112,6 +113,8 @@ export function EngineSidebar({
               </div>
             </div>
           </section>
+
+          <BrokerCredentialsCard />
         </>
       )}
     </div>

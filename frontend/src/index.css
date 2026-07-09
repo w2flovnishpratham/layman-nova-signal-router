@@ -2702,6 +2702,72 @@ code {
   min-width: 0;
 }
 
+.credentials-card {
+  gap: 12px;
+}
+
+.credential-field {
+  display: grid;
+  gap: 6px;
+}
+
+.credential-field label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.credential-saved-hint {
+  color: var(--success);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.credential-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.credential-field-row input {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.credential-field-row button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.credential-status-message {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.credential-status-message.success {
+  color: var(--success);
+}
+
+.credential-status-message.error {
+  color: var(--danger);
+}
+
 .market-title-group {
   display: inline-flex;
   min-width: 0;
