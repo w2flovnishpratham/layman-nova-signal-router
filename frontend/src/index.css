@@ -29,6 +29,8 @@
   --tick-down: rgba(255, 122, 122, 0.18);
   --shadow-soft: 0 18px 48px rgba(0, 0, 0, 0.42);
   --shadow-card: 0 16px 50px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --accent-ink: #f5e7ff;
+  --code-accent: #8cf585;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
   --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
@@ -52,16 +54,27 @@
   --bg-0: #fafaf9;
   --bg-1: #ffffff;
   --bg-2: #f5f5f4;
+  --bg-3: #ececea;
   --bg-tertiary: #efefed;
+  --surface: rgba(255, 255, 255, 0.86);
+  --surface-2: rgba(255, 255, 255, 0.96);
+  --surface-3: #ffffff;
   --border: rgba(0, 0, 0, 0.08);
   --border-hi: rgba(0, 0, 0, 0.14);
   --text-1: #18181b;
   --text-2: rgba(24, 24, 27, 0.62);
   --text-3: rgba(24, 24, 27, 0.42);
   --accent: #4f46e5;
+  --accent-2: #4338ca;
+  --accent-paper: #0e7490;
+  --accent-live: #c2410c;
   --success: #059669;
   --danger: #dc2626;
   --warning: #b45309;
+  --accent-ink: #3b1770;
+  --code-accent: #15803d;
+  --shadow-soft: 0 18px 48px rgba(24, 24, 27, 0.12);
+  --shadow-card: 0 16px 50px rgba(24, 24, 27, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 * {
@@ -98,6 +111,13 @@ body {
     radial-gradient(circle at top, rgba(137, 72, 255, 0.12), transparent 18%),
     radial-gradient(circle at 78% 18%, rgba(91, 23, 153, 0.18), transparent 22%),
     linear-gradient(180deg, #05050a 0%, #08070f 48%, #06050c 100%);
+}
+
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(circle at top, rgba(79, 70, 229, 0.06), transparent 18%),
+    radial-gradient(circle at 78% 18%, rgba(124, 58, 237, 0.06), transparent 22%),
+    linear-gradient(180deg, #fafaf9 0%, #f7f6fb 48%, #fafaf9 100%);
 }
 
 button,
@@ -176,8 +196,8 @@ code {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: linear-gradient(180deg, rgba(6, 5, 11, 0.94), rgba(7, 6, 12, 0.86));
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
   padding: 12px 18px;
   backdrop-filter: blur(18px);
 }
@@ -216,10 +236,10 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(22, 21, 29, 0.82);
-  color: rgba(255, 255, 255, 0.82);
+  background: var(--surface);
+  color: var(--text-1);
   padding: 6px 10px;
   font-size: 11px;
   line-height: 1;
@@ -293,7 +313,7 @@ code {
 }
 
 .brand-lockup strong {
-  color: #f5e7ff;
+  color: var(--accent-ink);
   font-size: 17px;
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -319,7 +339,7 @@ code {
   min-width: 0;
   border: 0.5px solid var(--border);
   border-radius: 999px;
-  background: rgba(20, 18, 27, 0.74);
+  background: var(--surface);
   padding: 6px 11px;
 }
 
@@ -353,7 +373,7 @@ code {
   min-width: 92px;
   border: 0.5px solid var(--border);
   border-radius: 999px;
-  background: rgba(20, 18, 27, 0.74);
+  background: var(--surface);
   padding: 6px 10px;
   color: var(--text-2);
   font-size: 12px;
@@ -454,7 +474,7 @@ code {
   min-height: 26px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(19, 17, 27, 0.88);
+  background: var(--surface);
   padding: 0 9px;
   color: var(--text-3);
   font-size: 9px;
@@ -490,7 +510,7 @@ code {
   font-size: 11px;
   padding: 4px 6px 4px 4px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-2);
 }
 
 .user-badge img {
@@ -515,6 +535,23 @@ code {
 }
 
 .auth-card {
+  /* Deliberately a dark "hero" card regardless of page theme — re-pin the
+     semantic variables locally so children (buttons, error banners, text)
+     keep dark-appropriate contrast instead of inheriting the light theme. */
+  --bg-0: #05050a;
+  --bg-1: #0d0c14;
+  --bg-2: #14121d;
+  --surface: rgba(10, 9, 17, 0.82);
+  --surface-2: rgba(18, 17, 27, 0.94);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-hi: rgba(255, 255, 255, 0.14);
+  --text-1: #f7f3ff;
+  --text-2: rgba(247, 243, 255, 0.74);
+  --text-3: rgba(247, 243, 255, 0.48);
+  --success: #43d89a;
+  --danger: #ff7a7a;
+  --danger-bg: rgba(255, 122, 122, 0.1);
+  --warning: #f7c95a;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -525,6 +562,7 @@ code {
   box-shadow: 0 24px 90px rgba(0, 0, 0, 0.52), 0 0 42px rgba(126, 34, 206, 0.12);
   padding: 34px;
   text-align: center;
+  color: var(--text-1);
 }
 
 .auth-brand {
@@ -600,13 +638,13 @@ code {
   min-height: 34px;
   padding: 0 12px;
   color: var(--text-2);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-2);
 }
 
 .secondary-button,
 .icon-button,
 .kill-button {
-  background: rgba(28, 26, 34, 0.86);
+  background: var(--bg-2);
 }
 
 .reconnect-bar {
@@ -826,7 +864,7 @@ code {
   cursor: not-allowed;
   color: var(--text-3);
   border-color: var(--border);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-2);
 }
 
 .trade-edit-panel {
@@ -1034,7 +1072,7 @@ code {
   margin: 24px auto 0;
   border: 1px solid rgba(157, 91, 255, 0.18);
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(13, 12, 20, 0.96), rgba(9, 7, 14, 0.94));
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
   box-shadow: var(--shadow-card);
   padding: 18px;
 }
@@ -1062,7 +1100,7 @@ code {
   width: 100%;
   border: 1px solid rgba(157, 91, 255, 0.12);
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(12, 10, 18, 0.9), rgba(8, 7, 13, 0.86));
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
   box-shadow: var(--shadow-card);
   padding: 10px;
 }
@@ -1092,8 +1130,8 @@ code {
   place-items: center;
   border: 1px solid rgba(157, 91, 255, 0.18);
   border-radius: 8px;
-  background: rgba(18, 15, 28, 0.92);
-  color: rgba(247, 243, 255, 0.74);
+  background: var(--surface-2);
+  color: var(--text-2);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   transition:
     transform var(--dur-base) var(--ease-out),
@@ -1133,7 +1171,7 @@ code {
   left: 50%;
   transform: translateX(-50%);
   writing-mode: vertical-rl;
-  color: rgba(247, 243, 255, 0.46);
+  color: var(--text-3);
   font-size: 10px;
   font-weight: 900;
   letter-spacing: 0.12em;
@@ -1158,7 +1196,7 @@ code {
   flex-direction: column;
   border: 1px solid rgba(157, 91, 255, 0.16);
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(13, 12, 20, 0.96), rgba(9, 7, 14, 0.94));
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
   box-shadow: var(--shadow-card);
   padding: 18px;
 }
@@ -1176,7 +1214,7 @@ code {
   flex: 1 1 auto;
   height: auto;
   min-height: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--border);
   padding-top: 0;
 }
 
@@ -1209,8 +1247,8 @@ code {
 
 .app-footer {
   align-self: end;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  color: rgba(247, 243, 255, 0.32);
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
   padding: 12px 16px;
   text-align: center;
   font-size: 10px;
@@ -1271,9 +1309,9 @@ code {
 .message {
   width: fit-content;
   max-width: min(684px, 100%);
-  border: 1px solid rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(18, 17, 23, 0.9);
+  background: var(--bg-1);
   padding: 10px 12px;
 }
 
@@ -1281,9 +1319,9 @@ code {
 .rich-event-card,
 .error-banner {
   width: min(684px, 100%);
-  border: 1px solid rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(18, 17, 23, 0.9);
+  background: var(--bg-1);
   padding: 15px 14px;
 }
 
@@ -1327,11 +1365,16 @@ code {
 
 .user-message p {
   margin: 0;
-  color: var(--text-1);
+  color: #f7f3ff;
 }
 
 .user-meta {
   justify-content: flex-end;
+  color: rgba(247, 243, 255, 0.7);
+}
+
+.user-meta strong {
+  color: #f7f3ff;
 }
 
 .error-message,
@@ -1381,7 +1424,7 @@ code {
   align-self: flex-start;
   width: 100%;
   margin-left: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  border-top: 1px solid var(--border);
   border-right: 0;
   border-bottom: 0;
   border-left: 0;
@@ -1406,7 +1449,7 @@ code {
   min-height: 206px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(18, 17, 23, 0.86);
+  background: var(--bg-1);
   padding: 14px;
 }
 
@@ -1499,9 +1542,9 @@ code {
 .subscription-access-card {
   display: grid;
   gap: 10px;
-  border: 1px solid color-mix(in srgb, var(--accent-live) 30%, rgba(255, 255, 255, 0.08));
+  border: 1px solid color-mix(in srgb, var(--accent-live) 30%, var(--border));
   border-radius: 8px;
-  background: rgba(20, 18, 29, 0.78);
+  background: var(--surface);
   padding: 12px;
 }
 
@@ -1542,10 +1585,10 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border: 1px solid color-mix(in srgb, var(--success) 38%, rgba(255, 255, 255, 0.08));
+  border: 1px solid color-mix(in srgb, var(--success) 38%, var(--border));
   border-radius: 8px;
   padding: 12px 14px;
-  background: color-mix(in srgb, var(--success) 7%, rgba(255, 255, 255, 0.03));
+  background: color-mix(in srgb, var(--success) 7%, var(--bg-2));
 }
 
 .subscription-active-note h4,
@@ -1620,8 +1663,8 @@ code {
   justify-content: center;
   width: 100%;
   min-height: 30px;
-  border-color: rgba(255, 255, 255, 0.06);
-  background: rgba(22, 21, 29, 0.58);
+  border-color: var(--border);
+  background: var(--bg-2);
   box-shadow: none;
 }
 
@@ -1664,7 +1707,7 @@ code {
 .form-card label {
   display: grid;
   gap: 6px;
-  color: rgba(247, 243, 255, 0.52);
+  color: var(--text-3);
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -1686,9 +1729,9 @@ code {
 
 .form-card input {
   min-height: 42px;
-  border: 1px solid rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(15, 14, 20, 0.94);
+  background: var(--bg-1);
   color: var(--text-1);
   padding: 0 14px;
   font-size: 13px;
@@ -1698,10 +1741,10 @@ code {
 
 .form-error {
   margin: 0;
-  border: 1px solid rgba(248, 113, 113, 0.14);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
   border-radius: 6px;
-  background: rgba(127, 29, 29, 0.18);
-  color: rgba(248, 113, 113, 0.76);
+  background: var(--danger-bg);
+  color: var(--danger);
   padding: 10px 12px;
   font-size: 11px;
 }
@@ -1726,7 +1769,7 @@ code {
   min-height: 38px;
   padding: 0 10px;
   border-radius: 8px;
-  background: rgba(22, 21, 29, 0.9);
+  background: var(--bg-1);
   color: var(--text-2);
   font-size: 11px;
   font-weight: 700;
@@ -1786,9 +1829,9 @@ code {
 }
 
 .large-counter {
-  border: 1px solid rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(18, 17, 23, 0.9);
+  background: var(--bg-1);
   padding: 12px;
 }
 
@@ -1813,7 +1856,7 @@ code {
   justify-content: space-between;
   gap: 12px;
   align-items: center;
-  color: rgba(247, 243, 255, 0.52);
+  color: var(--text-3);
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -1824,9 +1867,9 @@ code {
   grid-template-columns: minmax(54px, 76px) auto;
   align-items: center;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(15, 14, 20, 0.94);
+  background: var(--bg-1);
 }
 
 .percent-input input {
@@ -1868,17 +1911,17 @@ code {
 
 .deployment-summary {
   gap: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--border);
   border-radius: 8px;
   background:
-    linear-gradient(90deg, rgba(17, 14, 24, 0.94), rgba(12, 9, 18, 0.92)),
-    rgba(12, 9, 18, 0.92);
+    linear-gradient(90deg, var(--surface-2), var(--surface)),
+    var(--surface);
   padding: 24px 17px 14px;
 }
 
 .deployment-summary h3 {
   margin: 0;
-  color: #d7b4ff;
+  color: var(--accent-ink);
   font-size: 14px;
   font-weight: 800;
 }
@@ -1895,12 +1938,12 @@ code {
 }
 
 .summary-grid span {
-  color: rgba(247, 243, 255, 0.44);
+  color: var(--text-3);
   font-size: 10px;
 }
 
 .summary-grid strong {
-  color: #f7f3ff;
+  color: var(--text-1);
   font-size: 11px;
   font-weight: 800;
 }
@@ -2139,7 +2182,7 @@ code {
 .error-badge-row span {
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(22, 20, 30, 0.86);
+  background: var(--surface);
   padding: 3px 7px;
   color: var(--text-2);
   font-size: 9px;
@@ -2185,7 +2228,7 @@ code {
 .technical-details {
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(15, 14, 20, 0.82);
+  background: var(--bg-1);
   padding: 9px;
 }
 
@@ -2249,7 +2292,7 @@ code {
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(22, 20, 30, 0.9);
+  background: var(--surface);
   color: var(--text-3);
   font-size: 10px;
 }
@@ -2316,7 +2359,7 @@ code {
   width: 100%;
   gap: 10px;
   padding: 10px 12px 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  border-top: 1px solid var(--border);
 }
 
 .engine-live-layout .live-engine-stack {
@@ -2352,7 +2395,7 @@ code {
   padding: 7px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgba(19, 17, 27, 0.88);
+  background: var(--surface);
   color: var(--text-2);
   font-size: 11px;
   line-height: 1.4;
@@ -2390,7 +2433,7 @@ code {
   min-height: 480px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: rgba(15, 14, 20, 0.84);
+  background: var(--bg-1);
 }
 
 @media (max-width: 900px) {
@@ -2462,7 +2505,7 @@ code {
 }
 
 .nifty-grid-line {
-  stroke: rgba(255, 255, 255, 0.06);
+  stroke: var(--border);
   stroke-width: 1;
 }
 
@@ -2611,7 +2654,7 @@ code {
   gap: 14px;
   border: 1px solid rgba(157, 91, 255, 0.12);
   border-radius: 16px;
-  background: linear-gradient(180deg, rgba(18, 15, 28, 0.96), rgba(10, 8, 16, 0.94));
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
   box-shadow: var(--shadow-card);
   padding: 16px;
 }
@@ -2643,7 +2686,7 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  color: rgba(247, 243, 255, 0.66);
+  color: var(--text-2);
   font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.06em;
@@ -2690,9 +2733,9 @@ code {
   display: grid;
   gap: 5px;
   min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(18, 16, 26, 0.82);
+  background: var(--surface);
   padding: 10px 11px;
 }
 
@@ -2701,7 +2744,7 @@ code {
 .manual-atm-row span,
 .atm-ltp-cell small,
 .manual-atm-row small {
-  color: rgba(247, 243, 255, 0.48);
+  color: var(--text-3);
   font-size: 10px;
   font-weight: 700;
 }
@@ -2710,7 +2753,7 @@ code {
 .atm-ltp-cell strong,
 .manual-atm-row strong {
   overflow: hidden;
-  color: #f7f3ff;
+  color: var(--text-1);
   font-size: 12px;
   font-weight: 900;
   text-overflow: ellipsis;
@@ -2719,7 +2762,7 @@ code {
 
 .atm-ltp-cell small,
 .manual-atm-row small {
-  color: color-mix(in srgb, var(--cyan) 72%, rgba(247, 243, 255, 0.46));
+  color: var(--accent-paper);
   text-transform: uppercase;
 }
 
@@ -2731,20 +2774,20 @@ code {
   display: grid;
   align-content: center;
   gap: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(22, 20, 30, 0.86);
+  background: var(--surface);
   padding: 13px;
 }
 
 .metric-row span,
 .copy-field > span {
-  color: rgba(247, 243, 255, 0.48);
+  color: var(--text-3);
   font-size: 10px;
 }
 
 .metric-row strong {
-  color: #f7f3ff;
+  color: var(--text-1);
   font-size: 13px;
   font-weight: 800;
   text-align: left;
@@ -2754,7 +2797,7 @@ code {
   min-height: 38px;
   border: 0;
   border-radius: 8px;
-  background: #46454c;
+  background: var(--bg-2);
   color: var(--text-1);
   font-size: 11px;
   font-weight: 900;
@@ -2763,13 +2806,13 @@ code {
 
 .entry-block-toggle {
   border: 1px solid color-mix(in srgb, var(--warning) 34%, transparent);
-  background: color-mix(in srgb, var(--warning) 12%, #232129);
+  background: color-mix(in srgb, var(--warning) 12%, var(--bg-2));
   color: var(--warning);
 }
 
 .entry-block-toggle.blocked {
   border-color: color-mix(in srgb, var(--success) 34%, transparent);
-  background: color-mix(in srgb, var(--success) 11%, #232129);
+  background: color-mix(in srgb, var(--success) 11%, var(--bg-2));
   color: var(--success);
 }
 
@@ -2789,7 +2832,7 @@ code {
 }
 
 .side-filter-control > span {
-  color: rgba(247, 243, 255, 0.48);
+  color: var(--text-3);
   font-size: 10px;
   font-weight: 700;
 }
@@ -2799,9 +2842,9 @@ code {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   padding: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
   border-radius: 7px;
-  background: rgba(15, 14, 20, 0.94);
+  background: var(--bg-1);
 }
 
 .side-filter-segmented button {
@@ -2908,7 +2951,7 @@ code {
   gap: 5px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(22, 20, 30, 0.86);
+  background: var(--surface);
   padding: 10px;
 }
 
@@ -2941,7 +2984,7 @@ code {
   min-height: 34px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(15, 14, 20, 0.94);
+  background: var(--bg-1);
   color: var(--text-1);
   padding: 0 10px;
   font-size: 12px;
@@ -2960,7 +3003,7 @@ code {
 .manual-advanced-motion.is-open {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid var(--border);
 }
 
 .manual-advanced-content {
@@ -3018,7 +3061,7 @@ code {
   min-height: 28px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(15, 14, 20, 0.84);
+  background: var(--bg-1);
   padding: 0 10px;
   color: var(--text-3);
   font-size: 10px;
@@ -3049,7 +3092,7 @@ code {
 .safety-state-list span {
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(22, 20, 30, 0.86);
+  background: var(--surface);
   color: var(--text-2);
   padding: 8px 10px;
   font-size: 10px;
@@ -3087,11 +3130,11 @@ code {
 
 .copy-field code {
   min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--border);
   border-radius: 5px;
-  background: rgba(15, 14, 20, 0.94);
+  background: var(--bg-1);
   padding: 9px;
-  color: #8cf585;
+  color: var(--code-accent);
   font-size: 9px;
 }
 
@@ -3101,7 +3144,7 @@ code {
   min-height: 0;
   border: 0;
   background: transparent;
-  color: #8cf585;
+  color: var(--code-accent);
   padding: 0;
   font-size: 9px;
   font-weight: 900;
@@ -3112,10 +3155,10 @@ code {
   align-content: center;
   justify-items: center;
   gap: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-3);
-  background: rgba(22, 20, 30, 0.86);
+  background: var(--surface);
   padding: 29px 16px;
   text-align: center;
   font-size: 10px;
