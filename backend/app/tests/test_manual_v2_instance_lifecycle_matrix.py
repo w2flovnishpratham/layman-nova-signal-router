@@ -68,6 +68,7 @@ def test_lifecycle_matrix_defaults_to_isolated_db_runtime_and_covers_scenarios(m
     assert runtime["app_state_file"].read_text(encoding="utf-8") == "repo-marker\n"
 
     expected = {
+        "full_lifecycle_regression",
         "create_born_paused",
         "paused_skipped_by_fanout",
         "resume_planning_eligible",
@@ -81,6 +82,45 @@ def test_lifecycle_matrix_defaults_to_isolated_db_runtime_and_covers_scenarios(m
     assert all(status == "passed" for status in result["scenarios"].values())
     for name in expected:
         assert result[name] == "passed"
+
+    full = _result_by_name(result, "full_lifecycle_regression")["details"]
+    assert full["create"] is True
+    assert full["edit"] is True
+    assert full["pause"] is True
+    assert full["resume"] is True
+    assert full["archive"] is True
+    assert full["restore"] is True
+    assert full["active_archive_status_code"] == 409
+    assert full["archived_resume_status_code"] == 409
+    assert full["archived_edit_status_code"] == 409
+    assert full["paused_restore_changed"] is False
+    assert full["paused_pause_changed"] is False
+    assert full["archived_archive_changed"] is False
+    assert full["planner_paused_skip"] == "PAUSED_INSTANCE"
+    assert full["planner_archive_skip"] == "ARCHIVED_INSTANCE"
+    assert full["planner_restore_skip"] == "PAUSED_INSTANCE"
+    assert full["planner_resume_count"] == 1
+    assert full["history_complete"] is True
+    assert full["side_effect_counts"] == {}
+
+    assert result["create"] is True
+    assert result["edit"] is True
+    assert result["pause"] is True
+    assert result["resume"] is True
+    assert result["archive"] is True
+    assert result["restore"] is True
+    assert result["planner_paused_skip"] is True
+    assert result["planner_archive_skip"] is True
+    assert result["planner_restore_skip"] is True
+    assert result["planner_resume_ok"] is True
+    assert result["history_complete"] is True
+    assert result["signals"] == 0
+    assert result["jobs"] == 0
+    assert result["credentials"] == 0
+    assert result["route_signal"] == 0
+    assert result["paper_broker"] == 0
+    assert result["dhan"] == 0
+    assert result["fresh_db"] is True
 
     created = _result_by_name(result, "create_born_paused")["details"]
     assert created["execution_mode"] == StrategyExecutionMode.PAPER_LIVE_DATA.value

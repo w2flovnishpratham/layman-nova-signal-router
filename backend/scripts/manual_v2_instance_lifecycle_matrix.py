@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run an isolated Phase 2F-2 paper instance lifecycle safety matrix.
+"""Run an isolated paper instance lifecycle safety matrix.
 
 Default mode creates a fresh temporary SQLite database and temporary runtime
 state/log directories. It does not use or mutate the configured staging DB.
@@ -47,6 +47,7 @@ from app.db import crud, models  # noqa: E402
 from app.db.engine import init_db, reset_engine_for_tests, session_scope  # noqa: E402
 from app.services import audit_logger, state_store  # noqa: E402
 from app.services.strategy_fanout_v2 import (  # noqa: E402
+    ARCHIVED_INSTANCE,
     PAUSED_INSTANCE,
     REAL_ORDERS_NOT_SUPPORTED_YET,
     plan_strategy_fanout_v2,
@@ -270,6 +271,7 @@ def _install_runtime_paths(context: MatrixContext) -> None:
 
 def _scenario_functions() -> tuple[tuple[str, Callable[[MatrixContext], dict[str, Any]]], ...]:
     return (
+        ("full_lifecycle_regression", _scenario_full_lifecycle_regression),
         ("create_born_paused", _scenario_create_born_paused),
         ("paused_skipped_by_fanout", _scenario_paused_skipped_by_fanout),
         ("resume_planning_eligible", _scenario_resume_planning_eligible),
@@ -279,6 +281,132 @@ def _scenario_functions() -> tuple[tuple[str, Callable[[MatrixContext], dict[str
         ("smuggled_fields_rejected", _scenario_smuggled_fields_rejected),
         ("frontend_static_safety", _scenario_frontend_static_safety),
     )
+
+
+def _scenario_full_lifecycle_regression(context: MatrixContext) -> dict[str, Any]:
+    _pause_all_instances()
+    user = _ensure_current_user("phase2h3-full@example.invalid")
+    client = _debug_client(user)
+    before_counts = _db_counts()
+
+    created = client.post("/api/debug/v2/instances", json=_create_body(instance_label="Phase 2H-3 Full"))
+    _assert(created.status_code == 200, f"create returned HTTP {created.status_code}")
+    instance = created.json()["instance"]
+    instance_id = str(instance["id"])
+    _assert(instance["status"] == StrategyInstanceStatus.PAUSED.value, "created instance was not paused.")
+
+    edited = _settings_edit(user, instance_id, instance_label="Phase 2H-3 Edited", lots=2, side_preference="CE")
+    _assert(edited.status_code == 200, f"edit returned HTTP {edited.status_code}")
+    _assert(edited.json()["changed"] is True, "edit did not report changed=true.")
+
+    with session_scope() as db:
+        paused_plan = plan_strategy_fanout_v2(db, _nova_v1_payload("phase2h3-paused"), SUPERTREND_CODE)
+    paused_skip = _skip_for_instance(paused_plan, instance_id, PAUSED_INSTANCE)
+    _assert(paused_plan.planned_count == 0 and paused_skip is not None, "paused instance was not skipped.")
+
+    paused_restore = client.post(f"/api/debug/v2/instances/{instance_id}/restore", json={"confirm_paper_only": True})
+    _assert(paused_restore.status_code == 200, f"paused restore returned HTTP {paused_restore.status_code}")
+    _assert(paused_restore.json()["changed"] is False, "paused restore was not idempotent.")
+
+    paused_pause = client.post(f"/api/debug/v2/instances/{instance_id}/pause", json={"confirm_paper_only": True})
+    _assert(paused_pause.status_code == 200, f"paused pause returned HTTP {paused_pause.status_code}")
+    _assert(paused_pause.json()["changed"] is False, "paused pause was not idempotent.")
+
+    resumed = client.post(f"/api/debug/v2/instances/{instance_id}/resume", json={"confirm_paper_only": True})
+    _assert(resumed.status_code == 200, f"resume returned HTTP {resumed.status_code}")
+    _assert(resumed.json()["instance"]["status"] == StrategyInstanceStatus.ACTIVE.value, "resume did not activate.")
+
+    active_archive = client.post(f"/api/debug/v2/instances/{instance_id}/archive", json={"confirm_paper_only": True})
+    _assert(active_archive.status_code == 409, "active archive was not rejected.")
+    _assert(
+        active_archive.json().get("detail") == "Pause the instance before archiving.",
+        "active archive rejection message changed.",
+    )
+
+    paused = client.post(f"/api/debug/v2/instances/{instance_id}/pause", json={"confirm_paper_only": True})
+    _assert(paused.status_code == 200, f"pause returned HTTP {paused.status_code}")
+    _assert(paused.json()["instance"]["status"] == StrategyInstanceStatus.PAUSED.value, "pause did not return paused.")
+
+    archived = client.post(f"/api/debug/v2/instances/{instance_id}/archive", json={"confirm_paper_only": True})
+    _assert(archived.status_code == 200, f"archive returned HTTP {archived.status_code}")
+    _assert(archived.json()["instance"]["status"] == StrategyInstanceStatus.ARCHIVED.value, "archive did not archive.")
+
+    archived_archive = client.post(f"/api/debug/v2/instances/{instance_id}/archive", json={"confirm_paper_only": True})
+    _assert(archived_archive.status_code == 200, f"archived archive returned HTTP {archived_archive.status_code}")
+    _assert(archived_archive.json()["changed"] is False, "archived archive was not idempotent.")
+
+    archived_resume = client.post(f"/api/debug/v2/instances/{instance_id}/resume", json={"confirm_paper_only": True})
+    _assert(archived_resume.status_code == 409, "archived resume was not rejected.")
+
+    archived_edit = _settings_edit(user, instance_id, instance_label="Should Not Apply", lots=3, side_preference="PE")
+    _assert(archived_edit.status_code == 409, "archived edit was not rejected.")
+
+    archived_before_jobs = _db_counts()["strategy_execution_jobs"]
+    with session_scope() as db:
+        archived_plan = plan_strategy_fanout_v2(db, _nova_v1_payload("phase2h3-archived"), SUPERTREND_CODE)
+    archived_skip = _skip_for_instance(archived_plan, instance_id, ARCHIVED_INSTANCE)
+    archived_after_jobs = _db_counts()["strategy_execution_jobs"]
+    _assert(archived_plan.planned_count == 0 and archived_skip is not None, "archived instance was not skipped.")
+    _assert(archived_after_jobs == archived_before_jobs, "archived planner created a job.")
+
+    restored = client.post(f"/api/debug/v2/instances/{instance_id}/restore", json={"confirm_paper_only": True})
+    _assert(restored.status_code == 200, f"restore returned HTTP {restored.status_code}")
+    _assert(restored.json()["instance"]["status"] == StrategyInstanceStatus.PAUSED.value, "restore did not return paused.")
+
+    with session_scope() as db:
+        restored_plan = plan_strategy_fanout_v2(db, _nova_v1_payload("phase2h3-restored"), SUPERTREND_CODE)
+    restored_skip = _skip_for_instance(restored_plan, instance_id, PAUSED_INSTANCE)
+    _assert(restored_plan.planned_count == 0 and restored_skip is not None, "restored paused instance was not skipped.")
+
+    resumed_again = client.post(f"/api/debug/v2/instances/{instance_id}/resume", json={"confirm_paper_only": True})
+    _assert(resumed_again.status_code == 200, f"resume after restore returned HTTP {resumed_again.status_code}")
+    with session_scope() as db:
+        active_plan = plan_strategy_fanout_v2(db, _nova_v1_payload("phase2h3-active"), SUPERTREND_CODE)
+    active_rows = [plan for plan in active_plan.plans if str(plan.instance_id) == instance_id]
+    _assert(active_plan.planned_count == 1 and active_rows, "resumed-after-restore instance was not eligible.")
+
+    details = client.get(f"/api/debug/v2/instances/{instance_id}/details")
+    _assert(details.status_code == 200, f"details returned HTTP {details.status_code}")
+    history_events = [item["event_type"] for item in details.json()["history"]]
+    expected_order = [
+        "V2_INSTANCE_CREATED",
+        "V2_INSTANCE_SETTINGS_EDITED",
+        "V2_INSTANCE_RESUMED",
+        "V2_INSTANCE_PAUSED",
+        "V2_INSTANCE_ARCHIVED",
+        "V2_INSTANCE_RESTORED",
+    ]
+    _assert(_contains_in_order(history_events, expected_order), "history did not contain lifecycle events in order.")
+
+    after_counts = _db_counts()
+    side_effects = _side_effect_counts(after_counts, before_counts)
+    _assert(side_effects == {}, f"full lifecycle wrote side-effect tables: {side_effects}")
+
+    return {
+        "instance_id": instance_id,
+        "create": created.status_code == 200,
+        "edit": edited.status_code == 200,
+        "pause": paused.status_code == 200,
+        "resume": resumed.status_code == 200 and resumed_again.status_code == 200,
+        "archive": archived.status_code == 200,
+        "restore": restored.status_code == 200,
+        "active_archive_status_code": active_archive.status_code,
+        "archived_resume_status_code": archived_resume.status_code,
+        "archived_edit_status_code": archived_edit.status_code,
+        "paused_restore_changed": paused_restore.json()["changed"],
+        "paused_pause_changed": paused_pause.json()["changed"],
+        "archived_archive_changed": archived_archive.json()["changed"],
+        "planner_paused_skip": paused_skip.reason,
+        "planner_archive_skip": archived_skip.reason,
+        "planner_restore_skip": restored_skip.reason,
+        "planner_resume_count": active_plan.planned_count,
+        "history_events": history_events,
+        "history_complete": True,
+        "side_effect_counts": side_effects,
+        "route_signal": context.guard.calls["route_signal"],
+        "paper_broker": context.guard.calls["paper_broker"],
+        "dhan": context.guard.calls["dhan"],
+    }
 
 
 def _scenario_create_born_paused(_context: MatrixContext) -> dict[str, Any]:
@@ -513,8 +641,10 @@ def _scenario_frontend_static_safety(_context: MatrixContext) -> dict[str, Any]:
     lifecycle_section = _lifecycle_api_section(api_text)
 
     approved_helpers = (
+        "archivePaperStrategyInstance",
         "createPaperStrategyInstance",
         "pausePaperStrategyInstance",
+        "restorePaperStrategyInstance",
         "resumePaperStrategyInstance",
         "updateStrategyInstanceSettings",
     )
@@ -529,6 +659,18 @@ def _scenario_frontend_static_safety(_context: MatrixContext) -> dict[str, Any]:
         "square off",
         "delete instance",
     )
+    forbidden_visible_controls = (
+        "Run",
+        "Execute",
+        "Trade",
+        "Webhook",
+        "Generate Secret",
+        "Activate Live",
+        "Real Orders",
+        "Retry",
+        "Process Ready",
+        "Run Once",
+    )
 
     _assert("import.meta.env.VITE_ENABLE_STRATEGY_INSTANCE_MUTATION === 'true'" in app_text, "mutation UI flag missing.")
     _assert(
@@ -542,14 +684,29 @@ def _scenario_frontend_static_safety(_context: MatrixContext) -> dict[str, Any]:
         _assert(helper not in paper_panel, f"{helper} leaked into v2 paper status panel.")
     for term in forbidden_catalog_terms:
         _assert(term not in catalog_panel.lower(), f"forbidden lifecycle UI term found: {term}")
+    for label in forbidden_visible_controls:
+        _assert(f'label="{label}"' not in catalog_panel, f"forbidden control label found: {label}")
+        _assert(f">{label}<" not in catalog_panel, f"forbidden visible control text found: {label}")
     _assert("method: 'POST'" in lifecycle_section, "lifecycle helpers are not explicit POST calls.")
     _assert("confirm_paper_only: true" in lifecycle_section, "lifecycle helpers do not force confirm_paper_only.")
+    for allowed in (
+        "/api/strategies/catalog",
+        "/api/strategies/instances",
+        "/api/debug/v2/instances/${encodeURIComponent(instanceId)}/details",
+        "/api/debug/v2/instances/${encodeURIComponent(instanceId)}/pause",
+        "/api/debug/v2/instances/${encodeURIComponent(instanceId)}/resume",
+        "/api/debug/v2/instances/${encodeURIComponent(instanceId)}/settings",
+        "/api/debug/v2/instances/${encodeURIComponent(instanceId)}/archive",
+        "/api/debug/v2/instances/${encodeURIComponent(instanceId)}/restore",
+    ):
+        _assert(allowed in api_text, f"approved UI endpoint missing: {allowed}")
     for forbidden in ("/api/debug/v2/paper-fanout/run-once", "/api/debug/v2/paper-fanout/process-ready"):
         _assert(forbidden not in lifecycle_section, f"lifecycle helpers reference {forbidden}.")
     return {
         "mutation_flag_default_off": True,
         "catalog_gate_required": True,
         "approved_helpers": list(approved_helpers),
+        "network_allowed_only": True,
         "runner_endpoints_referenced": False,
         "execution_controls_rendered": False,
     }
@@ -591,6 +748,25 @@ def _create_instance(user: CurrentUser, *, instance_label: str) -> dict[str, Any
     )
     _assert(response.status_code == 200, f"create returned HTTP {response.status_code}")
     return response.json()["instance"]
+
+
+def _settings_edit(
+    user: CurrentUser,
+    instance_id: str,
+    *,
+    instance_label: str,
+    lots: int,
+    side_preference: str,
+    **extra: Any,
+):
+    body = {
+        "instance_label": instance_label,
+        "lots": lots,
+        "side_preference": side_preference,
+        "confirm_paper_only": True,
+        **extra,
+    }
+    return _debug_client(user).post(f"/api/debug/v2/instances/{instance_id}/settings", json=body)
 
 
 def _create_body(**overrides: Any) -> dict[str, Any]:
@@ -684,12 +860,39 @@ def _db_counts() -> dict[str, int]:
         "normalized_option_signals": models.NormalizedOptionSignal,
         "strategy_execution_jobs": models.StrategyExecutionJob,
         "user_strategy_webhook_credentials": models.UserStrategyWebhookCredential,
+        "live_order_intents": models.LiveOrderIntent,
+        "portfolio_trades": models.PortfolioTrade,
+        "portfolio_snapshots": models.PortfolioSnapshot,
     }
     with session_scope() as db:
         return {
             name: int(db.scalar(select(func.count()).select_from(model)) or 0)
             for name, model in models_by_name.items()
         }
+
+
+def _side_effect_counts(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
+    allowed = {"user_strategy_instances"}
+    return {
+        key: after[key] - before.get(key, 0)
+        for key in after
+        if key not in allowed and after[key] != before.get(key, 0)
+    }
+
+
+def _skip_for_instance(plan: Any, instance_id: str, reason: str) -> Any | None:
+    for skip in plan.skips:
+        if str(skip.instance_id) == str(instance_id) and skip.reason == reason:
+            return skip
+    return None
+
+
+def _contains_in_order(values: list[str], expected: list[str]) -> bool:
+    index = 0
+    for value in values:
+        if index < len(expected) and value == expected[index]:
+            index += 1
+    return index == len(expected)
 
 
 def _position_file_snapshot() -> dict[str, dict[str, Any]]:
@@ -773,9 +976,12 @@ def _summary(context: MatrixContext, results: list[ScenarioResult]) -> dict[str,
     scenario_status = {result.name: "passed" if result.passed else "failed" for result in results}
     expected = [name for name, _runner in _scenario_functions()]
     overall_ok = len(results) == len(expected) and all(result.passed for result in results)
+    full = next((result.details for result in results if result.name == "full_lifecycle_regression"), {})
+    final_counts = _db_counts()
     data = {
         "overall_ok": overall_ok,
         "fresh_isolated_db": context.isolated,
+        "fresh_db": context.isolated,
         "db_type": "sqlite_temp" if context.isolated else "configured_external",
         "runtime_isolated": context.isolated,
         "flags": feature_flag_states(),
@@ -785,6 +991,23 @@ def _summary(context: MatrixContext, results: list[ScenarioResult]) -> dict[str,
             "dhan_mode": str(settings.DHAN_MODE).upper(),
         },
         "execution_guard_calls": dict(context.guard.calls),
+        "create": bool(full.get("create")),
+        "edit": bool(full.get("edit")),
+        "pause": bool(full.get("pause")),
+        "resume": bool(full.get("resume")),
+        "archive": bool(full.get("archive")),
+        "restore": bool(full.get("restore")),
+        "planner_paused_skip": full.get("planner_paused_skip") == PAUSED_INSTANCE,
+        "planner_archive_skip": full.get("planner_archive_skip") == ARCHIVED_INSTANCE,
+        "planner_restore_skip": full.get("planner_restore_skip") == PAUSED_INSTANCE,
+        "planner_resume_ok": int(full.get("planner_resume_count") or 0) == 1,
+        "history_complete": bool(full.get("history_complete")),
+        "signals": final_counts["strategy_signals"],
+        "jobs": final_counts["strategy_execution_jobs"],
+        "credentials": final_counts["user_strategy_webhook_credentials"],
+        "route_signal": context.guard.calls["route_signal"] + context.guard.calls["worker_route_signal"],
+        "paper_broker": context.guard.calls["paper_broker"],
+        "dhan": context.guard.calls["dhan"],
         "scenarios": scenario_status,
         "results": [asdict(result) for result in results],
     }
