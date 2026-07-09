@@ -53,6 +53,8 @@ export function EngineSidebar({
         </section>
       )}
 
+      <BrokerCredentialsCard />
+
       {!onlyMargin && (
         <>
           <section className="sidebar-card position-card">
@@ -113,8 +115,6 @@ export function EngineSidebar({
               </div>
             </div>
           </section>
-
-          <BrokerCredentialsCard />
         </>
       )}
     </div>
