@@ -6,7 +6,8 @@ debug-gated mutation exception for paper strategy instance lifecycle only:
 create born paused, pause, and resume. Phase 2G-1 adds paused-only settings
 edit for `instance_label`, `lots`, and `side_preference`. These are not
 execution surfaces. Phase 2H-1 adds read-only instance details/history
-visibility for safe inspection before any further mutation.
+visibility for safe inspection before any further mutation. Phase 2H-2 adds
+paused-only soft archive and restore-to-paused lifecycle mutation.
 
 ## Panels And Flags
 
@@ -44,6 +45,8 @@ Paper instance lifecycle controls call:
 - `POST /api/debug/v2/instances/{id}/pause`
 - `POST /api/debug/v2/instances/{id}/resume`
 - `POST /api/debug/v2/instances/{id}/settings`
+- `POST /api/debug/v2/instances/{id}/archive`
+- `POST /api/debug/v2/instances/{id}/restore`
 
 Instance details/history calls:
 
@@ -56,6 +59,13 @@ Pause/resume only flip eligible paper or signal-only instance status between
 paper/signal-only instance is already paused, and only changes
 `instance_label`, `lots`, `side_preference`, `updated_at`, and the safe
 `config_json.last_mutation` breadcrumb.
+
+Archive/restore requires the same debug mutation gates and confirmation. Archive
+only changes a paused eligible paper/signal-only instance to `archived`; restore
+only returns an archived eligible paper/signal-only instance to `paused`.
+Idempotent repeats do not write or audit. Archived instances are hidden from the
+catalog panel list by default and skipped by the v2 planner with
+`ARCHIVED_INSTANCE`.
 
 The details endpoint requires only backend debug access and an internal
 admin/dev user. It does not require mutation, fanout, runner, or confirmation
@@ -93,6 +103,12 @@ Phase 2H-1 additionally allows only:
 - view safe instance details for the current user's own instance
 - view sanitized lifecycle/settings history
 - refresh or close the details drawer
+
+Phase 2H-2 additionally allows only:
+
+- archive a paused eligible paper/signal-only instance
+- restore an archived eligible paper/signal-only instance to paused
+- show/hide archived rows client-side in the internal catalog panel
 
 It does not add execution controls, webhook generation, live mode, Dhan
 placement, workers, schedulers, startup wiring, signal writes, job writes,
@@ -192,6 +208,22 @@ Expected:
 - No raw config/risk/audit body fields, secrets, tokens, headers, or proxy URLs
   appear.
 - No execution, webhook, live, worker, scheduler, or Dhan calls occur.
+
+Archive smoke:
+
+```bash
+VITE_ENABLE_STRATEGY_CATALOG_STATUS=true VITE_ENABLE_STRATEGY_INSTANCE_MUTATION=true npm --prefix frontend run build
+```
+
+Expected:
+
+- Paused eligible rows show Archive.
+- Archived rows are hidden until Show archived is checked.
+- Archived eligible rows show Restore and not Resume.
+- Archive/restore use only their debug POST endpoints with paper confirmation.
+- Planner skips archived rows with `ARCHIVED_INSTANCE`.
+- No signals, jobs, webhook credentials, runtime state, order logs, live paths,
+  workers, schedulers, or Dhan calls occur.
 
 ## Required Review Before Further Mutation
 

@@ -208,6 +208,30 @@
   min-height: 180px;
 }
 
+.strategy-panel-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.strategy-archive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.strategy-archive-toggle input {
+  width: 13px;
+  height: 13px;
+  accent-color: #67e8f9;
+}
+
 .strategy-status .nv-dash-head p {
   display: inline-flex;
   align-items: center;

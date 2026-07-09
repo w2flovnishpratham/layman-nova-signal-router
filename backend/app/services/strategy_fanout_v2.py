@@ -32,6 +32,7 @@ UNKNOWN_STRATEGY = "UNKNOWN_STRATEGY"
 STRATEGY_VERSION_NOT_FOUND = "STRATEGY_VERSION_NOT_FOUND"
 DUPLICATE_SIGNAL = "DUPLICATE_SIGNAL"
 PAUSED_INSTANCE = "PAUSED_INSTANCE"
+ARCHIVED_INSTANCE = "ARCHIVED_INSTANCE"
 DISABLED_INSTANCE = "DISABLED_INSTANCE"
 INACTIVE_INSTANCE = "INACTIVE_INSTANCE"
 STRATEGY_VERSION_MISMATCH = "STRATEGY_VERSION_MISMATCH"
@@ -256,7 +257,7 @@ def plan_strategy_fanout_v2(
         )
 
     signal_row_id: uuid.UUID | None = None
-    if not dry_run:
+    if not dry_run and plans:
         signal_row = _persist_planned_signal(
             db,
             catalog=catalog,
@@ -301,6 +302,8 @@ def _skip_for_instance(
     status = str(instance.status or "")
     if status == StrategyInstanceStatus.PAUSED.value:
         return _instance_skip(instance, PAUSED_INSTANCE)
+    if status == StrategyInstanceStatus.ARCHIVED.value:
+        return _instance_skip(instance, ARCHIVED_INSTANCE)
     if status == StrategyInstanceStatus.DISABLED.value:
         return _instance_skip(instance, DISABLED_INSTANCE)
     if status != StrategyInstanceStatus.ACTIVE.value:

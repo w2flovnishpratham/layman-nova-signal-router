@@ -296,6 +296,40 @@ def test_owner_internal_user_can_read_safe_details_and_history(
             },
         }
     )
+    audit_records.append(
+        {
+            "timestamp": "2026-07-09T08:05:00+00:00",
+            "event_type": "V2_INSTANCE_ARCHIVED",
+            "metadata": {
+                "actor_user_id": str(user_row.id),
+                "instance_id": str(instance_id),
+                "strategy_code": "SUPERTREND_V1",
+                "previous_status": StrategyInstanceStatus.PAUSED.value,
+                "new_status": StrategyInstanceStatus.ARCHIVED.value,
+                "changed_fields": ["status", "raw_payload"],
+                "old_values": {"status": StrategyInstanceStatus.PAUSED.value, "token": "archive-token"},
+                "new_values": {"status": StrategyInstanceStatus.ARCHIVED.value, "secret": "archive-secret"},
+                "request": {"raw_payload": "archive-raw-value"},
+            },
+        }
+    )
+    audit_records.append(
+        {
+            "timestamp": "2026-07-09T08:10:00+00:00",
+            "event_type": "V2_INSTANCE_RESTORED",
+            "metadata": {
+                "actor_user_id": str(user_row.id),
+                "instance_id": str(instance_id),
+                "strategy_code": "SUPERTREND_V1",
+                "previous_status": StrategyInstanceStatus.ARCHIVED.value,
+                "new_status": StrategyInstanceStatus.PAUSED.value,
+                "changed_fields": ["status", "headers"],
+                "old_values": {"status": StrategyInstanceStatus.ARCHIVED.value, "headers": "restore-header"},
+                "new_values": {"status": StrategyInstanceStatus.PAUSED.value, "proxy_url": "restore-proxy"},
+                "raw_payload": "restore-raw-value",
+            },
+        }
+    )
 
     client = _client(_current_user(user_row), monkeypatch)
     response = client.get(f"/api/debug/v2/instances/{instance_id}/details")
@@ -322,6 +356,8 @@ def test_owner_internal_user_can_read_safe_details_and_history(
     assert "V2_INSTANCE_CREATED" in event_types
     assert "V2_INSTANCE_SETTINGS_EDITED" in event_types
     assert "V2_INSTANCE_RESUMED" in event_types
+    assert "V2_INSTANCE_ARCHIVED" in event_types
+    assert "V2_INSTANCE_RESTORED" in event_types
 
     settings_row = next(row for row in history if row["event_type"] == "V2_INSTANCE_SETTINGS_EDITED")
     assert settings_row["changed_fields"] == ["instance_label", "lots", "side_preference"]
@@ -348,6 +384,18 @@ def test_owner_internal_user_can_read_safe_details_and_history(
         "lots": 2,
     }
 
+    archived_row = next(row for row in history if row["event_type"] == "V2_INSTANCE_ARCHIVED")
+    assert archived_row["summary"] == "Archived"
+    assert archived_row["changed_fields"] == ["status"]
+    assert archived_row["old_values"] == {"status": StrategyInstanceStatus.PAUSED.value}
+    assert archived_row["new_values"] == {"status": StrategyInstanceStatus.ARCHIVED.value}
+
+    restored_row = next(row for row in history if row["event_type"] == "V2_INSTANCE_RESTORED")
+    assert restored_row["summary"] == "Restored"
+    assert restored_row["changed_fields"] == ["status"]
+    assert restored_row["old_values"] == {"status": StrategyInstanceStatus.ARCHIVED.value}
+    assert restored_row["new_values"] == {"status": StrategyInstanceStatus.PAUSED.value}
+
     assert _contains_key(body, FORBIDDEN_KEYS) is False
     for hidden_value in (
         "catalog-secret-value",
@@ -365,6 +413,12 @@ def test_owner_internal_user_can_read_safe_details_and_history(
         "new-status-token",
         "status-token-value",
         "headers-secret-value",
+        "archive-token",
+        "archive-secret",
+        "archive-raw-value",
+        "restore-header",
+        "restore-proxy",
+        "restore-raw-value",
     ):
         assert _contains_value(body, hidden_value) is False
     assert sum(execution_spies.values()) == 0

@@ -27,6 +27,7 @@ class StrategyCatalogStatus(_StringEnum):
 class StrategyInstanceStatus(_StringEnum):
     ACTIVE = "active"
     PAUSED = "paused"
+    ARCHIVED = "archived"
     ERROR = "error"
     DISABLED = "disabled"
 

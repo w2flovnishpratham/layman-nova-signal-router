@@ -308,14 +308,17 @@ def test_lifecycle_mutation_controls_are_flag_gated_and_scoped():
 
     # Only the approved lifecycle helpers are referenced by the catalog panel.
     approved_helpers = (
+        "archivePaperStrategyInstance",
         "createPaperStrategyInstance",
         "pausePaperStrategyInstance",
+        "restorePaperStrategyInstance",
         "resumePaperStrategyInstance",
         "updateStrategyInstanceSettings",
     )
     for helper in approved_helpers:
         assert helper in catalog_panel
     assert "Pause to edit" in catalog_panel
+    assert "Show archived" in catalog_panel
     assert "Paper only. No orders will be placed." in catalog_panel
     for forbidden in ("run-once", "process-ready", "paper-fanout", "runV2", "processReady"):
         assert forbidden not in catalog_panel, forbidden

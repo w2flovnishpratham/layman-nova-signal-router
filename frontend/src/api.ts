@@ -320,6 +320,14 @@ export async function resumePaperStrategyInstance(instanceId: string): Promise<S
   return lifecycleMutation(`/api/debug/v2/instances/${encodeURIComponent(instanceId)}/resume`, {})
 }
 
+export async function archivePaperStrategyInstance(instanceId: string): Promise<StrategyInstanceMutationResult> {
+  return lifecycleMutation(`/api/debug/v2/instances/${encodeURIComponent(instanceId)}/archive`, {})
+}
+
+export async function restorePaperStrategyInstance(instanceId: string): Promise<StrategyInstanceMutationResult> {
+  return lifecycleMutation(`/api/debug/v2/instances/${encodeURIComponent(instanceId)}/restore`, {})
+}
+
 export async function updateStrategyInstanceSettings(
   instanceId: string,
   input: {

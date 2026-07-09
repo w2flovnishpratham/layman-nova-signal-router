@@ -2,10 +2,12 @@ import { AlertTriangle, BookOpen, Boxes, Database, Layers3, Loader2, RefreshCw, 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   StrategyCatalogStatusDisabledError,
+  archivePaperStrategyInstance,
   createPaperStrategyInstance,
   getStrategyInstanceDetails,
   getStrategyCatalogStatusBundle,
   pausePaperStrategyInstance,
+  restorePaperStrategyInstance,
   resumePaperStrategyInstance,
   type StrategyCatalogItem,
   type StrategyInstanceDetailsResponse,
@@ -360,15 +362,33 @@ function InstancesPanel({
   onDetails: (instanceId: string) => void
   onMutated: () => void
 }) {
+  const [showArchived, setShowArchived] = useState(false)
+  const archivedCount = instances.filter((instance) => instance.status === 'archived').length
+  const visibleInstances = showArchived ? instances : instances.filter((instance) => instance.status !== 'archived')
+
   return (
     <section className="nv-panel">
       <div className="nv-panel-head">
         <h2><Boxes size={15} /> My Strategy Instances</h2>
-        <span className="nv-panel-note">{instances.length} row{instances.length === 1 ? '' : 's'}</span>
+        <div className="strategy-panel-tools">
+          {archivedCount ? (
+            <label className="strategy-archive-toggle">
+              <input
+                checked={showArchived}
+                type="checkbox"
+                onChange={(event) => setShowArchived(event.target.checked)}
+              />
+              <span>Show archived</span>
+            </label>
+          ) : null}
+          <span className="nv-panel-note">
+            {visibleInstances.length} row{visibleInstances.length === 1 ? '' : 's'}
+          </span>
+        </div>
       </div>
-      {instances.length ? (
+      {visibleInstances.length ? (
         <InstancesTable
-          instances={instances}
+          instances={visibleInstances}
           lifecycleControls={lifecycleControls}
           onDetails={onDetails}
           onMutated={onMutated}
@@ -383,7 +403,7 @@ function InstancesPanel({
 function _lifecycleEligible(instance: UserStrategyInstanceStatus): boolean {
   const mode = instance.execution_mode
   if (mode !== 'paper_live_data' && mode !== 'signal_only') return false
-  return instance.status === 'active' || instance.status === 'paused'
+  return instance.status === 'active' || instance.status === 'paused' || instance.status === 'archived'
 }
 
 function InstancesTable({
@@ -604,11 +624,28 @@ function InstanceLifecycleCell({
     )
   }
 
+  if (instance.status === 'archived') {
+    return (
+      <div className="strategy-lifecycle-stack">
+        <LifecycleConfirmButton
+          label="Restore"
+          onRun={() => restorePaperStrategyInstance(String(instance.id))}
+          onDone={onMutated}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="strategy-lifecycle-stack">
       <LifecycleConfirmButton
         label="Resume"
         onRun={() => resumePaperStrategyInstance(String(instance.id))}
+        onDone={onMutated}
+      />
+      <LifecycleConfirmButton
+        label="Archive"
+        onRun={() => archivePaperStrategyInstance(String(instance.id))}
         onDone={onMutated}
       />
       <InstanceSettingsEditControl instance={instance} onDone={onMutated} />
@@ -819,7 +856,7 @@ function modeLabel(value?: string | null): string {
 function statusTone(status: string): string {
   const lowered = status.toLowerCase()
   if (lowered === 'active' || lowered === 'beta') return 'ok'
-  if (lowered === 'coming_soon' || lowered === 'paused') return 'warn'
+  if (lowered === 'coming_soon' || lowered === 'paused' || lowered === 'archived') return 'warn'
   if (lowered === 'disabled' || lowered === 'deprecated' || lowered === 'error') return 'bad'
   return 'muted'
 }

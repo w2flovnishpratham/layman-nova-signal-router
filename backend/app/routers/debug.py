@@ -87,8 +87,10 @@ V2_INSTANCE_LIFECYCLE_MODES = {
 }
 V2_INSTANCE_TRANSITION_STATUSES = {"active", "paused"}
 V2_INSTANCE_DETAILS_HISTORY_EVENTS = {
+    "V2_INSTANCE_ARCHIVED",
     "V2_INSTANCE_CREATED",
     "V2_INSTANCE_PAUSED",
+    "V2_INSTANCE_RESTORED",
     "V2_INSTANCE_RESUMED",
     "V2_INSTANCE_SETTINGS_EDITED",
 }
@@ -424,8 +426,10 @@ def _safe_history_changed_fields(value: Any) -> list[str]:
 
 def _history_summary(event_type: str) -> str:
     return {
+        "V2_INSTANCE_ARCHIVED": "Archived",
         "V2_INSTANCE_CREATED": "Instance created paused",
         "V2_INSTANCE_PAUSED": "Instance paused",
+        "V2_INSTANCE_RESTORED": "Restored",
         "V2_INSTANCE_RESUMED": "Instance resumed",
         "V2_INSTANCE_SETTINGS_EDITED": "Instance settings edited",
     }.get(event_type, "Instance event")
@@ -707,6 +711,65 @@ def _v2_instance_lifecycle_transition(
         return {"ok": True, "changed": True, "instance": _instance_mutation_public(instance, strategy_code)}
 
 
+def _v2_instance_archive_restore_transition(
+    instance_id: str,
+    target_status: str,
+    *,
+    audit_event: str,
+    request: V2InstanceLifecycleRequest,
+    user: CurrentUser,
+) -> dict[str, Any]:
+    _require_instance_mutation_debug_enabled()
+    _require_paper_confirmation(request.confirm_paper_only)
+
+    try:
+        parsed_id = uuid.UUID(str(instance_id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=404, detail="Strategy instance not found.")
+
+    with session_scope() as db:
+        instance = db.get(models.UserStrategyInstance, parsed_id)
+        # Non-owner gets 404 (not 403) so instance existence is not leaked.
+        if instance is None or instance.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Strategy instance not found.")
+
+        if str(instance.execution_mode) == StrategyExecutionMode.REAL_ORDERS.value:
+            raise HTTPException(status_code=403, detail="real_orders instances cannot be mutated here.")
+        if str(instance.execution_mode) not in V2_INSTANCE_LIFECYCLE_MODES:
+            raise HTTPException(status_code=409, detail="This instance execution mode does not support lifecycle mutation.")
+
+        catalog = db.get(models.StrategyCatalog, instance.strategy_id)
+        strategy_code = catalog.code if catalog is not None else "UNKNOWN"
+        current_status = str(instance.status)
+
+        if current_status == target_status:
+            return {"ok": True, "changed": False, "instance": _instance_mutation_public(instance, strategy_code)}
+
+        if target_status == StrategyInstanceStatus.ARCHIVED.value:
+            if current_status == StrategyInstanceStatus.ACTIVE.value:
+                raise HTTPException(status_code=409, detail="Pause the instance before archiving.")
+            if current_status != StrategyInstanceStatus.PAUSED.value:
+                raise HTTPException(status_code=409, detail="This instance status does not support archive.")
+        elif target_status == StrategyInstanceStatus.PAUSED.value:
+            if current_status == StrategyInstanceStatus.PAUSED.value:
+                return {"ok": True, "changed": False, "instance": _instance_mutation_public(instance, strategy_code)}
+            if current_status != StrategyInstanceStatus.ARCHIVED.value:
+                raise HTTPException(status_code=409, detail="This instance status does not support restore.")
+
+        instance.status = target_status
+        instance.updated_at = models.utcnow()
+        db.flush()
+        _audit_instance_mutation(
+            audit_event,
+            user=user,
+            instance=instance,
+            strategy_code=strategy_code,
+            previous_status=current_status,
+            changed=True,
+        )
+        return {"ok": True, "changed": True, "instance": _instance_mutation_public(instance, strategy_code)}
+
+
 def _settings_fields_present(request: V2InstanceSettingsRequest) -> set[str]:
     return {"instance_label", "lots", "side_preference"} & set(request.model_fields_set)
 
@@ -828,6 +891,36 @@ def pause_v2_paper_instance_debug(
         "V2_INSTANCE_PAUSED",
         request,
         user,
+    )
+
+
+@router.post("/v2/instances/{instance_id}/archive")
+def archive_v2_paper_instance_debug(
+    instance_id: str,
+    request: V2InstanceLifecycleRequest,
+    user: CurrentUser = Depends(_require_internal_mutation_user),
+) -> dict[str, Any]:
+    return _v2_instance_archive_restore_transition(
+        instance_id,
+        StrategyInstanceStatus.ARCHIVED.value,
+        audit_event="V2_INSTANCE_ARCHIVED",
+        request=request,
+        user=user,
+    )
+
+
+@router.post("/v2/instances/{instance_id}/restore")
+def restore_v2_paper_instance_debug(
+    instance_id: str,
+    request: V2InstanceLifecycleRequest,
+    user: CurrentUser = Depends(_require_internal_mutation_user),
+) -> dict[str, Any]:
+    return _v2_instance_archive_restore_transition(
+        instance_id,
+        StrategyInstanceStatus.PAUSED.value,
+        audit_event="V2_INSTANCE_RESTORED",
+        request=request,
+        user=user,
     )
 
 
