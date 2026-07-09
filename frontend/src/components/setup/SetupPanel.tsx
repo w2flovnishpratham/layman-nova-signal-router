@@ -287,44 +287,116 @@ function BrokerStep({
   onDraft: (patch: Partial<SetupDraft>) => void
   onSubmit: (clientId: string, accessToken: string) => void
 }) {
-  const [clientId, setClientId] = useState(draft.clientId)
-  const [accessToken, setAccessToken] = useState(draft.accessToken)
+  const [clientIdInput, setClientIdInput] = useState(draft.clientId)
+  const [accessTokenInput, setAccessTokenInput] = useState(draft.accessToken)
+  const [savedClientId, setSavedClientId] = useState(draft.clientId || null)
+  const [savedAccessToken, setSavedAccessToken] = useState(draft.accessToken || null)
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    onDraft({ clientId, accessToken })
-    onSubmit(clientId, accessToken)
+  // Verification fires only from a direct click handler below, never from an
+  // effect — this component can remount as unrelated chat messages are
+  // appended, and an effect keyed on this state would re-fire on every such
+  // remount, causing runaway duplicate Dhan verification calls.
+  function saveClientId() {
+    const trimmed = clientIdInput.trim()
+    if (trimmed.length < 3) return
+    setSavedClientId(trimmed)
+    onDraft({ clientId: trimmed })
+    if (savedAccessToken) onSubmit(trimmed, savedAccessToken)
+  }
+
+  function saveAccessToken() {
+    const trimmed = accessTokenInput.trim()
+    if (trimmed.length < 12) return
+    setSavedAccessToken(trimmed)
+    onDraft({ accessToken: trimmed })
+    if (savedClientId) onSubmit(savedClientId, trimmed)
+  }
+
+  function retryVerification() {
+    if (!savedClientId || !savedAccessToken) return
+    onSubmit(savedClientId, savedAccessToken)
   }
 
   return (
-    <form className="setup-card form-card" onSubmit={submit}>
-      <p className="form-hint">{mode === 'paper' ? 'Dhan credentials are used only for real market data. Paper mode never sends Dhan orders.' : 'Credentials are used for live market data and live order routing.'}</p>
-      <label>
-        Dhan Client ID
-        <input value={clientId} onChange={(event) => setClientId(event.target.value)} required minLength={3} autoComplete="off" disabled={pending} />
-      </label>
-      <label>
-        Access Token
-        <input
-          value={accessToken}
-          onChange={(event) => setAccessToken(event.target.value)}
-          required
-          minLength={12}
-          type="password"
-          autoComplete="off"
-          disabled={pending}
-        />
-      </label>
+    <div className="setup-card form-card">
+      <p className="form-hint">
+        {mode === 'paper'
+          ? 'Dhan credentials are used only for real market data. Paper mode never sends Dhan orders.'
+          : 'Credentials are used for live market data and live order routing.'}
+      </p>
+
+      <div className="credential-field">
+        <label htmlFor="setup-dhan-client-id">
+          Dhan Client ID
+          {savedClientId ? <span className="credential-saved-hint">Saved</span> : null}
+        </label>
+        <div className="credential-field-row">
+          <input
+            id="setup-dhan-client-id"
+            value={clientIdInput}
+            onChange={(event) => setClientIdInput(event.target.value)}
+            minLength={3}
+            autoComplete="off"
+            disabled={pending}
+          />
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={pending || clientIdInput.trim().length < 3}
+            onClick={saveClientId}
+          >
+            {savedClientId ? 'Update' : 'Save'}
+          </button>
+        </div>
+      </div>
+
+      <div className="credential-field">
+        <label htmlFor="setup-dhan-access-token">
+          Access Token
+          {savedAccessToken ? <span className="credential-saved-hint">Saved</span> : null}
+        </label>
+        <div className="credential-field-row">
+          <input
+            id="setup-dhan-access-token"
+            value={accessTokenInput}
+            onChange={(event) => setAccessTokenInput(event.target.value)}
+            minLength={12}
+            type="password"
+            autoComplete="off"
+            disabled={pending}
+          />
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={pending || accessTokenInput.trim().length < 12}
+            onClick={saveAccessToken}
+          >
+            {savedAccessToken ? 'Update' : 'Save'}
+          </button>
+        </div>
+      </div>
+
       {error ? <p className="form-error">{error}</p> : null}
-      <button type="submit" disabled={pending}>
-        {pending ? (
+
+      {pending ? (
+        <p className="form-hint">
           <MotionSpinner>
             <Loader2 size={14} />
-          </MotionSpinner>
-        ) : null}
-        {pending ? 'Verifying Dhan Account' : 'Connect & Verify Dhan Account'}
-      </button>
-    </form>
+          </MotionSpinner>{' '}
+          Verifying Dhan Account…
+        </p>
+      ) : savedClientId && savedAccessToken ? (
+        error ? (
+          <button type="button" className="secondary-button" onClick={retryVerification}>
+            Retry Verification
+          </button>
+        ) : (
+          <p className="form-hint">Both fields saved — verifying automatically.</p>
+        )
+      ) : (
+        <p className="form-hint">Save both fields to verify and connect automatically.</p>
+      )}
+    </div>
   )
 }
 
