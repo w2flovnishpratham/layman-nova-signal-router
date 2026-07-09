@@ -42,7 +42,7 @@ export function SetupPanel({
   onStep,
 }: Props) {
   if (state === 'LIVE' || state === 'PAUSED' || state === 'ENDED' || flowStep === 'complete') return null
-  if (flowStep === 'mode') return <ModeStep draft={draft} onSelect={(engineMode, paperStartingBalance) => {
+  if (flowStep === 'mode') return <ModeStep draft={draft} error={lastError} onSelect={(engineMode, paperStartingBalance) => {
     onDraft({ engineMode, paperStartingBalance })
     onUserReply(engineMode === 'paper' ? `Paper mode with ${formatCurrency(paperStartingBalance)} virtual balance` : 'Live mode - real money routing')
     onSend({ type: 'setup.mode', data: { engineMode, paperStartingBalance } })
@@ -51,12 +51,12 @@ export function SetupPanel({
     onUserReply('Nova Static IP entitlement and proxy verification confirmed')
     onStep('strategy')
   }} />
-  if (flowStep === 'strategy') return <StrategyStep onSelect={() => {
+  if (flowStep === 'strategy') return <StrategyStep error={lastError} onSelect={() => {
     onUserReply('Supertrend Strategy (NSE Options)')
     onSend({ type: 'setup.select_strategy', data: { strategy: 'supertrend' } })
   }} />
   if (flowStep === 'broker' && draft.engineMode === 'paper' && sharedMarketData) {
-    return <SharedDataStep onContinue={() => {
+    return <SharedDataStep error={lastError} onContinue={() => {
       onUserReply('Use shared live market data (no Dhan account needed)')
       onSend({ type: 'setup.use_shared_data', data: {} })
     }} />
@@ -84,7 +84,7 @@ export function SetupPanel({
     ))
     onStep('limits')
   }} />
-  if (flowStep === 'limits') return <DailyLimitsStep draft={draft} pending={commandPending} onSubmit={(patch) => {
+  if (flowStep === 'limits') return <DailyLimitsStep draft={draft} error={lastError} pending={commandPending} onSubmit={(patch) => {
     const finalDraft = { ...draft, ...patch }
     onDraft(patch)
     onUserReply(limitsReply(finalDraft.maxTrades, finalDraft.maxLoss))
@@ -101,14 +101,22 @@ export function SetupPanel({
       },
     })
   }} />
-  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} pending={commandPending} onDeploy={() => {
+  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} error={lastError} pending={commandPending} onDeploy={() => {
     onUserReply(draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Deploy Live Strategy & Start Listening')
     onSend({ type: 'setup.confirm_live', data: {} })
   }} />
   return null
 }
 
-function ModeStep({ draft, onSelect }: { draft: SetupDraft; onSelect: (mode: EngineMode, balance: number) => void }) {
+function ModeStep({
+  draft,
+  error,
+  onSelect,
+}: {
+  draft: SetupDraft
+  error: string
+  onSelect: (mode: EngineMode, balance: number) => void
+}) {
   const [paperBalance, setPaperBalance] = useState(draft.paperStartingBalance)
   return (
     <article className="setup-card mode-step">
@@ -135,11 +143,12 @@ function ModeStep({ draft, onSelect }: { draft: SetupDraft; onSelect: (mode: Eng
           <button type="button" onClick={() => onSelect('live', paperBalance)}>Configure Live</button>
         </section>
       </div>
+      {error ? <p className="form-error">{error}</p> : null}
     </article>
   )
 }
 
-function StrategyStep({ onSelect }: { onSelect: () => void }) {
+function StrategyStep({ error, onSelect }: { error: string; onSelect: () => void }) {
   return (
     <article className="setup-card strategy-panel">
       <div className="strategy-chip-row" aria-label="Strategy choices">
@@ -149,11 +158,12 @@ function StrategyStep({ onSelect }: { onSelect: () => void }) {
         <button type="button" className="disabled-option" disabled>RSI</button>
         <button type="button" className="disabled-option" disabled>Scalper</button>
       </div>
+      {error ? <p className="form-error">{error}</p> : null}
     </article>
   )
 }
 
-function SharedDataStep({ onContinue }: { onContinue: () => void }) {
+function SharedDataStep({ error, onContinue }: { error: string; onContinue: () => void }) {
   return (
     <article className="setup-card broker-panel">
       <div className="shared-data-step">
@@ -166,6 +176,7 @@ function SharedDataStep({ onContinue }: { onContinue: () => void }) {
         <button type="button" className="primary-button" onClick={onContinue}>
           Continue with shared market data
         </button>
+        {error ? <p className="form-error">{error}</p> : null}
       </div>
     </article>
   )
@@ -531,10 +542,12 @@ function ExitRulesStep({
 
 function DailyLimitsStep({
   draft,
+  error,
   pending,
   onSubmit,
 }: {
   draft: SetupDraft
+  error: string
   pending: boolean
   onSubmit: (patch: Pick<SetupDraft, 'maxTrades' | 'maxLoss'>) => void
 }) {
@@ -563,6 +576,7 @@ function DailyLimitsStep({
         <div><span>Margin check</span><strong>{draft.engineMode === 'paper' ? 'Virtual balance before fill' : 'Dhan margin API before order'}</strong></div>
         <div><span>Charges</span><strong>{draft.engineMode === 'paper' ? 'Simulated Dhan charge formula' : 'From real Dhan fills/reporting'}</strong></div>
       </div>
+      {error ? <p className="form-error">{error}</p> : null}
       <button className="live-confirm" type="submit" disabled={pending}>
         {pending ? 'Saving Setup...' : 'Save Limits & Finish'}
       </button>
@@ -591,7 +605,19 @@ function limitsReply(maxTrades: number, maxLoss: number): string {
   return `Daily limits: ${trades} / ${loss}`
 }
 
-function DeploymentSummary({ draft, lotSize, pending, onDeploy }: { draft: SetupDraft; lotSize: number; pending: boolean; onDeploy: () => void }) {
+function DeploymentSummary({
+  draft,
+  lotSize,
+  error,
+  pending,
+  onDeploy,
+}: {
+  draft: SetupDraft
+  lotSize: number
+  error: string
+  pending: boolean
+  onDeploy: () => void
+}) {
   return (
     <article className="setup-card deployment-summary">
       <h3>Deployment Configuration Summary</h3>
@@ -625,6 +651,7 @@ function DeploymentSummary({ draft, lotSize, pending, onDeploy }: { draft: Setup
           <strong>{draft.maxTrades ? `${draft.maxTrades} trades` : 'None'} | {draft.maxLoss ? formatCurrency(draft.maxLoss) : 'None'}</strong>
         </div>
       </div>
+      {error ? <p className="form-error">{error}</p> : null}
       <button className="live-confirm" type="button" onClick={onDeploy} disabled={pending}>
         {pending ? 'Starting Engine...' : draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Trade Real Money - Confirm'}
       </button>
