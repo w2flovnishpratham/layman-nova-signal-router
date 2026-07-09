@@ -64,6 +64,10 @@ export function SetupPanel({
   if (flowStep === 'broker') return <BrokerStep draft={draft} mode={draft.engineMode} error={lastError} pending={verifyPending} onDraft={onDraft} onSubmit={(clientId, accessToken) => {
     onUserReply(`Dhan credentials submitted for CLIENT: ${maskClientId(clientId)}`)
     onSend({ type: 'setup.broker_creds', data: { clientId, accessToken } })
+  }} onVerifySaved={(maskedClientId) => {
+    onDraft({ clientId: maskedClientId })
+    onUserReply(`Verify previously saved Dhan credentials (CLIENT: ${maskedClientId})`)
+    onSend({ type: 'setup.verify_saved_broker_creds', data: { clientId: maskedClientId } })
   }} />
   if (flowStep === 'side') return <SideStep value={draft.side} onSelect={(side) => {
     onDraft({ side })
@@ -290,6 +294,7 @@ function BrokerStep({
   pending,
   onDraft,
   onSubmit,
+  onVerifySaved,
 }: {
   draft: SetupDraft
   mode: EngineMode | null
@@ -297,6 +302,7 @@ function BrokerStep({
   pending: boolean
   onDraft: (patch: Partial<SetupDraft>) => void
   onSubmit: (clientId: string, accessToken: string) => void
+  onVerifySaved: (maskedClientId: string) => void
 }) {
   const [clientIdInput, setClientIdInput] = useState(draft.clientId)
   const [accessTokenInput, setAccessTokenInput] = useState(draft.accessToken)
@@ -343,6 +349,11 @@ function BrokerStep({
   function retryVerification() {
     if (!savedClientId || !savedAccessToken) return
     onSubmit(savedClientId, savedAccessToken)
+  }
+
+  function verifySaved() {
+    if (!persistedStatus?.has_dhan_client_id || !persistedStatus?.has_dhan_access_token) return
+    onVerifySaved(persistedStatus.dhan_client_id_masked ?? '')
   }
 
   return (
@@ -425,6 +436,10 @@ function BrokerStep({
         ) : (
           <p className="form-hint">Both fields saved — verifying automatically.</p>
         )
+      ) : persistedStatus?.has_dhan_client_id && persistedStatus?.has_dhan_access_token ? (
+        <button type="button" className="primary-button" onClick={verifySaved}>
+          Verify Saved Credentials
+        </button>
       ) : (
         <p className="form-hint">Save both fields to verify and connect automatically.</p>
       )}

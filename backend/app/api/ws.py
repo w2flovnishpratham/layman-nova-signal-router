@@ -12,7 +12,7 @@ from app.domain.state_machine import SetupState, StateTransitionError, validate_
 from app.routers.control import panic_exit
 from app.routers.engine import StartEngineRequest, start_engine, stop_engine
 from app.routers.setup import EngineModeRequest, configure_engine_mode, validate_dhan_credentials
-from app.services.credential_vault import save_dhan_credentials
+from app.services.credential_vault import get_dhan_credentials, save_dhan_credentials
 from app.services.chat_event_publisher import active_trade_from_position
 from app.services.execution_context import bind_user_execution_context
 from app.services.state_store import get_engine_mode, get_open_position, get_wallet_snapshot, set_open_position, update_runtime_settings, utc_now
@@ -144,7 +144,7 @@ async def _receive_commands(websocket: WebSocket, session_id: str, user: Current
                             webhookSecret=session.webhook_secret,
                         ),
                     )
-            elif command_type in {"setup.broker_creds", "setup.use_shared_data"}:
+            elif command_type in {"setup.broker_creds", "setup.use_shared_data", "setup.verify_saved_broker_creds"}:
                 wallet = await asyncio.to_thread(get_wallet_snapshot)
                 await session_store.append_event(
                     session_id,
@@ -236,6 +236,24 @@ async def _apply_production_command(
         if not ok:
             raise ValueError(dhan_connection_failure_message(message, details))
         await asyncio.to_thread(save_dhan_credentials, client_id, access_token)
+        await asyncio.to_thread(refresh_wallet_snapshot, force=True, log_event=True)
+        return
+
+    if command_type == "setup.verify_saved_broker_creds":
+        if session_config.get("engineMode") == "live" and not user.is_dev:
+            await asyncio.to_thread(_require_live_static_ip_ready, user)
+        # Already running inside bind_user_execution_context(user) from the caller,
+        # so get_dhan_credentials() resolves to this user's own encrypted vault entry.
+        creds = await asyncio.to_thread(get_dhan_credentials)
+        if creds is None:
+            raise ValueError("No saved Dhan credentials found. Enter and save your Client ID and Access Token first.")
+        ok, message, _funds, details = await asyncio.to_thread(
+            validate_dhan_credentials,
+            creds.client_id,
+            creds.access_token,
+        )
+        if not ok:
+            raise ValueError(dhan_connection_failure_message(message, details))
         await asyncio.to_thread(refresh_wallet_snapshot, force=True, log_event=True)
         return
 
