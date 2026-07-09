@@ -62,6 +62,18 @@ export interface PaymentEntitlementStatus {
   max_strategy_count: number | null
 }
 
+export interface UserCredentialStatus {
+  broker_name: string
+  has_dhan_client_id: boolean
+  dhan_client_id_masked: string | null
+  has_dhan_access_token: boolean
+  has_dhan_api_secret: boolean
+  has_webhook_secret: boolean
+  mode: string
+  dhan_token_saved_at: string | null
+  updated_at: string | null
+}
+
 async function apiFetch(path: `/${string}`, init: RequestInit = {}): Promise<Response> {
   return fetch(backendHttpUrl(path), {
     ...init,
@@ -282,6 +294,28 @@ export async function verifyEgressIp(): Promise<void> {
   if (!body?.ok) {
     throw new Error(body?.egress?.error || 'Static IP verification failed.')
   }
+}
+
+export async function getUserCredentialStatus(): Promise<UserCredentialStatus | null> {
+  const response = await apiFetch('/api/user/credentials/status', { cache: 'no-store' })
+  if (!response.ok) return null
+  return response.json().catch(() => null) as Promise<UserCredentialStatus | null>
+}
+
+export async function saveUserCredentials(payload: {
+  dhan_client_id?: string
+  dhan_access_token?: string
+}): Promise<UserCredentialStatus> {
+  const response = await apiFetch('/api/user/credentials', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { detail?: string } | null
+    throw new Error(body?.detail || `Could not save credentials: ${response.status}`)
+  }
+  return response.json() as Promise<UserCredentialStatus>
 }
 
 export async function createRazorpaySubscription(planCode: RazorpayPlanCode): Promise<RazorpayCheckoutResponse> {
