@@ -328,6 +328,10 @@ export async function restorePaperStrategyInstance(instanceId: string): Promise<
   return lifecycleMutation(`/api/debug/v2/instances/${encodeURIComponent(instanceId)}/restore`, {})
 }
 
+export async function clonePaperStrategyInstance(instanceId: string): Promise<StrategyInstanceMutationResult> {
+  return lifecycleMutation(`/api/debug/v2/instances/${encodeURIComponent(instanceId)}/clone`, {})
+}
+
 export async function updateStrategyInstanceSettings(
   instanceId: string,
   input: {

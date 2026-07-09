@@ -7,7 +7,9 @@ create born paused, pause, and resume. Phase 2G-1 adds paused-only settings
 edit for `instance_label`, `lots`, and `side_preference`. These are not
 execution surfaces. Phase 2H-1 adds read-only instance details/history
 visibility for safe inspection before any further mutation. Phase 2H-2 adds
-paused-only soft archive and restore-to-paused lifecycle mutation.
+paused-only soft archive and restore-to-paused lifecycle mutation. Phase 2I-1
+adds a configuration-only clone/duplicate that always creates a new,
+born-paused instance.
 
 ## Panels And Flags
 
@@ -47,6 +49,7 @@ Paper instance lifecycle controls call:
 - `POST /api/debug/v2/instances/{id}/settings`
 - `POST /api/debug/v2/instances/{id}/archive`
 - `POST /api/debug/v2/instances/{id}/restore`
+- `POST /api/debug/v2/instances/{id}/clone`
 
 Instance details/history calls:
 
@@ -66,6 +69,23 @@ only returns an archived eligible paper/signal-only instance to `paused`.
 Idempotent repeats do not write or audit. Archived instances are hidden from the
 catalog panel list by default and skipped by the v2 planner with
 `ARCHIVED_INSTANCE`.
+
+Clone requires the same debug mutation gates and confirmation. It is allowed
+from any eligible paper/signal-only source instance whose status is `active`,
+`paused`, or `archived` (`real_orders` sources → 403; `disabled`/`error`
+sources → 409). The new instance always belongs to the calling user, is
+always `execution_mode="paper_live_data"` and `status="paused"` regardless of
+the source's mode or status, and copies only `strategy_id`,
+`strategy_version_id` (pinned to the source's version), `lots`,
+`side_preference`, `source_type`, and a renumbered `instance_label` (`"{name}
+(Copy)"`, then `"(Copy 2)"`, `"(Copy 3)"`, ...). It never copies the source's
+`config_json`/`risk_config`, runtime state, history, audit rows, or webhook
+credentials — the clone starts with a fresh `config_json`, empty
+`risk_config`, and zero history rows of its own. A per-user, per-strategy cap
+of 10 instances blocks further clones once reached (409); this is a narrow
+row-creation guard, not a general rate limiter, since clone is the only
+mutation on this surface that creates a new row per call instead of editing
+an existing one.
 
 The details endpoint requires only backend debug access and an internal
 admin/dev user. It does not require mutation, fanout, runner, or confirmation
@@ -109,6 +129,16 @@ Phase 2H-2 additionally allows only:
 - archive a paused eligible paper/signal-only instance
 - restore an archived eligible paper/signal-only instance to paused
 - show/hide archived rows client-side in the internal catalog panel
+
+Phase 2I-1 additionally allows only:
+
+- clone an active, paused, or archived eligible paper/signal-only instance
+  into a new, always-paused, always-`paper_live_data`, always own-user
+  instance
+- copy only `strategy_id`/`strategy_version_id`/`lots`/`side_preference`/
+  `source_type`/a renumbered label; never copy status, runtime state,
+  history, audit rows, or webhook credentials
+- enforce a per-user, per-strategy cap of 10 instances
 
 It does not add execution controls, webhook generation, live mode, Dhan
 placement, workers, schedulers, startup wiring, signal writes, job writes,
@@ -222,6 +252,29 @@ Expected:
 - Archived eligible rows show Restore and not Resume.
 - Archive/restore use only their debug POST endpoints with paper confirmation.
 - Planner skips archived rows with `ARCHIVED_INSTANCE`.
+- No signals, jobs, webhook credentials, runtime state, order logs, live paths,
+  workers, schedulers, or Dhan calls occur.
+
+Clone smoke:
+
+```bash
+VITE_ENABLE_STRATEGY_CATALOG_STATUS=true VITE_ENABLE_STRATEGY_INSTANCE_MUTATION=true npm --prefix frontend run build
+```
+
+Expected:
+
+- Active, paused, and archived eligible rows all show Clone.
+- Cloning always creates a new row with `status=paused`,
+  `execution_mode=paper_live_data`, regardless of the source row's status or
+  mode.
+- Cloned label reads `"{source label} (Copy)"`, then `"(Copy 2)"`, etc. on
+  repeated clones of the same source.
+- The source instance is never mutated by cloning it.
+- Clone uses only its debug POST endpoint with paper confirmation.
+- Planner skips a freshly cloned instance with `PAUSED_INSTANCE` until it is
+  explicitly resumed.
+- A tenth clone of the same strategy for the same user is rejected (409); no
+  row is written.
 - No signals, jobs, webhook credentials, runtime state, order logs, live paths,
   workers, schedulers, or Dhan calls occur.
 

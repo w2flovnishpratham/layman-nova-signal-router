@@ -309,6 +309,7 @@ def test_lifecycle_mutation_controls_are_flag_gated_and_scoped():
     # Only the approved lifecycle helpers are referenced by the catalog panel.
     approved_helpers = (
         "archivePaperStrategyInstance",
+        "clonePaperStrategyInstance",
         "createPaperStrategyInstance",
         "pausePaperStrategyInstance",
         "restorePaperStrategyInstance",

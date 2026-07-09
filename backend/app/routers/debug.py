@@ -88,12 +88,23 @@ V2_INSTANCE_LIFECYCLE_MODES = {
 V2_INSTANCE_TRANSITION_STATUSES = {"active", "paused"}
 V2_INSTANCE_DETAILS_HISTORY_EVENTS = {
     "V2_INSTANCE_ARCHIVED",
+    "V2_INSTANCE_CLONED",
     "V2_INSTANCE_CREATED",
     "V2_INSTANCE_PAUSED",
     "V2_INSTANCE_RESTORED",
     "V2_INSTANCE_RESUMED",
     "V2_INSTANCE_SETTINGS_EDITED",
 }
+V2_INSTANCE_CLONE_ELIGIBLE_STATUSES = {
+    StrategyInstanceStatus.ACTIVE.value,
+    StrategyInstanceStatus.PAUSED.value,
+    StrategyInstanceStatus.ARCHIVED.value,
+}
+# Clone-storm guard (Phase 2I-1 design review): clone is the only mutation on
+# this surface that creates a new row per call instead of editing one, so it
+# gets its own per-user-per-strategy cap rather than a general rate limiter.
+V2_INSTANCE_MAX_PER_USER_PER_STRATEGY = 10
+V2_INSTANCE_CLONE_LABEL_MAX_SUFFIX = 200
 V2_INSTANCE_DETAILS_SAFE_HISTORY_FIELDS = {
     "execution_mode",
     "instance_label",
@@ -427,6 +438,7 @@ def _safe_history_changed_fields(value: Any) -> list[str]:
 def _history_summary(event_type: str) -> str:
     return {
         "V2_INSTANCE_ARCHIVED": "Archived",
+        "V2_INSTANCE_CLONED": "Cloned from another instance",
         "V2_INSTANCE_CREATED": "Instance created paused",
         "V2_INSTANCE_PAUSED": "Instance paused",
         "V2_INSTANCE_RESTORED": "Restored",
@@ -586,6 +598,54 @@ def _audit_instance_settings_edit(
     )
 
 
+_CLONE_SUFFIX_RE = re.compile(r"\s*\(Copy(?:\s+\d+)?\)$")
+
+
+def _clone_base_label(label: str) -> str:
+    return _CLONE_SUFFIX_RE.sub("", label).strip()
+
+
+def _next_clone_label(source_label: str | None, existing_labels: set[str]) -> str:
+    # Strip any existing "(Copy)"/"(Copy N)" suffix first so cloning a clone
+    # renumbers off the original name instead of chaining "(Copy) (Copy)".
+    base = _clone_base_label(source_label or "") or "Cloned instance"
+    candidate = _sanitized_instance_label(f"{base} (Copy)") or f"{base} (Copy)"
+    if candidate not in existing_labels:
+        return candidate
+    suffix = 2
+    while suffix <= V2_INSTANCE_CLONE_LABEL_MAX_SUFFIX:
+        candidate = _sanitized_instance_label(f"{base} (Copy {suffix})") or f"{base} (Copy {suffix})"
+        if candidate not in existing_labels:
+            return candidate
+        suffix += 1
+    raise HTTPException(status_code=409, detail="Too many clones of this instance already exist.")
+
+
+def _audit_instance_clone(
+    *,
+    user: CurrentUser,
+    source_instance: models.UserStrategyInstance,
+    new_instance: models.UserStrategyInstance,
+    strategy_code: str,
+) -> None:
+    # Metadata only. Never request bodies, never secrets, never raw payloads.
+    log_audit_event(
+        "V2_INSTANCE_CLONED",
+        f"V2_INSTANCE_CLONED for strategy {strategy_code}.",
+        severity="INFO",
+        metadata={
+            "actor_user_id": user.id_str,
+            "instance_id": str(new_instance.id),
+            "source_instance_id": str(source_instance.id),
+            "strategy_code": strategy_code,
+            "execution_mode": new_instance.execution_mode,
+            "previous_status": None,
+            "new_status": new_instance.status,
+            "feature_flags": feature_flag_states(),
+        },
+    )
+
+
 def _mutation_breadcrumb(instance: models.UserStrategyInstance, action: str, actor: CurrentUser) -> None:
     # Reassign (not mutate in place) so SQLAlchemy detects the JSON change.
     instance.config_json = {
@@ -658,6 +718,79 @@ def create_v2_paper_instance_debug(
             changed=True,
         )
         return {"ok": True, "changed": True, "instance": _instance_mutation_public(instance, catalog.code)}
+
+
+@router.post("/v2/instances/{instance_id}/clone")
+def clone_v2_paper_instance_debug(
+    instance_id: str,
+    request: V2InstanceLifecycleRequest,
+    user: CurrentUser = Depends(_require_internal_mutation_user),
+) -> dict[str, Any]:
+    _require_instance_mutation_debug_enabled()
+    _require_paper_confirmation(request.confirm_paper_only)
+
+    try:
+        parsed_id = uuid.UUID(str(instance_id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=404, detail="Strategy instance not found.")
+
+    with session_scope() as db:
+        source = db.get(models.UserStrategyInstance, parsed_id)
+        # Non-owner gets 404 (not 403) so instance existence is not leaked.
+        if source is None or source.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Strategy instance not found.")
+
+        if str(source.execution_mode) == StrategyExecutionMode.REAL_ORDERS.value:
+            raise HTTPException(status_code=403, detail="real_orders instances cannot be cloned.")
+        if str(source.execution_mode) not in V2_INSTANCE_LIFECYCLE_MODES:
+            raise HTTPException(status_code=409, detail="This instance execution mode does not support clone.")
+        if str(source.status) not in V2_INSTANCE_CLONE_ELIGIBLE_STATUSES:
+            raise HTTPException(status_code=409, detail="This instance status does not support clone.")
+
+        catalog = db.get(models.StrategyCatalog, source.strategy_id)
+        strategy_code = catalog.code if catalog is not None else "UNKNOWN"
+
+        siblings = db.scalars(
+            select(models.UserStrategyInstance).where(
+                models.UserStrategyInstance.user_id == user.id,
+                models.UserStrategyInstance.strategy_id == source.strategy_id,
+            )
+        ).all()
+        if len(siblings) >= V2_INSTANCE_MAX_PER_USER_PER_STRATEGY:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Maximum of {V2_INSTANCE_MAX_PER_USER_PER_STRATEGY} instances per strategy reached.",
+            )
+        existing_labels = {row.instance_label for row in siblings if row.instance_label}
+        new_label = _next_clone_label(source.instance_label, existing_labels)
+
+        clone = models.UserStrategyInstance(
+            # SERVER-SIDE HARDCODED SAFETY INVARIANTS (Phase 2I-1 design):
+            # owner is always the authenticated caller (never the source's
+            # owner - ownership above already forces caller == source owner),
+            # mode is always paper, and the clone is BORN PAUSED regardless of
+            # the source instance's current status (active/paused/archived).
+            user_id=user.id,
+            strategy_id=source.strategy_id,
+            strategy_version_id=source.strategy_version_id,
+            instance_label=new_label,
+            source_type=source.source_type,
+            status=StrategyInstanceStatus.PAUSED.value,
+            execution_mode=StrategyExecutionMode.PAPER_LIVE_DATA.value,
+            lots=source.lots,
+            side_preference=source.side_preference,
+            config_json={
+                "created_by": "debug_lifecycle_v2i1",
+                "born_paused": True,
+                "cloned_from": str(source.id),
+            },
+            risk_config={},
+        )
+        db.add(clone)
+        db.flush()
+        _mutation_breadcrumb(clone, "clone", user)
+        _audit_instance_clone(user=user, source_instance=source, new_instance=clone, strategy_code=strategy_code)
+        return {"ok": True, "changed": True, "instance": _instance_mutation_public(clone, strategy_code)}
 
 
 def _v2_instance_lifecycle_transition(

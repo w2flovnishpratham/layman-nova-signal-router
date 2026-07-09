@@ -463,8 +463,6 @@ def test_frontend_exposes_only_archive_restore_for_phase2h2_controls():
     for forbidden in (
         "Delete",
         "Purge",
-        "Clone",
-        "Duplicate",
         "Execute",
         "Run",
         "Retry",

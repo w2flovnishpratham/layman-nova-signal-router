@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   StrategyCatalogStatusDisabledError,
   archivePaperStrategyInstance,
+  clonePaperStrategyInstance,
   createPaperStrategyInstance,
   getStrategyInstanceDetails,
   getStrategyCatalogStatusBundle,
@@ -619,6 +620,11 @@ function InstanceLifecycleCell({
           onRun={() => pausePaperStrategyInstance(String(instance.id))}
           onDone={onMutated}
         />
+        <LifecycleConfirmButton
+          label="Clone"
+          onRun={() => clonePaperStrategyInstance(String(instance.id))}
+          onDone={onMutated}
+        />
         <span className="strategy-lifecycle-note">Pause to edit</span>
       </div>
     )
@@ -630,6 +636,11 @@ function InstanceLifecycleCell({
         <LifecycleConfirmButton
           label="Restore"
           onRun={() => restorePaperStrategyInstance(String(instance.id))}
+          onDone={onMutated}
+        />
+        <LifecycleConfirmButton
+          label="Clone"
+          onRun={() => clonePaperStrategyInstance(String(instance.id))}
           onDone={onMutated}
         />
       </div>
@@ -646,6 +657,11 @@ function InstanceLifecycleCell({
       <LifecycleConfirmButton
         label="Archive"
         onRun={() => archivePaperStrategyInstance(String(instance.id))}
+        onDone={onMutated}
+      />
+      <LifecycleConfirmButton
+        label="Clone"
+        onRun={() => clonePaperStrategyInstance(String(instance.id))}
         onDone={onMutated}
       />
       <InstanceSettingsEditControl instance={instance} onDone={onMutated} />
