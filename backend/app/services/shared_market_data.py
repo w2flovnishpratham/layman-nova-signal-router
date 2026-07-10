@@ -42,7 +42,16 @@ _STATE: dict[str, object] = {
     "expiry_epoch": 0.0,
     "refreshed_at": None,
     "last_error": None,
+    "last_attempt_epoch": 0.0,
 }
+
+# Dhan enforces "token can be generated once every 2 minutes" on this endpoint.
+# Multiple independent callers (the market-feed websocket loop, and each
+# on-demand REST read) can all find the cache empty at once — most notably
+# right after a process restart — and without this gate they each retry every
+# few seconds, perpetually re-tripping the rate limit and never letting a
+# single attempt land more than 2 minutes after the last one.
+_MIN_TOKEN_ATTEMPT_INTERVAL_SECONDS = 130.0
 
 _STOP_EVENT = threading.Event()
 _WORKER: threading.Thread | None = None
@@ -104,6 +113,13 @@ def _parse_expiry(expiry_time: str | None) -> float:
 def _generate_token_locked() -> bool:
     """Call Dhan to mint a fresh access token. Caller holds _LOCK. Never raises."""
     import httpx
+
+    last_attempt = float(_STATE.get("last_attempt_epoch") or 0.0)
+    since_last_attempt = time.time() - last_attempt
+    if since_last_attempt < _MIN_TOKEN_ATTEMPT_INTERVAL_SECONDS:
+        _set_last_error("token_generation_cooldown")
+        return False
+    _STATE["last_attempt_epoch"] = time.time()
 
     client_id = (settings.DHAN_SHARED_CLIENT_ID or "").strip()
     pin = (settings.DHAN_SHARED_PIN or "").strip()

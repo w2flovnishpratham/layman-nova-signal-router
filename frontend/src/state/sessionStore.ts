@@ -56,7 +56,7 @@ interface SessionStore {
   applyServerEvent: (event: ServerEvent) => void
 }
 
-const initialTheme = localStorage.getItem('nova-theme') || 'dark'
+const initialTheme = localStorage.getItem('nova-theme') || 'light'
 const initialMotion = localStorage.getItem('nova-motion') || 'full'
 const defaultDraft: SetupDraft = {
   engineMode: null,

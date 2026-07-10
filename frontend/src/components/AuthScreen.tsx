@@ -14,7 +14,7 @@ export function AuthScreen({ loading, error, onLogin, onRetry }: Props) {
       <section className="auth-card" aria-live="polite">
         <div className="auth-brand">
           <span className="nova-mark" />
-          <strong>NOVA SIGNAL ROUTER</strong>
+          <strong>NOVA LAYMAN FNO TOOL</strong>
         </div>
         <div className="auth-icon"><ShieldCheck size={28} /></div>
         <p className="eyebrow">Secure trading workspace</p>
