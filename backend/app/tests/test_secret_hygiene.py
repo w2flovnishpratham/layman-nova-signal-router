@@ -14,6 +14,7 @@ def test_shared_market_data_status_does_not_leak_token_generation_inputs(monkeyp
     monkeypatch.setitem(smd._STATE, "client_id", None)
     monkeypatch.setitem(smd._STATE, "expiry_epoch", 0.0)
     monkeypatch.setitem(smd._STATE, "last_error", None)
+    monkeypatch.setitem(smd._STATE, "last_attempt_epoch", 0.0)
 
     class FailingClient:
         def __init__(self, *args, **kwargs):
