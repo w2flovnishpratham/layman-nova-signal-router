@@ -5,6 +5,8 @@ official RFC 6238 test vectors (SHA1, 6 digits, 30s period).
 """
 from __future__ import annotations
 
+import time
+
 from app.services.credential_vault import DhanCredentials
 from app.services import shared_market_data as smd
 
@@ -132,5 +134,65 @@ def test_auth_failure_invalidates_and_forces_shared_refresh(monkeypatch):
 
     assert refreshed is True
     assert calls == [True]
-    assert smd._STATE["access_token"] is None
-    assert smd._STATE["expiry_epoch"] == 0.0
+
+
+def test_token_generation_respects_cooldown_after_recent_attempt(monkeypatch):
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
+    monkeypatch.setitem(smd._STATE, "access_token", None)
+    monkeypatch.setitem(smd._STATE, "expiry_epoch", 0.0)
+    monkeypatch.setitem(smd._STATE, "last_error", None)
+    # Simulate a failed attempt a few seconds ago — well within Dhan's 2-minute
+    # rate limit, so a second attempt right now must not hit the network.
+    monkeypatch.setitem(smd._STATE, "last_attempt_epoch", time.time() - 5.0)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("must not call Dhan again inside the cooldown window")
+
+    monkeypatch.setattr("httpx.Client", fail_if_called)
+
+    assert smd._generate_token_locked() is False
+    assert smd._STATE["last_error"] == "token_generation_cooldown"
+
+
+def test_token_generation_proceeds_once_cooldown_has_elapsed(monkeypatch):
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
+    monkeypatch.setitem(smd._STATE, "access_token", None)
+    monkeypatch.setitem(smd._STATE, "expiry_epoch", 0.0)
+    monkeypatch.setitem(smd._STATE, "last_error", None)
+    # Well past the cooldown (and past the module's own interval), so this
+    # attempt should proceed and actually reach the (mocked) HTTP call.
+    monkeypatch.setitem(smd._STATE, "last_attempt_epoch", 0.0)
+
+    calls: list[bool] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"accessToken": "fresh-token", "dhanClientId": "1000000001", "expiryTime": None}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            calls.append(True)
+            return FakeResponse()
+
+    monkeypatch.setattr("httpx.Client", FakeClient)
+
+    assert smd._generate_token_locked() is True
+    assert calls == [True]
+    assert smd._STATE["access_token"] == "fresh-token"
