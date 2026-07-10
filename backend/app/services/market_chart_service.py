@@ -176,16 +176,7 @@ def _fetch_candles(dhan_interval: str, interval_label: str, today: date) -> dict
         error_text = str(result.get("error") or "")
         lowered = error_text.lower()
         if "token" in lowered or "auth" in lowered or result.get("status_code") in (401, 403):
-            reason = "market_data_token_expired"
-            # Lazy refresh: trigger the shared auto-TOTP flow so the next poll
-            # succeeds without waiting for the 5-minute background worker.
-            if shared_market_data_configured():
-                try:
-                    from app.services.shared_market_data import refresh_shared_token_after_auth_failure
-
-                    refresh_shared_token_after_auth_failure(status_code=result.get("status_code"), message=error_text)
-                except Exception:
-                    pass
+            reason = "market_data_chart_auth_failed"
         else:
             reason = "market_data_fetch_failed"
         return _unavailable(reason, "NIFTY chart is temporarily unavailable. Nova is reconnecting market data.")
