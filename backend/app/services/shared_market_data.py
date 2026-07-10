@@ -239,7 +239,7 @@ def refresh_shared_token_after_auth_failure(
     message: object | None = None,
     raw_response: object | None = None,
 ) -> bool:
-    """Invalidate and refresh the shared token after a Dhan auth failure."""
+    """Refresh after an auth failure without discarding a usable token on throttle."""
     if not shared_market_data_configured():
         return False
     if not _looks_like_auth_failure(
@@ -249,8 +249,18 @@ def refresh_shared_token_after_auth_failure(
     ):
         return False
     logger.warning("Shared market-data token auth failure detected; refreshing token.")
-    invalidate_shared_token()
-    return refresh_shared_token(force=True)
+    with _LOCK:
+        old_token = _STATE.get("access_token")
+        old_client_id = _STATE.get("client_id")
+        old_expiry = _STATE.get("expiry_epoch")
+        ok = _generate_token_locked()
+        if ok:
+            return True
+        if old_token and old_client_id and old_expiry:
+            _STATE["access_token"] = old_token
+            _STATE["client_id"] = old_client_id
+            _STATE["expiry_epoch"] = old_expiry
+        return False
 
 
 def get_shared_market_credentials() -> DhanCredentials | None:

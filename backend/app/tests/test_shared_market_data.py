@@ -157,18 +157,36 @@ def test_auth_failure_invalidates_and_forces_shared_refresh(monkeypatch):
     monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
     monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
     monkeypatch.setitem(smd._STATE, "access_token", "old-token")
+    monkeypatch.setitem(smd._STATE, "client_id", "1000000001")
     monkeypatch.setitem(smd._STATE, "expiry_epoch", 9999999999.0)
-    calls: list[bool] = []
 
-    def fake_refresh(force: bool = False) -> bool:
-        calls.append(force)
+    def fake_generate() -> bool:
+        smd._STATE["access_token"] = "new-token"
+        smd._STATE["client_id"] = "1000000001"
+        smd._STATE["expiry_epoch"] = 9999999999.0
         return True
 
-    monkeypatch.setattr(smd, "refresh_shared_token", fake_refresh)
+    monkeypatch.setattr(smd, "_generate_token_locked", fake_generate)
 
     refreshed = smd.refresh_shared_token_after_auth_failure(status_code=401, message="Unauthorized")
 
     assert refreshed is True
-    assert calls == [True]
-    assert smd._STATE["access_token"] is None
-    assert smd._STATE["expiry_epoch"] == 0.0
+    assert smd._STATE["access_token"] == "new-token"
+
+
+def test_auth_failure_refresh_keeps_existing_token_when_refresh_is_throttled(monkeypatch):
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
+    monkeypatch.setitem(smd._STATE, "access_token", "still-valid")
+    monkeypatch.setitem(smd._STATE, "client_id", "1000000001")
+    monkeypatch.setitem(smd._STATE, "expiry_epoch", 9999999999.0)
+    monkeypatch.setattr(smd, "_generate_token_locked", lambda: False)
+
+    refreshed = smd.refresh_shared_token_after_auth_failure(status_code=401, message="Unauthorized")
+
+    assert refreshed is False
+    assert smd._STATE["access_token"] == "still-valid"
+    assert smd._STATE["client_id"] == "1000000001"
+    assert smd._STATE["expiry_epoch"] == 9999999999.0
