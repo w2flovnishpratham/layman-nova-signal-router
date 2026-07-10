@@ -23,6 +23,8 @@ import logging
 import struct
 import threading
 import time
+from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from app.config import settings
@@ -53,6 +55,17 @@ def _set_last_error(code: str) -> None:
     # Keep browser-facing status and logs free of PIN, TOTP, token, URL, and
     # provider-specific error details.
     _STATE["last_error"] = code
+
+
+@contextmanager
+def _suppress_httpx_info_logs():
+    httpx_logger = logging.getLogger("httpx")
+    previous_level = httpx_logger.level
+    httpx_logger.setLevel(max(previous_level, logging.WARNING))
+    try:
+        yield
+    finally:
+        httpx_logger.setLevel(previous_level)
 
 
 def shared_market_data_configured() -> bool:
@@ -101,6 +114,23 @@ def _parse_expiry(expiry_time: str | None) -> float:
     return time.time() + 24 * 3600
 
 
+def _find_response_value(payload: object, names: set[str]) -> object | None:
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            if str(key) in names and value not in (None, ""):
+                return value
+        for value in payload.values():
+            found = _find_response_value(value, names)
+            if found not in (None, ""):
+                return found
+    elif isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+        for item in payload:
+            found = _find_response_value(item, names)
+            if found not in (None, ""):
+                return found
+    return None
+
+
 def _generate_token_locked() -> bool:
     """Call Dhan to mint a fresh access token. Caller holds _LOCK. Never raises."""
     import httpx
@@ -118,7 +148,8 @@ def _generate_token_locked() -> bool:
     params = {"dhanClientId": client_id, "pin": pin, "totp": totp}
     try:
         with httpx.Client(timeout=_HTTP_TIMEOUT_SECONDS) as client:
-            response = client.post(_GENERATE_TOKEN_URL, params=params)
+            with _suppress_httpx_info_logs():
+                response = client.post(_GENERATE_TOKEN_URL, params=params)
     except Exception as exc:
         _set_last_error("token_request_failed")
         logger.warning("Shared market-data token request failed (%s).", type(exc).__name__)
@@ -136,15 +167,19 @@ def _generate_token_locked() -> bool:
         logger.warning("Shared market-data token response JSON parse failed (%s).", type(exc).__name__)
         return False
 
-    token = str(body.get("accessToken") or "").strip()
+    token = str(
+        _find_response_value(body, {"accessToken", "access_token", "token", "jwtToken"})
+        or ""
+    ).strip()
     if not token:
         _set_last_error("token_missing_in_response")
-        logger.warning("Shared market-data token response had no accessToken.")
+        keys = sorted(str(key) for key in body.keys()) if isinstance(body, dict) else [type(body).__name__]
+        logger.warning("Shared market-data token response had no access token field (keys=%s).", keys)
         return False
 
     _STATE["access_token"] = token
-    _STATE["client_id"] = str(body.get("dhanClientId") or client_id)
-    _STATE["expiry_epoch"] = _parse_expiry(body.get("expiryTime"))
+    _STATE["client_id"] = str(_find_response_value(body, {"dhanClientId", "clientId", "client_id"}) or client_id)
+    _STATE["expiry_epoch"] = _parse_expiry(_find_response_value(body, {"expiryTime", "expiresAt", "expires_at"}))
     _STATE["refreshed_at"] = datetime.now(timezone.utc).isoformat()
     _STATE["last_error"] = None
     logger.info("Shared market-data access token refreshed (expires in ~%.1fh).",

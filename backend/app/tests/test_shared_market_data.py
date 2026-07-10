@@ -98,6 +98,44 @@ def test_market_data_credentials_uses_shared_when_configured(monkeypatch):
     assert result.source == "shared_market_data"
 
 
+def test_generate_token_accepts_wrapped_dhan_response(monkeypatch):
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "status": "success",
+                "data": {
+                    "access_token": "wrapped-token",
+                    "clientId": "wrapped-client",
+                    "expiresAt": "2030-01-01T09:15:00",
+                },
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("httpx.Client", FakeClient)
+
+    assert smd._generate_token_locked() is True
+    assert smd._STATE["access_token"] == "wrapped-token"
+    assert smd._STATE["client_id"] == "wrapped-client"
+
+
 def test_market_data_credentials_does_not_fallback_when_shared_unavailable(monkeypatch):
     monkeypatch.setattr(smd.settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
     monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
