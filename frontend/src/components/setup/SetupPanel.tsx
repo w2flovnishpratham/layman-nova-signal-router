@@ -1,8 +1,8 @@
 import { FlaskConical, Loader2, Zap } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { createRazorpaySubscription, getPaymentEntitlementStatus, getUserCredentialStatus } from '../../api'
-import type { PaymentEntitlementStatus, UserCredentialStatus } from '../../api'
+import { createRazorpaySubscription, getPaymentEntitlementStatus } from '../../api'
+import type { PaymentEntitlementStatus } from '../../api'
 import { SetupInfoCard } from '../messages/SetupInfoCard'
 import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
@@ -42,7 +42,7 @@ export function SetupPanel({
   onStep,
 }: Props) {
   if (state === 'LIVE' || state === 'PAUSED' || state === 'ENDED' || flowStep === 'complete') return null
-  if (flowStep === 'mode') return <ModeStep draft={draft} error={lastError} onSelect={(engineMode, paperStartingBalance) => {
+  if (flowStep === 'mode') return <ModeStep draft={draft} onSelect={(engineMode, paperStartingBalance) => {
     onDraft({ engineMode, paperStartingBalance })
     onUserReply(engineMode === 'paper' ? `Paper mode with ${formatCurrency(paperStartingBalance)} virtual balance` : 'Live mode - real money routing')
     onSend({ type: 'setup.mode', data: { engineMode, paperStartingBalance } })
@@ -51,12 +51,12 @@ export function SetupPanel({
     onUserReply('Nova Static IP entitlement and proxy verification confirmed')
     onStep('strategy')
   }} />
-  if (flowStep === 'strategy') return <StrategyStep error={lastError} onSelect={() => {
+  if (flowStep === 'strategy') return <StrategyStep onSelect={() => {
     onUserReply('Supertrend Strategy (NSE Options)')
     onSend({ type: 'setup.select_strategy', data: { strategy: 'supertrend' } })
   }} />
   if (flowStep === 'broker' && draft.engineMode === 'paper' && sharedMarketData) {
-    return <SharedDataStep error={lastError} onContinue={() => {
+    return <SharedDataStep onContinue={() => {
       onUserReply('Use shared live market data (no Dhan account needed)')
       onSend({ type: 'setup.use_shared_data', data: {} })
     }} />
@@ -64,10 +64,6 @@ export function SetupPanel({
   if (flowStep === 'broker') return <BrokerStep draft={draft} mode={draft.engineMode} error={lastError} pending={verifyPending} onDraft={onDraft} onSubmit={(clientId, accessToken) => {
     onUserReply(`Dhan credentials submitted for CLIENT: ${maskClientId(clientId)}`)
     onSend({ type: 'setup.broker_creds', data: { clientId, accessToken } })
-  }} onVerifySaved={(maskedClientId) => {
-    onDraft({ clientId: maskedClientId })
-    onUserReply(`Verify previously saved Dhan credentials (CLIENT: ${maskedClientId})`)
-    onSend({ type: 'setup.verify_saved_broker_creds', data: { clientId: maskedClientId } })
   }} />
   if (flowStep === 'side') return <SideStep value={draft.side} onSelect={(side) => {
     onDraft({ side })
@@ -88,7 +84,7 @@ export function SetupPanel({
     ))
     onStep('limits')
   }} />
-  if (flowStep === 'limits') return <DailyLimitsStep draft={draft} error={lastError} pending={commandPending} onSubmit={(patch) => {
+  if (flowStep === 'limits') return <DailyLimitsStep draft={draft} pending={commandPending} onSubmit={(patch) => {
     const finalDraft = { ...draft, ...patch }
     onDraft(patch)
     onUserReply(limitsReply(finalDraft.maxTrades, finalDraft.maxLoss))
@@ -105,22 +101,14 @@ export function SetupPanel({
       },
     })
   }} />
-  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} error={lastError} pending={commandPending} onDeploy={() => {
+  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} pending={commandPending} onDeploy={() => {
     onUserReply(draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Deploy Live Strategy & Start Listening')
     onSend({ type: 'setup.confirm_live', data: {} })
   }} />
   return null
 }
 
-function ModeStep({
-  draft,
-  error,
-  onSelect,
-}: {
-  draft: SetupDraft
-  error: string
-  onSelect: (mode: EngineMode, balance: number) => void
-}) {
+function ModeStep({ draft, onSelect }: { draft: SetupDraft; onSelect: (mode: EngineMode, balance: number) => void }) {
   const [paperBalance, setPaperBalance] = useState(draft.paperStartingBalance)
   return (
     <article className="setup-card mode-step">
@@ -147,12 +135,11 @@ function ModeStep({
           <button type="button" onClick={() => onSelect('live', paperBalance)}>Configure Live</button>
         </section>
       </div>
-      {error ? <p className="form-error">{error}</p> : null}
     </article>
   )
 }
 
-function StrategyStep({ error, onSelect }: { error: string; onSelect: () => void }) {
+function StrategyStep({ onSelect }: { onSelect: () => void }) {
   return (
     <article className="setup-card strategy-panel">
       <div className="strategy-chip-row" aria-label="Strategy choices">
@@ -162,12 +149,11 @@ function StrategyStep({ error, onSelect }: { error: string; onSelect: () => void
         <button type="button" className="disabled-option" disabled>RSI</button>
         <button type="button" className="disabled-option" disabled>Scalper</button>
       </div>
-      {error ? <p className="form-error">{error}</p> : null}
     </article>
   )
 }
 
-function SharedDataStep({ error, onContinue }: { error: string; onContinue: () => void }) {
+function SharedDataStep({ onContinue }: { onContinue: () => void }) {
   return (
     <article className="setup-card broker-panel">
       <div className="shared-data-step">
@@ -180,7 +166,6 @@ function SharedDataStep({ error, onContinue }: { error: string; onContinue: () =
         <button type="button" className="primary-button" onClick={onContinue}>
           Continue with shared market data
         </button>
-        {error ? <p className="form-error">{error}</p> : null}
       </div>
     </article>
   )
@@ -294,7 +279,6 @@ function BrokerStep({
   pending,
   onDraft,
   onSubmit,
-  onVerifySaved,
 }: {
   draft: SetupDraft
   mode: EngineMode | null
@@ -302,148 +286,45 @@ function BrokerStep({
   pending: boolean
   onDraft: (patch: Partial<SetupDraft>) => void
   onSubmit: (clientId: string, accessToken: string) => void
-  onVerifySaved: (maskedClientId: string) => void
 }) {
-  const [clientIdInput, setClientIdInput] = useState(draft.clientId)
-  const [accessTokenInput, setAccessTokenInput] = useState(draft.accessToken)
-  const [savedClientId, setSavedClientId] = useState(draft.clientId || null)
-  const [savedAccessToken, setSavedAccessToken] = useState(draft.accessToken || null)
-  const [persistedStatus, setPersistedStatus] = useState<UserCredentialStatus | null>(null)
+  const [clientId, setClientId] = useState(draft.clientId)
+  const [accessToken, setAccessToken] = useState(draft.accessToken)
 
-  // Reflects whatever was already saved in a previous session/attempt (e.g.
-  // after "reconfigure"), since the vault persists across setup runs even
-  // though this component's local state does not.
-  useEffect(() => {
-    let cancelled = false
-    getUserCredentialStatus().then((status) => {
-      if (!cancelled) setPersistedStatus(status)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const clientIdHasValue = Boolean(savedClientId || persistedStatus?.has_dhan_client_id)
-  const accessTokenHasValue = Boolean(savedAccessToken || persistedStatus?.has_dhan_access_token)
-
-  // Verification fires only from a direct click handler below, never from an
-  // effect — this component can remount as unrelated chat messages are
-  // appended, and an effect keyed on this state would re-fire on every such
-  // remount, causing runaway duplicate Dhan verification calls.
-  function saveClientId() {
-    const trimmed = clientIdInput.trim()
-    if (trimmed.length < 3) return
-    setSavedClientId(trimmed)
-    onDraft({ clientId: trimmed })
-    if (savedAccessToken) onSubmit(trimmed, savedAccessToken)
-  }
-
-  function saveAccessToken() {
-    const trimmed = accessTokenInput.trim()
-    if (trimmed.length < 12) return
-    setSavedAccessToken(trimmed)
-    onDraft({ accessToken: trimmed })
-    if (savedClientId) onSubmit(savedClientId, trimmed)
-  }
-
-  function retryVerification() {
-    if (!savedClientId || !savedAccessToken) return
-    onSubmit(savedClientId, savedAccessToken)
-  }
-
-  function verifySaved() {
-    if (!persistedStatus?.has_dhan_client_id || !persistedStatus?.has_dhan_access_token) return
-    onVerifySaved(persistedStatus.dhan_client_id_masked ?? '')
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    onDraft({ clientId, accessToken })
+    onSubmit(clientId, accessToken)
   }
 
   return (
-    <div className="setup-card form-card">
-      <p className="form-hint">
-        {mode === 'paper'
-          ? 'Dhan credentials are used only for real market data. Paper mode never sends Dhan orders.'
-          : 'Credentials are used for live market data and live order routing.'}
-      </p>
-
-      <div className="credential-field">
-        <label htmlFor="setup-dhan-client-id">
-          Dhan Client ID
-          {persistedStatus?.has_dhan_client_id ? (
-            <span className="credential-saved-hint">Saved: {persistedStatus.dhan_client_id_masked}</span>
-          ) : null}
-        </label>
-        <div className="credential-field-row">
-          <input
-            id="setup-dhan-client-id"
-            value={clientIdInput}
-            onChange={(event) => setClientIdInput(event.target.value)}
-            minLength={3}
-            autoComplete="off"
-            disabled={pending}
-          />
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={pending || clientIdInput.trim().length < 3}
-            onClick={saveClientId}
-          >
-            {clientIdHasValue ? 'Update' : 'Save'}
-          </button>
-        </div>
-      </div>
-
-      <div className="credential-field">
-        <label htmlFor="setup-dhan-access-token">
-          Access Token
-          {persistedStatus?.has_dhan_access_token ? (
-            <span className="credential-saved-hint">Last saved {formatSavedAt(persistedStatus.dhan_token_saved_at)}</span>
-          ) : null}
-        </label>
-        <div className="credential-field-row">
-          <input
-            id="setup-dhan-access-token"
-            value={accessTokenInput}
-            onChange={(event) => setAccessTokenInput(event.target.value)}
-            minLength={12}
-            type="password"
-            autoComplete="off"
-            disabled={pending}
-          />
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={pending || accessTokenInput.trim().length < 12}
-            onClick={saveAccessToken}
-          >
-            {accessTokenHasValue ? 'Update' : 'Save'}
-          </button>
-        </div>
-      </div>
-
+    <form className="setup-card form-card" onSubmit={submit}>
+      <p className="form-hint">{mode === 'paper' ? 'Dhan credentials are used only for real market data. Paper mode never sends Dhan orders.' : 'Credentials are used for live market data and live order routing.'}</p>
+      <label>
+        Dhan Client ID
+        <input value={clientId} onChange={(event) => setClientId(event.target.value)} required minLength={3} autoComplete="off" disabled={pending} />
+      </label>
+      <label>
+        Access Token
+        <input
+          value={accessToken}
+          onChange={(event) => setAccessToken(event.target.value)}
+          required
+          minLength={12}
+          type="password"
+          autoComplete="off"
+          disabled={pending}
+        />
+      </label>
       {error ? <p className="form-error">{error}</p> : null}
-
-      {pending ? (
-        <p className="form-hint">
+      <button type="submit" disabled={pending}>
+        {pending ? (
           <MotionSpinner>
             <Loader2 size={14} />
-          </MotionSpinner>{' '}
-          Verifying Dhan Account…
-        </p>
-      ) : savedClientId && savedAccessToken ? (
-        error ? (
-          <button type="button" className="secondary-button" onClick={retryVerification}>
-            Retry Verification
-          </button>
-        ) : (
-          <p className="form-hint">Both fields saved — verifying automatically.</p>
-        )
-      ) : persistedStatus?.has_dhan_client_id && persistedStatus?.has_dhan_access_token ? (
-        <button type="button" className="primary-button" onClick={verifySaved}>
-          Verify Saved Credentials
-        </button>
-      ) : (
-        <p className="form-hint">Save both fields to verify and connect automatically.</p>
-      )}
-    </div>
+          </MotionSpinner>
+        ) : null}
+        {pending ? 'Verifying Dhan Account' : 'Connect & Verify Dhan Account'}
+      </button>
+    </form>
   )
 }
 
@@ -557,12 +438,10 @@ function ExitRulesStep({
 
 function DailyLimitsStep({
   draft,
-  error,
   pending,
   onSubmit,
 }: {
   draft: SetupDraft
-  error: string
   pending: boolean
   onSubmit: (patch: Pick<SetupDraft, 'maxTrades' | 'maxLoss'>) => void
 }) {
@@ -591,7 +470,6 @@ function DailyLimitsStep({
         <div><span>Margin check</span><strong>{draft.engineMode === 'paper' ? 'Virtual balance before fill' : 'Dhan margin API before order'}</strong></div>
         <div><span>Charges</span><strong>{draft.engineMode === 'paper' ? 'Simulated Dhan charge formula' : 'From real Dhan fills/reporting'}</strong></div>
       </div>
-      {error ? <p className="form-error">{error}</p> : null}
       <button className="live-confirm" type="submit" disabled={pending}>
         {pending ? 'Saving Setup...' : 'Save Limits & Finish'}
       </button>
@@ -620,19 +498,7 @@ function limitsReply(maxTrades: number, maxLoss: number): string {
   return `Daily limits: ${trades} / ${loss}`
 }
 
-function DeploymentSummary({
-  draft,
-  lotSize,
-  error,
-  pending,
-  onDeploy,
-}: {
-  draft: SetupDraft
-  lotSize: number
-  error: string
-  pending: boolean
-  onDeploy: () => void
-}) {
+function DeploymentSummary({ draft, lotSize, pending, onDeploy }: { draft: SetupDraft; lotSize: number; pending: boolean; onDeploy: () => void }) {
   return (
     <article className="setup-card deployment-summary">
       <h3>Deployment Configuration Summary</h3>
@@ -666,7 +532,6 @@ function DeploymentSummary({
           <strong>{draft.maxTrades ? `${draft.maxTrades} trades` : 'None'} | {draft.maxLoss ? formatCurrency(draft.maxLoss) : 'None'}</strong>
         </div>
       </div>
-      {error ? <p className="form-error">{error}</p> : null}
       <button className="live-confirm" type="button" onClick={onDeploy} disabled={pending}>
         {pending ? 'Starting Engine...' : draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Trade Real Money - Confirm'}
       </button>
@@ -751,16 +616,6 @@ function allowedSideSummary(side: SideFilter): string {
 function maskClientId(clientId: string): string {
   const suffix = clientId.slice(-4).padStart(4, '*')
   return `******${suffix}`
-}
-
-function formatSavedAt(value: string | null): string {
-  if (!value) return ''
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return ''
-  return new Intl.DateTimeFormat('en-IN', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(parsed)
 }
 
 function clampPercent(value: number): number {
