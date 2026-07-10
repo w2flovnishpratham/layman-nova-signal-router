@@ -7,6 +7,20 @@ from app.services import shared_market_data as smd
 from app.services.credential_vault import DhanCredentials
 
 
+def test_chart_date_uses_today_after_market_close():
+    now = datetime(2026, 7, 10, 16, 20, tzinfo=charts._IST)
+
+    assert charts.chart_trading_date_ist(now) == now.date()
+
+
+def test_chart_date_uses_previous_weekday_before_open_or_weekend():
+    monday_preopen = datetime(2026, 7, 13, 8, 30, tzinfo=charts._IST)
+    sunday = datetime(2026, 7, 12, 12, 0, tzinfo=charts._IST)
+
+    assert charts.chart_trading_date_ist(monday_preopen).isoformat() == "2026-07-10"
+    assert charts.chart_trading_date_ist(sunday).isoformat() == "2026-07-10"
+
+
 def test_chart_auth_failure_does_not_refresh_shared_market_token(monkeypatch):
     calls = {"refresh": 0}
 

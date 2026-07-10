@@ -4,10 +4,10 @@ Candles are GLOBAL: one Dhan fetch (via the shared auto-TOTP market-data
 identity) serves every connected user. Per-user data (trade markers) is
 resolved separately in the markers endpoint from user-scoped order logs.
 
-CRITICAL CHART RULE: only the CURRENT IST trading day is ever returned.
-Candles are filtered backend-side to today's 09:15-15:30 IST session window,
-sorted ascending, deduplicated by timestamp. The cache key includes the IST
-trading date so a date rollover can never serve yesterday's series.
+CHART RULE: return the active IST trading day, or the last weekday session
+when the market is closed before today's session has candles. Candles are
+filtered backend-side to that session window, sorted ascending, deduplicated
+by timestamp. The cache key includes the selected IST trading date.
 
 Never returns credentials; unavailable states are sanitized.
 """
@@ -53,6 +53,18 @@ _CACHE: dict[str, Any] = {"key": None, "data": None, "built_monotonic": 0.0}
 
 def trading_date_ist() -> date:
     return datetime.now(_IST).date()
+
+
+def chart_trading_date_ist(now_ist: datetime | None = None) -> date:
+    now_ist = now_ist or datetime.now(_IST)
+    today = now_ist.date()
+    session_start, _session_end = session_bounds_ist(today)
+    selected = today
+    if now_ist < session_start:
+        selected = today - timedelta(days=1)
+    while selected.weekday() >= 5:
+        selected -= timedelta(days=1)
+    return selected
 
 
 def session_bounds_ist(trading_date: date) -> tuple[datetime, datetime]:
@@ -105,7 +117,7 @@ def get_nifty_candles(interval: str = "5m") -> dict[str, Any]:
     if dhan_interval is None:
         return _unavailable("unsupported_interval", f"Interval {interval!r} is not supported.")
 
-    today = trading_date_ist()
+    today = chart_trading_date_ist()
     key = cache_key(interval, today)
     ttl = CACHE_TTL_OPEN_SECONDS if _market_is_open() else CACHE_TTL_CLOSED_SECONDS
 
@@ -148,14 +160,13 @@ def _fetch_candles(dhan_interval: str, interval_label: str, today: date) -> dict
     now_ist = datetime.now(_IST)
 
     if now_ist < session_start:
-        # Before today's open: today has no candles yet. Never fall back to
-        # yesterday's series.
+        # Before the selected session opens there are no candles yet.
         return _ready_payload(interval_label, today, [], note="preopen")
 
     creds = market_data_credentials()
     if not creds:
         reason = "market_data_token_expired" if shared_market_data_configured() else "market_data_unavailable"
-        return _unavailable(reason, "NIFTY chart is temporarily unavailable. Nova is reconnecting market data.")
+        return _unavailable(reason, "NIFTY chart is temporarily unavailable. Nova is reconnecting market data.", today)
 
     from_date = session_start.strftime("%Y-%m-%d %H:%M:%S")
     to_date = min(now_ist, session_end).strftime("%Y-%m-%d %H:%M:%S")
@@ -179,7 +190,7 @@ def _fetch_candles(dhan_interval: str, interval_label: str, today: date) -> dict
             reason = "market_data_chart_auth_failed"
         else:
             reason = "market_data_fetch_failed"
-        return _unavailable(reason, "NIFTY chart is temporarily unavailable. Nova is reconnecting market data.")
+        return _unavailable(reason, "NIFTY chart is temporarily unavailable. Nova is reconnecting market data.", today)
 
     # Defense-in-depth: even if Dhan returns mixed dates, only today's IST
     # session survives (sorted ascending, deduplicated).
@@ -217,8 +228,8 @@ def _ready_payload(interval_label: str, today: date, candles: list[dict[str, Any
     return payload
 
 
-def _unavailable(reason: str, message: str) -> dict[str, Any]:
-    payload = _base_payload("5m", trading_date_ist())
+def _unavailable(reason: str, message: str, trading_date: date | None = None) -> dict[str, Any]:
+    payload = _base_payload("5m", trading_date or chart_trading_date_ist())
     payload.update(
         {
             "status": "unavailable",
@@ -238,7 +249,7 @@ def chart_status() -> dict[str, Any]:
         "source": "dhan",
         "interval": "5m",
         "timezone": IST_TIMEZONE_NAME,
-        "trading_date": trading_date_ist().isoformat(),
+        "trading_date": chart_trading_date_ist().isoformat(),
         "token_status": token_status(),
         "market_state": market_state(),
         "last_updated_at": cached.get("updated_at") if cached else None,
