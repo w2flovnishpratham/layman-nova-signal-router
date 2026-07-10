@@ -35,13 +35,6 @@ class BrokerCredsPayload(BaseModel):
     accessToken: str = Field(min_length=12)
 
 
-class VerifySavedBrokerCredsPayload(BaseModel):
-    # Display-only masked client ID (e.g. "******4633"); the real credential
-    # is never sent by the client for this command, it's read server-side
-    # from the encrypted vault.
-    clientId: str = Field(default="", max_length=32)
-
-
 class RiskPayload(BaseModel):
     maxTrades: int | None = Field(default=5, ge=1, le=50)
     maxLoss: int | None = Field(default=3000, ge=100)
@@ -112,16 +105,6 @@ def validate_command(state: SetupState, command_type: str, data: dict[str, Any])
         if command_type == "setup.broker_creds":
             _require_state(state, SetupState.STRATEGY_PICKED, command_type)
             payload = BrokerCredsPayload.model_validate(data).model_dump()
-            return SetupState.BROKER_CONNECTED, {
-                "broker": {
-                    "clientId": payload["clientId"],
-                    "status": "verified",
-                }
-            }
-
-        if command_type == "setup.verify_saved_broker_creds":
-            _require_state(state, SetupState.STRATEGY_PICKED, command_type)
-            payload = VerifySavedBrokerCredsPayload.model_validate(data).model_dump()
             return SetupState.BROKER_CONNECTED, {
                 "broker": {
                     "clientId": payload["clientId"],

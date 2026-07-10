@@ -1,7 +1,6 @@
 import { Ban, CheckCircle2, LogOut, Play } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ActiveTradeCard } from './ActiveTradeCard'
-import { BrokerCredentialsCard } from './BrokerCredentialsCard'
 import { TickingNumber } from './TickingNumber'
 import { formatCurrency } from '../lib/format'
 import type { ActiveTrade, ClientCommand, EngineMode, SetupState, SideFilter } from '../types'
@@ -52,8 +51,6 @@ export function EngineSidebar({
           <MetricRow label={paper ? 'Paper P&L' : 'Realized Session P&L'}><TickingNumber value={realizedPnl} decimals={0} signed /></MetricRow>
         </section>
       )}
-
-      <BrokerCredentialsCard />
 
       {!onlyMargin && (
         <>
