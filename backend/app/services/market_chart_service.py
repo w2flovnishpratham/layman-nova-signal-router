@@ -183,7 +183,11 @@ def _fetch_candles(dhan_interval: str, interval_label: str, today: date) -> dict
                 try:
                     from app.services.shared_market_data import refresh_shared_token_after_auth_failure
 
-                    refresh_shared_token_after_auth_failure(status_code=result.get("status_code"), message=error_text)
+                    refresh_shared_token_after_auth_failure(
+                        status_code=result.get("status_code"),
+                        message=error_text,
+                        failed_token=creds.access_token,
+                    )
                 except Exception:
                     pass
         else:

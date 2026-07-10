@@ -76,6 +76,7 @@ def _shared_market_ltp(*, exchange_segment: str, security_id: str) -> DhanLtpRes
             status_code=result.status_code,
             message=result.message or result.error,
             raw_response=result.raw_response,
+            failed_token=creds.access_token,
         )
     ):
         refreshed = get_shared_market_credentials()

@@ -267,6 +267,7 @@ def _ltp_with_prefer_ws(
                 status_code=quote.status_code,
                 message=quote.message or quote.error,
                 raw_response=quote.raw_response,
+                failed_token=creds.access_token,
             )
         ):
             refreshed = market_data_credentials()

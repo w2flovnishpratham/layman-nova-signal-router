@@ -124,16 +124,90 @@ def test_auth_failure_invalidates_and_forces_shared_refresh(monkeypatch):
     monkeypatch.setitem(smd._STATE, "expiry_epoch", 9999999999.0)
     calls: list[bool] = []
 
-    def fake_refresh(force: bool = False) -> bool:
-        calls.append(force)
+    def fake_generate() -> bool:
+        calls.append(True)
+        smd._STATE["access_token"] = "new-token"
         return True
 
-    monkeypatch.setattr(smd, "refresh_shared_token", fake_refresh)
+    monkeypatch.setattr(smd, "_generate_token_locked", fake_generate)
 
     refreshed = smd.refresh_shared_token_after_auth_failure(status_code=401, message="Unauthorized")
 
     assert refreshed is True
     assert calls == [True]
+    assert smd._STATE["access_token"] == "new-token"
+
+
+def test_auth_failure_with_no_failed_token_still_invalidates(monkeypatch):
+    """Backward-compat: callers that don't pass failed_token keep the old
+    unconditional-invalidate behavior (e.g. any caller not yet updated)."""
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
+    monkeypatch.setitem(smd._STATE, "access_token", "old-token")
+    monkeypatch.setitem(smd._STATE, "expiry_epoch", 9999999999.0)
+    calls: list[bool] = []
+    monkeypatch.setattr(smd, "_generate_token_locked", lambda: (calls.append(True), True)[1])
+
+    refreshed = smd.refresh_shared_token_after_auth_failure(
+        status_code=401, message="Unauthorized", failed_token=None
+    )
+
+    assert refreshed is True
+    assert calls == [True]
+
+
+def test_auth_failure_skips_invalidate_when_token_already_replaced(monkeypatch):
+    """The core race fix: a caller reporting a failure for a token that is no
+    longer the cached one (someone else already refreshed it) must not
+    invalidate the fresher token or burn a generation attempt."""
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
+    # Cache already holds a fresh token that differs from what this caller
+    # was using when it failed (another caller already fixed it).
+    monkeypatch.setitem(smd._STATE, "access_token", "already-refreshed-token")
+    monkeypatch.setitem(smd._STATE, "expiry_epoch", 9999999999.0)
+
+    def fail_if_called() -> bool:
+        raise AssertionError("must not invalidate/regenerate a token that already changed")
+
+    monkeypatch.setattr(smd, "_generate_token_locked", fail_if_called)
+
+    refreshed = smd.refresh_shared_token_after_auth_failure(
+        status_code=401, message="Unauthorized", failed_token="stale-token-caller-was-using"
+    )
+
+    assert refreshed is True
+    # The already-fresh token must survive untouched.
+    assert smd._STATE["access_token"] == "already-refreshed-token"
+
+
+def test_auth_failure_invalidates_when_failed_token_matches_current(monkeypatch):
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_DATA_ENABLED", True, raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_CLIENT_ID", "1000000001", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_PIN", "1234", raising=False)
+    monkeypatch.setattr(smd.settings, "DHAN_SHARED_TOTP_SECRET", _RFC_SECRET, raising=False)
+    monkeypatch.setitem(smd._STATE, "access_token", "still-the-stale-token")
+    monkeypatch.setitem(smd._STATE, "expiry_epoch", 9999999999.0)
+    calls: list[bool] = []
+
+    def fake_generate() -> bool:
+        calls.append(True)
+        smd._STATE["access_token"] = "regenerated-token"
+        return True
+
+    monkeypatch.setattr(smd, "_generate_token_locked", fake_generate)
+
+    refreshed = smd.refresh_shared_token_after_auth_failure(
+        status_code=401, message="Unauthorized", failed_token="still-the-stale-token"
+    )
+
+    assert refreshed is True
+    assert calls == [True]
+    assert smd._STATE["access_token"] == "regenerated-token"
 
 
 def test_token_generation_respects_cooldown_after_recent_attempt(monkeypatch):

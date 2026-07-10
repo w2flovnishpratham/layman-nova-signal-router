@@ -186,6 +186,7 @@ class DhanMarketFeedWsManager:
         self._last_subscribed_at: str | None = None
         self._reconnect_count = 0
         self._ticks: dict[tuple[str, str], dict[str, Any]] = {}
+        self._current_token: str | None = None
 
     def ensure_subscription(self, *, exchange_segment: str, security_id: str) -> None:
         target = _target_key(exchange_segment, security_id)
@@ -305,7 +306,9 @@ class DhanMarketFeedWsManager:
                 backoff_seconds = 1.0
             except Exception as exc:
                 message = str(exc)
-                refresh_shared_token_after_auth_failure(message=message)
+                with self._lock:
+                    used_token = self._current_token
+                refresh_shared_token_after_auth_failure(message=message, failed_token=used_token)
                 logger.warning("Dhan market-feed WebSocket disconnected: %s", message)
                 with self._lock:
                     self._connected = False
@@ -322,6 +325,9 @@ class DhanMarketFeedWsManager:
                 self._last_error = "missing_dhan_credentials"
             await asyncio.sleep(2.0)
             return
+
+        with self._lock:
+            self._current_token = creds.access_token
 
         encoded_token = quote(creds.access_token, safe="")
         url = f"{DHAN_MARKETFEED_WS_URL}?version=2&token={encoded_token}&clientId={creds.client_id}&authType=2"
@@ -407,7 +413,8 @@ class DhanMarketFeedWsManager:
         with self._lock:
             self._last_message_at = utc_now()
             self._last_error = safe_message
-        return refresh_shared_token_after_auth_failure(message=safe_message)
+            used_token = self._current_token
+        return refresh_shared_token_after_auth_failure(message=safe_message, failed_token=used_token)
 
 
 _MANAGER = DhanMarketFeedWsManager()

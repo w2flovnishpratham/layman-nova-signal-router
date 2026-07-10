@@ -219,8 +219,24 @@ def refresh_shared_token_after_auth_failure(
     status_code: int | None = None,
     message: object | None = None,
     raw_response: object | None = None,
+    failed_token: str | None = None,
 ) -> bool:
-    """Invalidate and refresh the shared token after a Dhan auth failure."""
+    """Invalidate and refresh the shared token after a Dhan auth failure.
+
+    ``failed_token``, when the caller has it, must be the exact access token
+    that produced the failure. Multiple independent readers (WS feed, ATM
+    LTP, chart service, paper broker) share one cached token, so a burst of
+    near-simultaneous failures against the same stale token can otherwise
+    each unconditionally invalidate it — including wiping out a token
+    another caller already refreshed a moment earlier, then getting blocked
+    from re-fetching by the generation cooldown for up to
+    _MIN_TOKEN_ATTEMPT_INTERVAL_SECONDS. When the currently cached token no
+    longer matches ``failed_token``, someone else already replaced it; treat
+    this as already resolved rather than invalidating it again. The compare
+    and the invalidate+regenerate happen under one lock acquisition so a
+    concurrent caller blocks until this one finishes, then sees the fresh
+    token instead of racing to invalidate it.
+    """
     if not shared_market_data_configured():
         return False
     if not _looks_like_auth_failure(
@@ -229,9 +245,13 @@ def refresh_shared_token_after_auth_failure(
         raw_response=raw_response,
     ):
         return False
-    logger.warning("Shared market-data token auth failure detected; refreshing token.")
-    invalidate_shared_token()
-    return refresh_shared_token(force=True)
+    with _LOCK:
+        if failed_token is not None and _STATE.get("access_token") != failed_token:
+            return True
+        logger.warning("Shared market-data token auth failure detected; refreshing token.")
+        _STATE["access_token"] = None
+        _STATE["expiry_epoch"] = 0.0
+        return _generate_token_locked()
 
 
 def get_shared_market_credentials() -> DhanCredentials | None:
