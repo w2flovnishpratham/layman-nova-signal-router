@@ -82,6 +82,12 @@ def subscribe_user(
             row.execution_mode = execution_mode
             row.updated_at = _now()
         db.flush()
+        # Same-transaction strategy-instance mirror (lots/mode/lifecycle). A
+        # sync failure rolls back this subscription write too — success is
+        # never returned with divergent effective settings.
+        from app.services.strategy_instance_service import sync_instance_from_subscription
+
+        sync_instance_from_subscription(db, row)
         return _sub_public(row)
 
 
@@ -103,6 +109,11 @@ def set_subscription_active(
         row.active = active
         row.updated_at = _now()
         db.flush()
+        # Same-transaction lifecycle mirror onto the strategy instance; a
+        # failure rolls back this subscription change too (no silent drift).
+        from app.services.strategy_instance_service import sync_instance_from_subscription
+
+        sync_instance_from_subscription(db, row)
         return True
 
 

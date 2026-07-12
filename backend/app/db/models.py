@@ -22,11 +22,13 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text as sa_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -542,6 +544,285 @@ class PortfolioTrade(Base):
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class StrategyCatalog(Base):
+    """One registered strategy (Nova-owned or personal).
+
+    Phase 0 registry foundation: nothing in the execution path reads this yet.
+    Nova-owned rows have owner_user_id NULL and a globally unique code
+    (partial unique index); personal rows are namespaced per owner.
+    """
+
+    __tablename__ = "strategy_catalog"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "code", name="uq_strategy_catalog_owner_code"),
+        Index(
+            "uq_strategy_catalog_nova_code",
+            "code",
+            unique=True,
+            postgresql_where=sa_text("owner_user_id IS NULL"),
+            sqlite_where=sa_text("owner_user_id IS NULL"),
+        ),
+        Index("ix_strategy_catalog_owner_status", "owner_user_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    owner_type: Mapped[str] = mapped_column(String(20), default="nova", nullable=False)  # nova/personal
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # private / nova_shared / marketplace (defined now, unused until a later release)
+    visibility: Mapped[str] = mapped_column(String(20), default="private", nullable=False)
+    # coming_soon / active / beta / disabled / deprecated
+    status: Mapped[str] = mapped_column(String(20), default="coming_soon", nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    versions: Mapped[list["StrategyVersion"]] = relationship(
+        back_populates="strategy", cascade="all, delete-orphan"
+    )
+
+
+class StrategyVersion(Base):
+    """One immutable-once-approved version of a catalog strategy.
+
+    INVARIANT: approved StrategyVersion rows must never be modified through
+    direct ORM assignment. All updates must go through
+    app.services.strategy_registry (update_version/approve_version), which
+    rejects every change to an approved version except approved -> deprecated.
+    """
+
+    __tablename__ = "strategy_versions"
+    __table_args__ = (
+        UniqueConstraint("strategy_id", "version", name="uq_strategy_version"),
+        # Composite key target so strategy_instances can enforce
+        # "version belongs to strategy" structurally.
+        UniqueConstraint("id", "strategy_id", name="uq_strategy_versions_id_strategy"),
+        Index("ix_strategy_versions_strategy_status", "strategy_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_catalog.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Wire contract this version's alerts must use, e.g. "nova.v1".
+    payload_spec_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    # nova_shared / nova_hosted_personal / personal_tradingview
+    source_journey: Mapped[str] = mapped_column(String(30), nullable=False)
+    # draft / pending_validation / validation_failed / pending_review / approved / rejected / deprecated
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
+    # external_webhook (TradingView calls Nova) / nova_runtime (Nova evaluates internally)
+    execution_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Populated only for nova_runtime versions: the validated declarative rule
+    # document the internal runtime interprets — never raw arbitrary source.
+    runtime_definition: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    strategy: Mapped["StrategyCatalog"] = relationship(back_populates="versions")
+
+
+class StrategySourceArtifact(Base):
+    """Inert source evidence for one strategy version (Pine text, prompt output).
+
+    Never executed — input to validation and audit only.
+    """
+
+    __tablename__ = "strategy_source_artifacts"
+    __table_args__ = (
+        Index("ix_strategy_source_artifacts_version_type", "strategy_version_id", "artifact_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # pine_script / master_prompt_output / ai_conversion_log / runtime_dsl
+    artifact_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    # SET NULL (not NOT NULL as drafted in the report) so audit rows survive
+    # account deletion instead of blocking it.
+    submitted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # manual_master_prompt / claude_api (future) — audit detail, never branched on
+    conversion_method: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class StrategyValidationReport(Base):
+    """Durable result of one automated validation stage for one version."""
+
+    __tablename__ = "strategy_validation_reports"
+    __table_args__ = (
+        Index(
+            "ix_strategy_validation_reports_version_stage",
+            "strategy_version_id",
+            "stage",
+            "executed_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # structural / security / compatibility / replay
+    stage: Mapped[str] = mapped_column(String(30), nullable=False)
+    # passed / failed / warning
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Structured findings: [{code, severity, message, location}, ...]
+    findings: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class StrategyAdminReview(Base):
+    """Immutable human review decision history for one strategy version."""
+
+    __tablename__ = "strategy_admin_reviews"
+    __table_args__ = (
+        Index("ix_strategy_admin_reviews_version_reviewed", "strategy_version_id", "reviewed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # SET NULL so review history survives reviewer account deletion.
+    reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # approved / rejected / changes_requested
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class StrategyInstance(Base):
+    """One user's configured copy of a strategy version — the universal
+    server-side unit all three journeys route through.
+
+    Phase 1: control-plane only. During the transition the legacy
+    strategy_subscriptions row remains EXECUTION-AUTHORITATIVE (the fan-out
+    reads it); this row is the future authority, kept transactionally
+    synchronized in both directions (lots, execution_mode, and lifecycle
+    active-eligibility) via legacy_subscription_id. Status transitions are
+    enforced solely by app.domain.strategy_instance_state_machine — never
+    assign status directly.
+    """
+
+    __tablename__ = "strategy_instances"
+    __table_args__ = (
+        UniqueConstraint("user_id", "strategy_id", "label", name="uq_strategy_instance_user_label"),
+        # Structural guarantee that the chosen version belongs to the chosen
+        # strategy — not left to service-layer discipline.
+        ForeignKeyConstraint(
+            ["strategy_version_id", "strategy_id"],
+            ["strategy_versions.id", "strategy_versions.strategy_id"],
+            name="fk_strategy_instance_version_strategy",
+        ),
+        Index("ix_strategy_instances_user_status", "user_id", "status"),
+        Index("ix_strategy_instances_strategy_status", "strategy_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # No ondelete: a catalog strategy/version with live instances must not be deletable.
+    strategy_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_catalog.id"), nullable=False, index=True
+    )
+    # FK enforced via the composite fk_strategy_instance_version_strategy above.
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
+    # NOVA_SHARED / NOVA_HOSTED_PERSONAL / PERSONAL_TRADINGVIEW
+    source_journey: Mapped[str] = mapped_column(String(30), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    # See strategy_instance_state_machine.InstanceState for values/transitions.
+    status: Mapped[str] = mapped_column(String(20), default="ready", nullable=False)
+    status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # signal_only / paper_live_data / real_orders (live_engine.EXECUTION_MODES)
+    execution_mode: Mapped[str] = mapped_column(String(30), default="signal_only", nullable=False)
+    current_lots: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Risk/config snapshot; structured but strategy-variable.
+    risk_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Link to the pre-instance subscription this row was backfilled from
+    # (dual-write target for lots/mode until execution is instance-aware).
+    legacy_subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("strategy_subscriptions.id", ondelete="SET NULL"),
+        unique=True,
+        nullable=True,
+    )
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    webhook_credentials: Mapped[list["StrategyInstanceWebhookCredential"]] = relationship(
+        back_populates="instance", cascade="all, delete-orphan"
+    )
+
+
+class StrategyInstanceWebhookCredential(Base):
+    """One issued private-webhook token for one strategy instance.
+
+    Only the SHA-256 hash of the opaque token is stored; plaintext is returned
+    exactly once at issue/rotation time. Rotation revokes the old row and
+    inserts a new one so issue/rotate/revoke history stays immutable. At most
+    one active (revoked_at IS NULL) credential per instance (partial index).
+
+    Ownership is derived through the instance (no duplicated user_id column),
+    so a credential can never reference one user and another user's instance.
+    """
+
+    __tablename__ = "strategy_instance_webhook_credentials"
+    __table_args__ = (
+        Index(
+            "uq_instance_webhook_credential_active",
+            "strategy_instance_id",
+            unique=True,
+            postgresql_where=sa_text("revoked_at IS NULL"),
+            sqlite_where=sa_text("revoked_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # First characters of the plaintext token, for display only ("nwk_ab12…").
+    token_prefix: Mapped[str] = mapped_column(String(12), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+
+    instance: Mapped["StrategyInstance"] = relationship(back_populates="webhook_credentials")
 
 
 class PortfolioSnapshot(Base):

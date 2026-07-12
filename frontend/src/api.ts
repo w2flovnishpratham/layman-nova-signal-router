@@ -397,3 +397,130 @@ async function postManualOrder(path: `/${string}`, payload: unknown): Promise<Ma
   }
   return body ?? { ok: false, message: 'Manual order failed.' }
 }
+
+// ---------------------------------------------------------------------------
+// Strategy instances (Phase 1 control plane)
+// ---------------------------------------------------------------------------
+
+export interface StrategyInstance {
+  id: string
+  strategy_id: string
+  strategy_version_id: string
+  strategy_code: string | null
+  strategy_display_name: string | null
+  source_journey: 'NOVA_SHARED' | 'NOVA_HOSTED_PERSONAL' | 'PERSONAL_TRADINGVIEW'
+  label: string
+  status: string
+  status_reason: string | null
+  execution_mode: string
+  current_lots: number
+  created_at: string | null
+  updated_at: string | null
+  archived_at: string | null
+  webhook_credential?: InstanceWebhookCredential | null
+}
+
+export interface InstanceWebhookCredential {
+  id: string
+  strategy_instance_id: string
+  token_prefix: string
+  created_at: string | null
+  last_used_at: string | null
+  revoked_at: string | null
+  /** Present only in the generate/rotate response — shown exactly once. */
+  token?: string
+}
+
+interface InstanceResponse {
+  ok: boolean
+  instance?: StrategyInstance
+  error?: string
+}
+
+async function instanceCall(path: `/${string}`, method: string, payload?: unknown): Promise<StrategyInstance> {
+  const response = await apiFetch(path, {
+    method,
+    headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as InstanceResponse | null
+  if (!response.ok || !body?.ok || !body.instance) {
+    throw new Error(body?.error || `Strategy instance request failed: ${response.status}`)
+  }
+  return body.instance
+}
+
+export async function listStrategyInstances(includeArchived = false): Promise<StrategyInstance[]> {
+  const suffix = includeArchived ? '?include_archived=true' : ''
+  const response = await apiFetch(`/api/strategy-instances${suffix}` as `/${string}`, { cache: 'no-store' })
+  const body = await response.json().catch(() => null) as { ok?: boolean; instances?: StrategyInstance[]; error?: string } | null
+  if (!response.ok || !body?.ok || !body.instances) {
+    throw new Error(body?.error || `Could not load strategy instances: ${response.status}`)
+  }
+  return body.instances
+}
+
+export async function getStrategyInstance(id: string): Promise<StrategyInstance> {
+  return instanceCall(`/api/strategy-instances/${id}` as `/${string}`, 'GET')
+}
+
+export interface CreateStrategyInstancePayload {
+  strategy_code: string
+  source_journey?: StrategyInstance['source_journey']
+  label?: string
+  lots?: number
+  execution_mode?: string
+}
+
+export async function createStrategyInstance(payload: CreateStrategyInstancePayload): Promise<StrategyInstance> {
+  return instanceCall('/api/strategy-instances', 'POST', payload)
+}
+
+export async function cloneStrategyInstance(id: string, label?: string): Promise<StrategyInstance> {
+  return instanceCall(`/api/strategy-instances/${id}/clone` as `/${string}`, 'POST', { label: label ?? null })
+}
+
+export async function updateStrategyInstanceLots(id: string, lots: number): Promise<StrategyInstance> {
+  return instanceCall(`/api/strategy-instances/${id}/lots` as `/${string}`, 'POST', { lots })
+}
+
+export async function activateStrategyInstance(id: string): Promise<StrategyInstance> {
+  return instanceCall(`/api/strategy-instances/${id}/activate` as `/${string}`, 'POST')
+}
+
+export async function pauseStrategyInstance(id: string, reason?: string): Promise<StrategyInstance> {
+  return instanceCall(`/api/strategy-instances/${id}/pause` as `/${string}`, 'POST', { reason: reason ?? null })
+}
+
+export async function resumeStrategyInstance(id: string): Promise<StrategyInstance> {
+  return instanceCall(`/api/strategy-instances/${id}/resume` as `/${string}`, 'POST')
+}
+
+export async function stopStrategyInstance(id: string, reason?: string): Promise<StrategyInstance> {
+  return instanceCall(`/api/strategy-instances/${id}/stop` as `/${string}`, 'POST', { reason: reason ?? null })
+}
+
+export async function archiveStrategyInstance(id: string): Promise<StrategyInstance> {
+  return instanceCall(`/api/strategy-instances/${id}/archive` as `/${string}`, 'POST')
+}
+
+async function credentialCall(path: `/${string}`, method: string): Promise<InstanceWebhookCredential> {
+  const response = await apiFetch(path, { method })
+  const body = await response.json().catch(() => null) as { ok?: boolean; credential?: InstanceWebhookCredential; error?: string } | null
+  if (!response.ok || !body?.ok || !body.credential) {
+    throw new Error(body?.error || `Webhook credential request failed: ${response.status}`)
+  }
+  return body.credential
+}
+
+export async function generateInstanceWebhookCredential(id: string): Promise<InstanceWebhookCredential> {
+  return credentialCall(`/api/strategy-instances/${id}/webhook-credential` as `/${string}`, 'POST')
+}
+
+export async function rotateInstanceWebhookCredential(id: string): Promise<InstanceWebhookCredential> {
+  return credentialCall(`/api/strategy-instances/${id}/webhook-credential/rotate` as `/${string}`, 'POST')
+}
+
+export async function revokeInstanceWebhookCredential(id: string): Promise<InstanceWebhookCredential> {
+  return credentialCall(`/api/strategy-instances/${id}/webhook-credential` as `/${string}`, 'DELETE')
+}

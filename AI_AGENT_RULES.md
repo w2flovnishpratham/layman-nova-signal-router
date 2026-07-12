@@ -116,6 +116,12 @@ the PR description instead of silently working around it.
   rename/drop-in-one-shot.
 - Use foreign keys and unique constraints for business truth. JSON columns are
   for raw payloads or provider variability.
+- Approved `StrategyVersion` records must never be modified through direct ORM
+  assignment. All updates must pass through `app.services.strategy_registry`
+  service methods, which only permit the approved -> deprecated lifecycle move.
+- `strategy_source_artifacts.content` is private user IP: never log it, never
+  return full source in list endpoints, owner/admin access only, and admin
+  reads must be audited (enforced from Phase 5 when routes exist).
 
 ## 9. Frontend
 

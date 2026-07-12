@@ -38,6 +38,13 @@ EXPECTED_TABLES = {
     "user_risk_controls",
     "user_strategy_risk_controls",
     "user_strategy_daily_risk_counters",
+    "strategy_catalog",
+    "strategy_versions",
+    "strategy_source_artifacts",
+    "strategy_validation_reports",
+    "strategy_admin_reviews",
+    "strategy_instances",
+    "strategy_instance_webhook_credentials",
 }
 
 
