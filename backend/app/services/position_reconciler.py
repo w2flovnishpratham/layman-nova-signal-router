@@ -7,6 +7,7 @@ from app.config import settings
 from app.services.audit_logger import log_audit_event, log_order_event
 from app.services.credential_vault import get_dhan_credentials
 from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, RealDhanClient
+from app.services import position_operations
 from app.services.state_store import (
     default_open_position,
     get_app_state,
@@ -113,7 +114,14 @@ def _summarize_dhan_order(row: dict[str, Any]) -> dict[str, Any]:
 def _with_sync(position: dict[str, Any], sync: dict[str, Any], *, persist: bool) -> dict[str, Any]:
     updated = {**position, "broker_sync": sync}
     if persist:
-        return set_open_position(updated)
+        result = set_open_position(updated)
+        position_operations.on_reconciliation(
+            source=position_operations.BROKER_RECONCILIATION,
+            status=str(sync.get("status") or "unknown"),
+            message=sync.get("message"),
+            checked_at=sync.get("checked_at"),
+        )
+        return result
     return updated
 
 
@@ -250,6 +258,10 @@ def get_reconciled_open_position(*, force: bool = False, reason: str = "position
     )
     cleared_position = {**default_open_position(), "broker_sync": sync}
     set_open_position(cleared_position)
+    position_operations.on_position_closed(
+        None, None,
+        source=position_operations.BROKER_RECONCILIATION, reason="broker_flat",
+    )
 
     app_state = get_app_state()
     if app_state.get("state") in EXIT_WAITING_STATES:

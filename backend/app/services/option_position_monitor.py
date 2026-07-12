@@ -26,6 +26,7 @@ from app.services.dhan_marketfeed_ws import (
 from app.services.market_snapshot import build_nifty_snapshot, get_shared_nifty_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import market_data_credentials, shared_market_data_configured
+from app.services import position_operations
 from app.services.state_store import get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
 from app.store.redis_session import session_store
 
@@ -471,7 +472,12 @@ def _sync_entry_fill_if_needed(position: dict[str, Any], client: Any, client_id:
             "security_id": position.get("security_id"),
         }
     )
-    return set_open_position(updated)
+    result = set_open_position(updated)
+    # Ordering: authoritative JSON write first, typed DB operation second.
+    position_operations.on_entry_fill_synced(
+        updated, order_id=str(order_id), fill_price=avg_price
+    )
+    return result
 
 
 def _exit_cooldown_active(position: dict[str, Any]) -> bool:

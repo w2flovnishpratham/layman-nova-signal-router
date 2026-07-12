@@ -6,6 +6,7 @@ from app.config import settings
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.credential_vault import get_dhan_credentials
 from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, RealDhanClient
+from app.services import position_operations
 from app.services.state_store import default_open_position, get_engine_mode, get_open_position, set_open_position, update_app_state, utc_now
 
 
@@ -102,6 +103,10 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
             "checked_at": checked_at,
         }
         set_open_position({**position, "broker_restart_sync": sync})
+        position_operations.on_reconciliation(
+            source=position_operations.STARTUP_RECONCILIATION,
+            status="skipped_not_real_mode", checked_at=checked_at,
+        )
         return sync
 
     creds = get_dhan_credentials()
@@ -113,6 +118,9 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
             "checked_at": checked_at,
         }
         set_open_position({**position, "broker_restart_sync": sync})
+        position_operations.on_reconciliation_error(
+            source=position_operations.STARTUP_RECONCILIATION, reason="missing_dhan_credentials",
+        )
         update_app_state(
             state="RESTART_RECONCILE_FAILED",
             last_message="Startup could not verify the tracked open position because Dhan credentials are missing.",
@@ -138,6 +146,9 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
             "checked_at": checked_at,
         }
         set_open_position({**position, "broker_restart_sync": sync})
+        position_operations.on_reconciliation_error(
+            source=position_operations.STARTUP_RECONCILIATION, reason="dhan_exception",
+        )
         update_app_state(
             state="RESTART_RECONCILE_FAILED",
             last_message="Startup could not verify Dhan open position. Keeping local tracker for safety.",
@@ -159,6 +170,9 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
             "checked_at": checked_at,
         }
         set_open_position({**position, "broker_restart_sync": sync})
+        position_operations.on_reconciliation_error(
+            source=position_operations.STARTUP_RECONCILIATION, reason="dhan_verification_failed",
+        )
         update_app_state(
             state="RESTART_RECONCILE_FAILED",
             last_message="Startup could not verify Dhan open position. Keeping local tracker for safety.",
@@ -188,6 +202,10 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
             "open_orders_count": len(open_orders),
         }
         set_open_position({**default_open_position(), "broker_restart_sync": sync})
+        position_operations.on_position_closed(
+            None, None,
+            source=position_operations.STARTUP_RECONCILIATION, reason="broker_missing_local",
+        )
         update_app_state(
             state="WAITING_ENTRY",
             last_message="Startup reconciliation cleared stale local position; Dhan appears flat for NOVA's tracked contract.",
@@ -236,6 +254,10 @@ def reconcile_open_position_on_startup() -> dict[str, Any]:
     )
     updated["live_pnl"] = live_pnl
     set_open_position(updated)
+    position_operations.on_reconciliation(
+        source=position_operations.STARTUP_RECONCILIATION,
+        status="verified", checked_at=checked_at, snapshot=updated,
+    )
     update_app_state(state="WAITING_EXIT", last_message=_active_waiting_message(updated, sync))
     log_audit_event(
         "STARTUP_OPEN_POSITION_VERIFIED",

@@ -58,6 +58,14 @@ def _shared_market_data_unavailable_result(*, exchange_segment: str, security_id
 
 
 def _shared_market_ltp(*, exchange_segment: str, security_id: str) -> DhanLtpResult:
+    from app.services.shared_market_data import test_market_data_provider_enabled
+
+    if test_market_data_provider_enabled():
+        return DhanLtpResult(
+            success=True, message="Deterministic isolated-staging quote.", ltp=100.0,
+            exchange_segment=exchange_segment, security_id=security_id,
+            raw_response={"mode": "paper", "source": "test_market_data"},
+        )
     creds = get_shared_market_credentials()
     if creds is None:
         return _shared_market_data_unavailable_result(exchange_segment=exchange_segment, security_id=security_id)

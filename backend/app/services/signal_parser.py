@@ -170,7 +170,7 @@ def _parse_nova_payload(raw_payload: dict[str, Any]) -> NormalizedSignal:
         "qty": _as_positive_int(raw_payload.get("qty"), "qty"),
         "order_type": _normalize_order_type(raw_payload.get("order_type")),
         "product_type": _normalize_product_type(raw_payload.get("product_type")),
-        "source": raw_payload.get("source") or "tradingview",
+        "source": "tradingview",
         "raw_payload": raw_payload,
     }
     if not normalized["trading_symbol"]:
@@ -233,7 +233,7 @@ def _parse_pine_multi_leg_payload(raw_payload: dict[str, Any]) -> NormalizedSign
         "qty": _as_positive_int(leg.get("quantity"), "order_legs[0].quantity"),
         "order_type": _normalize_order_type(leg.get("orderType")),
         "product_type": _normalize_product_type(leg.get("productType")),
-        "source": raw_payload.get("source") or "tradingview",
+        "source": "tradingview",
         "raw_payload": raw_payload,
     }
     try:

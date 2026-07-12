@@ -92,6 +92,20 @@ class Settings(BaseSettings):
     POSITION_DB_SHADOW_LOCK_TIMEOUT_MS: int = 500
     # Consecutive failures that open the breaker, and how long it stays open
     # before a half-open recovery probe.
+    # Phase 2B1: explicit typed position operations write the PG ledger from
+    # the business transition points. PRECEDENCE: when this is on, the generic
+    # diff-based shadow hook is fully inert (POSITION_DB_SHADOW_WRITE_ENABLED
+    # then only labels the legacy generic mechanism). JSON remains the
+    # execution read authority either way.
+    POSITION_DB_TYPED_WRITES_ENABLED: bool = False
+    POSITION_DB_READ_SHADOW_ENABLED: bool = False
+    POSITION_DB_READ_SHADOW_TIMEOUT_MS: int = 250
+    POSITION_DB_READ_SHADOW_LOCK_TIMEOUT_MS: int = 100
+    POSITION_DB_READ_SHADOW_FAILURE_THRESHOLD: int = 5
+    POSITION_DB_READ_SHADOW_CIRCUIT_OPEN_SECONDS: int = 30
+    POSITION_DB_READ_SHADOW_SAMPLE_RATE: float = 1.0
+    POSITION_DB_READ_SHADOW_GRACE_MS: int = 500
+    ENABLE_TEST_MARKET_DATA_PROVIDER: bool = False
     POSITION_DB_SHADOW_FAILURE_THRESHOLD: int = 5
     POSITION_DB_SHADOW_CIRCUIT_OPEN_SECONDS: int = 60
     WEBHOOK_HMAC_REQUIRED: bool = False

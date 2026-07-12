@@ -172,6 +172,10 @@ def _validate_live_payment_provider_configuration() -> None:
 
 
 def validate_production_configuration() -> None:
+    if settings.ENABLE_TEST_MARKET_DATA_PROVIDER and settings.APP_ENV.strip().lower() not in {"test", "isolated_staging"}:
+        raise RuntimeError("ENABLE_TEST_MARKET_DATA_PROVIDER is allowed only in test or isolated_staging.")
+    if settings.ENABLE_TEST_MARKET_DATA_PROVIDER and (settings.ENABLE_LIVE_ORDERS or settings.DHAN_MODE.upper() != "MOCK"):
+        raise RuntimeError("ENABLE_TEST_MARKET_DATA_PROVIDER requires ENABLE_LIVE_ORDERS=false and DHAN_MODE=MOCK.")
     if not settings.is_production:
         return
 

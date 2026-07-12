@@ -311,7 +311,21 @@ def get_open_position() -> dict[str, Any]:
 
 
 def get_live_open_position() -> dict[str, Any]:
-    return _read_json(OPEN_POSITION_FILE, default_open_position)
+    position = _read_json(OPEN_POSITION_FILE, default_open_position)
+    _shadow_position_read(position, "live")
+    return position
+
+
+def _shadow_position_read(position: dict[str, Any], execution_mode: str) -> None:
+    """Observation only: the caller always receives the JSON object above."""
+    if not settings.POSITION_DB_READ_SHADOW_ENABLED:
+        return
+    try:
+        from app.services.position_read_shadow import observe_json_position
+        observe_json_position(position, execution_mode)
+    except Exception:
+        # Defense in depth: read diagnostics can never reach execution logic.
+        return
 
 
 def _position_shadow_user():
@@ -350,6 +364,9 @@ def set_live_open_position(data: dict[str, Any]) -> dict[str, Any]:
     shadow_user = _position_shadow_user()
     previous = _read_json(OPEN_POSITION_FILE, default_open_position) if shadow_user else {}
     result = _write_json(OPEN_POSITION_FILE, data)
+    if settings.POSITION_DB_READ_SHADOW_ENABLED:
+        from app.services.position_read_shadow import note_json_write
+        note_json_write("live")
     if shadow_user is not None:
         _shadow_position_write(shadow_user, "live", previous, result)
     return result
@@ -366,13 +383,18 @@ def clear_live_open_position() -> dict[str, Any]:
 
 
 def get_paper_position() -> dict[str, Any]:
-    return _read_json(PAPER_POSITION_FILE, default_open_position)
+    position = _read_json(PAPER_POSITION_FILE, default_open_position)
+    _shadow_position_read(position, "paper")
+    return position
 
 
 def set_paper_position(data: dict[str, Any]) -> dict[str, Any]:
     shadow_user = _position_shadow_user()
     previous = _read_json(PAPER_POSITION_FILE, default_open_position) if shadow_user else {}
     result = _write_json(PAPER_POSITION_FILE, data)
+    if settings.POSITION_DB_READ_SHADOW_ENABLED:
+        from app.services.position_read_shadow import note_json_write
+        note_json_write("paper")
     if shadow_user is not None:
         _shadow_position_write(shadow_user, "paper", previous, result)
     return result

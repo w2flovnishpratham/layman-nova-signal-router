@@ -32,6 +32,7 @@ from app.services.risk_manager import (
     option_side_is_allowed,
 )
 from app.services.security_id_resolver import resolve_security_id
+from app.services import position_operations
 from app.services.state_store import (
     clear_open_position,
     get_engine_mode,
@@ -1207,6 +1208,11 @@ def _reconcile_tracked_position_before_entry(signal: NormalizedSignal) -> RiskDe
     )
     if preflight.get("allowed"):
         clear_open_position()
+        position_operations.on_position_closed(
+            signal, None,
+            source=position_operations.BROKER_RECONCILIATION,
+            reason="broker_flat_before_entry",
+        )
         message = "Tracked open position cleared because Dhan positions/orders are flat before entry."
         log_audit_event(
             "OPEN_POSITION_RECONCILED",
@@ -1846,6 +1852,7 @@ def _apply_partial_exit_fill(position: dict[str, Any], order_result: dict[str, A
     )
     updated["live_pnl"] = live_pnl
     set_open_position(updated)
+    position_operations.on_partial_exit(signal, order_result, updated)
     log_audit_event(
         "PARTIAL_EXIT_FILL",
         f"Exit partially filled; {remaining_qty} quantity remains open.",
@@ -1953,6 +1960,11 @@ def route_reversal_signal(
         state="REVERSAL_EXIT_SENDING",
         last_message=f"Exiting {open_position.get('option_side')} before entering {signal.option_side}.",
     )
+    position_operations.on_reversal_marked(
+        signal,
+        from_option_side=open_position.get("option_side"),
+        to_option_side=signal.option_side,
+    )
     exit_result = _place_order(exit_signal, exit_decision.final_qty, "EXIT", runtime=runtime)
     if exit_result.get("blocked"):
         return {
@@ -1993,6 +2005,7 @@ def route_reversal_signal(
                 "message": reason,
             }
             set_open_position(current)
+            position_operations.on_exit_pending(signal, exit_result, current)
         log_audit_event(
             "REVERSAL_EXIT_PENDING",
             reason,
@@ -2015,6 +2028,9 @@ def route_reversal_signal(
 
     super_order_leg_cancellations = _cancel_super_order_exit_legs(open_position)
     clear_open_position()
+    position_operations.on_position_closed(
+        exit_signal, exit_result, source=position_operations.STRATEGY_REVERSAL
+    )
     refresh_wallet_snapshot(force=True, log_event=True)
 
     update_app_state(
@@ -2046,6 +2062,9 @@ def route_reversal_signal(
         entry_result["sr_suggestion"] = position.get("sr_suggestion")
         entry_result["active_exit_levels"] = position.get("active_exit_levels")
         set_open_position(position)
+        position_operations.on_entry_placed(
+            signal, entry_result, position, source=position_operations.STRATEGY_REVERSAL
+        )
         record_entry_trade(signal.signal_id)
         update_app_state(
             state="WAITING_EXIT",
@@ -2196,6 +2215,7 @@ def route_entry_signal(
         order_result["sr_suggestion"] = position.get("sr_suggestion")
         order_result["active_exit_levels"] = position.get("active_exit_levels")
         set_open_position(position)
+        position_operations.on_entry_placed(signal, order_result, position)
         record_entry_trade(signal.signal_id)
         update_app_state(
             state="WAITING_EXIT",
@@ -2283,6 +2303,7 @@ def route_exit_signal(
 
         super_order_leg_cancellations = _cancel_super_order_exit_legs(open_position)
         clear_open_position()
+        position_operations.on_position_closed(signal, order_result)
         refresh_wallet_snapshot(force=True, log_event=True)
         update_app_state(
             state="WAITING_ENTRY",

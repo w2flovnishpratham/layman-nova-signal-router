@@ -213,6 +213,12 @@ def _flag_enabled() -> bool:
     return bool(settings.POSITION_DB_SHADOW_WRITE_ENABLED)
 
 
+def typed_writes_enabled() -> bool:
+    from app.config import settings
+
+    return bool(settings.POSITION_DB_TYPED_WRITES_ENABLED)
+
+
 def _advisory_lock_key(user_id: uuid.UUID, execution_mode: str) -> int:
     """Deterministic signed 64-bit key for pg_advisory_xact_lock."""
     digest = hashlib.sha256(f"position-slot:{user_id}:{execution_mode}".encode()).digest()
@@ -492,19 +498,45 @@ def shadow_position_write(
     failure is logged per operation-family policy and counted, and the broker
     action that triggered the write is never repeated or rolled back.
     """
+    # PRECEDENCE: when typed writes own the transitions, the generic
+    # diff-classifier is fully inert (no row writes, no events) so the same
+    # transition can never produce duplicate events from both mechanisms.
+    if typed_writes_enabled():
+        return
+    operation = classify_operation(previous, new)
+    run_guarded_slot_operation(
+        operation_kind=operation,
+        user_id=user_id,
+        execution_mode=execution_mode,
+        txn=lambda: _shadow_write_txn(user_id, execution_mode, operation, new),
+    )
+
+
+def run_guarded_slot_operation(
+    *,
+    operation_kind: str,
+    user_id: uuid.UUID,
+    execution_mode: str,
+    txn,
+) -> Any:
+    """Shared safety envelope for every DB position write (generic shadow AND
+    typed operations): circuit breaker, saturation guard, wall-clock watchdog,
+    per-operation failure policy. Never raises into the execution path.
+
+    Returns the txn result, or None when skipped/failed.
+    """
     global shadow_writes_attempted, shadow_writes_succeeded
     global shadow_writes_skipped_breaker, shadow_writes_noop_identical
 
-    operation = classify_operation(previous, new)
     if not breaker.allow():
         with _metrics_lock:
             shadow_writes_skipped_breaker += 1
-        return
+        return None
     with _metrics_lock:
         shadow_writes_attempted += 1
     try:
         if not database_configured():
-            raise RuntimeError("DATABASE_URL is not configured for shadow writes.")
+            raise RuntimeError("DATABASE_URL is not configured for position DB writes.")
         # Wall-clock watchdog: SET LOCAL timeouts bound server-side work, but
         # a frozen DB / hung socket / stalled connect blocks the client
         # indefinitely. Run the transaction in a worker thread and abandon it
@@ -524,12 +556,10 @@ def shadow_position_write(
             with _metrics_lock:
                 global shadow_writes_skipped_saturated
                 shadow_writes_skipped_saturated += 1
-            logger.debug("shadow executor saturated; skipping shadow write")
-            return
+            logger.debug("position DB executor saturated; skipping write")
+            return None
         try:
-            future = _shadow_executor().submit(
-                _shadow_write_txn, user_id, execution_mode, operation, new
-            )
+            future = _shadow_executor().submit(txn)
         except BaseException:
             _inflight.release()
             raise
@@ -539,20 +569,30 @@ def shadow_position_write(
         except FuturesTimeoutError as exc:
             future.cancel()
             raise RuntimeError(
-                f"shadow write exceeded wall-clock budget of {budget_seconds:.1f}s"
+                f"position DB write exceeded wall-clock budget of {budget_seconds:.1f}s"
             ) from exc
         if outcome == "noop":
             with _metrics_lock:
                 shadow_writes_noop_identical += 1
             _record_slot_success(user_id, execution_mode)
             breaker.record_success()
-            return
+            return outcome
         with _metrics_lock:
             shadow_writes_succeeded += 1
         _record_slot_success(user_id, execution_mode)
         breaker.record_success()
+        return outcome
+    except ConflictingIdempotencyError:
+        # Visible, non-swallowed contract violation: same key, different
+        # payload. Reported by the caller; never retried here.
+        raise
     except Exception as exc:
-        _report_shadow_failure(operation, user_id, execution_mode, exc)
+        _report_shadow_failure(operation_kind, user_id, execution_mode, exc)
+        return None
+
+
+class ConflictingIdempotencyError(RuntimeError):
+    """Same idempotency key reused with a conflicting payload."""
 
 
 def _release_inflight() -> None:
@@ -818,6 +858,7 @@ def compare_user_positions(
                         "mode": mode,
                         "position_id": str(row.id),
                     })
+                    findings.extend(_typed_event_findings(db, row, user_id, mode))
                 continue
             json_open = bool(json_position.get("has_open_position"))
             if json_open and row is None:
@@ -861,4 +902,51 @@ def compare_user_positions(
                     "json_value": json_view.get(key),
                     "db_value": (db_view or {}).get(key),
                 })
+            findings.extend(_typed_event_findings(db, row, user_id, mode))
+    return findings
+
+
+_GENERIC_EVENT_SOURCES = set(_FAILURE_POLICY) - {"import"}
+
+
+def _typed_event_findings(db, row, user_id, mode) -> list[dict[str, Any]]:
+    """Typed-event completeness checks (active when typed writes own the
+    ledger): every active row must have typed events, the latest event must
+    agree with the row state, no generic-derived financial events may appear
+    alongside typed ones, and no idempotency key may repeat."""
+    if not typed_writes_enabled():
+        return []
+    findings: list[dict[str, Any]] = []
+    events = db.scalars(
+        select(models.PositionEvent)
+        .where(models.PositionEvent.position_id == row.id)
+        .order_by(models.PositionEvent.event_at, models.PositionEvent.id)
+    ).all()
+    base = {"user_id": str(user_id), "mode": mode, "position_id": str(row.id)}
+    typed_events = [e for e in events if (e.event_metadata or {}).get("typed")]
+    if not typed_events:
+        findings.append({"type": "missing_typed_event", **base, "row_state": row.position_state})
+    else:
+        last = typed_events[-1]
+        if last.new_state != row.position_state:
+            findings.append({
+                "type": "typed_event_state_lag", **base,
+                "last_event_state": last.new_state, "row_state": row.position_state,
+            })
+    generic_financial = [
+        e for e in events
+        if not (e.event_metadata or {}).get("typed") and e.source in _GENERIC_EVENT_SOURCES
+    ]
+    if typed_events and generic_financial:
+        findings.append({
+            "type": "unexpected_generic_event", **base,
+            "generic_event_types": sorted({e.event_type for e in generic_financial}),
+        })
+    seen_keys: dict[str, int] = {}
+    for event in events:
+        if event.idempotency_key:
+            seen_keys[event.idempotency_key] = seen_keys.get(event.idempotency_key, 0) + 1
+    duplicates = [k for k, count in seen_keys.items() if count > 1]
+    if duplicates:
+        findings.append({"type": "duplicate_typed_event", **base, "keys": duplicates[:5]})
     return findings

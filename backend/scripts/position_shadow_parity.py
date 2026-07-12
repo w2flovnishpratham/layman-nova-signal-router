@@ -73,7 +73,16 @@ def run(user_filter: str | None) -> dict:
         findings.extend(
             compare_user_positions(uuid.UUID(user_id_str), json_live=json_live, json_paper=json_paper)
         )
-    return {"users_checked": checked, "findings": findings, "mode": "report-only"}
+    typed_types = {"missing_typed_event", "typed_event_state_lag", "unexpected_generic_event", "duplicate_typed_event"}
+    from app.services.position_read_shadow import health as read_shadow_health
+    return {
+        "users_checked": checked,
+        "write_parity": {"findings": [item for item in findings if item.get("type") not in typed_types]},
+        "read_shadow_parity": read_shadow_health(),
+        "typed_event_parity": {"findings": [item for item in findings if item.get("type") in typed_types]},
+        "findings": findings,  # backward-compatible aggregate; use sections above for new tooling
+        "mode": "report-only",
+    }
 
 
 def main() -> int:
@@ -85,7 +94,7 @@ def main() -> int:
         return 2
     result = run(args.user)
     print(json.dumps(result, indent=2, default=str))
-    return 1 if result["findings"] else 0
+    return 1 if result["write_parity"]["findings"] or result["typed_event_parity"]["findings"] else 0
 
 
 if __name__ == "__main__":

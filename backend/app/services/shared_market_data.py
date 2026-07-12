@@ -51,6 +51,15 @@ _WORKER: threading.Thread | None = None
 _WORKER_LOCK = threading.RLock()
 
 
+def test_market_data_provider_enabled() -> bool:
+    return bool(
+        settings.ENABLE_TEST_MARKET_DATA_PROVIDER
+        and settings.APP_ENV.strip().lower() in {"test", "isolated_staging"}
+        and not settings.ENABLE_LIVE_ORDERS
+        and settings.DHAN_MODE.upper() == "MOCK"
+    )
+
+
 def _set_last_error(code: str) -> None:
     # Keep browser-facing status and logs free of PIN, TOTP, token, URL, and
     # provider-specific error details.
@@ -70,7 +79,7 @@ def _suppress_httpx_info_logs():
 
 def shared_market_data_configured() -> bool:
     """True when the dedicated data account is fully configured via env."""
-    return bool(
+    return test_market_data_provider_enabled() or bool(
         settings.DHAN_SHARED_DATA_ENABLED
         and (settings.DHAN_SHARED_CLIENT_ID or "").strip()
         and (settings.DHAN_SHARED_PIN or "").strip()
@@ -265,6 +274,8 @@ def refresh_shared_token_after_auth_failure(
 
 def get_shared_market_credentials() -> DhanCredentials | None:
     """Return valid shared data credentials, refreshing on demand. None if off."""
+    if test_market_data_provider_enabled():
+        return DhanCredentials(client_id="test-market-data", access_token="test-market-data", source="test_market_data")
     if not shared_market_data_configured():
         return None
     with _LOCK:
@@ -307,6 +318,11 @@ def shared_market_data_status() -> dict[str, object]:
     """Masked health snapshot — safe to expose to admins / the frontend."""
     from app.services.credential_vault import mask_client_id
 
+    if test_market_data_provider_enabled():
+        return {"configured": True, "enabled": True, "has_token": True,
+                "client_id_masked": "test***data", "token_valid": True,
+                "seconds_to_expiry": 0, "refreshed_at": None, "last_error": None,
+                "source": "test_market_data"}
     with _LOCK:
         expiry = float(_STATE.get("expiry_epoch") or 0.0)
         has_token = bool(_STATE.get("access_token"))

@@ -16,6 +16,7 @@ from app.config import settings
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.credential_vault import get_dhan_credentials
 from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, RealDhanClient
+from app.services import position_operations
 from app.services.state_store import (
     default_external_positions,
     default_open_position,
@@ -311,6 +312,11 @@ def _clear_stale_local_position(
         "open_orders_count": len(open_orders),
     }
     set_open_position({**default_open_position(), "broker_sync": sync})
+    position_operations.on_position_closed(
+        None, None,
+        source=position_operations.GHOST_POSITION_RECONCILIATION,
+        reason=str(sync.get("status") or "manual_exit_detected"),
+    )
 
     app_state = get_app_state()
     if app_state.get("state") in EXIT_WAITING_STATES:

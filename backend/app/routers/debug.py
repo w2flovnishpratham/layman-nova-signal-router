@@ -111,6 +111,12 @@ def position_shadow_health(admin=Depends(require_admin)) -> dict:
     return {"ok": True, **shadow_health()}
 
 
+@router.get("/position-read-shadow/health")
+def position_read_shadow_health(admin=Depends(require_admin)) -> dict:
+    from app.services.position_read_shadow import health
+    return {"ok": True, **health()}
+
+
 @router.get("/dhan/config")
 def dhan_config() -> dict[str, Any]:
     outgoing_ip = get_outgoing_ip()
