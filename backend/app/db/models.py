@@ -733,6 +733,8 @@ class StrategyInstance(Base):
     __tablename__ = "strategy_instances"
     __table_args__ = (
         UniqueConstraint("user_id", "strategy_id", "label", name="uq_strategy_instance_user_label"),
+        # Composite target so positions can structurally prove instance ownership.
+        UniqueConstraint("id", "user_id", name="uq_strategy_instances_id_user"),
         # Structural guarantee that the chosen version belongs to the chosen
         # strategy — not left to service-layer discipline.
         ForeignKeyConstraint(
@@ -823,6 +825,165 @@ class StrategyInstanceWebhookCredential(Base):
     replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
 
     instance: Mapped["StrategyInstance"] = relationship(back_populates="webhook_credentials")
+
+
+# Position states with an open broker exposure or an in-flight order. Shared
+# by the model constraint, position_store, and the parity tool. Closed/flat
+# rows never occupy the active-position slot.
+ACTIVE_POSITION_STATES = (
+    "entering",
+    "open",
+    "scaling_in",
+    "exiting",
+    "reversing",
+    "error_reconciling",
+)
+_ACTIVE_STATES_SQL = "position_state IN ({})".format(
+    ", ".join(f"'{state}'" for state in ACTIVE_POSITION_STATES)
+)
+
+
+class StrategyInstancePosition(Base):
+    """Durable shadow of one tracked option position (Phase 2A).
+
+    AUTHORITY: during Phase 2A the per-user JSON files (open_position.json /
+    paper_position.json) remain the EXECUTION READ AUTHORITY. Rows here are
+    shadow dual-writes for durability and parity comparison only — nothing on
+    the execution path reads this table. Do not add fallback reads.
+
+    One row represents one position lifetime for a (user, execution_mode)
+    slot; the partial unique index enforces at most one active row per slot
+    (which implies the product rule of one active live position per user).
+    Money/price columns are integer paise — never floats. raw_snapshot keeps
+    the full source JSON for lossless parity and audit.
+    """
+
+    __tablename__ = "strategy_instance_positions"
+    __table_args__ = (
+        # A position can never reference User A and an instance owned by
+        # User B — enforced structurally, not by service discipline. NULL
+        # strategy_instance_id (legacy/migration rows) passes (MATCH SIMPLE).
+        ForeignKeyConstraint(
+            ["strategy_instance_id", "user_id"],
+            ["strategy_instances.id", "strategy_instances.user_id"],
+            name="fk_position_instance_owner",
+        ),
+        # Composite target so position_events structurally prove tenant match.
+        UniqueConstraint("id", "user_id", name="uq_positions_id_user"),
+        Index(
+            "uq_active_position_per_user_mode",
+            "user_id",
+            "execution_mode",
+            unique=True,
+            postgresql_where=sa_text(_ACTIVE_STATES_SQL),
+            sqlite_where=sa_text(_ACTIVE_STATES_SQL),
+        ),
+        Index("ix_positions_user_state", "user_id", "position_state"),
+        Index("ix_positions_instance", "strategy_instance_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Nullable during migration: legacy JSON positions have no instance yet.
+    strategy_instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_instances.id", ondelete="SET NULL"), nullable=True
+    )
+    execution_mode: Mapped[str] = mapped_column(String(20), nullable=False)  # paper/live
+    # flat/entering/open/scaling_in/exiting/reversing/error_reconciling/closed
+    position_state: Mapped[str] = mapped_column(String(30), nullable=False)
+    position_side: Mapped[str] = mapped_column(String(10), default="LONG", nullable=False)
+    strategy_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    security_id: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    trading_symbol: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    underlying: Mapped[str] = mapped_column(String(20), default="NIFTY", nullable=False)
+    option_side: Mapped[str | None] = mapped_column(String(8), nullable=True)  # CE/PE
+    strike: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    expiry: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    product_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Quantities (contracts).
+    entry_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    filled_entry_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    open_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    filled_exit_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_lots: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Money in integer paise (project convention; never float).
+    avg_entry_price_paise: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    realized_pnl_paise: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Broker lifecycle.
+    entry_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    exit_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    broker_correlation_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    pending_order_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    reversal_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    super_order_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    reconciliation_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_broker_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Shadow bookkeeping.
+    raw_snapshot: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    snapshot_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    parity_status: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    last_parity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    imported_from_json: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Audit/concurrency.
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class PositionEvent(Base):
+    """Append-only history of position transitions (Phase 2A shadow).
+
+    Rows are never updated or deleted. idempotency_key dedupes retried
+    writes of the same logical event.
+    """
+
+    __tablename__ = "position_events"
+    __table_args__ = (
+        # An event can never claim a different tenant than its position.
+        # (strategy_instance ownership derives through the position row —
+        # events deliberately carry no instance column of their own.)
+        ForeignKeyConstraint(
+            ["position_id", "user_id"],
+            ["strategy_instance_positions.id", "strategy_instance_positions.user_id"],
+            name="fk_event_position_owner",
+        ),
+        Index("ix_position_events_position_at", "position_id", "event_at"),
+        Index("ix_position_events_user_at", "user_id", "event_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    position_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_instance_positions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # entry_requested/entry_submitted/entry_partial_fill/entry_filled/
+    # exit_requested/exit_submitted/exit_partial_fill/exit_filled/
+    # reversal_requested/reconciliation_adjustment/eod_exit/manual_exit/
+    # shadow_write_failure/imported_from_json/... (open string set)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    # Operation family that produced the write: entry/exit/partial_fill/
+    # reversal/reconciliation/update/import
+    source: Mapped[str] = mapped_column(String(30), nullable=False)
+    signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    execution_job_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    order_intent_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    broker_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    price_paise: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    previous_state: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    new_state: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    event_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
+    event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
 
 class PortfolioSnapshot(Base):

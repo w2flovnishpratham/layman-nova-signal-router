@@ -314,6 +314,31 @@ def get_live_open_position() -> dict[str, Any]:
     return _read_json(OPEN_POSITION_FILE, default_open_position)
 
 
+def _position_shadow_user():
+    """Return the bound execution user when the Phase 2A DB shadow write is
+    enabled. JSON stays the execution read authority; the shadow is
+    durability/parity only. Dev/unbound (legacy global runtime) is skipped —
+    it has no tenant row to attach the shadow to."""
+    if not settings.POSITION_DB_SHADOW_WRITE_ENABLED:
+        return None
+    from app.services.execution_context import current_execution_user
+
+    user = current_execution_user()
+    if user is None or user.is_dev:
+        return None
+    return user
+
+
+def _shadow_position_write(user, execution_mode: str, previous: dict[str, Any], new: dict[str, Any]) -> None:
+    # Never raises: shadow failures are logged/audited inside position_store
+    # and must not disturb the authoritative JSON write that already happened.
+    from app.services.position_store import shadow_position_write
+
+    shadow_position_write(
+        user_id=user.id, execution_mode=execution_mode, previous=previous, new=new
+    )
+
+
 def set_open_position(data: dict[str, Any]) -> dict[str, Any]:
     """Persist the tracked position for the currently selected engine mode."""
     if get_engine_mode() == "paper":
@@ -322,7 +347,12 @@ def set_open_position(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def set_live_open_position(data: dict[str, Any]) -> dict[str, Any]:
-    return _write_json(OPEN_POSITION_FILE, data)
+    shadow_user = _position_shadow_user()
+    previous = _read_json(OPEN_POSITION_FILE, default_open_position) if shadow_user else {}
+    result = _write_json(OPEN_POSITION_FILE, data)
+    if shadow_user is not None:
+        _shadow_position_write(shadow_user, "live", previous, result)
+    return result
 
 
 def clear_open_position() -> dict[str, Any]:
@@ -340,7 +370,12 @@ def get_paper_position() -> dict[str, Any]:
 
 
 def set_paper_position(data: dict[str, Any]) -> dict[str, Any]:
-    return _write_json(PAPER_POSITION_FILE, data)
+    shadow_user = _position_shadow_user()
+    previous = _read_json(PAPER_POSITION_FILE, default_open_position) if shadow_user else {}
+    result = _write_json(PAPER_POSITION_FILE, data)
+    if shadow_user is not None:
+        _shadow_position_write(shadow_user, "paper", previous, result)
+    return result
 
 
 def clear_paper_position() -> dict[str, Any]:

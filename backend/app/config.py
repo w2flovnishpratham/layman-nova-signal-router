@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     SESSION_TOKEN_TTL_SECONDS: int = 60 * 60 * 12
 
     WEBHOOK_TRADING_ENABLED: bool = False
+    # Phase 2A: shadow dual-write of JSON position state into PostgreSQL.
+    # JSON remains the execution read authority while this is rolled out.
+    POSITION_DB_SHADOW_WRITE_ENABLED: bool = False
+    # Hard budget for one shadow write (statement_timeout) and its lock waits
+    # (lock_timeout) on PostgreSQL; writes exceeding the budget count as
+    # failures and feed the circuit breaker.
+    POSITION_DB_SHADOW_WRITE_TIMEOUT_MS: int = 1500
+    POSITION_DB_SHADOW_LOCK_TIMEOUT_MS: int = 500
+    # Consecutive failures that open the breaker, and how long it stays open
+    # before a half-open recovery probe.
+    POSITION_DB_SHADOW_FAILURE_THRESHOLD: int = 5
+    POSITION_DB_SHADOW_CIRCUIT_OPEN_SECONDS: int = 60
     WEBHOOK_HMAC_REQUIRED: bool = False
     WEBHOOK_RATE_LIMIT_PER_MINUTE: int = 120
     WEBHOOK_REPLAY_RETENTION_SECONDS: int = 60 * 60 * 24 * 3

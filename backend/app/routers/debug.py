@@ -6,6 +6,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT, settings
+from app.auth.dependencies import require_admin
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_order_event, read_jsonl
 from app.services.credential_vault import get_dhan_credentials, get_webhook_secret
@@ -94,6 +95,20 @@ def _prepare_order_response(raw_payload: dict[str, Any]) -> dict[str, Any]:
         "payload_validation_result": payload_validation,
         "warnings": warnings,
     }
+
+
+@router.get("/position-shadow/health")
+def position_shadow_health(admin=Depends(require_admin)) -> dict:
+    """Breaker state and shadow-write counters (Phase 2A diagnostics).
+
+    Double-gated: the whole debug router 404s unless DEBUG_ENABLED, and this
+    endpoint additionally requires an admin session. The response contains
+    only aggregate counters and breaker state — never user ids, positions,
+    snapshots, filesystem paths, or database details.
+    """
+    from app.services.position_store import shadow_health
+
+    return {"ok": True, **shadow_health()}
 
 
 @router.get("/dhan/config")

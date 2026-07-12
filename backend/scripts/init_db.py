@@ -45,6 +45,8 @@ EXPECTED_TABLES = {
     "strategy_admin_reviews",
     "strategy_instances",
     "strategy_instance_webhook_credentials",
+    "strategy_instance_positions",
+    "position_events",
 }
 
 

@@ -51,6 +51,12 @@ the PR description instead of silently working around it.
   dictionaries, or process-local singletons. Caches and derived data only.
   Authority belongs in DB/Redis. Existing JSON runtime files are legacy
   projections and should not be expanded.
+- Position-state authority (Phase 2A transition): the per-user JSON files
+  (`open_position.json` / `paper_position.json`) are the EXECUTION READ
+  AUTHORITY. `strategy_instance_positions` receives shadow dual-writes only
+  (`POSITION_DB_SHADOW_WRITE_ENABLED`). Never add a "read DB if present,
+  else JSON" fallback — two competing authorities are prohibited. The
+  read cutover happens only in an explicitly approved later phase.
 
 ## 3. Dhan Market Data And Rate Limits
 
