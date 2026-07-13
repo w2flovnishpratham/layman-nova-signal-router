@@ -1,0 +1,125 @@
+name: Deploy isolated staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full commit SHA reachable from phase-2b2a-read-shadow
+        required: true
+        type: string
+      confirmation:
+        description: Type DEPLOY_STAGING
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nova-isolated-staging
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+      - name: Validate immutable target
+        env:
+          TARGET_SHA: ${{ inputs.commit_sha }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CONFIRMATION" == "DEPLOY_STAGING" ]]
+          git cat-file -e "$TARGET_SHA^{commit}"
+          [[ "$(git rev-parse "$TARGET_SHA^{commit}")" == "$TARGET_SHA" ]]
+          git fetch --no-tags origin phase-2b2a-read-shadow:refs/remotes/origin/phase-2b2a-read-shadow
+          git merge-base --is-ancestor "$TARGET_SHA" refs/remotes/origin/phase-2b2a-read-shadow
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements_test.txt
+      - name: Backend exact-SHA gate
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt -r requirements_test.txt
+          python -m pytest app/tests/test_position_read_shadow.py -q
+          python -m pytest app/tests/test_position_operations.py -q
+          python -m pytest app/tests/test_position_shadow.py -q
+          python -m pytest app/tests -q
+          [[ "$(python -m alembic heads | awk '{print $1}')" == "0010_position_ownership" ]]
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Frontend exact-SHA gate
+        working-directory: frontend
+        run: |
+          npm ci
+          npx tsc -b --noEmit
+          npm run build
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    env:
+      TARGET_SHA: ${{ inputs.commit_sha }}
+      SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      SSH_PORT: ${{ secrets.STAGING_SSH_PORT }}
+      SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      SSH_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      SSH_HOST_KEY: ${{ secrets.STAGING_SSH_HOST_KEY }}
+      DEPLOY_PATH: ${{ secrets.STAGING_DEPLOY_PATH }}
+      SERVICE_NAME: ${{ secrets.STAGING_SERVICE_NAME }}
+      DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      ENV_FILE_PATH: ${{ secrets.STAGING_ENV_FILE_PATH }}
+      HEALTH_URL: ${{ secrets.STAGING_HEALTH_URL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate staging configuration
+        run: |
+          set -euo pipefail
+          for name in SSH_HOST SSH_PORT SSH_USER SSH_KEY SSH_HOST_KEY DEPLOY_PATH SERVICE_NAME DATABASE_URL ENV_FILE_PATH HEALTH_URL; do
+            [[ -n "${!name}" ]] || { echo "Missing staging secret: $name" >&2; exit 1; }
+          done
+          [[ "$SSH_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]]
+          [[ "$SSH_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]
+          [[ "$SSH_HOST_KEY" =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa)\ [A-Za-z0-9+/=]+$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]*staging[A-Za-z0-9._/-]*$ ]]
+          [[ "$ENV_FILE_PATH" =~ ^/[A-Za-z0-9._/-]*staging[A-Za-z0-9._/-]*$ ]]
+          [[ "$SERVICE_NAME" =~ ^[A-Za-z0-9_.@-]*staging[A-Za-z0-9_.@-]*\.service$ ]]
+          [[ "$HEALTH_URL" =~ ^http://(127\.0\.0\.1|localhost):[0-9]{2,5}/api/health$ ]]
+          [[ ! "${DEPLOY_PATH,,} ${ENV_FILE_PATH,,} ${SERVICE_NAME,,}" =~ production|prod/|/prod ]]
+      - name: Configure pinned SSH host
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/staging
+          chmod 600 ~/.ssh/staging
+          printf '[%s]:%s %s\n' "$SSH_HOST" "$SSH_PORT" "$SSH_HOST_KEY" > ~/.ssh/known_hosts
+          printf 'Host nova-staging\n  HostName %s\n  Port %s\n  User %s\n  IdentityFile ~/.ssh/staging\n  IdentitiesOnly yes\n  BatchMode yes\n  StrictHostKeyChecking yes\n' "$SSH_HOST" "$SSH_PORT" "$SSH_USER" > ~/.ssh/config
+          chmod 600 ~/.ssh/config ~/.ssh/known_hosts
+      - name: Deploy exact SHA
+        env:
+          REMOTE_SCRIPT: /tmp/nova-staging-deploy-${{ github.run_id }}-${{ github.run_attempt }}.sh
+          REPOSITORY_SLUG: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash -n deploy/deploy_staging.sh
+          trap 'ssh nova-staging "rm -f $REMOTE_SCRIPT" >/dev/null 2>&1 || true' EXIT
+          scp deploy/deploy_staging.sh "nova-staging:$REMOTE_SCRIPT"
+          printf '%s\n' "$DATABASE_URL" | ssh nova-staging \
+            "bash '$REMOTE_SCRIPT' '$TARGET_SHA' '$DEPLOY_PATH' '$SERVICE_NAME' '$ENV_FILE_PATH' '$HEALTH_URL' '$REPOSITORY_SLUG'"
