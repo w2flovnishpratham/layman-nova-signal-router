@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import uuid
 
 import pytest
 
@@ -103,3 +104,27 @@ def test_health_endpoint_admin_only_and_redacted(read_shadow, monkeypatch):
     assert response.status_code == 200
     for banned in ("user_id", "security_id", "postgres", "password", "database_url", "/users/"):
         assert banned not in response.text.lower()
+
+
+def test_pg_verifier_cleanup_is_tenant_scoped_and_restores_index(monkeypatch):
+    from scripts import position_read_shadow_pg_verify as verifier
+
+    executed = []
+    class Connection:
+        def execute(self, statement, params=None): executed.append((str(statement), params))
+    class Transaction:
+        def __enter__(self): return Connection()
+        def __exit__(self, *_): pass
+    class Engine:
+        def begin(self): return Transaction()
+
+    users = [uuid.uuid4(), uuid.uuid4()]
+    monkeypatch.setattr(verifier, "_engine", Engine())
+    monkeypatch.setattr(verifier, "_created_users", users.copy())
+    monkeypatch.setattr(verifier, "_index_dropped", True)
+    verifier.cleanup()
+
+    assert [params["u"] for sql, params in executed if sql.startswith("DELETE FROM users")] == users
+    assert any("CREATE UNIQUE INDEX IF NOT EXISTS uq_active_position_per_user_mode" in sql for sql, _ in executed)
+    assert verifier._created_users == []
+    assert verifier._index_dropped is False

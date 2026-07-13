@@ -5,6 +5,20 @@ import argparse, json, os, subprocess, sys, threading, time, uuid
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+_engine = None
+_created_users = []
+_index_dropped = False
+
+def cleanup():
+    global _index_dropped
+    if _engine is None: return
+    from sqlalchemy import text
+    with _engine.begin() as c:
+        for user_id in _created_users:
+            c.execute(text("DELETE FROM users WHERE id=:u"), {"u": user_id})
+        if _index_dropped:
+            c.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_active_position_per_user_mode ON strategy_instance_positions (user_id,execution_mode) WHERE position_state IN ('entering','open','scaling_in','exiting','reversing','error_reconciling')"))
+    _created_users.clear(); _index_dropped=False
 
 def snap(qty=75, state="open", side="CE"):
     return {"has_open_position": state != "closed", "security_id": "10001", "trading_symbol": "NIFTY VERIFY CE",
@@ -74,18 +88,21 @@ def hold(user,kind):
     p=subprocess.Popen([sys.executable,"-m","scripts.position_read_shadow_pg_verify","--worker","--kind",kind,"--user",str(user),"--hold","5"],cwd=ROOT,env=os.environ.copy(),stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     assert p.stdout.readline().strip()=="READY"; return p
 
-def main():
+def verify():
+    global _engine, _index_dropped
     setup()
     from sqlalchemy import text
     from app.db import models
     from app.db.engine import get_engine,session_scope
     from app.services import position_read_shadow as rs, position_store
     engine=get_engine()
+    _engine=engine
     with engine.connect() as c: version=c.scalar(text("SHOW server_version"))
     if not str(version).startswith("16."): raise SystemExit("PostgreSQL 16 required")
     def user(name):
         u=models.User(email=f"read-{name}-{uuid.uuid4().hex}@example.test")
         with session_scope() as db: db.add(u); db.flush(); i=u.id
+        _created_users.append(i)
         return i
     def row(u):
         with session_scope() as db:
@@ -120,9 +137,13 @@ def main():
     # 15 isolated DB uniqueness bypass.
     with engine.begin() as c:
         c.execute(text("DROP INDEX uq_active_position_per_user_mode")); c.execute(text("INSERT INTO strategy_instance_positions (id,user_id,execution_mode,position_state,position_side,underlying,open_quantity,filled_exit_quantity,imported_from_json,version,created_at,updated_at) VALUES (:id,:u,'live','open','LONG','NIFTY',1,0,false,1,now(),now())"),{"id":uuid.uuid4(),"u":ua})
-    multi=spawn_read(ua,snap(),False); add("15 multiple active rows",multi,"MULTIPLE_ACTIVE_DB_POSITIONS" in multi["diagnostic"].get("categories",[]))
-    with engine.begin() as c:
-        c.execute(text("DELETE FROM strategy_instance_positions WHERE user_id=:u AND open_quantity=1"),{"u":ua}); c.execute(text("CREATE UNIQUE INDEX uq_active_position_per_user_mode ON strategy_instance_positions (user_id,execution_mode) WHERE position_state IN ('entering','open','scaling_in','exiting','reversing','error_reconciling')"))
+    _index_dropped=True
+    try:
+        multi=spawn_read(ua,snap(),False); add("15 multiple active rows",multi,"MULTIPLE_ACTIVE_DB_POSITIONS" in multi["diagnostic"].get("categories",[]))
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM strategy_instance_positions WHERE user_id=:u AND open_quantity=1"),{"u":ua}); c.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_active_position_per_user_mode ON strategy_instance_positions (user_id,execution_mode) WHERE position_state IN ('entering','open','scaling_in','exiting','reversing','error_reconciling')"))
+        _index_dropped=False
     # 16 local executor pressure: fifth observation skips without queueing.
     original=rs._query; rs._query=lambda *a:(time.sleep(1),[])[1]; u=user("pressure")
     threads=[threading.Thread(target=read_once,args=(str(u),snap())) for _ in range(4)]
@@ -133,6 +154,10 @@ def main():
     add("16 executor pressure",pressure,pressure["unchanged"] and elapsed<100 and pressure["diagnostic"].get("categories")==["DB_READ_TIMEOUT"])
     summary={"postgres_version":version,"checkpoint":os.popen("git rev-parse HEAD").read().strip(),"scenarios":reports,"attempted":16,"passed":sum(r["passed"] for r in reports),"changed_json":sum(not r.get("unchanged",True) for r in reports),"broker_actions":0}
     print(json.dumps(summary,indent=2,default=str)); return 0 if summary["passed"]==16 else 1
+
+def main():
+    try: return verify()
+    finally: cleanup()
 
 if __name__=="__main__":
     a=argparse.ArgumentParser(); a.add_argument("--worker",action="store_true"); a.add_argument("--kind"); a.add_argument("--user"); a.add_argument("--payload",default="{}"); a.add_argument("--hold",type=float,default=1); a.add_argument("--grace",action="store_true"); args=a.parse_args()
