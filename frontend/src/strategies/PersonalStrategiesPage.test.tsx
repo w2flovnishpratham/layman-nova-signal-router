@@ -7,6 +7,8 @@ import { PersonalStrategiesPage } from './PersonalStrategiesPage'
 const api = vi.hoisted(() => ({
   activate: vi.fn(), create: vi.fn(), generate: vi.fn(), get: vi.fn(), history: vi.fn(), list: vi.fn(),
   pause: vi.fn(), resume: vi.fn(), revoke: vi.fn(), rotate: vi.fn(), stop: vi.fn(), test: vi.fn(), lots: vi.fn(),
+  pineList: vi.fn(), pineGet: vi.fn(), pineCreate: vi.fn(), pineVersion: vi.fn(), pineValidate: vi.fn(),
+  pineSubmit: vi.fn(), pineSource: vi.fn(), pineLink: vi.fn(), reviewList: vi.fn(), reviewGet: vi.fn(), reviewDecide: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
@@ -23,6 +25,17 @@ vi.mock('../api', () => ({
   stopStrategyInstance: api.stop,
   testInstanceWebhookConnection: api.test,
   updateStrategyInstanceLots: api.lots,
+  listPineStrategies: api.pineList,
+  getPineStrategy: api.pineGet,
+  createPineStrategy: api.pineCreate,
+  createPineVersion: api.pineVersion,
+  validatePineVersion: api.pineValidate,
+  submitPineVersion: api.pineSubmit,
+  getPineSource: api.pineSource,
+  linkPineVersion: api.pineLink,
+  listPineReviews: api.reviewList,
+  getPineReview: api.reviewGet,
+  decidePineReview: api.reviewDecide,
 }))
 
 const TOKEN = 'nwk_SENTINEL_PHASE3B_BROWSER_CREDENTIAL_123456'

@@ -22,6 +22,8 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import type { AuthUser } from '../api'
+import { ImportedPinePage } from './ImportedPinePage'
 import {
   activateStrategyInstance,
   createStrategyInstance,
@@ -45,7 +47,20 @@ import './personalStrategies.css'
 const ACTIONS = ['BUY_CE', 'BUY_PE', 'EXIT', 'HOLD'] as const
 const PAGE_SIZE = 10
 
-export function PersonalStrategiesPage() {
+export function PersonalStrategiesPage({ user }: { user?: AuthUser }) {
+  const [journey, setJourney] = useState<'webhook' | 'pine'>('webhook')
+  return (
+    <>
+      <nav className="ps-journey-tabs" aria-label="Personal strategy type">
+        <button type="button" className={journey === 'webhook' ? 'active' : ''} onClick={() => setJourney('webhook')}>TradingView webhooks</button>
+        <button type="button" className={journey === 'pine' ? 'active' : ''} onClick={() => setJourney('pine')}>Imported Pine scripts</button>
+      </nav>
+      {journey === 'pine' ? <ImportedPinePage isAdmin={Boolean(user?.is_admin)} /> : <TradingViewStrategiesPage />}
+    </>
+  )
+}
+
+function TradingViewStrategiesPage() {
   const [instances, setInstances] = useState<StrategyInstance[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<StrategyInstance | null>(null)

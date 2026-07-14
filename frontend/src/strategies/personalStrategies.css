@@ -6,6 +6,34 @@
   color: var(--text-1);
 }
 
+.ps-journey-tabs { display: flex; gap: 6px; width: 100%; max-width: 1380px; margin: 18px auto 0; padding: 0 22px; }
+.ps-journey-tabs button { padding: 8px 12px; color: var(--text-3); background: transparent; }
+.ps-journey-tabs button.active { color: var(--text-1); border-color: var(--border-hi); background: var(--bg-1); }
+.pine-toolbar { display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: 12px; margin-bottom: 14px; }
+.pine-toolbar label, .pine-changelog { display: flex; flex-direction: column; gap: 6px; color: var(--text-2); font-size: 11px; font-weight: 600; }
+.pine-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, .75fr); gap: 14px; align-items: start; }
+.pine-editor-card { min-width: 0; }
+.pine-file-row { display: flex; gap: 9px; margin-bottom: 10px; }
+.pine-file-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.pine-file-row > input { flex: 1; }
+.pine-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.pine-source { width: 100%; min-height: 430px; resize: vertical; padding: 12px; color: var(--text-1); border: 1px solid var(--border-hi); border-radius: 9px; background: var(--bg-2); font: 11.5px/1.6 "JetBrains Mono Variable", monospace; tab-size: 2; }
+.pine-changelog { margin: 10px 0; }
+.pine-findings { position: sticky; top: 76px; max-height: 680px; overflow-y: auto; }
+.pine-finding { display: flex; flex-direction: column; align-items: stretch; gap: 5px; width: 100%; margin-bottom: 8px; padding: 10px; text-align: left; background: var(--bg-2); }
+.pine-finding > span { color: var(--text-3); font-size: 9px; font-weight: 700; }
+.pine-finding > strong { color: var(--text-1); font-size: 11px; }
+.pine-finding > small, .pine-finding > em { color: var(--text-3); font-size: 10px; line-height: 1.45; font-style: normal; }
+.pine-finding.error { border-left: 3px solid var(--danger); }
+.pine-finding.warning { border-left: 3px solid var(--warning); }
+.pine-finding.info { border-left: 3px solid var(--accent); }
+.pine-link { display: grid; grid-template-columns: 1fr minmax(220px, 320px) auto; gap: 12px; align-items: center; margin-top: 14px; }
+.pine-admin-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 14px; align-items: start; }
+.pine-review-source { max-height: 520px; overflow: auto; margin: 0 0 12px; padding: 12px; color: var(--text-2); border: 1px solid var(--border); border-radius: 9px; background: var(--bg-2); font: 11px/1.55 "JetBrains Mono Variable", monospace; }
+.pine-review-source span { display: block; min-height: 1.55em; white-space: pre; }
+.pine-review-source i { display: inline-block; width: 42px; margin-right: 12px; color: var(--text-3); text-align: right; font-style: normal; user-select: none; }
+.pine-review-note { width: 100%; min-height: 90px; resize: vertical; padding: 10px; color: var(--text-1); border: 1px solid var(--border-hi); border-radius: 9px; background: var(--bg-2); }
+
 .ps-heading,
 .ps-card-head,
 .ps-heading-actions,
@@ -127,6 +155,9 @@
   .ps-list { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ps-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ps-secret-panel { grid-template-columns: 1fr; }
+  .pine-grid, .pine-admin-grid { grid-template-columns: 1fr; }
+  .pine-findings { position: static; max-height: none; }
+  .pine-link { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 620px) {
@@ -139,4 +170,9 @@
   .ps-instructions { columns: 1; }
   .ps-card { padding: 14px; }
   .ps-copy-row { align-items: stretch; flex-direction: column; }
+  .ps-journey-tabs { padding: 0 12px; overflow-x: auto; }
+  .ps-journey-tabs button { flex: 0 0 auto; }
+  .pine-toolbar { grid-template-columns: 1fr; }
+  .pine-file-row { flex-direction: column; }
+  .pine-source { min-height: 360px; }
 }

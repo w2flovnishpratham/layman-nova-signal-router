@@ -321,7 +321,7 @@ function App() {
       {view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (
-        <PersonalStrategiesPage />
+        <PersonalStrategiesPage user={authUser} />
       ) : (
         <motion.section
           layout

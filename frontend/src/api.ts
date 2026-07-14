@@ -604,3 +604,97 @@ export async function testInstanceWebhookConnection(id: string): Promise<{ statu
   }
   return { status: body.status, signal_id: body.signal_id }
 }
+
+// ---------------------------------------------------------------------------
+// Personal Pine import, static validation and review (Phase 4A)
+// ---------------------------------------------------------------------------
+
+export interface PineFinding {
+  code: string
+  severity: 'ERROR' | 'WARNING' | 'INFO'
+  title: string
+  explanation: string
+  remediation: string
+  blocks_review: boolean
+  line: number | null
+  column: number | null
+  excerpt: string | null
+}
+
+export interface PineValidation {
+  id: string
+  status: string
+  validator_version: string
+  contract_version: number
+  source_sha256: string
+  error_count: number
+  warning_count: number
+  info_count: number
+  eligible_for_review: boolean
+  findings: PineFinding[]
+}
+
+export interface PineVersion {
+  id: string
+  strategy_id: string
+  version: string
+  status: string
+  source_sha256: string
+  pine_contract_version: number
+  changelog: string | null
+  created_at: string | null
+  approved_at: string | null
+  validation: PineValidation | null
+}
+
+export interface PineStrategy {
+  id: string
+  name: string
+  description: string | null
+  status: string
+  version_count: number | null
+  latest_version: PineVersion | null
+}
+
+async function pineCall<T>(path: `/${string}`, method = 'GET', payload?: unknown): Promise<T> {
+  const response = await apiFetch(path, {
+    method,
+    cache: 'no-store',
+    headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as ({ ok?: boolean; error?: string } & T) | null
+  if (!response.ok || !body?.ok) throw new Error(body?.error || `Personal Pine request failed: ${response.status}`)
+  return body
+}
+
+export const listPineStrategies = async () =>
+  (await pineCall<{ strategies: PineStrategy[] }>('/api/personal-pine-strategies')).strategies
+export const getPineStrategy = async (id: string) =>
+  pineCall<{ strategy: PineStrategy; versions: PineVersion[] }>(`/api/personal-pine-strategies/${id}` as `/${string}`)
+export const createPineStrategy = async (payload: { name: string; source: string; filename: string; description?: string }) =>
+  pineCall<{ strategy: PineStrategy; version: PineVersion }>('/api/personal-pine-strategies', 'POST', payload)
+export const createPineVersion = async (strategyId: string, payload: { source: string; filename: string; changelog?: string }) =>
+  pineCall<{ version: PineVersion; reused: boolean }>(`/api/personal-pine-strategies/${strategyId}/versions` as `/${string}`, 'POST', payload)
+export const validatePineVersion = async (strategyId: string, versionId: string) =>
+  pineCall<{ version: PineVersion; report: PineValidation; reused: boolean }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/validate` as `/${string}`, 'POST')
+export const submitPineVersion = async (strategyId: string, versionId: string) =>
+  pineCall<{ version: PineVersion }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/submit` as `/${string}`, 'POST')
+export const getPineSource = async (strategyId: string, versionId: string) =>
+  pineCall<{ source: string; filename: string; source_sha256: string; approved: boolean }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/source` as `/${string}`)
+export const linkPineVersion = async (instanceId: string, strategyId: string, versionId: string) =>
+  pineCall<{ link: unknown }>(`/api/personal-strategies/${instanceId}/link-version` as `/${string}`, 'POST', { strategy_id: strategyId, version_id: versionId })
+
+export interface PineReview {
+  strategy: PineStrategy
+  version: PineVersion
+  source?: string
+  filename?: string
+  history?: Array<{ id: string; decision: string; note: string | null; reviewed_at: string | null }>
+}
+export const listPineReviews = async () =>
+  (await pineCall<{ reviews: PineReview[] }>('/api/admin/pine-reviews')).reviews
+export const getPineReview = async (id: string) =>
+  (await pineCall<{ review: PineReview }>(`/api/admin/pine-reviews/${id}` as `/${string}`)).review
+export const decidePineReview = async (id: string, action: 'start' | 'approve' | 'request-changes' | 'reject', note: string, acknowledgeWarnings = false) =>
+  pineCall<{ version: PineVersion }>(`/api/admin/pine-reviews/${id}/${action}` as `/${string}`, 'POST', { note, acknowledge_warnings: acknowledgeWarnings })

@@ -601,6 +601,12 @@ class StrategyVersion(Base):
     __tablename__ = "strategy_versions"
     __table_args__ = (
         UniqueConstraint("strategy_id", "version", name="uq_strategy_version"),
+        UniqueConstraint(
+            "strategy_id",
+            "source_sha256",
+            "pine_contract_version",
+            name="uq_strategy_version_source_contract",
+        ),
         # Composite key target so strategy_instances can enforce
         # "version belongs to strategy" structurally.
         UniqueConstraint("id", "strategy_id", name="uq_strategy_versions_id_strategy"),
@@ -624,6 +630,8 @@ class StrategyVersion(Base):
     # document the internal runtime interprets — never raw arbitrary source.
     runtime_definition: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pine_contract_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -648,6 +656,9 @@ class StrategySourceArtifact(Base):
     __tablename__ = "strategy_source_artifacts"
     __table_args__ = (
         Index("ix_strategy_source_artifacts_version_type", "strategy_version_id", "artifact_type"),
+        UniqueConstraint(
+            "strategy_version_id", "artifact_type", name="uq_strategy_source_artifact_version_type"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
@@ -665,6 +676,7 @@ class StrategySourceArtifact(Base):
     )
     # manual_master_prompt / claude_api (future) — audit detail, never branched on
     conversion_method: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    original_filename: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
@@ -673,6 +685,14 @@ class StrategyValidationReport(Base):
 
     __tablename__ = "strategy_validation_reports"
     __table_args__ = (
+        UniqueConstraint(
+            "strategy_version_id",
+            "stage",
+            "validator_version",
+            "contract_version",
+            "source_sha256",
+            name="uq_strategy_validation_identity",
+        ),
         Index(
             "ix_strategy_validation_reports_version_stage",
             "strategy_version_id",
@@ -690,7 +710,16 @@ class StrategyValidationReport(Base):
     # passed / failed / warning
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     # Structured findings: [{code, severity, message, location}, ...]
-    findings: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    findings: Mapped[list] = mapped_column(JSONType, nullable=False)
+    validator_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    contract_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    validation_engine: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    warning_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    info_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    eligible_for_review: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
@@ -714,6 +743,12 @@ class StrategyAdminReview(Base):
     # approved / rejected / changes_requested
     decision: Mapped[str] = mapped_column(String(20), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validation_report_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_validation_reports.id", ondelete="SET NULL"), nullable=True
+    )
+    previous_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    new_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
