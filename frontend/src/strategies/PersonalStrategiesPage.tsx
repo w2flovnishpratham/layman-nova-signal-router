@@ -40,6 +40,15 @@ import {
   updateStrategyInstanceLots,
   type StrategyInstance,
   type WebhookExecution,
+  activateHostedRuntime,
+  getHostedRuntime,
+  getHostedStrategyConfig,
+  listHostedEvaluations,
+  pauseHostedRuntime,
+  resumeHostedRuntime,
+  stopHostedRuntime,
+  replayHostedRuntime,
+  type HostedRuntime,
 } from '../api'
 import { backendHttpUrl } from '../lib/backend'
 import './personalStrategies.css'
@@ -48,16 +57,83 @@ const ACTIONS = ['BUY_CE', 'BUY_PE', 'EXIT', 'HOLD'] as const
 const PAGE_SIZE = 10
 
 export function PersonalStrategiesPage({ user }: { user?: AuthUser }) {
-  const [journey, setJourney] = useState<'webhook' | 'pine'>('webhook')
+  const [journey, setJourney] = useState<'webhook' | 'pine' | 'hosted'>('webhook')
   return (
     <>
       <nav className="ps-journey-tabs" aria-label="Personal strategy type">
         <button type="button" className={journey === 'webhook' ? 'active' : ''} onClick={() => setJourney('webhook')}>TradingView webhooks</button>
         <button type="button" className={journey === 'pine' ? 'active' : ''} onClick={() => setJourney('pine')}>Imported Pine scripts</button>
+        <button type="button" className={journey === 'hosted' ? 'active' : ''} onClick={() => setJourney('hosted')}>Hosted runtime</button>
       </nav>
-      {journey === 'pine' ? <ImportedPinePage isAdmin={Boolean(user?.is_admin)} /> : <TradingViewStrategiesPage />}
+      {journey === 'pine' ? <ImportedPinePage isAdmin={Boolean(user?.is_admin)} /> : journey === 'hosted' ? <HostedStrategiesPage /> : <TradingViewStrategiesPage />}
     </>
   )
+}
+
+function HostedStrategiesPage() {
+  const [rows, setRows] = useState<Array<{ instance: StrategyInstance; runtime: HostedRuntime | null }>>([])
+  const [evaluations, setEvaluations] = useState<Record<string, Array<{ candle_close_timestamp: string; status: string; action: string | null; safe_error_code: string | null }>>>({})
+  const [config, setConfig] = useState<{ runtime_enabled: boolean; paper_execution_enabled: boolean } | null>(null)
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  const load = useCallback(async () => {
+    const [availability, instances] = await Promise.all([getHostedStrategyConfig(), listStrategyInstances()])
+    const eligible = instances.filter((item) => item.source_journey !== 'PERSONAL_TRADINGVIEW')
+    const loaded = await Promise.all(eligible.map(async (instance) => ({ instance, runtime: await getHostedRuntime(instance.id).catch(() => null) })))
+    setConfig(availability); setRows(loaded)
+    const history = await Promise.all(loaded.filter((item) => item.runtime).map(async (item) => [item.instance.id, (await listHostedEvaluations(item.instance.id)).items] as const))
+    setEvaluations(Object.fromEntries(history))
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load().catch((reason: unknown) => setError(messageOf(reason))) }, 0)
+    return () => window.clearTimeout(timer)
+  }, [load])
+
+  async function lifecycle(instanceId: string, action: 'activate' | 'pause' | 'resume' | 'stop') {
+    setBusy(`${instanceId}:${action}`); setError(''); setNotice('')
+    try {
+      if (action === 'activate') await activateHostedRuntime(instanceId)
+      if (action === 'pause') await pauseHostedRuntime(instanceId)
+      if (action === 'resume') await resumeHostedRuntime(instanceId)
+      if (action === 'stop') await stopHostedRuntime(instanceId)
+      await load()
+    } catch (reason) { setError(messageOf(reason)) } finally { setBusy('') }
+  }
+
+  return <div className="ps-page">
+    <div className="ps-heading"><div><span className="ps-eyebrow"><ShieldCheck size={13} /> Paper mode only</span><h1>Hosted Strategy Runtime</h1><p>Validated NOVA-owned strategy IR evaluated on completed NIFTY one-minute candles.</p></div></div>
+    {!config?.runtime_enabled || !config?.paper_execution_enabled ? <div className="ps-message error" role="status">Hosted runtime is unavailable. Both rollout flags are disabled by default.</div> : null}
+    {error ? <div className="ps-message error" role="alert">{error}</div> : null}
+    {notice ? <div className="ps-message success" role="status">{notice}</div> : null}
+    {rows.length ? rows.map(({ instance, runtime }) => <section className="ps-card" key={instance.id}>
+      <div className="ps-card-head"><div><span>Hosted strategy</span><h2>{instance.label}</h2></div><span className="ps-paper-badge">PAPER</span></div>
+      {runtime ? <>
+        <div className="ps-summary-grid">
+          <Summary label="IR version" value={runtime.ir_version_id.slice(0, 8)} />
+          <Summary label="Validation" value="Approved and pinned" />
+          <Summary label="Runtime" value={runtime.status} />
+          <Summary label="Last candle" value={formatDate(runtime.last_evaluated_candle)} />
+          <Summary label="Last action" value={runtime.last_emitted_action ?? 'None'} />
+          <Summary label="Warmup" value={runtime.warmup_status} />
+        </div>
+        {runtime.safe_error_code ? <div className="ps-warning"><AlertTriangle size={14} />{runtime.safe_error_code}</div> : null}
+        <div className="ps-actions">
+          {runtime.status === 'READY' ? <button className="ps-primary" disabled={!!busy} onClick={() => void lifecycle(instance.id, 'activate')}><Play size={14} /> Activate</button> : null}
+          {runtime.status === 'ACTIVE' ? <button className="secondary-button" disabled={!!busy} onClick={() => void lifecycle(instance.id, 'pause')}><Pause size={14} /> Pause</button> : null}
+          {runtime.status === 'PAUSED' ? <button className="ps-primary" disabled={!!busy} onClick={() => void lifecycle(instance.id, 'resume')}><Play size={14} /> Resume</button> : null}
+          {runtime.status !== 'STOPPED' ? <button className="ps-danger" disabled={!!busy} onClick={() => void lifecycle(instance.id, 'stop')}><Square size={14} /> Stop when flat</button> : null}
+          <button className="secondary-button" disabled={!!busy} onClick={() => { setBusy(`${instance.id}:replay`); setError(''); void replayHostedRuntime(instance.id).then((result) => setNotice(`Replay matched ${result.timeline.length} action(s), fingerprint ${result.fingerprint.slice(0, 12)}.`)).catch((reason: unknown) => setError(messageOf(reason))).finally(() => setBusy('')) }}><RefreshCw size={14} /> Replay verification</button>
+        </div>
+        <div className="ps-history-wrap"><table className="ps-history"><thead><tr><th>Candle</th><th>Status</th><th>Action</th><th>Safe error</th></tr></thead><tbody>
+          {(evaluations[instance.id] ?? []).map((entry) => <tr key={entry.candle_close_timestamp}><td>{formatDate(entry.candle_close_timestamp)}</td><td>{entry.status}</td><td>{entry.action ?? '—'}</td><td>{entry.safe_error_code ?? '—'}</td></tr>)}
+          {!(evaluations[instance.id] ?? []).length ? <tr><td className="ps-history-empty" colSpan={4}>No completed-candle evaluations yet.</td></tr> : null}
+        </tbody></table></div>
+      </> : <p className="ps-note">No hosted IR is linked. Admin approval and a pinned eligible IR are required before activation.</p>}
+    </section>) : <div className="ps-card ps-empty"><ShieldCheck size={28} /><h2>No hosted strategies</h2><p>Approved NOVA-owned instances will appear here.</p></div>}
+  </div>
 }
 
 function TradingViewStrategiesPage() {

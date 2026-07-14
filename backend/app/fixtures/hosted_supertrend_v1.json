@@ -1,0 +1,23 @@
+{
+  "ir_version": 1,
+  "strategy_name": "Synthetic Supertrend",
+  "description": "Non-proprietary verification fixture",
+  "underlying": "NIFTY",
+  "timeframe": "1m",
+  "evaluation": "BAR_CLOSE",
+  "warmup_bars": 12,
+  "parameters": {},
+  "indicators": [{"id": "supertrend", "type": "SUPERTREND", "source": "close", "atr_period": 10, "multiplier": 3.0}],
+  "conditions": {
+    "bullish": {"op": "CROSSES_ABOVE", "left": {"op": "CANDLE_FIELD", "field": "close"}, "right": {"op": "INDICATOR_VALUE", "indicator": "supertrend"}},
+    "bearish": {"op": "CROSSES_BELOW", "left": {"op": "CANDLE_FIELD", "field": "close"}, "right": {"op": "INDICATOR_VALUE", "indicator": "supertrend"}}
+  },
+  "actions": [
+    {"action": "EXIT", "when": "bearish", "priority": 100, "position_states": ["LONG_CE"]},
+    {"action": "EXIT", "when": "bullish", "priority": 100, "position_states": ["LONG_PE"]},
+    {"action": "BUY_CE", "when": "bullish", "priority": 20, "position_states": ["FLAT"]},
+    {"action": "BUY_PE", "when": "bearish", "priority": 10, "position_states": ["FLAT"]}
+  ],
+  "session": {"timezone": "Asia/Kolkata", "entry_start": "09:20", "entry_end": "14:45", "force_exit_time": "15:15", "skip_expiry_day": false},
+  "risk_metadata": {"purpose": "verification_only"}
+}

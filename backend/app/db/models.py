@@ -18,6 +18,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -794,6 +795,105 @@ class PineConversionRequest(Base):
     max_attempts: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class HostedStrategyIRVersion(Base):
+    """Immutable canonical declarative strategy artifact; never executable code."""
+
+    __tablename__ = "hosted_strategy_ir_versions"
+    __table_args__ = (
+        UniqueConstraint("strategy_id", "canonical_sha256", name="uq_hosted_ir_strategy_hash"),
+        Index("ix_hosted_ir_owner_created", "owner_user_id", "created_at"),
+        CheckConstraint("ir_version = 1", name="ck_hosted_ir_version_v1"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_catalog.id", ondelete="CASCADE"), nullable=False)
+    source_strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="SET NULL"))
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    ir_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    canonical_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    ir_document: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    creation_source: Mapped[str] = mapped_column(String(40), nullable=False)
+    validator_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    validation_report: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("users.id", ondelete="SET NULL"))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class HostedStrategyRuntime(Base):
+    __tablename__ = "hosted_strategy_runtimes"
+    __table_args__ = (
+        UniqueConstraint("strategy_instance_id", name="uq_hosted_runtime_instance"),
+        Index("ix_hosted_runtime_owner_status", "owner_user_id", "status"),
+        CheckConstraint("execution_mode = 'paper_live_data'", name="ck_hosted_runtime_paper_only"),
+        CheckConstraint("status IN ('READY','ACTIVE','PAUSED','ERROR','STOPPED')", name="ck_hosted_runtime_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=False)
+    ir_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("hosted_strategy_ir_versions.id", ondelete="RESTRICT"), nullable=False)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(30), nullable=False, default="paper_live_data")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="READY")
+    last_evaluated_candle_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_emitted_action: Mapped[str | None] = mapped_column(String(20))
+    last_signal_id: Mapped[str | None] = mapped_column(String(255))
+    warmup_status: Mapped[str] = mapped_column(String(30), nullable=False, default="PENDING")
+    consecutive_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    safe_error_code: Mapped[str | None] = mapped_column(String(50))
+    paused_reason: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class HostedStrategyEvaluationJob(Base):
+    __tablename__ = "hosted_strategy_evaluation_jobs"
+    __table_args__ = (
+        UniqueConstraint("hosted_runtime_id", "ir_version_id", "candle_close_timestamp", name="uq_hosted_evaluation_identity"),
+        Index("ix_hosted_evaluation_jobs_claim", "status", "available_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    hosted_runtime_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("hosted_strategy_runtimes.id", ondelete="CASCADE"), nullable=False)
+    ir_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("hosted_strategy_ir_versions.id", ondelete="RESTRICT"), nullable=False)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    candle_close_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    candle_history: Mapped[list] = mapped_column(JSONType, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="QUEUED")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    safe_error_code: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class HostedStrategyEvaluation(Base):
+    __tablename__ = "hosted_strategy_evaluations"
+    __table_args__ = (
+        UniqueConstraint("hosted_runtime_id", "ir_version_id", "candle_close_timestamp", name="uq_hosted_evaluation_audit_identity"),
+        Index("ix_hosted_evaluations_runtime_candle", "hosted_runtime_id", "candle_close_timestamp"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    hosted_runtime_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("hosted_strategy_runtimes.id", ondelete="CASCADE"), nullable=False)
+    ir_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("hosted_strategy_ir_versions.id", ondelete="RESTRICT"), nullable=False)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    candle_close_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    position_state: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    action: Mapped[str | None] = mapped_column(String(20))
+    signal_id: Mapped[str | None] = mapped_column(String(255))
+    indicator_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    result_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    safe_error_code: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class StrategyInstance(Base):

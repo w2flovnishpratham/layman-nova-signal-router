@@ -1,0 +1,26 @@
+{
+  "ir_version": 1,
+  "strategy_name": "Synthetic RSI Trend Filter",
+  "description": "Non-proprietary verification fixture",
+  "underlying": "NIFTY",
+  "timeframe": "1m",
+  "evaluation": "BAR_CLOSE",
+  "warmup_bars": 16,
+  "parameters": {"upper": 55, "lower": 45},
+  "indicators": [
+    {"id": "trend", "type": "EMA", "source": "close", "period": 10},
+    {"id": "rsi", "type": "RSI", "source": "close", "period": 14}
+  ],
+  "conditions": {
+    "bullish": {"op": "AND", "args": [{"op": "GT", "left": {"op": "CANDLE_FIELD", "field": "close"}, "right": {"op": "INDICATOR_VALUE", "indicator": "trend"}}, {"op": "GT", "left": {"op": "INDICATOR_VALUE", "indicator": "rsi"}, "right": {"op": "PARAMETER_VALUE", "parameter": "upper"}}]},
+    "bearish": {"op": "AND", "args": [{"op": "LT", "left": {"op": "CANDLE_FIELD", "field": "close"}, "right": {"op": "INDICATOR_VALUE", "indicator": "trend"}}, {"op": "LT", "left": {"op": "INDICATOR_VALUE", "indicator": "rsi"}, "right": {"op": "PARAMETER_VALUE", "parameter": "lower"}}]}
+  },
+  "actions": [
+    {"action": "EXIT", "when": "bearish", "priority": 100, "position_states": ["LONG_CE"]},
+    {"action": "EXIT", "when": "bullish", "priority": 100, "position_states": ["LONG_PE"]},
+    {"action": "BUY_CE", "when": "bullish", "priority": 20, "position_states": ["FLAT"]},
+    {"action": "BUY_PE", "when": "bearish", "priority": 10, "position_states": ["FLAT"]}
+  ],
+  "session": {"timezone": "Asia/Kolkata", "entry_start": "09:20", "entry_end": "14:45", "force_exit_time": "15:15", "skip_expiry_day": false},
+  "risk_metadata": {"purpose": "verification_only"}
+}

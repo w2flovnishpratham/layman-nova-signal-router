@@ -56,7 +56,7 @@ def _failed(reason: str, message: str) -> dict[str, Any]:
 
 
 @contextmanager
-def _revalidate_instance(instance_id: uuid.UUID, job_user_id: Any, action: str):
+def _revalidate_instance(instance_id: uuid.UUID, job_user_id: Any, action: str, *, hosted: bool = False):
     """Fresh instance state at claim time — lots/mode changes since enqueue
     apply; paused entries and all stopped/archived actions fail closed."""
     with session_scope() as db:
@@ -73,6 +73,21 @@ def _revalidate_instance(instance_id: uuid.UUID, job_user_id: Any, action: str):
             # fail closed anyway.
             yield {"error": _result("rejected", "TENANT_MISMATCH")}
             return
+        if hosted:
+            runtime = db.scalar(
+                select(models.HostedStrategyRuntime).where(
+                    models.HostedStrategyRuntime.strategy_instance_id == instance_id
+                ).with_for_update()
+            )
+            if runtime is None or runtime.status not in {"ACTIVE", "PAUSED"}:
+                yield {"error": _result("rejected", "HOSTED_RUNTIME_INACTIVE")}
+                return
+            if instance.execution_mode != "paper_live_data":
+                yield {"error": _result("rejected", "HOSTED_RUNTIME_PAPER_ONLY")}
+                return
+            if runtime.status == "PAUSED" and action == "ENTRY":
+                yield {"error": _no_op("HOSTED_RUNTIME_PAUSED_ENTRIES_BLOCKED")}
+                return
         if instance.status == InstanceState.PAUSED.value and action == "ENTRY":
             yield {"error": _no_op("INSTANCE_PAUSED_ENTRIES_BLOCKED")}
             return
@@ -166,7 +181,12 @@ def execute_private_job(job: dict[str, Any], signal: NormalizedSignal) -> dict[s
     except (ValueError, TypeError):
         return _result("rejected", "INACTIVE_INSTANCE")
 
-    with _revalidate_instance(instance_id, job["user_id"], signal.action) as revalidated:
+    with _revalidate_instance(
+        instance_id,
+        job["user_id"],
+        signal.action,
+        hosted=signal.source == "hosted_strategy",
+    ) as revalidated:
         if "error" in revalidated:
             return revalidated["error"]
         lots = revalidated["lots"]

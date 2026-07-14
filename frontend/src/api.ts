@@ -605,6 +605,50 @@ export async function testInstanceWebhookConnection(id: string): Promise<{ statu
   return { status: body.status, signal_id: body.signal_id }
 }
 
+export interface HostedRuntime {
+  id: string
+  strategy_instance_id: string
+  ir_version_id: string
+  paper_only: true
+  status: 'READY' | 'ACTIVE' | 'PAUSED' | 'ERROR' | 'STOPPED'
+  last_evaluated_candle: string | null
+  last_emitted_action: 'BUY_CE' | 'BUY_PE' | 'EXIT' | null
+  last_signal_id: string | null
+  warmup_status: string
+  consecutive_error_count: number
+  safe_error_code: string | null
+  paused_reason: string | null
+}
+
+async function hostedCall<T>(path: `/${string}`, method = 'GET', payload?: unknown): Promise<T> {
+  const response = await apiFetch(path, {
+    method,
+    cache: 'no-store',
+    headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as ({ ok?: boolean; error?: string } & T) | null
+  if (!response.ok || !body?.ok) throw new Error(body?.error || `Hosted strategy request failed: ${response.status}`)
+  return body
+}
+
+export const getHostedStrategyConfig = async () =>
+  hostedCall<{ runtime_enabled: boolean; paper_execution_enabled: boolean; paper_only: true }>('/api/hosted-strategies/config')
+export const getHostedRuntime = async (id: string) =>
+  (await hostedCall<{ runtime: HostedRuntime }>(`/api/strategy-instances/${id}/hosted-runtime` as `/${string}`)).runtime
+export const activateHostedRuntime = async (id: string) =>
+  (await hostedCall<{ runtime: HostedRuntime }>(`/api/strategy-instances/${id}/hosted-activate` as `/${string}`, 'POST')).runtime
+export const pauseHostedRuntime = async (id: string) =>
+  (await hostedCall<{ runtime: HostedRuntime }>(`/api/strategy-instances/${id}/hosted-pause` as `/${string}`, 'POST')).runtime
+export const resumeHostedRuntime = async (id: string) =>
+  (await hostedCall<{ runtime: HostedRuntime }>(`/api/strategy-instances/${id}/hosted-resume` as `/${string}`, 'POST')).runtime
+export const stopHostedRuntime = async (id: string) =>
+  (await hostedCall<{ runtime: HostedRuntime }>(`/api/strategy-instances/${id}/hosted-stop` as `/${string}`, 'POST')).runtime
+export const listHostedEvaluations = async (id: string, limit = 20, offset = 0) =>
+  hostedCall<{ items: Array<{ candle_close_timestamp: string; status: string; action: string | null; signal_id: string | null; duration_ms: number; safe_error_code: string | null }>; total: number }>(`/api/strategy-instances/${id}/hosted-evaluations?limit=${limit}&offset=${offset}` as `/${string}`)
+export const replayHostedRuntime = async (id: string) =>
+  hostedCall<{ timeline: Array<{ candle_close_timestamp: string; action: string; rule: string | null }>; fingerprint: string }>(`/api/strategy-instances/${id}/hosted-replay` as `/${string}`, 'POST')
+
 // ---------------------------------------------------------------------------
 // Personal Pine import, static validation and review (Phase 4A)
 // ---------------------------------------------------------------------------

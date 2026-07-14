@@ -23,6 +23,7 @@ from app.routers import strategies as strategies_router
 from app.routers import strategy_instances as strategy_instances_router
 from app.routers import personal_pine as personal_pine_router
 from app.routers import pine_conversion as pine_conversion_router
+from app.routers import hosted_strategies as hosted_strategies_router
 from app.auth import google as google_auth
 from app.db.engine import database_configured, get_engine, init_db
 from app.services.user_credential_vault import vault_ready as user_vault_ready
@@ -47,6 +48,7 @@ from app.workers.strategy_job_worker import (
     stop_strategy_job_worker,
     strategy_job_worker_status,
 )
+from app.workers.hosted_strategy_worker import start_hosted_strategy_worker, stop_hosted_strategy_worker, status as hosted_worker_status
 
 
 logging.basicConfig(level=logging.INFO)
@@ -299,6 +301,7 @@ async def lifespan(app: FastAPI):
     if background_workers_enabled:
         start_strategy_job_worker()
         start_pine_conversion_worker()
+        start_hosted_strategy_worker()
     if background_workers_enabled and _multi_user_mode():
         logger.info(
             "Multi-user reconcile, position monitor, EOD, and ghost workers enabled."
@@ -341,6 +344,7 @@ async def lifespan(app: FastAPI):
     yield
     stop_strategy_job_worker()
     stop_pine_conversion_worker()
+    stop_hosted_strategy_worker()
     stop_shared_token_worker()
     stop_option_position_monitor()
     stop_eod_squareoff_worker()
@@ -403,6 +407,8 @@ app.include_router(personal_pine_router.link_router)
 app.include_router(personal_pine_router.admin_router)
 app.include_router(pine_conversion_router.router)
 app.include_router(pine_conversion_router.admin_router)
+app.include_router(hosted_strategies_router.router)
+app.include_router(hosted_strategies_router.admin_router)
 app.include_router(admin_router.router)
 
 
@@ -424,6 +430,7 @@ def _health() -> dict:
         "multi_user_mode": _multi_user_mode(),
         "legacy_single_user_workers_enabled": not _multi_user_mode(),
         "strategy_job_worker": strategy_job_worker_status(),
+        "hosted_strategy_worker": hosted_worker_status(),
     }
 
 

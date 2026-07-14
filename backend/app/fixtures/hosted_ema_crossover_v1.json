@@ -1,0 +1,26 @@
+{
+  "ir_version": 1,
+  "strategy_name": "Synthetic EMA Crossover",
+  "description": "Non-proprietary verification fixture",
+  "underlying": "NIFTY",
+  "timeframe": "1m",
+  "evaluation": "BAR_CLOSE",
+  "warmup_bars": 22,
+  "parameters": {},
+  "indicators": [
+    {"id": "ema_fast", "type": "EMA", "source": "close", "period": 9},
+    {"id": "ema_slow", "type": "EMA", "source": "close", "period": 21}
+  ],
+  "conditions": {
+    "bullish": {"op": "CROSSES_ABOVE", "left": {"op": "INDICATOR_VALUE", "indicator": "ema_fast"}, "right": {"op": "INDICATOR_VALUE", "indicator": "ema_slow"}},
+    "bearish": {"op": "CROSSES_BELOW", "left": {"op": "INDICATOR_VALUE", "indicator": "ema_fast"}, "right": {"op": "INDICATOR_VALUE", "indicator": "ema_slow"}}
+  },
+  "actions": [
+    {"action": "EXIT", "when": "bearish", "priority": 100, "position_states": ["LONG_CE"]},
+    {"action": "EXIT", "when": "bullish", "priority": 100, "position_states": ["LONG_PE"]},
+    {"action": "BUY_CE", "when": "bullish", "priority": 20, "cooldown_bars": 1, "position_states": ["FLAT"]},
+    {"action": "BUY_PE", "when": "bearish", "priority": 10, "cooldown_bars": 1, "position_states": ["FLAT"]}
+  ],
+  "session": {"timezone": "Asia/Kolkata", "entry_start": "09:20", "entry_end": "14:45", "force_exit_time": "15:15", "skip_expiry_day": false},
+  "risk_metadata": {"purpose": "verification_only"}
+}
