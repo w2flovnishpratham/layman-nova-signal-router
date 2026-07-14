@@ -1,4 +1,4 @@
-import { BarChart3, Check, Copy, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, Wifi, X, Zap } from 'lucide-react'
+import { BarChart3, Check, Copy, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, Webhook, Wifi, X, Zap } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import type { AuthUser } from '../api'
@@ -112,6 +112,15 @@ export function Header({
             >
               <BarChart3 size={13} />
               Dashboard
+            </button>
+            <button
+              type="button"
+              className={`nv-nav-tab${view === 'strategies' ? ' active' : ''}`}
+              aria-current={view === 'strategies'}
+              onClick={() => onNavigate('strategies')}
+            >
+              <Webhook size={13} />
+              Strategies
             </button>
           </nav>
         </div>

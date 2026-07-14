@@ -75,6 +75,52 @@ def _instance_public(row: models.StrategyInstance, *, strategy: models.StrategyC
     }
 
 
+def _decorate_personal_instance(db, row: models.StrategyInstance, payload: dict[str, Any]) -> dict[str, Any]:
+    if row.source_journey != "PERSONAL_TRADINGVIEW":
+        return payload
+    from app.routers.setup import current_nifty_lot_size
+    from app.services.private_webhook_service import instance_strategy_name
+
+    credential = _active_credential(db, row.id)
+    latest_credential = db.scalar(
+        select(models.StrategyInstanceWebhookCredential)
+        .where(models.StrategyInstanceWebhookCredential.strategy_instance_id == row.id)
+        .order_by(models.StrategyInstanceWebhookCredential.created_at.desc())
+    )
+    latest = db.scalar(
+        select(models.StrategySignal)
+        .where(models.StrategySignal.strategy_name == instance_strategy_name(row.id))
+        .order_by(models.StrategySignal.created_at.desc())
+    )
+    tested = db.scalar(
+        select(models.StrategySignal.id).where(
+            models.StrategySignal.strategy_name == instance_strategy_name(row.id),
+            models.StrategySignal.signal_id.like("connection-test-%"),
+            models.StrategySignal.status == "completed",
+        )
+    ) is not None
+    lot_size = current_nifty_lot_size()
+    readiness = {
+        "paper_mode": row.execution_mode in {"signal_only", "paper_live_data"},
+        "valid_lots": MIN_LOTS <= row.current_lots <= MAX_LOTS,
+        "active_credential": credential is not None,
+        "connection_tested": tested,
+    }
+    readiness["can_activate"] = all(readiness.values())
+    payload.update(
+        {
+            "webhook_credential": _credential_public(credential) if credential else None,
+            "credential_status": "active" if credential else "revoked" if latest_credential else "missing",
+            "readiness": readiness,
+            "lot_size": lot_size,
+            "estimated_quantity": row.current_lots * lot_size,
+            "last_signal_time": latest.created_at.isoformat() if latest and latest.created_at else None,
+            "last_execution_status": latest.status if latest else None,
+        }
+    )
+    return payload
+
+
 def _credential_public(row: models.StrategyInstanceWebhookCredential) -> dict[str, Any]:
     """Public view — never includes the token or its hash."""
     return {
@@ -130,7 +176,12 @@ def list_instances(user_id: uuid.UUID, *, include_archived: bool = False) -> lis
         )
         if not include_archived:
             query = query.where(models.StrategyInstance.status != InstanceState.ARCHIVED.value)
-        return [_instance_public(row, strategy=strategy) for row, strategy in db.execute(query).all()]
+        # ponytail: one small decoration query set per personal instance; batch
+        # when a single user can realistically own hundreds of strategies.
+        return [
+            _decorate_personal_instance(db, row, _instance_public(row, strategy=strategy))
+            for row, strategy in db.execute(query).all()
+        ]
 
 
 def get_instance(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
@@ -138,15 +189,7 @@ def get_instance(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, 
         row = _owned_instance(db, user_id, instance_id)
         strategy = db.get(models.StrategyCatalog, row.strategy_id)
         payload = _instance_public(row, strategy=strategy)
-        payload["webhook_credential"] = next(
-            (
-                _credential_public(cred)
-                for cred in row.webhook_credentials
-                if cred.revoked_at is None
-            ),
-            None,
-        )
-        return payload
+        return _decorate_personal_instance(db, row, payload)
 
 
 def admin_list_instances(*, user_id: uuid.UUID | None = None) -> list[dict[str, Any]]:
@@ -308,6 +351,13 @@ def _set_status(
             entitlements.require_strategy_entitlement_for_user(user_id)
     with session_scope() as db:
         row = _owned_instance(db, user_id, instance_id)
+        if target is InstanceState.ACTIVE and row.source_journey == "PERSONAL_TRADINGVIEW":
+            readiness = _decorate_personal_instance(db, row, {})["readiness"]
+            if not readiness["can_activate"]:
+                missing = [key.replace("_", " ") for key, ready in readiness.items() if key != "can_activate" and not ready]
+                raise InstanceError(
+                    f"Personal strategy is not ready: {', '.join(missing)}.", status_code=409
+                )
         previous = row.status
         try:
             _apply_status(row, target)

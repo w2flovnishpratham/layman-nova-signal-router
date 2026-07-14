@@ -255,7 +255,10 @@ def test_backfill_creates_missing_instances(mu_db):
 # Tenant isolation
 # ---------------------------------------------------------------------------
 
-def test_tenant_isolation_owner_only(mu_db):
+def test_tenant_isolation_owner_only(mu_db, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED", True)
     _seed_supertrend()
     user_a = make_user("a@example.com")
     user_b = make_user("b@example.com")
@@ -270,6 +273,10 @@ def test_tenant_isolation_owner_only(mu_db):
     assert client_b.post(f"/api/strategy-instances/{instance_id}/lots", json={"lots": 5}).status_code == 404
     assert client_b.post(f"/api/strategy-instances/{instance_id}/pause").status_code == 404
     assert client_b.post(f"/api/strategy-instances/{instance_id}/webhook-credential").status_code == 404
+    assert client_b.post(f"/api/strategy-instances/{instance_id}/webhook-credential/rotate").status_code == 404
+    assert client_b.delete(f"/api/strategy-instances/{instance_id}/webhook-credential").status_code == 404
+    assert client_b.post(f"/api/strategy-instances/{instance_id}/webhook-test").status_code == 404
+    assert client_b.get(f"/api/strategy-instances/{instance_id}/webhook-executions").status_code == 404
     assert client_b.get("/api/strategy-instances").json()["instances"] == []
 
     # Admin listing is explicit and admin-gated.
@@ -287,7 +294,7 @@ def test_lifecycle_transitions_and_invalid_moves(mu_db):
     _seed_supertrend()
     user = make_user("lifecycle@example.com")
     client = _client(user)
-    instance_id = _create_instance(client)["id"]
+    instance_id = _create_instance(client, source_journey="NOVA_SHARED")["id"]
 
     def status_of(response):
         assert response.status_code == 200, response.text
@@ -426,6 +433,7 @@ def test_webhook_credential_lifecycle_and_hashing(mu_db):
     assert client.delete(f"/api/strategy-instances/{instance_id}/webhook-credential").status_code == 200
     assert client.delete(f"/api/strategy-instances/{instance_id}/webhook-credential").status_code == 404
     assert client.post(f"/api/strategy-instances/{instance_id}/webhook-credential/rotate").status_code == 404
+    assert client.get(f"/api/strategy-instances/{instance_id}").json()["instance"]["credential_status"] == "revoked"
     # After revocation a fresh generate is allowed again.
     assert client.post(f"/api/strategy-instances/{instance_id}/webhook-credential").status_code == 200
 
@@ -698,3 +706,62 @@ def test_webhook_credential_only_for_personal_tradingview(mu_db):
     shared = _create_instance(client, source_journey="NOVA_SHARED", label="shared one")
     response = client.post(f"/api/strategy-instances/{shared['id']}/webhook-credential")
     assert response.status_code == 409
+
+
+def test_personal_readiness_and_hold_connection_test(mu_db, monkeypatch):
+    from sqlalchemy import func
+
+    from app.config import settings
+    from app.db import models
+    from app.db.engine import session_scope
+
+    monkeypatch.setattr(settings, "PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED", True)
+    _seed_supertrend()
+    user = make_user("personal-ready@example.com")
+    client = _client(user)
+    instance_id = _create_instance(client, execution_mode="paper_live_data")["id"]
+
+    blocked = client.post(f"/api/strategy-instances/{instance_id}/activate")
+    assert blocked.status_code == 409
+    issued = client.post(f"/api/strategy-instances/{instance_id}/webhook-credential")
+    assert issued.status_code == 200 and issued.json()["credential"]["token"]
+
+    tested = client.post(f"/api/strategy-instances/{instance_id}/webhook-test")
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "NO_OP"
+    detail = client.get(f"/api/strategy-instances/{instance_id}").json()["instance"]
+    assert detail["readiness"] == {
+        "paper_mode": True,
+        "valid_lots": True,
+        "active_credential": True,
+        "connection_tested": True,
+        "can_activate": True,
+    }
+    assert detail["estimated_quantity"] == detail["current_lots"] * detail["lot_size"]
+    assert client.post(f"/api/strategy-instances/{instance_id}/activate").status_code == 200
+
+    with session_scope() as db:
+        assert db.scalar(select(func.count(models.StrategyExecutionJob.id))) == 0
+        assert db.scalar(select(func.count(models.StrategySignal.id))) == 1
+
+
+def test_webhook_test_is_owner_scoped_and_paper_only(mu_db, monkeypatch):
+    from app.config import settings
+    from app.db import models
+    from app.db.engine import session_scope
+
+    monkeypatch.setattr(settings, "PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED", True)
+    _seed_supertrend()
+    owner = make_user("personal-owner@example.com")
+    foreign = make_user("personal-foreign@example.com")
+    owner_client = _client(owner)
+    instance_id = _create_instance(owner_client)["id"]
+    owner_client.post(f"/api/strategy-instances/{instance_id}/webhook-credential")
+
+    assert _client(foreign).post(f"/api/strategy-instances/{instance_id}/webhook-test").status_code == 404
+    with session_scope() as db:
+        row = db.get(models.StrategyInstance, uuid.UUID(instance_id))
+        row.execution_mode = "real_orders"
+    response = owner_client.post(f"/api/strategy-instances/{instance_id}/webhook-test")
+    assert response.status_code == 409
+    assert response.json()["reason"] == "LIVE_MODE_UNAVAILABLE"

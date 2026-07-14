@@ -366,6 +366,57 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
     return result
 
 
+def test_connection(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
+    """Owner-authenticated HOLD through the durable webhook ingestion path."""
+    from app.services.strategy_instance_service import _active_credential, _owned_instance
+
+    if not settings.PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED:
+        raise PrivateWebhookError(
+            "Private strategy webhooks are disabled.", status_code=403, reason="DISABLED"
+        )
+    with session_scope() as db:
+        instance = _owned_instance(db, user_id, instance_id)
+        if instance.source_journey != "PERSONAL_TRADINGVIEW":
+            raise PrivateWebhookError(
+                "This strategy does not accept private webhooks.",
+                status_code=409,
+                reason="INACTIVE_INSTANCE",
+            )
+        if instance.execution_mode == "real_orders":
+            raise PrivateWebhookError(
+                "Connection tests are available only in paper mode.",
+                status_code=409,
+                reason="LIVE_MODE_UNAVAILABLE",
+            )
+        credential = _active_credential(db, instance.id)
+        if credential is None:
+            raise PrivateWebhookError(
+                "Generate a webhook credential first.",
+                status_code=409,
+                reason="INVALID_CREDENTIAL",
+            )
+        auth = {
+            "credential_id": str(credential.id),
+            "correlation_id": uuid.uuid4().hex,
+            "instance_id": str(instance.id),
+            "user_id": str(instance.user_id),
+            "instance_status": instance.status,
+            "source_journey": instance.source_journey,
+            "execution_mode": instance.execution_mode,
+            "current_lots": instance.current_lots,
+            "strategy_id": str(instance.strategy_id),
+        }
+    return ingest(
+        auth,
+        PrivateWebhookPayload(
+            action="HOLD",
+            signal_id=f"connection-test-{uuid.uuid4().hex}",
+            signal_time=_now(),
+            comment="NOVA paper connection test",
+        ),
+    )
+
+
 def _persist_hold(
     auth: dict[str, Any],
     payload: PrivateWebhookPayload,

@@ -418,6 +418,18 @@ export interface StrategyInstance {
   updated_at: string | null
   archived_at: string | null
   webhook_credential?: InstanceWebhookCredential | null
+  credential_status?: 'active' | 'revoked' | 'missing'
+  readiness?: {
+    paper_mode: boolean
+    valid_lots: boolean
+    active_credential: boolean
+    connection_tested: boolean
+    can_activate: boolean
+  }
+  lot_size?: number
+  estimated_quantity?: number
+  last_signal_time?: string | null
+  last_execution_status?: string | null
 }
 
 export interface InstanceWebhookCredential {
@@ -523,4 +535,71 @@ export async function rotateInstanceWebhookCredential(id: string): Promise<Insta
 
 export async function revokeInstanceWebhookCredential(id: string): Promise<InstanceWebhookCredential> {
   return credentialCall(`/api/strategy-instances/${id}/webhook-credential` as `/${string}`, 'DELETE')
+}
+
+export interface WebhookExecution {
+  signal_id: string
+  strategy_instance_id: string
+  action: 'BUY_CE' | 'BUY_PE' | 'EXIT' | 'HOLD' | null
+  signal_time: string | null
+  received_at: string | null
+  status: string
+  reason: string | null
+  execution_mode: string | null
+  job_status: string | null
+  job_created_at: string | null
+  job_completed_at: string | null
+  result: {
+    status?: string
+    reason?: string
+    execution_status?: string
+    execution_reason?: string
+    order_id?: string
+    contract?: {
+      trading_symbol?: string
+      option_side?: string
+      strike?: number
+      expiry?: string
+      qty?: number
+    }
+  } | null
+}
+
+export async function listInstanceWebhookExecutions(
+  id: string,
+  limit = 10,
+  offset = 0,
+): Promise<{ executions: WebhookExecution[]; limit: number; offset: number }> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  const response = await apiFetch(
+    `/api/strategy-instances/${id}/webhook-executions?${params}` as `/${string}`,
+    { cache: 'no-store' },
+  )
+  const body = await response.json().catch(() => null) as {
+    ok?: boolean
+    executions?: WebhookExecution[]
+    limit?: number
+    offset?: number
+    error?: string
+  } | null
+  if (!response.ok || !body?.ok || !body.executions) {
+    throw new Error(body?.error || `Could not load webhook history: ${response.status}`)
+  }
+  return { executions: body.executions, limit: body.limit ?? limit, offset: body.offset ?? offset }
+}
+
+export async function testInstanceWebhookConnection(id: string): Promise<{ status: string; signal_id: string }> {
+  const response = await apiFetch(`/api/strategy-instances/${id}/webhook-test` as `/${string}`, {
+    method: 'POST',
+  })
+  const body = await response.json().catch(() => null) as {
+    ok?: boolean
+    status?: string
+    signal_id?: string
+    error?: string
+  } | null
+  if (!response.ok || !body?.ok || !body.status || !body.signal_id) {
+    throw new Error(body?.error || `Connection test failed: ${response.status}`)
+  }
+  return { status: body.status, signal_id: body.signal_id }
 }

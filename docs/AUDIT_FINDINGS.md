@@ -92,7 +92,7 @@ Severity: Critical / High / Medium / Low
 
 | ID | Sev | Item | Status | Notes |
 |---|---|---|---|---|
-| P1 | Critical | No frontend tests | Pending | Vitest + React Testing Library scaffold |
+| P1 | Critical | No frontend tests | Done | Vitest + React Testing Library added with the Phase 3B personal-strategy flow |
 | P2 | Critical | No CI/CD | Done | GitHub Actions runs backend tests, frontend build, and VPS deploy |
 | P3 | Critical | No state file backup | Pending | Nightly tar to off-VPS storage |
 | P4 | Critical | No uptime monitoring | Pending | UptimeRobot / BetterStack on /health |
@@ -105,6 +105,8 @@ Severity: Critical / High / Medium / Low
 | P11 | Medium | No frontend README | Pending | Brief dev/build/env doc |
 | P12 | High | Windows env breaks pytest (Defender locks tmp_path) | Pending | Add --basetemp to pyproject.toml; add Defender exclusion for repo + C:/pytest-tmp |
 | P13 | High | OneDrive sync causes git index.lock races | Pending | Exclude repo folder from OneDrive sync |
+| P14 | Medium | Frontend lint baseline: 11 errors, 3 warnings | Pending | Pre-existing files only; Phase 3B adds zero findings |
+| P15 | Medium | Alembic autogenerate sees `user_setup_profiles` metadata drift | Pending | Reconcile separately; do not add to a strategy-feature migration |
 
 ## Ghost Position Detector
 

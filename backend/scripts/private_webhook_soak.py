@@ -148,7 +148,7 @@ def main() -> None:
     check("alembic upgrade head on PG16", True)
 
     # ------------------------------------------------------------------
-    # Seed: two users + sessions + instances (driver-side, same DB).
+    # Seed: two users + sessions + one approved external-webhook catalog row.
     # ------------------------------------------------------------------
     from app.auth.session import sign_session_id
     from app.config import settings
@@ -163,11 +163,11 @@ def main() -> None:
             session = crud.create_session(db, user_id=user.id, ttl_seconds=7200)
             return str(user.id), f"{settings.SESSION_COOKIE_NAME}={sign_session_id(session.id)}"
 
-    def make_instance(user_id: str, label: str, lots: int) -> str:
+    def make_catalog() -> str:
         with session_scope() as db:
             strategy = models.StrategyCatalog(
-                code=f"pine-{uuid.uuid4().hex[:10]}", display_name=f"Soak {label}",
-                owner_type="personal", owner_user_id=uuid.UUID(user_id), status="active",
+                code=f"pine-{uuid.uuid4().hex[:10]}", display_name="Personal TradingView",
+                owner_type="nova", owner_user_id=None, status="active",
             )
             db.add(strategy)
             db.flush()
@@ -177,19 +177,11 @@ def main() -> None:
             )
             db.add(version)
             db.flush()
-            instance = models.StrategyInstance(
-                user_id=uuid.UUID(user_id), strategy_id=strategy.id, strategy_version_id=version.id,
-                source_journey="PERSONAL_TRADINGVIEW", label=label, status="active",
-                execution_mode="paper_live_data", current_lots=lots,
-            )
-            db.add(instance)
-            db.flush()
-            return str(instance.id)
+            return strategy.code
 
     user_a, cookie_a = make_user("soak-user-a@example.test")
     user_b, cookie_b = make_user("soak-user-b@example.test")
-    instance_a = make_instance(user_a, "Soak A", lots=1)
-    instance_b = make_instance(user_b, "Soak B", lots=3)
+    strategy_code = make_catalog()
     print(f"Users: A={user_a} B={user_b}", flush=True)
 
     # ------------------------------------------------------------------
@@ -252,7 +244,20 @@ def main() -> None:
             assert status_code == 200, payload
             return payload["position"]
 
-        # Steps 1-2: instances active (seeded); create webhook credentials via API.
+        # Step 1: create both personal paper strategies through the owner API.
+        status_code, created_a = http("POST", "/api/strategy-instances", cookie=cookie_a, body={
+            "strategy_code": strategy_code, "source_journey": "PERSONAL_TRADINGVIEW",
+            "label": "Soak A", "lots": 1, "execution_mode": "paper_live_data",
+        })
+        instance_a = created_a["instance"]["id"]
+        status_b, created_b = http("POST", "/api/strategy-instances", cookie=cookie_b, body={
+            "strategy_code": strategy_code, "source_journey": "PERSONAL_TRADINGVIEW",
+            "label": "Soak B", "lots": 3, "execution_mode": "paper_live_data",
+        })
+        instance_b = created_b["instance"]["id"]
+        check("step 1: two owner-scoped personal strategies created", status_code == 200 and status_b == 200)
+
+        # Step 2: create webhook credentials via API.
         status_code, cred_a = http("POST", f"/api/strategy-instances/{instance_a}/webhook-credential", cookie=cookie_a, body={})
         check("step 2: credential issued for A", status_code == 200 and cred_a.get("ok"), str(status_code))
         token_a = cred_a["credential"]["token"]
@@ -263,6 +268,14 @@ def main() -> None:
         # Step 3: start paper engines.
         check("step 3: engine A started", http("POST", "/__soak__/engine", cookie=cookie_a, body={})[0] == 200)
         check("step 3: engine B started", http("POST", "/__soak__/engine", cookie=cookie_b, body={})[0] == 200)
+
+        # Step 3B: safe HOLD connectivity tests, then readiness-gated activation.
+        test_a = http("POST", f"/api/strategy-instances/{instance_a}/webhook-test", cookie=cookie_a, body={})
+        test_b = http("POST", f"/api/strategy-instances/{instance_b}/webhook-test", cookie=cookie_b, body={})
+        check("step 3: owner HOLD connection tests passed", test_a[0] == 200 and test_b[0] == 200)
+        active_a = http("POST", f"/api/strategy-instances/{instance_a}/activate", cookie=cookie_a, body={})
+        active_b = http("POST", f"/api/strategy-instances/{instance_b}/activate", cookie=cookie_b, body={})
+        check("step 3: readiness-gated activation passed", active_a[0] == 200 and active_b[0] == 200)
 
         # Step 4: set engine lots via control API (A: 2 lots).
         status_code, lots_payload = http("POST", f"/api/strategy-instances/{instance_a}/lots", cookie=cookie_a, body={"lots": 2})
@@ -425,6 +438,7 @@ def main() -> None:
         check("0 duplicate execution jobs", not duplicate_jobs, str(duplicate_jobs))
         check("0 duplicate broker/PaperBroker order ids", len(order_ids) == len(set(order_ids)),
               f"{len(order_ids)} orders, {len(set(order_ids))} unique")
+        check("0 live orders", all(order_id.startswith("PAPER-") for order_id in order_ids))
         check("all jobs terminal", not non_terminal, str(non_terminal))
         check("final parity: JSON flat AND 0 active PG position rows",
               position(cookie_a).get("has_open_position") is False
@@ -460,7 +474,7 @@ def main() -> None:
         for name in failed:
             print(f"  FAILED: {name}")
         raise SystemExit(1)
-    print("PHASE 3A LOCAL SOAK PASSED", flush=True)
+    print("PHASE 3A/3B LOCAL SOAK PASSED", flush=True)
 
 
 if __name__ == "__main__":

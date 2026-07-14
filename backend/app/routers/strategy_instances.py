@@ -149,6 +149,22 @@ def list_webhook_executions(
         return _error(exc)
 
 
+@router.post("/{instance_id}/webhook-test")
+def test_webhook_connection(instance_id: uuid.UUID, user: CurrentUser = Depends(get_current_user)):
+    """Authenticated, owner-scoped, paper-only HOLD connectivity test."""
+    from app.services import private_webhook_service
+
+    try:
+        return {"ok": True, **private_webhook_service.test_connection(user.id, instance_id)}
+    except Exception as exc:
+        if isinstance(exc, private_webhook_service.PrivateWebhookError):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"ok": False, "error": str(exc), "reason": exc.reason},
+            )
+        return _error(exc)
+
+
 @router.post("/{instance_id}/webhook-credential")
 def generate_webhook_credential(instance_id: uuid.UUID, user: CurrentUser = Depends(get_current_user)):
     try:

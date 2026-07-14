@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { BarChart3, ChevronLeft, ChevronRight, LineChart, Loader2, Sliders, Wallet } from 'lucide-react'
+import { BarChart3, ChevronLeft, ChevronRight, LineChart, Loader2, Sliders, Wallet, Webhook } from 'lucide-react'
 import { AuthScreen } from './components/AuthScreen'
 import { EngineLeftPanel } from './components/EngineLeftPanel'
 import { EngineListening } from './components/EngineListening'
@@ -11,6 +11,7 @@ import { MotionPulseText, MotionSpinner, softEase, useAppReducedMotion } from '.
 import { ChatLog } from './components/messages/ChatLog'
 import { SetupPanel } from './components/setup/SetupPanel'
 import { PortfolioDashboard } from './dashboard/PortfolioDashboard'
+import { PersonalStrategiesPage } from './strategies/PersonalStrategiesPage'
 import type { NovaView } from './types'
 import {
   getCurrentUser,
@@ -306,7 +307,7 @@ function App() {
         onLogout={handleLogout}
       />
 
-      {engineLive && view !== 'dashboard' ? (
+      {engineLive && view === 'trading' ? (
         <div className="router-banner-slot">
           <EngineListening
             paused={effectiveSetupState === 'PAUSED'}
@@ -319,6 +320,8 @@ function App() {
 
       {view === 'dashboard' ? (
         <PortfolioDashboard />
+      ) : view === 'strategies' ? (
+        <PersonalStrategiesPage />
       ) : (
         <motion.section
           layout
@@ -600,6 +603,19 @@ function App() {
             >
               <BarChart3 size={18} />
               <span className="text-[10px]">Dashboard</span>
+            </button>
+
+            <button
+              type="button"
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'strategies' ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
+              onClick={() => {
+                setView('strategies')
+                setLeftDrawerOpen(false)
+                setRightDrawerOpen(false)
+              }}
+            >
+              <Webhook size={18} />
+              <span className="text-[10px]">Strategies</span>
             </button>
 
             <button
