@@ -1,9 +1,14 @@
-import { AlertTriangle, Check, Copy, Download, FileCode2, Loader2, Plus, ShieldCheck, Upload } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Download, FileCode2, Loader2, Plus, ShieldCheck, Sparkles, Upload, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  acceptPineConversion,
+  createPineConversion,
   createPineStrategy,
   createPineVersion,
   decidePineReview,
+  generatePineConversionPackage,
+  getPineConversion,
+  getPineConversionConfig,
   getPineReview,
   getPineSource,
   getPineStrategy,
@@ -11,9 +16,13 @@ import {
   listPineReviews,
   listPineStrategies,
   listStrategyInstances,
+  rejectPineConversion,
+  retryPineConversion,
   submitPineVersion,
   validatePineVersion,
   type PineFinding,
+  type PineConversion,
+  type PineConversionConfig,
   type PineReview,
   type PineStrategy,
   type PineVersion,
@@ -55,6 +64,9 @@ function OwnerWorkspace() {
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [conversionConfig, setConversionConfig] = useState<PineConversionConfig | null>(null)
+  const [conversion, setConversion] = useState<PineConversion | null>(null)
+  const [consent, setConsent] = useState(false)
   const sourceRef = useRef<HTMLTextAreaElement>(null)
 
   const selected = versions.find((row) => row.id === versionId) ?? null
@@ -68,10 +80,11 @@ function OwnerWorkspace() {
   }, [])
 
   useEffect(() => {
-    Promise.all([listPineStrategies(), listStrategyInstances()]).then(([scripts, rows]) => {
+    Promise.all([listPineStrategies(), listStrategyInstances(), getPineConversionConfig()]).then(([scripts, rows, config]) => {
       setStrategies(scripts)
       setInstances(rows.filter((row) => row.execution_mode !== 'real_orders'))
       setStrategyId((current) => current || scripts[0]?.id || '')
+      setConversionConfig(config)
     }).catch((reason) => setError(messageOf(reason)))
   }, [])
   useEffect(() => {
@@ -92,6 +105,13 @@ function OwnerWorkspace() {
     window.addEventListener('beforeunload', guard)
     return () => window.removeEventListener('beforeunload', guard)
   }, [dirty])
+  useEffect(() => {
+    if (!conversion || !['queued', 'processing'].includes(conversion.status)) return
+    const timer = window.setInterval(() => {
+      void getPineConversion(conversion.id).then(({ conversion: current }) => setConversion(current)).catch((reason) => setError(messageOf(reason)))
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [conversion])
 
   async function run(label: string, task: () => Promise<void>) {
     setBusy(label); setError(''); setMessage('')
@@ -132,6 +152,17 @@ function OwnerWorkspace() {
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url)
   }
 
+  async function manualPackage(download = false) {
+    if (!selected) return
+    const result = await generatePineConversionPackage(strategyId, selected.id)
+    if (download) {
+      const url = URL.createObjectURL(new Blob([result.package], { type: 'text/plain;charset=utf-8' }))
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = result.filename; anchor.click(); URL.revokeObjectURL(url)
+    } else {
+      await navigator.clipboard.writeText(result.package)
+    }
+  }
+
   return (
     <>
       {error ? <div className="ps-message error" role="alert">{error}</div> : null}
@@ -154,15 +185,23 @@ function OwnerWorkspace() {
             {selected ? <button className="secondary-button" type="button" onClick={() => void copySource()}><Copy size={14} /> Copy</button> : null}
             {selected?.status === 'approved' ? <button className="secondary-button" type="button" onClick={downloadSource}><Download size={14} /> Download</button> : null}
           </div>
+          {selected && conversionConfig?.manual_package_enabled ? <div className="pine-convert-panel"><div><strong>Convert to NOVA Format</strong><span>Manual packages make no provider request.</span></div><button className="secondary-button" type="button" onClick={() => void run('Package copy', async () => manualPackage())}><Copy size={14} /> Copy conversion package</button><button className="secondary-button" type="button" onClick={() => void manualPackage(true)}><Download size={14} /> Download package</button></div> : null}
+          {selected ? <div className="pine-ai-panel"><div><strong><Sparkles size={14} /> AI-assisted conversion</strong><span>{conversionConfig?.ai_enabled ? `${conversionConfig.provider} · ${conversionConfig.model}` : 'Disabled by NOVA configuration. Manual conversion remains available.'}</span></div>{conversionConfig?.ai_enabled ? <><p>Your Pine source will be sent to the configured AI provider for conversion. NOVA will not execute the generated script automatically. Generated output may be incorrect and must pass NOVA validation and human review.</p><label className="ps-check"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />I consent to sending this exact source version for this conversion request.</label><button className="ps-primary" type="button" disabled={!consent || !!busy || (!!conversion && ['queued', 'processing'].includes(conversion.status))} onClick={() => void run('AI conversion request', async () => { const result = await createPineConversion(strategyId, selected.id); setConsent(false); setConversion(result.conversion) })}><Sparkles size={14} /> Send source for conversion</button></> : null}</div> : null}
         </section>
         <aside className="ps-card pine-findings">
           <div className="ps-card-head"><div><span>NOVA Pine Contract v1</span><h2>Static findings</h2></div>{selected?.validation ? <strong>{selected.validation.error_count}E · {selected.validation.warning_count}W</strong> : null}</div>
           {findings.length ? findings.map((finding, index) => <button type="button" key={`${finding.code}-${index}`} className={`pine-finding ${finding.severity.toLowerCase()}`} onClick={() => jumpTo(finding)}><span>{finding.severity} · {finding.code}{finding.line ? ` · line ${finding.line}` : ''}</span><strong>{finding.title}</strong><small>{finding.explanation}</small><em>{finding.remediation}</em></button>) : <div className="ps-empty-small"><FileCode2 size={22} /><strong>No validation report</strong><span>Run deterministic static validation for this exact version.</span></div>}
         </aside>
       </div>
+      {conversion ? <ConversionReview conversion={conversion} busy={busy} onAccept={() => run('Candidate acceptance', async () => { const result = await acceptPineConversion(conversion.id); setConversion(result.conversion); await reloadStrategy(strategyId, result.conversion.candidate_version_id ?? undefined) })} onReject={() => run('Candidate rejection', async () => setConversion((await rejectPineConversion(conversion.id)).conversion))} onRetry={() => run('Conversion retry', async () => setConversion((await retryPineConversion(conversion.id)).conversion))} /> : null}
       {selected?.status === 'approved' ? <section className="ps-card pine-link"><div><h2>Link approved version</h2><p className="ps-note">This only records a paper-safe control-plane link. Hosted Pine execution remains unavailable.</p></div><select aria-label="Personal strategy instance" value={instanceId} onChange={(e) => setInstanceId(e.target.value)}><option value="">Choose an instance</option>{instances.map((i) => <option key={i.id} value={i.id}>{i.label} · {i.execution_mode}</option>)}</select><button className="ps-primary" type="button" disabled={!instanceId || !!busy} onClick={() => void run('Version link', async () => { await linkPineVersion(instanceId, strategyId, selected.id) })}>Link version</button></section> : null}
     </>
   )
+}
+
+function ConversionReview({ conversion, busy, onAccept, onReject, onRetry }: { conversion: PineConversion; busy: string; onAccept: () => Promise<void>; onReject: () => Promise<void>; onRetry: () => Promise<void> }) {
+  const pending = ['queued', 'processing'].includes(conversion.status)
+  return <section className="ps-card pine-conversion-review"><div className="ps-card-head"><div><span>{conversion.provider} · {conversion.model} · prompt {conversion.prompt_version}</span><h2>Conversion candidate</h2></div><span className="ps-status">{conversion.status}</span></div>{pending ? <div className="ps-page-state"><Loader2 className="ps-spin" size={20} /> Conversion is processing in the durable queue.</div> : null}{conversion.safe_error_code ? <div className="ps-message error" role="alert">Conversion failed safely: {conversion.safe_error_code.replaceAll('_', ' ').toLowerCase()}</div> : null}{conversion.candidate_source ? <><div className="pine-diff"><div><strong>Original source</strong><pre>{conversion.original_source}</pre></div><div><strong>Converted candidate</strong><pre>{conversion.candidate_source}</pre></div></div><div className="pine-conversion-meta"><p><strong>Summary:</strong> {conversion.conversion_summary}</p><p><strong>Assumptions:</strong> {conversion.assumptions.join('; ') || 'None reported'}</p><p><strong>Unsupported/removed:</strong> {conversion.unsupported_features.join('; ') || 'None reported'}</p><p><strong>AI warnings:</strong> {conversion.warnings.join('; ') || 'None reported'}</p><p><strong>Deterministic validation:</strong> {conversion.validation?.eligible_for_review ? 'Eligible for review' : 'Blocking findings remain'}</p></div><div className="ps-actions">{conversion.status === 'succeeded' ? <button className="ps-primary" type="button" disabled={!!busy} onClick={() => void onAccept()}><Check size={14} /> Accept as new version</button> : null}{['succeeded', 'validation_failed'].includes(conversion.status) ? <button className="ps-danger" type="button" disabled={!!busy} onClick={() => void onReject()}><X size={14} /> Reject candidate</button> : null}</div></> : null}{['provider_failed', 'canceled'].includes(conversion.status) ? <button className="secondary-button" type="button" disabled={!!busy} onClick={() => void onRetry()}><Sparkles size={14} /> Request another conversion</button> : null}</section>
 }
 
 function AdminReview() {

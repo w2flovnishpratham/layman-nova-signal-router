@@ -6,12 +6,16 @@ import { ImportedPinePage } from './ImportedPinePage'
 const api = vi.hoisted(() => ({
   list: vi.fn(), get: vi.fn(), create: vi.fn(), version: vi.fn(), validate: vi.fn(), submit: vi.fn(),
   source: vi.fn(), link: vi.fn(), instances: vi.fn(), reviews: vi.fn(), review: vi.fn(), decide: vi.fn(),
+  conversionConfig: vi.fn(), conversionPackage: vi.fn(), convert: vi.fn(), conversion: vi.fn(), accept: vi.fn(), reject: vi.fn(), retry: vi.fn(),
 }))
 vi.mock('../api', () => ({
   listPineStrategies: api.list, getPineStrategy: api.get, createPineStrategy: api.create,
   createPineVersion: api.version, validatePineVersion: api.validate, submitPineVersion: api.submit,
   getPineSource: api.source, linkPineVersion: api.link, listStrategyInstances: api.instances,
   listPineReviews: api.reviews, getPineReview: api.review, decidePineReview: api.decide,
+  getPineConversionConfig: api.conversionConfig, generatePineConversionPackage: api.conversionPackage,
+  createPineConversion: api.convert, getPineConversion: api.conversion, acceptPineConversion: api.accept,
+  rejectPineConversion: api.reject, retryPineConversion: api.retry,
 }))
 
 const SOURCE = '//@version=6\nindicator("<script>alert(1)</script> NIFTY", overlay=true)\nalert("BUY_CE")\nalert("EXIT")\n'
@@ -25,6 +29,8 @@ beforeEach(() => {
   api.list.mockResolvedValue([strategy]); api.get.mockResolvedValue({ strategy, versions: [version] })
   api.source.mockResolvedValue({ source: SOURCE, filename: 'safe.pine', source_sha256: 'abc', approved: false })
   api.instances.mockResolvedValue([]); api.reviews.mockResolvedValue([])
+  api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: false, provider: null, model: null, prompt_version: 'v1', contract_version: 1, daily_limit: 10 })
+  api.conversionPackage.mockResolvedValue({ package: `PRIVATE WARNING\n${SOURCE}`, filename: 'conversion.txt', package_sha256: 'pkg' })
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
 afterEach(() => cleanup())
@@ -75,5 +81,26 @@ describe('ImportedPinePage', () => {
     const bad = new File([new Uint8Array([0xff, 0xfe])], 'bad.pine', { type: 'text/plain' })
     fireEvent.change(input, { target: { files: [bad] } })
     expect(await screen.findByRole('alert')).toHaveTextContent('valid UTF-8')
+  })
+
+  it('generates the manual package without starting AI conversion', async () => {
+    const user = userEvent.setup(); render(<ImportedPinePage />)
+    await waitFor(() => expect((screen.getByLabelText('Pine source') as HTMLTextAreaElement).value).toBe(SOURCE))
+    await user.click(screen.getByRole('button', { name: /copy conversion package/i }))
+    await waitFor(() => expect(api.conversionPackage).toHaveBeenCalledWith('s1', 'v1'))
+    expect(api.convert).not.toHaveBeenCalled()
+    expect(await screen.findByRole('status')).toHaveTextContent('Package copy completed')
+  })
+
+  it('requires unselected consent before sending the exact version', async () => {
+    const user = userEvent.setup()
+    api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: true, provider: 'configured', model: 'pine-model', prompt_version: 'v1', contract_version: 1, daily_limit: 10 })
+    api.convert.mockResolvedValue({ conversion: { id: 'c1', strategy_id: 's1', input_version_id: 'v1', status: 'queued', provider: 'configured', model: 'pine-model', prompt_version: 'v1', consent_at: 'now', candidate_version_id: null, conversion_summary: null, assumptions: [], unsupported_features: [], warnings: [], action_mapping: {}, safe_error_code: null }, reused: false })
+    render(<ImportedPinePage />); await waitFor(() => expect((screen.getByLabelText('Pine source') as HTMLTextAreaElement).value).toBe(SOURCE))
+    const send = screen.getByRole('button', { name: /send source for conversion/i })
+    expect(send).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: /i consent/i })); await user.click(send)
+    await waitFor(() => expect(api.convert).toHaveBeenCalledWith('s1', 'v1'))
+    expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0)
   })
 })

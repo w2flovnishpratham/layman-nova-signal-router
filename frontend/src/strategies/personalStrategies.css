@@ -150,6 +150,16 @@
 .ps-spin { animation: ps-spin .8s linear infinite; }
 @keyframes ps-spin { to { transform: rotate(360deg); } }
 
+.pine-convert-panel, .pine-ai-panel { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+.pine-convert-panel > div, .pine-ai-panel > div { display: grid; margin-right: auto; }
+.pine-convert-panel span, .pine-ai-panel span { color: var(--text-3); font-size: 11px; }
+.pine-ai-panel p { width: 100%; margin: 0; color: var(--text-3); font-size: 11.5px; }
+.pine-conversion-review { margin-top: 16px; }
+.pine-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pine-diff > div { min-width: 0; }
+.pine-diff pre { max-height: 420px; overflow: auto; white-space: pre; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 11px; }
+.pine-conversion-meta { font-size: 11.5px; }
+
 @media (max-width: 900px) {
   .ps-layout { grid-template-columns: 1fr; }
   .ps-list { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -158,6 +168,7 @@
   .pine-grid, .pine-admin-grid { grid-template-columns: 1fr; }
   .pine-findings { position: static; max-height: none; }
   .pine-link { grid-template-columns: 1fr; }
+  .pine-diff { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 620px) {

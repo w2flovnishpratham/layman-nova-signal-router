@@ -22,9 +22,12 @@ from app.routers import private_webhook as private_webhook_router
 from app.routers import strategies as strategies_router
 from app.routers import strategy_instances as strategy_instances_router
 from app.routers import personal_pine as personal_pine_router
+from app.routers import pine_conversion as pine_conversion_router
 from app.auth import google as google_auth
 from app.db.engine import database_configured, get_engine, init_db
 from app.services.user_credential_vault import vault_ready as user_vault_ready
+from app.services.pine_conversion_provider import validate_provider_configuration
+from app.workers.pine_conversion_worker import start_pine_conversion_worker, stop_pine_conversion_worker
 from app.services.audit_logger import log_audit_event
 from app.services.chat_event_publisher import bind_chat_event_loop, clear_chat_event_loop
 from app.services.credential_vault import vault_status
@@ -259,6 +262,7 @@ def _api_documentation_urls() -> dict[str, str | None]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_provider_configuration()
     validate_production_configuration()
     validate_background_worker_runner_configuration()
     bind_chat_event_loop(asyncio.get_running_loop())
@@ -294,6 +298,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Singleton background workers are disabled for this process.")
     if background_workers_enabled:
         start_strategy_job_worker()
+        start_pine_conversion_worker()
     if background_workers_enabled and _multi_user_mode():
         logger.info(
             "Multi-user reconcile, position monitor, EOD, and ghost workers enabled."
@@ -335,6 +340,7 @@ async def lifespan(app: FastAPI):
     )
     yield
     stop_strategy_job_worker()
+    stop_pine_conversion_worker()
     stop_shared_token_worker()
     stop_option_position_monitor()
     stop_eod_squareoff_worker()
@@ -395,6 +401,8 @@ app.include_router(strategy_instances_router.admin_router)
 app.include_router(personal_pine_router.router)
 app.include_router(personal_pine_router.link_router)
 app.include_router(personal_pine_router.admin_router)
+app.include_router(pine_conversion_router.router)
+app.include_router(pine_conversion_router.admin_router)
 app.include_router(admin_router.router)
 
 

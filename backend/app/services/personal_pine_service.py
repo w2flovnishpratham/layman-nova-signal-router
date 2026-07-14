@@ -388,6 +388,8 @@ def get_validation(user_id: uuid.UUID, strategy_id, version_id):
 def submit_version(user_id: uuid.UUID, strategy_id, version_id):
     with session_scope() as db:
         _, version = _owned_version(db, user_id, strategy_id, version_id, lock=True)
+        if _artifact(db, version.id).conversion_method == "ai_conversion_pending":
+            raise PineWorkflowError("Accept the AI-generated candidate before submitting it.", 409, "CANDIDATE_NOT_ACCEPTED")
         report = _latest_report(db, version.id)
         if version.status != "ready_for_review" or report is None or not report.eligible_for_review:
             raise PineWorkflowError("Only a passing exact source version can be submitted.", 409, "NOT_READY_FOR_REVIEW")

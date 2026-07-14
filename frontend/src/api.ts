@@ -698,3 +698,44 @@ export const getPineReview = async (id: string) =>
   (await pineCall<{ review: PineReview }>(`/api/admin/pine-reviews/${id}` as `/${string}`)).review
 export const decidePineReview = async (id: string, action: 'start' | 'approve' | 'request-changes' | 'reject', note: string, acknowledgeWarnings = false) =>
   pineCall<{ version: PineVersion }>(`/api/admin/pine-reviews/${id}/${action}` as `/${string}`, 'POST', { note, acknowledge_warnings: acknowledgeWarnings })
+
+export interface PineConversionConfig {
+  manual_package_enabled: boolean
+  ai_enabled: boolean
+  provider: string | null
+  model: string | null
+  prompt_version: string
+  contract_version: number
+  daily_limit: number
+}
+
+export interface PineConversion {
+  id: string
+  strategy_id: string
+  input_version_id: string
+  status: string
+  provider: string
+  model: string
+  prompt_version: string
+  consent_at: string
+  candidate_version_id: string | null
+  conversion_summary: string | null
+  assumptions: string[]
+  unsupported_features: string[]
+  warnings: string[]
+  action_mapping: Record<string, string>
+  safe_error_code: string | null
+  original_source?: string
+  candidate_source?: string | null
+  validation?: PineValidation | null
+}
+
+export const getPineConversionConfig = () => pineCall<PineConversionConfig>('/api/pine-conversions/config')
+export const generatePineConversionPackage = (strategyId: string, versionId: string) =>
+  pineCall<{ package: string; filename: string; package_sha256: string }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/conversion-package` as `/${string}`, 'POST')
+export const createPineConversion = (strategyId: string, versionId: string) =>
+  pineCall<{ conversion: PineConversion; reused: boolean }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/convert` as `/${string}`, 'POST', { consent: true })
+export const getPineConversion = (id: string) => pineCall<{ conversion: PineConversion }>(`/api/pine-conversions/${id}` as `/${string}`)
+export const acceptPineConversion = (id: string) => pineCall<{ conversion: PineConversion }>(`/api/pine-conversions/${id}/accept` as `/${string}`, 'POST')
+export const rejectPineConversion = (id: string) => pineCall<{ conversion: PineConversion }>(`/api/pine-conversions/${id}/reject` as `/${string}`, 'POST', {})
+export const retryPineConversion = (id: string) => pineCall<{ conversion: PineConversion }>(`/api/pine-conversions/${id}/retry` as `/${string}`, 'POST', { consent: true })

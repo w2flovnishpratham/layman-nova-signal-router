@@ -752,6 +752,50 @@ class StrategyAdminReview(Base):
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class PineConversionRequest(Base):
+    __tablename__ = "pine_conversion_requests"
+    __table_args__ = (
+        UniqueConstraint("identity_sha256", "attempt", name="uq_pine_conversion_identity_attempt"),
+        Index("ix_pine_conversion_status_available", "status", "available_at"),
+        Index("ix_pine_conversion_owner_created", "owner_user_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    strategy_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_catalog.id", ondelete="CASCADE"), nullable=False)
+    input_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    input_source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    options: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    options_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    identity_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    consent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
+    provider_request_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    candidate_version_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="SET NULL"), nullable=True)
+    validation_report_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("strategy_validation_reports.id", ondelete="SET NULL"), nullable=True)
+    safe_error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    usage_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    estimated_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    conversion_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assumptions: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    unsupported_features: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    warnings: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    action_mapping: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    worker_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class StrategyInstance(Base):
     """One user's configured copy of a strategy version — the universal
     server-side unit all three journeys route through.
