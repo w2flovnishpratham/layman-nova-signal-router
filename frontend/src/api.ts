@@ -185,6 +185,7 @@ export interface NiftyTradeMarker {
   time: number
   side: 'BUY' | 'SELL'
   option_side?: 'CE' | 'PE' | null
+  exit_kind?: 'SL' | 'TARGET' | 'REVERSAL' | 'EXIT' | null
   label: string
   price?: number | null
   approximate?: boolean

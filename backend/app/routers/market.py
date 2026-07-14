@@ -105,12 +105,25 @@ def nifty_markers(
             continue
         side = "BUY" if action == "ENTRY" else "SELL"
         option_side = str(ev.get("normalized_option_side") or ev.get("option_side") or "").upper() or None
+        exit_kind = None
+        if action == "EXIT":
+            reason = str(ev.get("exit_reason") or "").upper()
+            if ev.get("reversal_exit"):
+                exit_kind = "REVERSAL"
+            elif reason == "SL" or reason.startswith("TRAIL"):
+                exit_kind = "SL"
+            elif reason == "TP":
+                exit_kind = "TARGET"
+            else:
+                exit_kind = "EXIT"
+        exit_labels = {"SL": "EXIT SL", "TARGET": "EXIT TGT", "REVERSAL": "REV EXIT", "EXIT": "EXIT"}
         markers.append(
             {
                 "time": epoch,
                 "side": side,
                 "option_side": option_side,
-                "label": f"{side} {option_side}" if option_side else side,
+                "exit_kind": exit_kind,
+                "label": exit_labels[exit_kind] if exit_kind else (f"BUY {option_side}" if option_side else "BUY"),
                 # Execution price is the option premium, not the index level, so
                 # the frontend snaps the marker to the nearest NIFTY candle.
                 "price": None,
