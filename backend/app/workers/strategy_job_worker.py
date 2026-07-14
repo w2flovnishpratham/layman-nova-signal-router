@@ -14,7 +14,7 @@ from app.config import settings
 from app.db import models
 from app.db.engine import database_configured, get_engine, session_scope
 from app.schemas.signal import NormalizedSignal
-from app.services import strategy_fanout, webhook_replay_store
+from app.services import private_webhook_execution, strategy_fanout, webhook_replay_store
 
 
 logger = logging.getLogger("nova_signal_router.strategy_jobs")
@@ -174,13 +174,18 @@ def _execute_job(job: dict[str, Any]) -> None:
     with user_lock:
         try:
             signal = NormalizedSignal.model_validate(job["signal_payload"])
-            result = strategy_fanout.dispatch_signal_job(
-                user_id=job["user_id"],
-                strategy_name=job["strategy_name"],
-                lots=job["lots"],
-                execution_mode=job["execution_mode"],
-                signal=signal,
-            )
+            if private_webhook_execution.is_private_job(job["strategy_name"]):
+                # Private instance webhook job: revalidates instance state at
+                # processing time, then routes through the same execution path.
+                result = private_webhook_execution.execute_private_job(job, signal)
+            else:
+                result = strategy_fanout.dispatch_signal_job(
+                    user_id=job["user_id"],
+                    strategy_name=job["strategy_name"],
+                    lots=job["lots"],
+                    execution_mode=job["execution_mode"],
+                    signal=signal,
+                )
         except Exception as exc:
             logger.exception("Strategy job %s failed", job["id"])
             _complete_job(job, status="failed", error=str(exc))

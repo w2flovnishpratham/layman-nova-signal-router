@@ -128,6 +128,27 @@ def archive_instance(instance_id: uuid.UUID, user: CurrentUser = Depends(get_cur
     return _lifecycle(instances.archive_instance, instance_id, user)
 
 
+@router.get("/{instance_id}/webhook-executions")
+def list_webhook_executions(
+    instance_id: uuid.UUID,
+    limit: int = 50,
+    offset: int = 0,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Owner-scoped, paginated private-webhook execution history (Phase 3A)."""
+    from app.services import private_webhook_service
+
+    try:
+        return {
+            "ok": True,
+            **private_webhook_service.list_webhook_executions(
+                user.id, instance_id, limit=limit, offset=offset
+            ),
+        }
+    except Exception as exc:
+        return _error(exc)
+
+
 @router.post("/{instance_id}/webhook-credential")
 def generate_webhook_credential(instance_id: uuid.UUID, user: CurrentUser = Depends(get_current_user)):
     try:

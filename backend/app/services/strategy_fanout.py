@@ -756,8 +756,15 @@ def dispatch_signal_job(
     lots: int,
     execution_mode: str,
     signal: NormalizedSignal,
+    signal_enricher: Any | None = None,
 ) -> dict[str, Any]:
-    """Execute one immutable user job using only that user's state and proxy."""
+    """Execute one immutable user job using only that user's state and proxy.
+
+    signal_enricher (optional) runs inside the bound user execution context
+    just before routing. It may return an updated NormalizedSignal (e.g. with
+    a server-resolved ATM contract) or a result dict that replaces execution
+    entirely (idempotent no-op / safe failure) — used by private instance
+    webhooks (Phase 3A)."""
     user = load_user_context(user_id)
     if user is None:
         return {
@@ -862,7 +869,13 @@ def dispatch_signal_job(
             egress_last_verified_at=egress.get("last_verified_at") if egress else None,
         ):
             init_runtime_files()
-            execution_result = route_signal(per_user_signal)
+            prepared = signal_enricher(per_user_signal) if signal_enricher else per_user_signal
+            if isinstance(prepared, dict):
+                # Enricher short-circuited (idempotent no-op / safe failure):
+                # no broker call is made for this job.
+                execution_result = prepared
+            else:
+                execution_result = route_signal(prepared)
     except Exception as exc:
         _update_run(run_id, "error", str(exc))
         return {**base, "run_id": run_id, "status": "error", "reason": str(exc)}

@@ -18,6 +18,7 @@ from app.routers import admin as admin_router
 from app.routers import live as live_router
 from app.routers import user_credentials as user_credentials_router
 from app.routers import user_webhook as user_webhook_router
+from app.routers import private_webhook as private_webhook_router
 from app.routers import strategies as strategies_router
 from app.routers import strategy_instances as strategy_instances_router
 from app.auth import google as google_auth
@@ -387,6 +388,7 @@ app.include_router(user_credentials_router.router)
 app.include_router(live_router.router)
 app.include_router(user_webhook_router.router)
 app.include_router(strategies_router.router)
+app.include_router(private_webhook_router.router)
 app.include_router(strategy_instances_router.router)
 app.include_router(strategy_instances_router.admin_router)
 app.include_router(admin_router.router)

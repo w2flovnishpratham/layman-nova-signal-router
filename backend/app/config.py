@@ -112,6 +112,17 @@ class Settings(BaseSettings):
     WEBHOOK_RATE_LIMIT_PER_MINUTE: int = 120
     WEBHOOK_REPLAY_RETENTION_SECONDS: int = 60 * 60 * 24 * 3
 
+    # Phase 3A: private strategy-instance webhook execution. Master rollout
+    # gate — when false the private webhook endpoint accepts nothing and
+    # creates no signals/jobs. Live private-webhook execution stays behind its
+    # own additional flag and remains disabled for the whole phase.
+    PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED: bool = False
+    PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED: bool = False
+    PRIVATE_WEBHOOK_MAX_AGE_SECONDS: int = 300
+    PRIVATE_WEBHOOK_MAX_FUTURE_SKEW_SECONDS: int = 30
+    PRIVATE_WEBHOOK_MAX_BODY_BYTES: int = 4096
+    PRIVATE_WEBHOOK_RATE_LIMIT_PER_MINUTE: int = 60
+
     DHAN_MODE: str = "MOCK"
     DHAN_READ_ONLY_REAL_DATA: bool = True
     PAPER_MODE_ENABLED: bool = True
