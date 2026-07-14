@@ -3,6 +3,7 @@ payload contract, idempotency, tenant isolation, and status API."""
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -99,7 +100,7 @@ def _payload(**overrides):
 
 
 def _post(client, token, body):
-    return client.post(f"/api/webhooks/private/{token}", json=body)
+    return client.post("/api/webhooks/private", json={"credential": token, **body})
 
 
 def _jobs(instance_id: str):
@@ -258,6 +259,100 @@ def test_plaintext_credential_never_persisted_or_logged(client, tmp_path, monkey
         assert secret_part not in log_file.read_text(encoding="utf-8")
 
 
+def test_credential_is_body_only_and_legacy_path_is_unmounted(client):
+    user = make_user("cred-body-only@gmail.com")
+    instance_id = _make_instance(user)
+    token = _issue_token(user, instance_id)
+    body = _payload()
+
+    assert client.post(f"/api/webhooks/private/{token}", json=body).status_code == 404
+    assert client.post(
+        f"/api/webhooks/private?credential={token}", json=body
+    ).status_code == 422
+    assert client.post(
+        "/api/webhooks/private", json=body, headers={"X-Webhook-Credential": token}
+    ).status_code == 422
+    assert _jobs(instance_id) == []
+
+
+def test_request_model_masks_and_excludes_credential():
+    from app.services.private_webhook_service import PrivateWebhookRequest
+
+    sentinel = "SENTINEL_PRIVATE_WEBHOOK_CREDENTIAL"
+    request = PrivateWebhookRequest.model_validate({"credential": sentinel, **_payload()})
+    assert sentinel not in repr(request)
+    assert sentinel not in json.dumps(request.model_dump(mode="json"))
+    assert "credential" not in request.model_dump()
+
+
+def test_failed_auth_audit_has_only_safe_correlation(client, monkeypatch):
+    from app.services import private_webhook_service
+
+    events = []
+    monkeypatch.setattr(
+        private_webhook_service,
+        "log_audit_event",
+        lambda action, message, **kwargs: events.append((action, message, kwargs)),
+    )
+    sentinel = "SENTINEL_UNKNOWN_PRIVATE_WEBHOOK_CREDENTIAL"
+    response = _post(client, sentinel, _payload())
+
+    assert response.status_code == 401
+    assert len(events) == 1
+    action, message, kwargs = events[0]
+    assert action == "private_webhook_auth_failed"
+    assert message == "private_webhook_auth_failed"
+    assert set(kwargs["metadata"]) == {"correlation_id"}
+    assert len(kwargs["metadata"]["correlation_id"]) == 32
+    assert sentinel not in json.dumps(events)
+
+
+def test_sentinel_never_leaks_from_rejected_or_failed_requests(
+    mu_db, webhook_enabled, monkeypatch, caplog
+):
+    from app.routers import private_webhook
+
+    sentinel = "SENTINEL_PRIVATE_WEBHOOK_CREDENTIAL_9dff28"
+    caplog.set_level(logging.DEBUG)
+    app = FastAPI()
+    app.include_router(private_webhook.router)
+    safe_client = TestClient(app, raise_server_exceptions=False)
+
+    malformed = safe_client.post(
+        "/api/webhooks/private",
+        content=f'{{"credential":"{sentinel}"'.encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    oversized = safe_client.post(
+        "/api/webhooks/private",
+        json={"credential": sentinel, **_payload(), "comment": "x" * 10_000},
+    )
+    unknown = _post(safe_client, sentinel, _payload())
+
+    monkeypatch.setattr(private_webhook.service, "authenticate_credential", lambda *a, **k: {
+        "credential_id": "safe-id",
+        "correlation_id": "safe-correlation",
+        "instance_id": str(uuid.uuid4()),
+        "user_id": str(uuid.uuid4()),
+        "instance_status": "active",
+        "source_journey": "PERSONAL_TRADINGVIEW",
+        "execution_mode": "paper_live_data",
+        "current_lots": 1,
+        "strategy_id": str(uuid.uuid4()),
+    })
+    monkeypatch.setattr(
+        private_webhook.service, "ingest", lambda *_: (_ for _ in ()).throw(RuntimeError("forced"))
+    )
+    failed = _post(safe_client, sentinel, _payload())
+
+    assert [malformed.status_code, oversized.status_code, unknown.status_code, failed.status_code] == [
+        400, 413, 401, 500
+    ]
+    surfaces = "\n".join(response.text for response in (malformed, oversized, unknown, failed))
+    surfaces += "\n" + caplog.text
+    assert sentinel not in surfaces
+
+
 def test_credential_a_cannot_execute_instance_b(client):
     user_a = make_user("tenant-a@gmail.com")
     user_b = make_user("tenant-b@gmail.com")
@@ -383,7 +478,7 @@ def test_invalid_json_and_wrong_content_type_and_oversized_body(client):
     user = make_user("payload-body@gmail.com")
     instance_id = _make_instance(user)
     token = _issue_token(user, instance_id)
-    url = f"/api/webhooks/private/{token}"
+    url = "/api/webhooks/private"
 
     bad_json = client.post(url, content=b"{not json", headers={"Content-Type": "application/json"})
     assert bad_json.status_code == 400
@@ -396,7 +491,7 @@ def test_invalid_json_and_wrong_content_type_and_oversized_body(client):
 
     oversized = client.post(
         url,
-        content=json.dumps({**_payload(), "comment": "x" * 10_000}).encode(),
+        content=json.dumps({"credential": token, **_payload(), "comment": "x" * 10_000}).encode(),
         headers={"Content-Type": "application/json"},
     )
     assert oversized.status_code == 413

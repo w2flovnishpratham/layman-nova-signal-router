@@ -1,6 +1,6 @@
 """Private strategy-instance webhook ingestion (Phase 3A).
 
-One opaque credential in the URL identifies exactly one StrategyInstance;
+One opaque credential in the JSON body identifies exactly one StrategyInstance;
 everything else (owner, mode, lots, contract) is derived from trusted server
 state. The HTTP path only authenticates, validates, and persists a durable
 StrategySignal + StrategyExecutionJob — execution happens asynchronously in
@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -66,6 +66,12 @@ class PrivateWebhookPayload(BaseModel):
     comment: str | None = Field(default=None, max_length=200)
 
 
+class PrivateWebhookRequest(PrivateWebhookPayload):
+    """Ingress-only envelope; the credential cannot survive serialization."""
+
+    credential: SecretStr = Field(min_length=1, max_length=128, exclude=True)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -94,6 +100,22 @@ def parse_payload(data: dict[str, Any]) -> PrivateWebhookPayload:
             status_code=422,
             reason="INVALID_PAYLOAD",
         ) from None
+
+
+def parse_request(data: dict[str, Any]) -> tuple[str, PrivateWebhookPayload]:
+    try:
+        request = PrivateWebhookRequest.model_validate(data)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        location = ".".join(str(part) for part in first.get("loc") or ())
+        raise PrivateWebhookError(
+            f"Invalid payload: {location}: {first.get('msg')}",
+            status_code=422,
+            reason="INVALID_PAYLOAD",
+        ) from None
+    return request.credential.get_secret_value(), PrivateWebhookPayload.model_validate(
+        request.model_dump()
+    )
 
 
 def validate_signal_time(signal_time: datetime, *, received_at: datetime) -> None:
@@ -137,20 +159,21 @@ def payload_fingerprint(payload: PrivateWebhookPayload, action: str) -> str:
 # Credential authentication
 # ---------------------------------------------------------------------------
 
-def authenticate_credential(token: str) -> dict[str, Any]:
+def authenticate_credential(token: str, *, correlation_id: str | None = None) -> dict[str, Any]:
     """Resolve credential -> instance -> owner from trusted server state.
 
     Raises PrivateWebhookError with a uniform 401 for unknown AND revoked
     credentials so callers cannot probe which instances exist. The audit
-    trail records the precise reason server-side.
+    trail records only a safe correlation ID.
     """
+    correlation_id = correlation_id or uuid.uuid4().hex
     if not database_configured():
         raise PrivateWebhookError(
             "Webhook store unavailable.", status_code=503, reason="STORE_UNAVAILABLE"
         )
     token = (token or "").strip()
     if not token or len(token) > 128:
-        _audit_credential_failure("INVALID_CREDENTIAL")
+        _audit_credential_failure(correlation_id)
         raise _invalid_credential()
     token_hash = hash_credential(token)
     with session_scope() as db:
@@ -160,22 +183,23 @@ def authenticate_credential(token: str) -> dict[str, Any]:
             )
         )
         if credential is None:
-            _audit_credential_failure("INVALID_CREDENTIAL")
+            _audit_credential_failure(correlation_id)
             raise _invalid_credential()
         if credential.revoked_at is not None:
-            _audit_credential_failure("REVOKED_CREDENTIAL", credential_id=str(credential.id))
+            _audit_credential_failure(correlation_id)
             raise _invalid_credential()
         instance = db.get(models.StrategyInstance, credential.strategy_instance_id)
         if instance is None:
-            _audit_credential_failure("INVALID_CREDENTIAL", credential_id=str(credential.id))
+            _audit_credential_failure(correlation_id)
             raise _invalid_credential()
         owner = crud.get_user_by_id(db, instance.user_id)
         if owner is None:
-            _audit_credential_failure("INVALID_CREDENTIAL", credential_id=str(credential.id))
+            _audit_credential_failure(correlation_id)
             raise _invalid_credential()
         credential.last_used_at = _now()
         return {
             "credential_id": str(credential.id),
+            "correlation_id": correlation_id,
             "instance_id": str(instance.id),
             "user_id": str(owner.id),
             "instance_status": instance.status,
@@ -193,12 +217,12 @@ def _invalid_credential() -> PrivateWebhookError:
     )
 
 
-def _audit_credential_failure(reason: str, *, credential_id: str | None = None) -> None:
+def _audit_credential_failure(correlation_id: str | None) -> None:
     log_audit_event(
-        "PRIVATE_WEBHOOK_AUTH_FAILED",
-        f"Private webhook credential rejected ({reason}).",
+        "private_webhook_auth_failed",
+        "private_webhook_auth_failed",
         severity="WARNING",
-        metadata={"reason": reason, "credential_id": credential_id},
+        metadata={"correlation_id": correlation_id},
     )
 
 
@@ -301,6 +325,7 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
             metadata={
                 "source": PRIVATE_WEBHOOK_SOURCE,
                 "credential_id": auth["credential_id"],
+                "correlation_id": auth.get("correlation_id"),
                 "strategy_instance_id": auth["instance_id"],
                 "action": action,
                 "signal_time": payload.signal_time.astimezone(timezone.utc).isoformat(),
@@ -476,6 +501,7 @@ def _audit_signal(auth: dict[str, Any], signal_id: str, status: str, detail: str
                 metadata={
                     "source": PRIVATE_WEBHOOK_SOURCE,
                     "credential_id": auth["credential_id"],
+                    "correlation_id": auth.get("correlation_id"),
                     "strategy_instance_id": auth["instance_id"],
                     "signal_id": signal_id,
                     "status": status,

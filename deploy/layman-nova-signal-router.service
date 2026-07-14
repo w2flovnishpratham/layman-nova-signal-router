@@ -9,7 +9,7 @@ User=root
 WorkingDirectory=/root/layman-nova-signal-router/backend
 Environment="PATH=/root/layman-nova-signal-router/backend/.venv/bin"
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/root/layman-nova-signal-router/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8002
+ExecStart=/root/layman-nova-signal-router/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8002 --no-access-log
 Restart=always
 RestartSec=3
 

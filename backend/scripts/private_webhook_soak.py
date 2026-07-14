@@ -197,7 +197,8 @@ def main() -> None:
     # ------------------------------------------------------------------
     server = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "scripts.private_webhook_soak_app:app",
-         "--host", "127.0.0.1", "--port", str(PORT), "--log-level", "warning"],
+         "--host", "127.0.0.1", "--port", str(PORT), "--log-level", "warning",
+         "--no-access-log"],
         cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
 
@@ -225,7 +226,7 @@ def main() -> None:
         check("real uvicorn process healthy", True)
 
         def webhook(token: str, body: dict) -> tuple[int, dict]:
-            return http("POST", f"/api/webhooks/private/{token}", body=body)
+            return http("POST", "/api/webhooks/private", body={"credential": token, **body})
 
         def executions(cookie: str, instance_id: str) -> list[dict]:
             status_code, payload = http(
@@ -374,7 +375,7 @@ def main() -> None:
         # ------------------------------------------------------------------
         # Step 25: final parity + zero-findings audit.
         # ------------------------------------------------------------------
-        from sqlalchemy import func, select
+        from sqlalchemy import func, select, text
 
         with session_scope() as db:
             jobs = db.scalars(select(models.StrategyExecutionJob)).all()
@@ -398,6 +399,16 @@ def main() -> None:
                 )
             ).all()
             event_count = db.scalar(select(func.count(models.PositionEvent.id)))
+            persisted_text = ""
+            for table in (
+                "strategy_instance_webhook_credentials",
+                "webhook_events",
+                "strategy_signals",
+                "strategy_execution_jobs",
+                "audit_logs",
+            ):
+                rows = db.execute(text(f"SELECT * FROM {table}")).fetchall()
+                persisted_text += json.dumps([tuple(map(str, row)) for row in rows])
             order_ids: list[str] = []
             for job in jobs:
                 summary = job.result_summary or {}
@@ -421,10 +432,23 @@ def main() -> None:
               and len(active_positions) == 0,
               f"active_pg_rows={len(active_positions)}")
         check("typed PG position events were recorded (ledger active)", (event_count or 0) > 0, f"events={event_count}")
+        check(
+            "0 plaintext webhook credentials in PostgreSQL",
+            all(token not in persisted_text for token in (token_a, token_b, token_pre_rotate, token_rotated)),
+        )
 
         # Tenant status isolation via API.
         status_code, _ = http("GET", f"/api/strategy-instances/{instance_b}/webhook-executions", cookie=cookie_a)
         check("cross-user execution-status request rejected", status_code == 404, str(status_code))
+
+        # Access logging is disabled and no application output may contain a
+        # credential, including rejected and rotated values.
+        stop(server)
+        server_output = server.stdout.read() if server.stdout else ""
+        check(
+            "0 webhook credentials in captured Uvicorn/application logs",
+            all(token not in server_output for token in (token_a, token_b, token_pre_rotate, token_rotated)),
+        )
 
     finally:
         stop(worker)

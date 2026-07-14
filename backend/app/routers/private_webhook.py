@@ -1,8 +1,8 @@
 """Private strategy-instance webhook endpoint (Phase 3A).
 
-POST /api/webhooks/private/{credential}
+POST /api/webhooks/private
 
-The opaque URL credential resolves credential -> StrategyInstance -> owner.
+The opaque JSON-body credential resolves credential -> StrategyInstance -> owner.
 The body can never name a tenant, mode, quantity, or contract. The endpoint
 authenticates, validates, persists the durable signal + execution job, and
 returns 202 — it never places an order inline.
@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import uuid
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -49,8 +50,8 @@ def _credential_rate_limited(token_hash: str) -> bool:
         return False
 
 
-@router.post("/private/{credential}")
-async def private_instance_webhook(credential: str, request: Request) -> JSONResponse:
+@router.post("/private")
+async def private_instance_webhook(request: Request) -> JSONResponse:
     if not settings.PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED:
         return _error(403, "Private strategy webhooks are disabled.", "DISABLED")
 
@@ -62,15 +63,6 @@ async def private_instance_webhook(credential: str, request: Request) -> JSONRes
     if len(raw_body) > max(int(settings.PRIVATE_WEBHOOK_MAX_BODY_BYTES), 256):
         return _error(413, "Request body is too large.", "BODY_TOO_LARGE")
 
-    if _credential_rate_limited(service.hash_credential((credential or "").strip())):
-        return _error(429, "Rate limit exceeded for this webhook.", "RATE_LIMITED")
-
-    try:
-        auth = service.authenticate_credential(credential)
-        service.validate_instance_lifecycle(auth)
-    except service.PrivateWebhookError as exc:
-        return _error(exc.status_code, str(exc), exc.reason)
-
     try:
         data = json.loads(raw_body.decode("utf-8", errors="replace"))
     except json.JSONDecodeError:
@@ -79,7 +71,11 @@ async def private_instance_webhook(credential: str, request: Request) -> JSONRes
         return _error(400, "Payload must be a JSON object.", "INVALID_JSON")
 
     try:
-        payload = service.parse_payload(data)
+        credential, payload = service.parse_request(data)
+        if _credential_rate_limited(service.hash_credential(credential.strip())):
+            return _error(429, "Rate limit exceeded for this webhook.", "RATE_LIMITED")
+        auth = service.authenticate_credential(credential, correlation_id=uuid.uuid4().hex)
+        service.validate_instance_lifecycle(auth)
         result = service.ingest(auth, payload)
     except service.PrivateWebhookError as exc:
         return _error(exc.status_code, str(exc), exc.reason)
