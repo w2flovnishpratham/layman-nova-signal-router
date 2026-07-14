@@ -430,6 +430,7 @@ export interface StrategyInstance {
   estimated_quantity?: number
   last_signal_time?: string | null
   last_execution_status?: string | null
+  has_open_position?: boolean
 }
 
 export interface InstanceWebhookCredential {

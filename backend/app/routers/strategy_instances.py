@@ -27,7 +27,10 @@ router = APIRouter(prefix="/api/strategy-instances", tags=["Strategy Instances"]
 
 def _error(exc: Exception) -> JSONResponse:
     if isinstance(exc, instances.InstanceError):
-        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": str(exc)})
+        content = {"ok": False, "error": str(exc)}
+        if exc.code:
+            content["reason"] = exc.code
+        return JSONResponse(status_code=exc.status_code, content=content)
     if isinstance(exc, EntitlementError):
         return JSONResponse(status_code=403, content={"ok": False, "error": str(exc) or "Entitlement required."})
     if isinstance(exc, ValueError):

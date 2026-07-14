@@ -458,10 +458,13 @@ function StrategyDetail(props: DetailProps) {
           <CopyButton label="Webhook URL" copied={props.copied} onClick={() => props.onCopy('Webhook URL', webhookUrl)} />
         </div>
         {detail.webhook_credential ? (
-          <div className="ps-actions">
-            <button type="button" className="secondary-button" disabled={!!props.busy} onClick={() => void props.onRotate()}><RotateCw size={14} /> Rotate</button>
-            <button type="button" className="ps-danger" disabled={!!props.busy} onClick={() => void props.onRevoke()}><Trash2 size={14} /> Revoke</button>
-          </div>
+          <>
+            {detail.has_open_position ? <div className="ps-warning"><AlertTriangle size={16} /><span>Revoking this credential disables TradingView exit signals. NOVA manual and protective exits remain available.</span></div> : null}
+            <div className="ps-actions">
+              <button type="button" className="secondary-button" disabled={!!props.busy} onClick={() => void props.onRotate()}><RotateCw size={14} /> Rotate</button>
+              <button type="button" className="ps-danger" disabled={!!props.busy} onClick={() => void props.onRevoke()}><Trash2 size={14} /> Revoke</button>
+            </div>
+          </>
         ) : null}
       </section>
 
@@ -500,9 +503,10 @@ function StrategyDetail(props: DetailProps) {
           {detail.status === 'ready' ? <button type="button" className="ps-primary" disabled={!detail.readiness?.can_activate || !!props.busy} onClick={() => void props.onLifecycle('Activate')}><Play size={14} /> Activate</button> : null}
           {detail.status === 'paused' ? <button type="button" className="ps-primary" disabled={!detail.readiness?.can_activate || !!props.busy} onClick={() => void props.onLifecycle('Resume')}><Play size={14} /> Resume</button> : null}
           {detail.status === 'active' ? <button type="button" className="secondary-button" disabled={!!props.busy} onClick={() => void props.onLifecycle('Pause')}><Pause size={14} /> Pause</button> : null}
-          {['active', 'paused'].includes(detail.status) ? <button type="button" className="ps-danger" disabled={!!props.busy} onClick={() => { if (window.confirm('Stop this strategy? This does not close an open position.')) void props.onLifecycle('Stop') }}><Square size={14} /> Stop</button> : null}
+          {['active', 'paused'].includes(detail.status) ? <button type="button" className="ps-danger" disabled={!!props.busy} onClick={() => { if (window.confirm('Stop this strategy? Stop is permitted only when the position is flat.')) void props.onLifecycle('Stop') }}><Square size={14} /> Stop</button> : null}
         </div>
-        <p className="ps-note">Pause and Stop block every private webhook signal, including EXIT. Exit any open position from Trading before pausing or stopping; these controls never close it automatically.</p>
+        {detail.status === 'paused' ? <p className="ps-note"><strong>New entries are blocked.</strong> Exit signals and NOVA protective exits remain active.</p> : null}
+        <p className="ps-note">Stopping is permitted only when flat. Close the open position from Trading first, or pause now to block new entries while keeping exits available. Stop never closes a position automatically.</p>
       </section>
 
       <section className="ps-card">
@@ -589,7 +593,8 @@ function contractLabel(entry: WebhookExecution): string {
 function safeReason(reason: string): string {
   const labels: Record<string, string> = {
     STALE_SIGNAL: 'Alert arrived too late', CONFLICTING_DUPLICATE: 'Signal ID was reused with different data',
-    INVALID_ACTION: 'Unsupported action', INACTIVE_INSTANCE: 'Strategy is paused or stopped',
+    INVALID_ACTION: 'Unsupported action', INACTIVE_INSTANCE: 'Strategy is stopped or inactive',
+    INSTANCE_PAUSED_ENTRIES_BLOCKED: 'Paused: new entries are blocked',
     STORE_UNAVAILABLE: 'Paper service is temporarily unavailable', INVALID_CREDENTIAL: 'Credential is missing or revoked',
   }
   return labels[reason] ?? reason.replaceAll('_', ' ').toLowerCase()

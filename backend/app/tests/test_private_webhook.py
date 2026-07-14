@@ -199,7 +199,7 @@ def test_rotated_credential_old_rejected_new_works(client):
     assert _post(client, new_token, _payload()).status_code == 202
 
 
-@pytest.mark.parametrize("status", ["paused", "stopped", "ready"])
+@pytest.mark.parametrize("status", ["stopped", "ready"])
 def test_inactive_instance_rejected(client, status):
     user = make_user(f"cred-{status}@gmail.com")
     instance_id = _make_instance(user, status=status)
@@ -208,6 +208,16 @@ def test_inactive_instance_rejected(client, status):
     assert response.status_code == 409
     assert response.json()["reason"] == "INACTIVE_INSTANCE"
     assert _jobs(instance_id) == []
+
+
+@pytest.mark.parametrize("action", ["BUY_CE", "BUY_PE", "EXIT", "HOLD"])
+def test_paused_instance_persists_action_for_worker_policy(client, action):
+    user = make_user(f"paused-{action.lower()}@gmail.com")
+    instance_id = _make_instance(user, status="paused")
+    token = _issue_token(user, instance_id)
+    response = _post(client, token, _payload(action=action))
+    assert response.status_code == 202
+    assert len(_jobs(instance_id)) == (0 if action == "HOLD" else 1)
 
 
 def test_non_webhook_journey_rejected(client):

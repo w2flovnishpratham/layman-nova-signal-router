@@ -43,9 +43,10 @@ WEBHOOK_JOURNEYS = {"PERSONAL_TRADINGVIEW"}
 class InstanceError(ValueError):
     """Domain error with an HTTP-friendly status code."""
 
-    def __init__(self, message: str, status_code: int = 400) -> None:
+    def __init__(self, message: str, status_code: int = 400, code: str | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.code = code
 
 
 def _now() -> datetime:
@@ -133,8 +134,17 @@ def _credential_public(row: models.StrategyInstanceWebhookCredential) -> dict[st
     }
 
 
-def _owned_instance(db, user_id: uuid.UUID, instance_id: uuid.UUID | str) -> models.StrategyInstance:
-    row = db.get(models.StrategyInstance, uuid.UUID(str(instance_id)))
+def _owned_instance(
+    db,
+    user_id: uuid.UUID,
+    instance_id: uuid.UUID | str,
+    *,
+    for_update: bool = False,
+) -> models.StrategyInstance:
+    query = select(models.StrategyInstance).where(
+        models.StrategyInstance.id == uuid.UUID(str(instance_id))
+    )
+    row = db.scalar(query.with_for_update() if for_update else query)
     if row is None or row.user_id != user_id:
         # Same response whether missing or foreign: no tenant probing.
         raise InstanceError("Strategy instance not found.", status_code=404)
@@ -189,7 +199,10 @@ def get_instance(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, 
         row = _owned_instance(db, user_id, instance_id)
         strategy = db.get(models.StrategyCatalog, row.strategy_id)
         payload = _instance_public(row, strategy=strategy)
-        return _decorate_personal_instance(db, row, payload)
+        payload = _decorate_personal_instance(db, row, payload)
+        if row.source_journey == "PERSONAL_TRADINGVIEW":
+            payload["has_open_position"] = _position_is_open(user_id, row.execution_mode)
+        return payload
 
 
 def admin_list_instances(*, user_id: uuid.UUID | None = None) -> list[dict[str, Any]]:
@@ -350,7 +363,7 @@ def _set_status(
             entitlements.require_live_entitlement_for_user(user_id)
             entitlements.require_strategy_entitlement_for_user(user_id)
     with session_scope() as db:
-        row = _owned_instance(db, user_id, instance_id)
+        row = _owned_instance(db, user_id, instance_id, for_update=True)
         if target is InstanceState.ACTIVE and row.source_journey == "PERSONAL_TRADINGVIEW":
             readiness = _decorate_personal_instance(db, row, {})["readiness"]
             if not readiness["can_activate"]:
@@ -358,6 +371,17 @@ def _set_status(
                 raise InstanceError(
                     f"Personal strategy is not ready: {', '.join(missing)}.", status_code=409
                 )
+        if (
+            target is InstanceState.STOPPED
+            and row.source_journey == "PERSONAL_TRADINGVIEW"
+            and _position_is_open(user_id, row.execution_mode)
+        ):
+            raise InstanceError(
+                "Close the open position before stopping this strategy. "
+                "You may pause it now to block new entries while keeping exits available.",
+                status_code=409,
+                code="POSITION_OPEN",
+            )
         previous = row.status
         try:
             _apply_status(row, target)
@@ -380,6 +404,31 @@ def _set_status(
 def _instance_execution_mode(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> str:
     with session_scope() as db:
         return _owned_instance(db, user_id, instance_id).execution_mode
+
+
+def _position_is_open(user_id: uuid.UUID, execution_mode: str) -> bool:
+    """Read the owner's JSON execution authority for the requested mode."""
+    if execution_mode == "signal_only":
+        return False
+    from app.services import strategy_fanout
+    from app.services.execution_context import bind_user_execution_context
+    from app.services.state_store import (
+        get_live_open_position,
+        get_paper_position,
+        init_runtime_files,
+    )
+
+    user = strategy_fanout.load_user_context(user_id)
+    if user is None:
+        raise InstanceError("Position state is unavailable.", status_code=503)
+    with bind_user_execution_context(user):
+        init_runtime_files()
+        position = (
+            get_paper_position()
+            if execution_mode == "paper_live_data"
+            else get_live_open_position()
+        )
+    return bool(position.get("has_open_position"))
 
 
 def activate_instance(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:

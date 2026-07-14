@@ -368,7 +368,48 @@ def main() -> None:
         check("step 23: tenant B PE (3 lots = 195)", position_b.get("option_side") == "PE" and position_b.get("qty") == 195,
               f"{position_b.get('option_side')}/{position_b.get('qty')}")
 
-        # Step 24: worker restart after job persistence.
+        # Step 23B: paused blocks reversal entries but preserves EXIT; stop is
+        # server-enforced flat-only and duplicate EXIT remains idempotent.
+        paused = http("POST", f"/api/strategy-instances/{instance_a}/pause", cookie=cookie_a, body={})
+        check("step 23B: positioned strategy paused", paused[0] == 200)
+        status_code, _ = webhook(token_rotated, alert("BUY_PE", "soak-a-paused-entry"))
+        check("step 23B: paused opposite entry accepted for durable audit", status_code == 202)
+        paused_entry = wait_terminal(cookie_a, instance_a, "soak-a-paused-entry")
+        check(
+            "step 23B: paused entry did not reverse",
+            (paused_entry.get("result") or {}).get("reason") == "INSTANCE_PAUSED_ENTRIES_BLOCKED"
+            and position(cookie_a).get("option_side") == "CE",
+            json.dumps(paused_entry.get("result")),
+        )
+        stopped_open = http("POST", f"/api/strategy-instances/{instance_a}/stop", cookie=cookie_a, body={})
+        check(
+            "step 23B: stop rejected while positioned",
+            stopped_open[0] == 409 and stopped_open[1].get("reason") == "POSITION_OPEN",
+            str(stopped_open),
+        )
+        paused_exit = alert("EXIT", "soak-a-paused-exit")
+        status_code, _ = webhook(token_rotated, paused_exit)
+        check("step 23B: EXIT accepted while paused", status_code == 202)
+        wait_terminal(cookie_a, instance_a, "soak-a-paused-exit")
+        check("step 23B: paused EXIT closed CE", position(cookie_a).get("has_open_position") is False)
+        status_code, duplicate_exit = webhook(token_rotated, paused_exit)
+        check(
+            "step 23B: duplicate paused EXIT created no second job/order",
+            status_code == 200 and duplicate_exit.get("duplicate") is True,
+            str(duplicate_exit),
+        )
+        stopped_flat = http("POST", f"/api/strategy-instances/{instance_a}/stop", cookie=cookie_a, body={})
+        check("step 23B: stop succeeded after flatness", stopped_flat[0] == 200)
+        status_code, stopped_signal = webhook(token_rotated, alert("BUY_CE", "soak-a-after-stop"))
+        check(
+            "step 23B: signals rejected after stop",
+            status_code == 409 and stopped_signal.get("reason") == "INACTIVE_INSTANCE",
+            str(stopped_signal),
+        )
+
+        # Step 24: worker restart after job persistence. Queue EXIT while
+        # paused, resume before claim, and prove the EXIT still executes once.
+        check("step 24: B paused while positioned", http("POST", f"/api/strategy-instances/{instance_b}/pause", cookie=cookie_b, body={})[0] == 200)
         stop(worker)
         status_code, _ = webhook(token_b, alert("EXIT", "soak-b-2"))
         check("step 24: signal accepted while worker is down", status_code == 202)
@@ -376,14 +417,11 @@ def main() -> None:
         pending = execution_status(cookie_b, instance_b, "soak-b-2")
         check("step 24: job persisted, not executed while worker down", pending and pending.get("job_status") == "queued",
               json.dumps(pending))
+        check("step 24: B resumed before queued EXIT claim", http("POST", f"/api/strategy-instances/{instance_b}/resume", cookie=cookie_b, body={})[0] == 200)
         worker = start_worker()
         wait_terminal(cookie_b, instance_b, "soak-b-2")
         position_b = position(cookie_b)
         check("step 24: restarted worker executed exactly once (B flat)", position_b.get("has_open_position") is False)
-
-        # Close A as well for final parity.
-        webhook(token_rotated, alert("EXIT", "soak-a-8"))
-        wait_terminal(cookie_a, instance_a, "soak-a-8")
 
         # ------------------------------------------------------------------
         # Step 25: final parity + zero-findings audit.

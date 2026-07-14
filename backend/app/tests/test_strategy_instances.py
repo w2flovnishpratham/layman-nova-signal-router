@@ -765,3 +765,24 @@ def test_webhook_test_is_owner_scoped_and_paper_only(mu_db, monkeypatch):
     response = owner_client.post(f"/api/strategy-instances/{instance_id}/webhook-test")
     assert response.status_code == 409
     assert response.json()["reason"] == "LIVE_MODE_UNAVAILABLE"
+
+
+def test_personal_stop_returns_position_open_without_changing_status(mu_db, monkeypatch):
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import strategy_instance_service
+
+    _seed_supertrend()
+    user = make_user("personal-stop-open@example.com")
+    client = _client(user)
+    instance_id = _create_instance(client, execution_mode="paper_live_data")["id"]
+    with session_scope() as db:
+        db.get(models.StrategyInstance, uuid.UUID(instance_id)).status = "active"
+    monkeypatch.setattr(strategy_instance_service, "_position_is_open", lambda *_args: True)
+
+    response = client.post(f"/api/strategy-instances/{instance_id}/stop")
+    assert response.status_code == 409
+    assert response.json()["reason"] == "POSITION_OPEN"
+    assert "Close the open position" in response.json()["error"]
+    with session_scope() as db:
+        assert db.get(models.StrategyInstance, uuid.UUID(instance_id)).status == "active"

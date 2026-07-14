@@ -233,9 +233,9 @@ def validate_instance_lifecycle(auth: dict[str, Any]) -> None:
             status_code=409,
             reason="INACTIVE_INSTANCE",
         )
-    if auth["instance_status"] != InstanceState.ACTIVE.value:
+    if auth["instance_status"] not in {InstanceState.ACTIVE.value, InstanceState.PAUSED.value}:
         raise PrivateWebhookError(
-            "Strategy instance is not active.",
+            "Strategy instance is stopped or not active.",
             status_code=409,
             reason="INACTIVE_INSTANCE",
         )

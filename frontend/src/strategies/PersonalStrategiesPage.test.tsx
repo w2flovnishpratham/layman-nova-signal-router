@@ -183,4 +183,23 @@ describe('PersonalStrategiesPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('feature disabled')
     expect(document.body.textContent).not.toContain(TOKEN)
   })
+
+  it('keeps an open-position strategy paused when stop returns a conflict', async () => {
+    const credential = { id: 'credential-a', strategy_instance_id: 'instance-a', token_prefix: 'nwk_safe', created_at: null, last_used_at: null, revoked_at: null }
+    arrange(instance({
+      status: 'paused', has_open_position: true, webhook_credential: credential,
+      readiness: { paper_mode: true, valid_lots: true, active_credential: true, connection_tested: true, can_activate: true },
+    }))
+    api.stop.mockRejectedValue(new Error('Close the open position before stopping this strategy. You may pause it now to block new entries while keeping exits available.'))
+    const user = userEvent.setup()
+    render(<PersonalStrategiesPage />)
+    expect(await screen.findByText('New entries are blocked.')).toBeInTheDocument()
+    expect(screen.getByText(/Exit signals and NOVA protective exits remain active/)).toBeInTheDocument()
+    expect(screen.getByText(/Revoking this credential disables TradingView exit signals/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^stop$/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Close the open position')
+    expect(screen.getAllByText('Paused')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /^stop$/i })).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain(TOKEN)
+  })
 })

@@ -11,7 +11,10 @@ owns risk checks, order placement, reversal sequencing, and position updates.
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from typing import Any
+
+from sqlalchemy import select
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT, settings
 from app.db import models
@@ -52,23 +55,35 @@ def _failed(reason: str, message: str) -> dict[str, Any]:
     }
 
 
-def _revalidate_instance(instance_id: uuid.UUID, job_user_id: Any) -> dict[str, Any]:
+@contextmanager
+def _revalidate_instance(instance_id: uuid.UUID, job_user_id: Any, action: str):
     """Fresh instance state at claim time — lots/mode changes since enqueue
-    apply, stopped/paused/archived instances never execute."""
+    apply; paused entries and all stopped/archived actions fail closed."""
     with session_scope() as db:
-        instance = db.get(models.StrategyInstance, instance_id)
+        instance = db.scalar(
+            select(models.StrategyInstance)
+            .where(models.StrategyInstance.id == instance_id)
+            .with_for_update()
+        )
         if instance is None:
-            return {"error": _result("rejected", "INACTIVE_INSTANCE")}
+            yield {"error": _result("rejected", "INACTIVE_INSTANCE")}
+            return
         if str(instance.user_id) != str(job_user_id):
             # Structurally impossible (enqueue derives user from instance);
             # fail closed anyway.
-            return {"error": _result("rejected", "TENANT_MISMATCH")}
-        if instance.status != InstanceState.ACTIVE.value:
-            return {"error": _result("rejected", "INACTIVE_INSTANCE")}
+            yield {"error": _result("rejected", "TENANT_MISMATCH")}
+            return
+        if instance.status == InstanceState.PAUSED.value and action == "ENTRY":
+            yield {"error": _no_op("INSTANCE_PAUSED_ENTRIES_BLOCKED")}
+            return
+        if instance.status not in {InstanceState.ACTIVE.value, InstanceState.PAUSED.value}:
+            yield {"error": _result("rejected", "INACTIVE_INSTANCE")}
+            return
         lots = int(instance.current_lots or 0)
         if lots < 1:
-            return {"error": _result("rejected", "INVALID_LOTS")}
-        return {"lots": lots, "execution_mode": instance.execution_mode}
+            yield {"error": _result("rejected", "INVALID_LOTS")}
+            return
+        yield {"lots": lots, "execution_mode": instance.execution_mode}
 
 
 def _resolve_entry_contract(option_side: str, lots: int) -> dict[str, Any] | None:
@@ -151,41 +166,41 @@ def execute_private_job(job: dict[str, Any], signal: NormalizedSignal) -> dict[s
     except (ValueError, TypeError):
         return _result("rejected", "INACTIVE_INSTANCE")
 
-    revalidated = _revalidate_instance(instance_id, job["user_id"])
-    if "error" in revalidated:
-        return revalidated["error"]
-    lots = revalidated["lots"]
-    execution_mode = revalidated["execution_mode"]
+    with _revalidate_instance(instance_id, job["user_id"], signal.action) as revalidated:
+        if "error" in revalidated:
+            return revalidated["error"]
+        lots = revalidated["lots"]
+        execution_mode = revalidated["execution_mode"]
 
-    if (
-        execution_mode == "real_orders"
-        and not settings.PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED
-    ):
-        return _result("blocked", "PRIVATE_WEBHOOK_LIVE_EXECUTION_DISABLED")
+        if (
+            execution_mode == "real_orders"
+            and not settings.PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED
+        ):
+            return _result("blocked", "PRIVATE_WEBHOOK_LIVE_EXECUTION_DISABLED")
 
-    user = strategy_fanout.load_user_context(job["user_id"])
-    if user is None:
-        return _result("skipped", "user_not_found")
+        user = strategy_fanout.load_user_context(job["user_id"])
+        if user is None:
+            return _result("skipped", "user_not_found")
 
-    # Idempotent no-op pre-check before any risk reservation or run row.
-    # Raced state changes are re-checked by the enricher under the same
-    # per-user worker lock right before routing.
-    if execution_mode in _MONEY_MODES:
-        with bind_user_execution_context(user):
-            init_runtime_files()
-            position = get_open_position()
-            has_open = bool(position.get("has_open_position"))
-            current_side = str(position.get("option_side") or "").upper()
-        if signal.action == "EXIT" and not has_open:
-            return _no_op("ALREADY_FLAT")
-        if signal.action == "ENTRY" and has_open and current_side == (signal.option_side or ""):
-            return _no_op(f"ALREADY_IN_{current_side}")
+        # Idempotent no-op pre-check before any risk reservation or run row.
+        # Position state is checked again by the enricher immediately before
+        # routing while this instance row lock is still held.
+        if execution_mode in _MONEY_MODES:
+            with bind_user_execution_context(user):
+                init_runtime_files()
+                position = get_open_position()
+                has_open = bool(position.get("has_open_position"))
+                current_side = str(position.get("option_side") or "").upper()
+            if signal.action == "EXIT" and not has_open:
+                return _no_op("ALREADY_FLAT")
+            if signal.action == "ENTRY" and has_open and current_side == (signal.option_side or ""):
+                return _no_op(f"ALREADY_IN_{current_side}")
 
-    return strategy_fanout.dispatch_signal_job(
-        user_id=job["user_id"],
-        strategy_name=job["strategy_name"],
-        lots=lots,
-        execution_mode=execution_mode,
-        signal=signal,
-        signal_enricher=_make_enricher(lots),
-    )
+        return strategy_fanout.dispatch_signal_job(
+            user_id=job["user_id"],
+            strategy_name=job["strategy_name"],
+            lots=lots,
+            execution_mode=execution_mode,
+            signal=signal,
+            signal_enricher=_make_enricher(lots),
+        )

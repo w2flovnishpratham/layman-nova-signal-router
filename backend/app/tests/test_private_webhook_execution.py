@@ -368,6 +368,86 @@ def test_instance_stopped_after_queue_is_rejected_at_claim(client, per_user_runt
     assert _position_for(user)["has_open_position"] is False
 
 
+@pytest.mark.parametrize(
+    ("open_side", "blocked_action"),
+    [("CE", "BUY_PE"), ("PE", "BUY_CE")],
+)
+def test_paused_blocks_reversal_but_allows_exit(
+    client,
+    per_user_runtime,
+    deterministic_paper_market,
+    worker_enabled,
+    open_side,
+    blocked_action,
+):
+    from app.services import strategy_instance_service
+
+    user = make_user(f"paused-{open_side.lower()}@gmail.com")
+    instance_id = _make_instance(user)
+    token = _issue_token(user, instance_id)
+    _start_paper_engine(user)
+
+    _ingest(client, token, action=f"BUY_{open_side}")
+    assert _run_worker() == 1
+    strategy_instance_service.pause_instance(user.id, instance_id)
+
+    _ingest(client, token, action=blocked_action)
+    assert _run_worker() == 1
+    blocked = _job_rows(instance_id)[1]["result"]
+    assert blocked["status"] == "NO_OP"
+    assert blocked["reason"] == "INSTANCE_PAUSED_ENTRIES_BLOCKED"
+    assert _position_for(user)["option_side"] == open_side
+
+    _ingest(client, token, action="EXIT")
+    assert _run_worker() == 1
+    assert _position_for(user)["has_open_position"] is False
+
+
+def test_pause_after_queue_blocks_entry_and_hold_remains_audit_only(
+    client, per_user_runtime, deterministic_paper_market, worker_enabled
+):
+    from app.services import strategy_instance_service
+
+    user = make_user("paused-before-claim@gmail.com")
+    instance_id = _make_instance(user)
+    token = _issue_token(user, instance_id)
+    _start_paper_engine(user)
+
+    _ingest(client, token, action="BUY_CE")
+    strategy_instance_service.pause_instance(user.id, instance_id)
+    assert _run_worker() == 1
+    assert _job_rows(instance_id)[0]["result"]["reason"] == "INSTANCE_PAUSED_ENTRIES_BLOCKED"
+    assert _position_for(user)["has_open_position"] is False
+
+    _ingest(client, token, action="HOLD")
+    assert _run_worker() == 0
+    assert len(_job_rows(instance_id)) == 1
+
+
+def test_stop_rejects_open_position_then_succeeds_after_paused_exit(
+    client, per_user_runtime, deterministic_paper_market, worker_enabled
+):
+    from app.services import strategy_instance_service
+
+    user = make_user("stop-flat-only@gmail.com")
+    instance_id = _make_instance(user)
+    token = _issue_token(user, instance_id)
+    _start_paper_engine(user)
+    _ingest(client, token, action="BUY_CE")
+    assert _run_worker() == 1
+
+    with pytest.raises(strategy_instance_service.InstanceError) as caught:
+        strategy_instance_service.stop_instance(user.id, instance_id)
+    assert caught.value.status_code == 409
+    assert caught.value.code == "POSITION_OPEN"
+
+    strategy_instance_service.pause_instance(user.id, instance_id)
+    _ingest(client, token, action="EXIT")
+    assert _run_worker() == 1
+    assert _position_for(user)["has_open_position"] is False
+    assert strategy_instance_service.stop_instance(user.id, instance_id)["status"] == "stopped"
+
+
 def test_invalid_lots_rejected_at_claim(client, per_user_runtime, deterministic_paper_market, worker_enabled):
     from sqlalchemy import update
 
