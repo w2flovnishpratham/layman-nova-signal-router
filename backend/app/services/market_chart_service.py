@@ -168,8 +168,12 @@ def _fetch_candles(dhan_interval: str, interval_label: str, today: date) -> dict
         reason = "market_data_token_expired" if shared_market_data_configured() else "market_data_unavailable"
         return _unavailable(reason, "NIFTY chart is temporarily unavailable. Nova is reconnecting market data.", today)
 
-    from_date = session_start.strftime("%Y-%m-%d %H:%M:%S")
-    to_date = min(now_ist, session_end).strftime("%Y-%m-%d %H:%M:%S")
+    # Dhan's intraday toDate is DATE-exclusive and returns an empty set for a
+    # completed day when given same-day datetimes; date-only [day, day+1) is
+    # the only range that reliably returns a past session (verified against
+    # the live API). filter_today_session clips to the session window anyway.
+    from_date = today.isoformat()
+    to_date = (today + timedelta(days=1)).isoformat()
 
     # Shared data identity reads directly (no per-user egress proxy).
     client = RealDhanClient(proxy_url="")
