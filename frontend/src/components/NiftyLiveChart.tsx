@@ -130,7 +130,6 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
     const container = containerRef.current
     if (!container || !hasCandles || chartRef.current) return
     const chart = createChart(container, {
-      autoSize: true,
       layout: {
         background: { color: 'transparent' },
         textColor: 'rgba(148, 155, 175, 0.9)',
@@ -167,7 +166,22 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
     chartRef.current = chart
     seriesRef.current = candleSeries
     markersPluginRef.current = createSeriesMarkers(candleSeries, [])
+    let resizeFrame: number | null = null
+    const resizeObserver = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      const width = Math.floor(entry.contentRect.width)
+      const height = Math.floor(entry.contentRect.height)
+      if (width <= 0 || height <= 0) return
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null
+        chart.resize(width, height)
+      })
+    })
+    resizeObserver.observe(container)
     return () => {
+      resizeObserver.disconnect()
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
       markersPluginRef.current = null
       seriesRef.current = null
       chartRef.current = null

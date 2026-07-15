@@ -1151,6 +1151,7 @@ code {
 
 .engine-main-pane {
   min-width: 0;
+  max-width: 100%;
 }
 
 .engine-shell .engine-main-pane {
@@ -2314,7 +2315,10 @@ code {
   display: grid;
   flex: 0 0 auto;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   gap: 10px;
+  overflow: hidden;
   padding: 10px 12px 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.055);
 }
@@ -2334,8 +2338,7 @@ code {
 
 .engine-live-layout .nifty-chart-canvas {
   flex: 1 1 auto;
-  height: auto;
-  min-height: 0;
+  min-height: 280px;
 }
 
 .engine-live-layout .nifty-chart-empty {
@@ -2386,8 +2389,12 @@ code {
   display: grid;
   grid-template-rows: auto auto 1fr;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 12px;
   min-height: 480px;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: rgba(15, 14, 20, 0.84);
@@ -2405,6 +2412,7 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+  min-width: 0;
 }
 
 .nifty-chart-title {
@@ -2418,8 +2426,10 @@ code {
 }
 
 .nifty-chart-meta {
+  min-width: 0;
   color: var(--text-3);
   font-size: 10px;
+  overflow-wrap: anywhere;
 }
 
 .nifty-chart-meta strong {
@@ -2444,8 +2454,12 @@ code {
 .nifty-chart-canvas,
 .nova-live-chart {
   width: 100%;
-  height: clamp(360px, 52vh, 560px);
+  max-width: 100%;
+  min-width: 0;
+  height: clamp(280px, 40vh, 520px);
   display: block;
+  position: relative;
+  overflow: hidden;
   /* Read-only chart: block all mouse/touch interaction. */
   pointer-events: none;
   user-select: none;
@@ -2454,7 +2468,8 @@ code {
 
 @media (max-width: 900px) {
   .nifty-chart-canvas {
-    height: 340px;
+    height: 320px;
+    min-height: 320px;
   }
 }
 
@@ -2577,6 +2592,8 @@ code {
   align-content: start;
   padding-top: 0;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .sidebar-card {
@@ -2587,6 +2604,9 @@ code {
   background: linear-gradient(180deg, rgba(18, 15, 28, 0.96), rgba(10, 8, 16, 0.94));
   box-shadow: var(--shadow-card);
   padding: 16px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .account-card {
@@ -2616,11 +2636,26 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
+  min-width: 0;
   color: rgba(247, 243, 255, 0.66);
   font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-title > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.route-card button {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .market-panel-header,
@@ -3151,7 +3186,7 @@ code {
    Order: chat/execution first, then market + manual, then account + controls. */
 @media (min-width: 1024px) {
   .engine-shell-grid {
-    grid-template-columns: auto minmax(420px, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .desktop-engine-panel {
