@@ -97,30 +97,29 @@ def manual_package(user_id: uuid.UUID, strategy_id, version_id) -> dict[str, Any
     if not settings.PINE_CONVERSION_MANUAL_PACKAGE_ENABLED:
         raise ConversionError("Manual conversion packages are disabled.", 404, "FEATURE_DISABLED")
     source = pine.get_source(user_id, strategy_id, version_id)
+    prompt_template = PROMPT_PATH.read_text(encoding="utf-8")
+    prompt = prompt_template.replace("{{OPTIONS}}", json.dumps({"workflow": "manual_external_conversion"}, sort_keys=True)).replace("{{SOURCE}}", source["source"])
     package = f"""# NOVA Pine Contract v1 conversion package
+
+Prompt version: {settings.PINE_CONVERSION_PROMPT_VERSION}
+Prompt content SHA-256: {_hash(prompt_template)}
 
 Privacy warning: copying this package to an external assistant shares your Pine source with that service. Review that service's privacy terms before pasting private strategy code.
 
-## Task
-Convert the untrusted Pine source below to Pine v6 compatible with NOVA_PINE_CONTRACT_VERSION=1. Do not execute, compile, backtest, approve, or make profitability claims.
+## Current master prompt
+{prompt}
 
-## Mandatory contract
-- Emit only BUY_CE, BUY_PE, EXIT, and optional HOLD from alert()/alertcondition().
-- Preserve compatible logic; document ambiguous long/short mappings and every meaningful removal.
-- NIFTY intraday only; one current position; no pyramiding, scale-in, martingale, portfolio, strike, or expiry execution logic.
-- EXIT coverage is mandatory. Prefer bar-close confirmation and disclose repainting risk.
-- Never emit credentials or server-controlled owner, instance, broker, mode, lots, quantity, strike, expiry, security, symbol, order, or product fields.
-- Return Pine source plus a summary, assumptions, unsupported features, warnings, and action mapping.
-
-## Untrusted source
-BEGIN_UNTRUSTED_PINE_SOURCE
-{source['source']}
-END_UNTRUSTED_PINE_SOURCE
-
-## Final checklist
-Pine v6; one declaration; supported actions only; EXIT present; no secrets; no server-authority fields; NIFTY/intraday/one-position; repainting disclosed; no execution or profitability claim.
+## Manual validation and TradingView compilation checklist
+- Pine v6 and exactly one declaration.
+- BUY_CE, BUY_PE, EXIT and optional HOLD use the NOVA action vocabulary.
+- No credentials or server-authority fields.
+- NIFTY intraday, one position, no scale-in or pyramiding.
+- Completed-bar behavior and repainting risks are explicit.
+- Entry, exit, reversal assumptions and unsupported constructs are documented.
+- Paste into TradingView and confirm compilation separately; NOVA static validation is not compilation.
+- Add the script to the intended symbol/timeframe chart and use once-per-bar-close alerts where compatible.
 """
-    return {"package": package, "filename": "nova-pine-conversion-package.txt", "package_sha256": _hash(package), "source_sha256": source["source_sha256"]}
+    return {"package": package, "filename": "nova-pine-conversion-package.txt", "package_sha256": _hash(package), "source_sha256": source["source_sha256"], "prompt_version": settings.PINE_CONVERSION_PROMPT_VERSION, "prompt_content_sha256": _hash(prompt_template)}
 
 
 def create_request(user_id: uuid.UUID, strategy_id, version_id, options: ConversionOptions) -> dict[str, Any]:

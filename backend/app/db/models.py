@@ -796,6 +796,97 @@ class PineConversionRequest(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class PinePromptVersion(Base):
+    """Immutable manual conversion prompt metadata and qualification state."""
+
+    __tablename__ = "pine_prompt_versions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    version_label: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="QUALIFICATION")
+    change_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class PineUserAcceptance(Base):
+    """User acknowledgement pinned to exact source, prompt and validation evidence."""
+
+    __tablename__ = "pine_user_acceptances"
+    __table_args__ = (UniqueConstraint("candidate_version_id", name="uq_pine_acceptance_candidate"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    original_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    candidate_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    prompt_version_id: Mapped[str] = mapped_column(String(40), ForeignKey("pine_prompt_versions.id", ondelete="RESTRICT"), nullable=False)
+    setup_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    validation_report_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_validation_reports.id", ondelete="RESTRICT"), nullable=False)
+    validation_report_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    assumptions: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class TradingViewSetup(Base):
+    """Manual TradingView installation and server-observed verification state."""
+
+    __tablename__ = "tradingview_setups"
+    __table_args__ = (
+        UniqueConstraint("strategy_instance_id", name="uq_tradingview_setup_instance"),
+        Index("ix_tradingview_setups_type_status", "setup_type", "status"),
+        Index("ix_tradingview_setups_owner_updated", "user_id", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=False)
+    approved_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    setup_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="SETUP_PENDING")
+    requested_timeframe: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    user_reported_compiled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    installation_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    installation_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    hold_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hold_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paper_entry_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    paper_entry_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paper_exit_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    paper_exit_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reversal_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reversal_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    blocking_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admin_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reset_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class PinePromptQualificationTrial(Base):
+    """Admin-owned evidence for one representative manual-prompt trial."""
+
+    __tablename__ = "pine_prompt_qualification_trials"
+    __table_args__ = (Index("ix_pine_prompt_trials_prompt_outcome", "prompt_version_id", "outcome"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    prompt_version_id: Mapped[str] = mapped_column(String(40), ForeignKey("pine_prompt_versions.id", ondelete="RESTRICT"), nullable=False)
+    original_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    candidate_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    strategy_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    test_classification: Mapped[str] = mapped_column(String(50), nullable=False)
+    evidence: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tester_user_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class StrategyInstance(Base):
     """One user's configured copy of a strategy version — the universal
     server-side unit all three journeys route through.

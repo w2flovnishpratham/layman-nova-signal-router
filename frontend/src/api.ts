@@ -678,8 +678,18 @@ export const createPineVersion = async (strategyId: string, payload: { source: s
   pineCall<{ version: PineVersion; reused: boolean }>(`/api/personal-pine-strategies/${strategyId}/versions` as `/${string}`, 'POST', payload)
 export const validatePineVersion = async (strategyId: string, versionId: string) =>
   pineCall<{ version: PineVersion; report: PineValidation; reused: boolean }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/validate` as `/${string}`, 'POST')
-export const submitPineVersion = async (strategyId: string, versionId: string) =>
-  pineCall<{ version: PineVersion }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/submit` as `/${string}`, 'POST')
+export interface PineUserAcceptance {
+  original_version_id: string
+  prompt_version_id: string
+  setup_type: TradingViewSetupType
+  assumptions: string[]
+  reviewed_strategy: true
+  understands_static_validation: true
+  understands_performance_risk: true
+  accepts_paper_only: true
+}
+export const submitPineVersion = async (strategyId: string, versionId: string, acceptance: PineUserAcceptance) =>
+  pineCall<{ version: PineVersion }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/submit` as `/${string}`, 'POST', acceptance)
 export const getPineSource = async (strategyId: string, versionId: string) =>
   pineCall<{ source: string; filename: string; source_sha256: string; approved: boolean }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/source` as `/${string}`)
 export const linkPineVersion = async (instanceId: string, strategyId: string, versionId: string) =>
@@ -691,6 +701,7 @@ export interface PineReview {
   source?: string
   filename?: string
   history?: Array<{ id: string; decision: string; note: string | null; reviewed_at: string | null }>
+  acceptance?: { prompt_version_id: string; setup_type: TradingViewSetupType; original_version_id: string; validation_report_sha256: string; accepted_at: string; assumptions: string[] } | null
 }
 export const listPineReviews = async () =>
   (await pineCall<{ reviews: PineReview[] }>('/api/admin/pine-reviews')).reviews
@@ -739,3 +750,61 @@ export const getPineConversion = (id: string) => pineCall<{ conversion: PineConv
 export const acceptPineConversion = (id: string) => pineCall<{ conversion: PineConversion }>(`/api/pine-conversions/${id}/accept` as `/${string}`, 'POST')
 export const rejectPineConversion = (id: string) => pineCall<{ conversion: PineConversion }>(`/api/pine-conversions/${id}/reject` as `/${string}`, 'POST', {})
 export const retryPineConversion = (id: string) => pineCall<{ conversion: PineConversion }>(`/api/pine-conversions/${id}/retry` as `/${string}`, 'POST', { consent: true })
+
+export type TradingViewSetupType = 'USER_MANAGED_TRADINGVIEW' | 'NOVA_MANAGED_TRADINGVIEW'
+export interface TradingViewSetup {
+  id: string
+  user_id: string
+  strategy_instance_id: string
+  approved_version_id: string
+  setup_type: TradingViewSetupType
+  approved_source_sha256?: string | null
+  requested_timeframe?: string | null
+  status: string
+  ready_for_paper: boolean
+  blocking_step: string | null
+  who_acts_next: string
+  blocking_reason: string | null
+  user_reported_compiled_at: string | null
+  hold_verified_at: string | null
+  paper_entry_verified_at: string | null
+  paper_exit_verified_at: string | null
+  gates: Record<string, boolean>
+  updated_at: string | null
+  credential_status?: string
+  installation_metadata?: Record<string, string> | null
+  admin_notes?: string | null
+}
+
+async function setupCall(path: `/${string}`, method = 'GET', payload?: unknown): Promise<TradingViewSetup> {
+  const response = await apiFetch(path, {
+    method, cache: 'no-store',
+    headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as { ok?: boolean; setup?: TradingViewSetup; error?: string } | null
+  if (!response.ok || !body?.ok || !body.setup) throw new Error(body?.error || `TradingView setup request failed: ${response.status}`)
+  return body.setup
+}
+
+export const createTradingViewSetup = (instanceId: string, setup_type: TradingViewSetupType) =>
+  setupCall(`/api/strategy-instances/${instanceId}/tradingview-setup` as `/${string}`, 'POST', { setup_type })
+export const getTradingViewSetup = (instanceId: string) =>
+  setupCall(`/api/strategy-instances/${instanceId}/tradingview-setup` as `/${string}`)
+export const reportTradingViewCompiled = (instanceId: string) =>
+  setupCall(`/api/strategy-instances/${instanceId}/tradingview-setup/compiled` as `/${string}`, 'POST', { compiled: true })
+
+export async function listManagedTradingViewSetups(): Promise<TradingViewSetup[]> {
+  const response = await apiFetch('/api/admin/managed-tradingview-setups', { cache: 'no-store' })
+  const body = await response.json().catch(() => null) as { ok?: boolean; setups?: TradingViewSetup[]; error?: string } | null
+  if (!response.ok || !body?.ok || !body.setups) throw new Error(body?.error || 'Could not load managed setup queue.')
+  return body.setups
+}
+
+export const recordManagedTradingViewInstallation = (setupId: string, payload: {
+  installed_version_hash: string; workspace_reference: string; alert_reference: string
+  symbol: string; timeframe: string; installed_at: string
+}) => setupCall(`/api/admin/managed-tradingview-setups/${setupId}/installation` as `/${string}`, 'POST', payload)
+
+export const updateManagedTradingViewState = (setupId: string, status: 'SETUP_PENDING' | 'INSTALLATION_IN_PROGRESS' | 'ALERT_TEST_PENDING' | 'PAPER_VERIFICATION_PENDING' | 'BLOCKED' | 'RETIRED', reason?: string) =>
+  setupCall(`/api/admin/managed-tradingview-setups/${setupId}/state` as `/${string}`, 'POST', { status, reason: reason ?? null })

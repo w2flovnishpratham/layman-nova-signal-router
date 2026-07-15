@@ -5,6 +5,7 @@ import {
   createPineConversion,
   createPineStrategy,
   createPineVersion,
+  createTradingViewSetup,
   decidePineReview,
   generatePineConversionPackage,
   getPineConversion,
@@ -12,12 +13,15 @@ import {
   getPineReview,
   getPineSource,
   getPineStrategy,
+  getTradingViewSetup,
   linkPineVersion,
+  listManagedTradingViewSetups,
   listPineReviews,
   listPineStrategies,
   listStrategyInstances,
   rejectPineConversion,
   retryPineConversion,
+  recordManagedTradingViewInstallation,
   submitPineVersion,
   validatePineVersion,
   type PineFinding,
@@ -27,6 +31,8 @@ import {
   type PineStrategy,
   type PineVersion,
   type StrategyInstance,
+  type TradingViewSetup,
+  type TradingViewSetupType,
 } from '../api'
 
 const MAX_BYTES = 256 * 1024
@@ -44,7 +50,7 @@ export function ImportedPinePage({ isAdmin = false }: { isAdmin?: boolean }) {
         {isAdmin ? <div className="ps-heading-actions"><button className="secondary-button" type="button" onClick={() => setMode(mode === 'owner' ? 'admin' : 'owner')}>{mode === 'owner' ? 'Admin review queue' : 'My scripts'}</button></div> : null}
       </div>
       <div className="ps-warning"><AlertTriangle size={16} /><span>Hosted execution is unavailable. Approval records compatibility evidence only and never enables live or paper execution.</span></div>
-      {mode === 'admin' ? <AdminReview /> : <OwnerWorkspace />}
+      {mode === 'admin' ? <AdminWorkspace /> : <OwnerWorkspace />}
     </div>
   )
 }
@@ -67,6 +73,11 @@ function OwnerWorkspace() {
   const [conversionConfig, setConversionConfig] = useState<PineConversionConfig | null>(null)
   const [conversion, setConversion] = useState<PineConversion | null>(null)
   const [consent, setConsent] = useState(false)
+  const [originalVersionId, setOriginalVersionId] = useState('')
+  const [acceptance, setAcceptance] = useState([false, false, false, false])
+  const [conversionAssumptions, setConversionAssumptions] = useState('')
+  const [setupType, setSetupType] = useState<TradingViewSetupType>('USER_MANAGED_TRADINGVIEW')
+  const [tvSetup, setTvSetup] = useState<TradingViewSetup | null>(null)
   const sourceRef = useRef<HTMLTextAreaElement>(null)
 
   const selected = versions.find((row) => row.id === versionId) ?? null
@@ -92,6 +103,7 @@ function OwnerWorkspace() {
     void getPineStrategy(strategyId).then((result) => {
       setVersions(result.versions)
       setVersionId((current) => result.versions.some((v) => v.id === current) ? current : result.versions[0]?.id ?? '')
+      setOriginalVersionId((current) => result.versions.some((v) => v.id === current) ? current : result.versions.at(-1)?.id ?? '')
     }).catch((reason) => setError(messageOf(reason)))
   }, [strategyId])
   useEffect(() => {
@@ -112,6 +124,10 @@ function OwnerWorkspace() {
     }, 1500)
     return () => window.clearInterval(timer)
   }, [conversion])
+  useEffect(() => {
+    if (!instanceId) return
+    void getTradingViewSetup(instanceId).then(setTvSetup).catch(() => setTvSetup(null))
+  }, [instanceId])
 
   async function run(label: string, task: () => Promise<void>) {
     setBusy(label); setError(''); setMessage('')
@@ -181,11 +197,16 @@ function OwnerWorkspace() {
           <div className="ps-actions">
             {!strategyId ? <button className="ps-primary" type="button" disabled={!name.trim() || !source.trim() || !!busy} onClick={() => void run('Script creation', async () => { const result = await createPineStrategy({ name: name.trim(), source, filename }); setDirty(false); await reloadStrategy(result.strategy.id, result.version.id) })}><Plus size={14} /> Create immutable version</button> : <button className="ps-primary" type="button" disabled={!dirty || !source.trim() || !!busy} onClick={() => void run('New version', async () => { const result = await createPineVersion(strategyId, { source, filename, changelog }); setDirty(false); await reloadStrategy(strategyId, result.version.id) })}><Plus size={14} /> Save as new version</button>}
             {selected && ['draft', 'validation_failed', 'ready_for_review'].includes(selected.status) ? <button className="secondary-button" type="button" disabled={!!busy} onClick={() => void run('Static validation', async () => { await validatePineVersion(strategyId, selected.id); await reloadStrategy(strategyId, selected.id) })}>{busy === 'Static validation' ? <Loader2 className="ps-spin" size={14} /> : <FileCode2 size={14} />} Validate</button> : null}
-            {selected?.status === 'ready_for_review' ? <button className="secondary-button" type="button" disabled={!!busy} onClick={() => void run('Review submission', async () => { await submitPineVersion(strategyId, selected.id); await reloadStrategy(strategyId, selected.id) })}><Check size={14} /> Submit for review</button> : null}
             {selected ? <button className="secondary-button" type="button" onClick={() => void copySource()}><Copy size={14} /> Copy</button> : null}
             {selected?.status === 'approved' ? <button className="secondary-button" type="button" onClick={downloadSource}><Download size={14} /> Download</button> : null}
           </div>
           {selected && conversionConfig?.manual_package_enabled ? <div className="pine-convert-panel"><div><strong>Convert to NOVA Format</strong><span>Manual packages make no provider request.</span></div><button className="secondary-button" type="button" onClick={() => void run('Package copy', async () => manualPackage())}><Copy size={14} /> Copy conversion package</button><button className="secondary-button" type="button" onClick={() => void manualPackage(true)}><Download size={14} /> Download package</button></div> : null}
+          {selected?.status === 'ready_for_review' ? <div className="pine-acceptance-panel"><strong>User review and acceptance</strong><p>Static validation is deterministic, but it is not a TradingView compilation test.</p><label>Original Pine version<select aria-label="Original Pine version" value={originalVersionId} onChange={(event) => setOriginalVersionId(event.target.value)}>{versions.map((version) => <option key={version.id} value={version.id}>{version.version} · {version.source_sha256.slice(0, 10)}</option>)}</select></label><fieldset><legend>TradingView setup type</legend><label className="ps-check"><input type="radio" name="review-tv-setup" checked={setupType === 'USER_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('USER_MANAGED_TRADINGVIEW')} />I have TradingView Premium</label><label className="ps-check"><input type="radio" name="review-tv-setup" checked={setupType === 'NOVA_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('NOVA_MANAGED_TRADINGVIEW')} />I need NOVA-managed TradingView setup</label></fieldset><label>Conversion assumptions (one per line)<textarea value={conversionAssumptions} maxLength={4000} onChange={(event) => setConversionAssumptions(event.target.value)} /></label>{[
+            'I reviewed the converted strategy.',
+            'I understand static validation does not guarantee TradingView compilation.',
+            'I understand backtests do not guarantee future returns.',
+            'I understand the strategy will initially run in paper mode.',
+          ].map((label, index) => <label className="ps-check" key={label}><input type="checkbox" checked={acceptance[index]} onChange={(event) => setAcceptance((current) => current.map((value, item) => item === index ? event.target.checked : value))} />{label}</label>)}<button className="ps-primary" type="button" disabled={!originalVersionId || !acceptance.every(Boolean) || !!busy} onClick={() => void run('Review submission', async () => { await submitPineVersion(strategyId, selected.id, { original_version_id: originalVersionId, prompt_version_id: conversionConfig?.prompt_version ?? '', setup_type: setupType, assumptions: conversionAssumptions.split('\n').map((value) => value.trim()).filter(Boolean), reviewed_strategy: true, understands_static_validation: true, understands_performance_risk: true, accepts_paper_only: true }); setAcceptance([false, false, false, false]); await reloadStrategy(strategyId, selected.id) })}><Check size={14} /> Accept and submit for review</button></div> : null}
           {selected ? <div className="pine-ai-panel"><div><strong><Sparkles size={14} /> AI-assisted conversion</strong><span>{conversionConfig?.ai_enabled ? `${conversionConfig.provider} · ${conversionConfig.model}` : 'Disabled by NOVA configuration. Manual conversion remains available.'}</span></div>{conversionConfig?.ai_enabled ? <><p>Your Pine source will be sent to the configured AI provider for conversion. NOVA will not execute the generated script automatically. Generated output may be incorrect and must pass NOVA validation and human review.</p><label className="ps-check"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />I consent to sending this exact source version for this conversion request.</label><button className="ps-primary" type="button" disabled={!consent || !!busy || (!!conversion && ['queued', 'processing'].includes(conversion.status))} onClick={() => void run('AI conversion request', async () => { const result = await createPineConversion(strategyId, selected.id); setConsent(false); setConversion(result.conversion) })}><Sparkles size={14} /> Send source for conversion</button></> : null}</div> : null}
         </section>
         <aside className="ps-card pine-findings">
@@ -194,7 +215,7 @@ function OwnerWorkspace() {
         </aside>
       </div>
       {conversion ? <ConversionReview conversion={conversion} busy={busy} onAccept={() => run('Candidate acceptance', async () => { const result = await acceptPineConversion(conversion.id); setConversion(result.conversion); await reloadStrategy(strategyId, result.conversion.candidate_version_id ?? undefined) })} onReject={() => run('Candidate rejection', async () => setConversion((await rejectPineConversion(conversion.id)).conversion))} onRetry={() => run('Conversion retry', async () => setConversion((await retryPineConversion(conversion.id)).conversion))} /> : null}
-      {selected?.status === 'approved' ? <section className="ps-card pine-link"><div><h2>Link approved version</h2><p className="ps-note">This only records a paper-safe control-plane link. Hosted Pine execution remains unavailable.</p></div><select aria-label="Personal strategy instance" value={instanceId} onChange={(e) => setInstanceId(e.target.value)}><option value="">Choose an instance</option>{instances.map((i) => <option key={i.id} value={i.id}>{i.label} · {i.execution_mode}</option>)}</select><button className="ps-primary" type="button" disabled={!instanceId || !!busy} onClick={() => void run('Version link', async () => { await linkPineVersion(instanceId, strategyId, selected.id) })}>Link version</button></section> : null}
+      {selected?.status === 'approved' ? <section className="ps-card pine-link"><div><span>Stage 6 of 9 · TradingView setup</span><h2>Link approved version and choose setup path</h2><p className="ps-note">Paper-only. NOVA never compiles or executes Pine.</p></div><select aria-label="Personal strategy instance" value={instanceId} onChange={(e) => { setInstanceId(e.target.value); setTvSetup(null) }}><option value="">Choose an instance</option>{instances.map((i) => <option key={i.id} value={i.id}>{i.label} · {i.execution_mode}</option>)}</select><fieldset><legend>TradingView setup type</legend><label className="ps-check"><input type="radio" name="tv-setup" checked={setupType === 'USER_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('USER_MANAGED_TRADINGVIEW')} />I have TradingView Premium</label><small>You manage this strategy in your TradingView account.</small><label className="ps-check"><input type="radio" name="tv-setup" checked={setupType === 'NOVA_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('NOVA_MANAGED_TRADINGVIEW')} />I need NOVA-managed TradingView setup</label><small>NOVA-managed TradingView setup requested; installation remains a manual admin task.</small></fieldset><button className="ps-primary" type="button" disabled={!instanceId || !!busy} onClick={() => void run('TradingView setup', async () => { await linkPineVersion(instanceId, strategyId, selected.id); setTvSetup(await createTradingViewSetup(instanceId, setupType)) })}>Save setup path</button>{tvSetup ? <div className={`ps-message ${tvSetup.ready_for_paper ? 'success' : ''}`} role="status"><strong>{tvSetup.ready_for_paper ? 'READY FOR PAPER USE' : tvSetup.status.replaceAll('_', ' ')}</strong><span>{tvSetup.ready_for_paper ? 'All server-observed paper gates passed.' : `Pending: ${tvSetup.blocking_step ?? 'manual review'}. Next: ${tvSetup.who_acts_next}.`}</span>{tvSetup.blocking_reason ? <span>{tvSetup.blocking_reason}</span> : null}</div> : null}</section> : null}
     </>
   )
 }
@@ -215,7 +236,42 @@ function AdminReview() {
   const lines = useMemo(() => selected?.source?.split('\n') ?? [], [selected])
   async function open(id: string) { try { setSelected(await getPineReview(id)); setError('') } catch (reason) { setError(messageOf(reason)) } }
   async function decide(action: 'start' | 'approve' | 'request-changes' | 'reject') { if (!selected) return; try { await decidePineReview(selected.version.id, action, note, acknowledge); await refresh(); await open(selected.version.id) } catch (reason) { setError(messageOf(reason)) } }
-  return <div className="pine-admin-grid"><aside className="ps-list">{queue.map((item) => <button className={`ps-list-item${selected?.version.id === item.version.id ? ' active' : ''}`} type="button" key={item.version.id} onClick={() => void open(item.version.id)}><strong>{item.strategy.name}</strong><span>{item.version.version} · {item.version.status}</span><span>{item.version.validation?.error_count ?? 0} errors · {item.version.validation?.warning_count ?? 0} warnings</span></button>)}</aside><main className="ps-card">{error ? <div className="ps-message error">{error}</div> : null}{selected ? <><div className="ps-card-head"><div><span>Exact source {selected.version.source_sha256.slice(0, 12)}…</span><h2>{selected.strategy.name} · {selected.version.version}</h2></div><span className="ps-status">{selected.version.status}</span></div><pre className="pine-review-source">{lines.map((line, i) => <span key={i}><i>{i + 1}</i>{line}{'\n'}</span>)}</pre><textarea className="pine-review-note" aria-label="Review note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Review note" /><label className="ps-check"><input type="checkbox" checked={acknowledge} onChange={(e) => setAcknowledge(e.target.checked)} />I reviewed and acknowledge all warnings on this exact source hash.</label><div className="ps-actions">{selected.version.status === 'submitted' ? <button className="ps-primary" type="button" onClick={() => void decide('start')}>Start review</button> : null}{selected.version.status === 'under_review' ? <><button className="ps-primary" type="button" onClick={() => void decide('approve')}>Approve</button><button className="secondary-button" type="button" onClick={() => void decide('request-changes')}>Request changes</button><button className="ps-danger" type="button" onClick={() => void decide('reject')}>Reject</button></> : null}</div></> : <div className="ps-empty"><FileCode2 size={28} /><h2>Select a review</h2></div>}</main></div>
+  return <div className="pine-admin-grid"><aside className="ps-list">{queue.map((item) => <button className={`ps-list-item${selected?.version.id === item.version.id ? ' active' : ''}`} type="button" key={item.version.id} onClick={() => void open(item.version.id)}><strong>{item.strategy.name}</strong><span>{item.version.version} · {item.version.status}</span><span>{item.version.validation?.error_count ?? 0} errors · {item.version.validation?.warning_count ?? 0} warnings</span></button>)}</aside><main className="ps-card">{error ? <div className="ps-message error">{error}</div> : null}{selected ? <><div className="ps-card-head"><div><span>Exact source {selected.version.source_sha256.slice(0, 12)}…</span><h2>{selected.strategy.name} · {selected.version.version}</h2></div><span className="ps-status">{selected.version.status}</span></div>{selected.acceptance ? <div className="pine-acceptance-panel"><strong>User acceptance recorded</strong><span>Prompt {selected.acceptance.prompt_version_id} · {selected.acceptance.setup_type.replaceAll('_', ' ')}</span><span>Validation {selected.acceptance.validation_report_sha256.slice(0, 12)}… · original version {selected.acceptance.original_version_id}</span><span>Accepted {new Date(selected.acceptance.accepted_at).toLocaleString()}</span><span>Assumptions: {selected.acceptance.assumptions.join('; ') || 'None supplied'}</span></div> : <div className="ps-message error">User acceptance evidence is missing. Review actions are blocked.</div>}<pre className="pine-review-source">{lines.map((line, i) => <span key={i}><i>{i + 1}</i>{line}{'\n'}</span>)}</pre><textarea className="pine-review-note" aria-label="Review note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Review note" /><label className="ps-check"><input type="checkbox" checked={acknowledge} onChange={(e) => setAcknowledge(e.target.checked)} />I reviewed and acknowledge all warnings on this exact source hash.</label><div className="ps-actions">{selected.version.status === 'submitted' ? <button className="ps-primary" type="button" disabled={!selected.acceptance} onClick={() => void decide('start')}>Start review</button> : null}{selected.version.status === 'under_review' ? <><button className="ps-primary" type="button" disabled={!selected.acceptance} onClick={() => void decide('approve')}>Approve</button><button className="secondary-button" type="button" onClick={() => void decide('request-changes')}>Request changes</button><button className="ps-danger" type="button" onClick={() => void decide('reject')}>Reject</button></> : null}</div></> : <div className="ps-empty"><FileCode2 size={28} /><h2>Select a review</h2></div>}</main></div>
+}
+
+function AdminWorkspace() {
+  return <><AdminReview /><ManagedSetupQueue /></>
+}
+
+function ManagedSetupQueue() {
+  const [setups, setSetups] = useState<TradingViewSetup[]>([])
+  const [selectedId, setSelectedId] = useState('')
+  const [workspace, setWorkspace] = useState('')
+  const [alertRef, setAlertRef] = useState('')
+  const [symbol, setSymbol] = useState('NIFTY')
+  const [timeframe, setTimeframe] = useState('5')
+  const [error, setError] = useState('')
+  const selected = setups.find((setup) => setup.id === selectedId) ?? null
+  const refresh = useCallback(async () => {
+    const rows = await listManagedTradingViewSetups()
+    setSetups(rows); setSelectedId((current) => rows.some((row) => row.id === current) ? current : rows[0]?.id ?? '')
+  }, [])
+  useEffect(() => {
+    void listManagedTradingViewSetups().then((rows) => {
+      setSetups(rows); setSelectedId(rows[0]?.id ?? '')
+    }).catch((reason) => setError(messageOf(reason)))
+  }, [])
+  async function recordInstallation() {
+    if (!selected?.approved_source_sha256) return
+    try {
+      await recordManagedTradingViewInstallation(selected.id, {
+        installed_version_hash: selected.approved_source_sha256, workspace_reference: workspace,
+        alert_reference: alertRef, symbol, timeframe, installed_at: new Date().toISOString(),
+      })
+      setError(''); await refresh()
+    } catch (reason) { setError(messageOf(reason)) }
+  }
+  return <section className="ps-card pine-managed-queue"><div className="ps-card-head"><div><span>Admin only · manual operations</span><h2>Managed TradingView setup</h2></div><span>{setups.length} queued</span></div>{error ? <div className="ps-message error">{error}</div> : null}{setups.length ? <div className="pine-managed-grid"><aside className="ps-list">{setups.map((setup) => <button type="button" className={`ps-list-item${selectedId === setup.id ? ' active' : ''}`} key={setup.id} onClick={() => setSelectedId(setup.id)}><strong>User {setup.user_id.slice(0, 8)}</strong><span>{setup.status.replaceAll('_', ' ')}</span><span>{setup.blocking_step ?? 'No blocking step'}</span></button>)}</aside>{selected ? <div className="pine-managed-detail"><p><strong>Approved source:</strong> <code>{selected.approved_source_sha256}</code></p><p><strong>Instance:</strong> {selected.strategy_instance_id}</p><p><strong>Credential:</strong> {selected.credential_status}</p><p><strong>Alert verification:</strong> {selected.hold_verified_at ? 'Server confirmed' : 'Pending'}</p><p><strong>Paper verification:</strong> {selected.paper_entry_verified_at && selected.paper_exit_verified_at ? 'Entry and exit confirmed' : 'Pending'}</p><label>Safe workspace label<input value={workspace} maxLength={120} onChange={(event) => setWorkspace(event.target.value)} /></label><label>Alert reference<input value={alertRef} maxLength={120} onChange={(event) => setAlertRef(event.target.value)} /></label><label>Symbol<input value={symbol} maxLength={30} onChange={(event) => setSymbol(event.target.value)} /></label><label>Timeframe<input value={timeframe} maxLength={20} onChange={(event) => setTimeframe(event.target.value)} /></label><button className="ps-primary" type="button" disabled={!workspace.trim() || !alertRef.trim()} onClick={() => void recordInstallation()}>Record manual installation</button><small>Never enter a TradingView password, cookie, browser token, or private webhook credential here.</small></div> : null}</div> : <div className="ps-empty-small"><Check size={22} /><strong>No managed setups pending</strong></div>}</section>
 }
 
 function messageOf(reason: unknown) { return reason instanceof Error ? reason.message : 'Request failed.' }

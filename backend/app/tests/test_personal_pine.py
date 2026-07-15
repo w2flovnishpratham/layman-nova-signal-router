@@ -45,6 +45,19 @@ def _create(client, source: str = VALID_PINE, name: str = "Imported Pine"):
     return response.json()
 
 
+def _acceptance(version_id: str) -> dict:
+    return {
+        "original_version_id": version_id,
+        "prompt_version_id": "v1",
+        "setup_type": "USER_MANAGED_TRADINGVIEW",
+        "assumptions": [],
+        "reviewed_strategy": True,
+        "understands_static_validation": True,
+        "understands_performance_risk": True,
+        "accepts_paper_only": True,
+    }
+
+
 def test_validator_valid_v6_and_v5_warning():
     from app.services.pine_validation import validate_source
 
@@ -138,10 +151,10 @@ def test_owner_versioning_validation_submission_and_source_isolation(mu_db):
     assert validated.json()["report"]["eligible_for_review"] is True
     reused = client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/validate").json()
     assert reused["reused"] is True
-    submitted = client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/submit")
+    submitted = client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/submit", json=_acceptance(version_id))
     assert submitted.status_code == 200
     assert submitted.json()["version"]["status"] == "submitted"
-    assert other.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/submit").status_code == 404
+    assert other.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/submit", json=_acceptance(version_id)).status_code == 404
 
 
 def test_immutable_versions_dedupe_and_line_endings(mu_db):
@@ -194,7 +207,7 @@ def test_admin_review_exact_report_decisions_and_link_are_paper_only(mu_db):
     strategy_id, version_id = created["strategy"]["id"], created["version"]["id"]
     assert admin_client.get(f"/api/admin/pine-reviews/{version_id}").status_code == 404
     client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/validate")
-    client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/submit")
+    client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/submit", json=_acceptance(version_id))
 
     assert _client(non_admin).get("/api/admin/pine-reviews").status_code == 403
     queue = admin_client.get("/api/admin/pine-reviews").json()
@@ -235,13 +248,13 @@ def test_failing_version_cannot_submit_and_changes_require_new_version(mu_db):
     invalid = _create(client, VALID_PINE.replace('alert("EXIT", alert.freq_once_per_bar_close)', "plot(close)"))
     strategy_id, invalid_id = invalid["strategy"]["id"], invalid["version"]["id"]
     client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{invalid_id}/validate")
-    assert client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{invalid_id}/submit").status_code == 409
+    assert client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{invalid_id}/submit", json=_acceptance(invalid_id)).status_code == 409
 
     corrected = client.post(f"/api/personal-pine-strategies/{strategy_id}/versions", json={
         "source": VALID_PINE, "filename": "corrected.pine",
     }).json()["version"]
     client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{corrected['id']}/validate")
-    client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{corrected['id']}/submit")
+    client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{corrected['id']}/submit", json=_acceptance(invalid_id))
     admin_client.post(f"/api/admin/pine-reviews/{corrected['id']}/start", json={})
     changed = admin_client.post(f"/api/admin/pine-reviews/{corrected['id']}/request-changes", json={"note": "Clarify exit"})
     assert changed.status_code == 200

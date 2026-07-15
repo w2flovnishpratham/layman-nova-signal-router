@@ -7,6 +7,8 @@ const api = vi.hoisted(() => ({
   list: vi.fn(), get: vi.fn(), create: vi.fn(), version: vi.fn(), validate: vi.fn(), submit: vi.fn(),
   source: vi.fn(), link: vi.fn(), instances: vi.fn(), reviews: vi.fn(), review: vi.fn(), decide: vi.fn(),
   conversionConfig: vi.fn(), conversionPackage: vi.fn(), convert: vi.fn(), conversion: vi.fn(), accept: vi.fn(), reject: vi.fn(), retry: vi.fn(),
+  createSetup: vi.fn(), getSetup: vi.fn(),
+  managedSetups: vi.fn(), recordInstallation: vi.fn(),
 }))
 vi.mock('../api', () => ({
   listPineStrategies: api.list, getPineStrategy: api.get, createPineStrategy: api.create,
@@ -16,6 +18,8 @@ vi.mock('../api', () => ({
   getPineConversionConfig: api.conversionConfig, generatePineConversionPackage: api.conversionPackage,
   createPineConversion: api.convert, getPineConversion: api.conversion, acceptPineConversion: api.accept,
   rejectPineConversion: api.reject, retryPineConversion: api.retry,
+  createTradingViewSetup: api.createSetup, getTradingViewSetup: api.getSetup,
+  listManagedTradingViewSetups: api.managedSetups, recordManagedTradingViewInstallation: api.recordInstallation,
 }))
 
 const SOURCE = '//@version=6\nindicator("<script>alert(1)</script> NIFTY", overlay=true)\nalert("BUY_CE")\nalert("EXIT")\n'
@@ -31,6 +35,8 @@ beforeEach(() => {
   api.instances.mockResolvedValue([]); api.reviews.mockResolvedValue([])
   api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: false, provider: null, model: null, prompt_version: 'v1', contract_version: 1, daily_limit: 10 })
   api.conversionPackage.mockResolvedValue({ package: `PRIVATE WARNING\n${SOURCE}`, filename: 'conversion.txt', package_sha256: 'pkg' })
+  api.getSetup.mockRejectedValue(new Error('not configured'))
+  api.managedSetups.mockResolvedValue([])
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
 afterEach(() => cleanup())
@@ -67,8 +73,14 @@ describe('ImportedPinePage', () => {
     await waitFor(() => expect(api.version).toHaveBeenCalledWith('s1', expect.objectContaining({ source: expect.stringContaining('corrected') })))
     await user.click(screen.getByRole('button', { name: /^validate$/i }))
     await waitFor(() => expect(api.validate).toHaveBeenCalled())
-    await user.click(screen.getByRole('button', { name: /submit for review/i }))
-    await waitFor(() => expect(api.submit).toHaveBeenCalled())
+    for (const label of [
+      /I reviewed the converted strategy/i,
+      /static validation does not guarantee/i,
+      /backtests do not guarantee/i,
+      /initially run in paper mode/i,
+    ]) await user.click(screen.getByRole('checkbox', { name: label }))
+    await user.click(screen.getByRole('button', { name: /accept and submit for review/i }))
+    await waitFor(() => expect(api.submit).toHaveBeenCalledWith('s1', 'v2', expect.objectContaining({ prompt_version_id: 'v1', accepts_paper_only: true })))
   })
 
   it('accepts a UTF-8 .pine upload and rejects binary decoding', async () => {
@@ -102,5 +114,23 @@ describe('ImportedPinePage', () => {
     await user.click(screen.getByRole('checkbox', { name: /i consent/i })); await user.click(send)
     await waitFor(() => expect(api.convert).toHaveBeenCalledWith('s1', 'v1'))
     expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0)
+  })
+
+  it('shows distinct Premium and NOVA-managed setup paths without false readiness', async () => {
+    const user = userEvent.setup()
+    const approved = { ...version, status: 'approved' }
+    api.get.mockResolvedValue({ strategy, versions: [approved] })
+    api.source.mockResolvedValue({ source: SOURCE, filename: 'safe.pine', source_sha256: 'abc', approved: true })
+    api.instances.mockResolvedValue([{ id: 'i1', label: 'Paper strategy', execution_mode: 'paper_live_data' }])
+    api.link.mockResolvedValue({})
+    api.createSetup.mockResolvedValue({ id: 'tv1', strategy_instance_id: 'i1', approved_version_id: 'v1', setup_type: 'NOVA_MANAGED_TRADINGVIEW', status: 'SETUP_PENDING', ready_for_paper: false, blocking_step: 'TradingView installation', who_acts_next: 'Admin', blocking_reason: null, user_reported_compiled_at: null, hold_verified_at: null, paper_entry_verified_at: null, paper_exit_verified_at: null, gates: {}, updated_at: null })
+    render(<ImportedPinePage />)
+    await user.selectOptions(await screen.findByLabelText('Personal strategy instance'), 'i1')
+    expect(screen.getByText(/You manage this strategy in your TradingView account/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: /I need NOVA-managed/i }))
+    await user.click(screen.getByRole('button', { name: /save setup path/i }))
+    await waitFor(() => expect(api.createSetup).toHaveBeenCalledWith('i1', 'NOVA_MANAGED_TRADINGVIEW'))
+    expect(await screen.findByText(/Pending: TradingView installation/i)).toBeInTheDocument()
+    expect(screen.queryByText('READY FOR PAPER USE')).not.toBeInTheDocument()
   })
 })

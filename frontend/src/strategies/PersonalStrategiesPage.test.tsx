@@ -36,6 +36,10 @@ vi.mock('../api', () => ({
   listPineReviews: api.reviewList,
   getPineReview: api.reviewGet,
   decidePineReview: api.reviewDecide,
+  createTradingViewSetup: vi.fn(),
+  getTradingViewSetup: vi.fn(),
+  listManagedTradingViewSetups: vi.fn().mockResolvedValue([]),
+  recordManagedTradingViewInstallation: vi.fn(),
 }))
 
 const TOKEN = 'nwk_SENTINEL_PHASE3B_BROWSER_CREDENTIAL_123456'

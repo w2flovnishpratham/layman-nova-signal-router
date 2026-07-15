@@ -23,6 +23,7 @@ from app.routers import strategies as strategies_router
 from app.routers import strategy_instances as strategy_instances_router
 from app.routers import personal_pine as personal_pine_router
 from app.routers import pine_conversion as pine_conversion_router
+from app.routers import tradingview_setup as tradingview_setup_router
 from app.auth import google as google_auth
 from app.db.engine import database_configured, get_engine, init_db
 from app.services.user_credential_vault import vault_ready as user_vault_ready
@@ -403,6 +404,8 @@ app.include_router(personal_pine_router.link_router)
 app.include_router(personal_pine_router.admin_router)
 app.include_router(pine_conversion_router.router)
 app.include_router(pine_conversion_router.admin_router)
+app.include_router(tradingview_setup_router.router)
+app.include_router(tradingview_setup_router.admin_router)
 app.include_router(admin_router.router)
 
 

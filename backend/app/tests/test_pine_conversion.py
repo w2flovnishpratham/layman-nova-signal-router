@@ -7,7 +7,7 @@ from app.workers.pine_conversion_worker import process_queued_conversions_once
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.tests.test_personal_pine import VALID_PINE, _create
+from app.tests.test_personal_pine import VALID_PINE, _acceptance, _create
 from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 
 CONVERTED = VALID_PINE + "\n// NOVA AI candidate\n"
@@ -113,10 +113,11 @@ def test_conversion_dedupes_validates_requires_acceptance_and_preserves_original
     assert detail["candidate_source"] == CONVERTED
     candidate = detail["candidate_version_id"]
     submit = f"/api/personal-pine-strategies/{strategy_id}/versions/{candidate}/submit"
-    assert client.post(submit).json()["reason"] == "CANDIDATE_NOT_ACCEPTED"
+    acceptance = _acceptance(original_id)
+    assert client.post(submit, json=acceptance).json()["reason"] == "CANDIDATE_NOT_ACCEPTED"
     accepted = client.post(f"/api/pine-conversions/{conversion_id}/accept")
     assert accepted.status_code == 200
-    assert client.post(submit).status_code == 200
+    assert client.post(submit, json=acceptance).status_code == 200
     assert provider.calls and "BEGIN_UNTRUSTED_PINE_SOURCE" in provider.calls[0].prompt
 
 

@@ -591,6 +591,19 @@ def _issue_credential(db, row: models.StrategyInstance) -> tuple[models.Strategy
     return credential, token
 
 
+def _reset_setup_connectivity(db, instance_id: uuid.UUID) -> None:
+    """A new/revoked secret requires a fresh server-observed HOLD alert."""
+    setup = db.scalar(select(models.TradingViewSetup).where(
+        models.TradingViewSetup.strategy_instance_id == instance_id
+    ))
+    if setup is not None:
+        setup.hold_signal_id = None
+        setup.hold_verified_at = None
+        setup.status = "ALERT_TEST_PENDING"
+        setup.blocking_reason = "Webhook credential changed; send a new HOLD alert."
+        setup.updated_at = _now()
+
+
 def generate_webhook_credential(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
     with session_scope() as db:
         row = _owned_instance(db, user_id, instance_id)
@@ -618,6 +631,7 @@ def rotate_webhook_credential(user_id: uuid.UUID, instance_id: uuid.UUID | str) 
         db.flush()  # release the partial-unique slot before inserting the new one
         credential, token = _issue_credential(db, row)
         current.replaced_by_id = credential.id
+        _reset_setup_connectivity(db, row.id)
         _audit(db, user_id, "INSTANCE_WEBHOOK_CREDENTIAL_ROTATED", {
             "instance_id": str(row.id), "old_credential_id": str(current.id),
             "new_credential_id": str(credential.id),
@@ -635,6 +649,7 @@ def revoke_webhook_credential(user_id: uuid.UUID, instance_id: uuid.UUID | str, 
             raise InstanceError("No active webhook credential to revoke.", status_code=404)
         current.revoked_at = _now()
         current.revoked_reason = (reason or "user_request")[:120]
+        _reset_setup_connectivity(db, row.id)
         _audit(db, user_id, "INSTANCE_WEBHOOK_CREDENTIAL_REVOKED", {
             "instance_id": str(row.id), "credential_id": str(current.id), "reason": reason,
         })

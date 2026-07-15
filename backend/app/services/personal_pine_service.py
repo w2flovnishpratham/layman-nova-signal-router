@@ -447,7 +447,7 @@ def get_review(reviewer_id: uuid.UUID, version_id):
         events = db.scalars(select(models.StrategyAdminReview).where(
             models.StrategyAdminReview.strategy_version_id == version.id
         ).order_by(models.StrategyAdminReview.reviewed_at.asc())).all()
-        return {
+        payload = {
             "strategy": _strategy_public(strategy),
             "version": _version_public(version, report),
             "source": artifact.content,
@@ -459,6 +459,22 @@ def get_review(reviewer_id: uuid.UUID, version_id):
                 "reviewed_at": event.reviewed_at.isoformat() if event.reviewed_at else None,
             } for event in events],
         }
+        acceptance = db.scalar(select(models.PineUserAcceptance).where(
+            models.PineUserAcceptance.candidate_version_id == version.id
+        ))
+        payload["acceptance"] = ({
+            "id": str(acceptance.id),
+            "user_id": str(acceptance.user_id),
+            "original_version_id": str(acceptance.original_version_id),
+            "candidate_version_id": str(acceptance.candidate_version_id),
+            "prompt_version_id": acceptance.prompt_version_id,
+            "setup_type": acceptance.setup_type,
+            "validation_report_id": str(acceptance.validation_report_id),
+            "validation_report_sha256": acceptance.validation_report_sha256,
+            "assumptions": acceptance.assumptions or [],
+            "accepted_at": acceptance.accepted_at.isoformat(),
+        } if acceptance else None)
+        return payload
 
 
 def _review_transition(reviewer_id: uuid.UUID, version_id, target: str, *, note: str | None = None, acknowledge_warnings: bool = False):
@@ -488,6 +504,11 @@ def _review_transition(reviewer_id: uuid.UUID, version_id, target: str, *, note:
         report = _latest_report(db, version.id)
         if report is None or not report.eligible_for_review or report.source_sha256 != version.source_sha256:
             raise PineWorkflowError("The exact source version lacks an eligible validation report.", 409, "VALIDATION_STALE")
+        from app.services.tradingview_setup_service import SetupError, require_acceptance
+        try:
+            require_acceptance(db, version.id)
+        except SetupError as exc:
+            raise PineWorkflowError(str(exc), exc.status_code, exc.code) from exc
         if target == "approved" and report.warning_count and not acknowledge_warnings:
             raise PineWorkflowError("Explicit warning acknowledgement is required before approval.", 409, "WARNINGS_NOT_ACKNOWLEDGED")
         previous = version.status
@@ -529,9 +550,24 @@ def link_version(user_id: uuid.UUID, instance_id, strategy_id, version_id):
             raise PineWorkflowError("Only an approved supported Pine version can be linked.", 409, "VERSION_NOT_APPROVED")
         if instance.execution_mode == "real_orders":
             raise PineWorkflowError("Imported Pine versions may be linked only to paper strategies.", 409, "PAPER_ONLY")
+        previous_version_id = instance.strategy_version_id
         instance.strategy_id = strategy.id
         instance.strategy_version_id = version.id
         instance.updated_at = _now()
+        if previous_version_id != version.id:
+            setup = db.scalar(select(models.TradingViewSetup).where(
+                models.TradingViewSetup.strategy_instance_id == instance.id
+            ))
+            if setup is not None:
+                setup.approved_version_id = version.id
+                setup.status = "SETUP_PENDING"
+                setup.user_reported_compiled_at = setup.installation_confirmed_at = None
+                setup.installation_metadata = None
+                setup.hold_signal_id = setup.paper_entry_signal_id = setup.paper_exit_signal_id = setup.reversal_signal_id = None
+                setup.hold_verified_at = setup.paper_entry_verified_at = setup.paper_exit_verified_at = setup.reversal_verified_at = None
+                setup.blocking_reason = "Approved Pine version changed; TradingView verification was reset."
+                setup.reset_count += 1
+                setup.updated_at = _now()
         _audit(db, user_id, "PERSONAL_PINE_VERSION_LINKED", instance_id=str(instance.id), strategy_id=str(strategy.id), version_id=str(version.id), source_sha256=version.source_sha256)
         return {
             "instance_id": str(instance.id),

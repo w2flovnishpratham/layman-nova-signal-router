@@ -12,6 +12,7 @@ from app.schemas.personal_pine import (
     LinkPineVersionPayload,
     ReviewNotePayload,
 )
+from app.schemas.tradingview_setup import UserAcceptancePayload
 from app.services import personal_pine_service as service
 from app.services.user_context import CurrentUser
 
@@ -27,6 +28,9 @@ def _error(exc: Exception):
             body["reason"] = exc.code
         return JSONResponse(status_code=exc.status_code, content=body)
     from app.services.strategy_instance_service import InstanceError
+    from app.services.tradingview_setup_service import SetupError
+    if isinstance(exc, SetupError):
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": str(exc), "reason": exc.code})
     if isinstance(exc, InstanceError):
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": str(exc)})
     raise exc
@@ -106,9 +110,10 @@ def validate_version(strategy_id: uuid.UUID, version_id: uuid.UUID, user: Curren
 
 
 @router.post("/{strategy_id}/versions/{version_id}/submit")
-def submit_version(strategy_id: uuid.UUID, version_id: uuid.UUID, user: CurrentUser = Depends(get_current_user)):
+def submit_version(strategy_id: uuid.UUID, version_id: uuid.UUID, payload: UserAcceptancePayload, user: CurrentUser = Depends(get_current_user)):
     try:
-        return {"ok": True, **service.submit_version(user.id, strategy_id, version_id)}
+        from app.services import tradingview_setup_service
+        return {"ok": True, **tradingview_setup_service.accept_and_submit(user.id, strategy_id, version_id, payload)}
     except Exception as exc:
         return _error(exc)
 

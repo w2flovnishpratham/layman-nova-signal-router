@@ -153,6 +153,15 @@
 .pine-convert-panel, .pine-ai-panel { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
 .pine-convert-panel > div, .pine-ai-panel > div { display: grid; margin-right: auto; }
 .pine-convert-panel span, .pine-ai-panel span { color: var(--text-3); font-size: 11px; }
+.pine-acceptance-panel { display: grid; gap: 10px; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+.pine-acceptance-panel p, .pine-link small { color: var(--text-3); margin: 0; }
+.pine-link fieldset { display: grid; gap: 6px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.pine-link .ps-message { display: grid; gap: 4px; grid-column: 1 / -1; }
+.pine-managed-queue { margin-top: 14px; }
+.pine-managed-grid { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 14px; }
+.pine-managed-detail { display: grid; gap: 9px; min-width: 0; }
+.pine-managed-detail p { margin: 0; overflow-wrap: anywhere; }
+.pine-managed-detail label { display: grid; gap: 5px; }
 .pine-ai-panel p { width: 100%; margin: 0; color: var(--text-3); font-size: 11.5px; }
 .pine-conversion-review { margin-top: 16px; }
 .pine-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -168,6 +177,7 @@
   .pine-grid, .pine-admin-grid { grid-template-columns: 1fr; }
   .pine-findings { position: static; max-height: none; }
   .pine-link { grid-template-columns: 1fr; }
+  .pine-managed-grid { grid-template-columns: 1fr; }
   .pine-diff { grid-template-columns: 1fr; }
 }
 
