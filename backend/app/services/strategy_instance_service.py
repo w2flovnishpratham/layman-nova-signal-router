@@ -39,6 +39,30 @@ _PREFIX_DISPLAY_CHARS = 10
 ALLOWED_CREATE_JOURNEYS = {"NOVA_SHARED", "PERSONAL_TRADINGVIEW"}
 WEBHOOK_JOURNEYS = {"PERSONAL_TRADINGVIEW"}
 
+# Safe, user-facing blocker codes for the first failing activation gate.
+_BLOCKER_CODES = {
+    "paper_mode": "PAPER_MODE_REQUIRED",
+    "valid_lots": "INVALID_LOTS",
+    "active_credential": "CREDENTIAL_INACTIVE",
+    "connection_tested": "HOLD_NOT_VERIFIED",
+    "approved_version": "PINE_NOT_APPROVED",
+    "installation_confirmed": "TRADINGVIEW_NOT_INSTALLED",
+    "hold_verified": "HOLD_NOT_VERIFIED",
+    "paper_entry_verified": "PAPER_ENTRY_NOT_VERIFIED",
+    "paper_exit_verified": "PAPER_EXIT_NOT_VERIFIED",
+}
+
+
+def _first_blocker(readiness: dict[str, Any], setup: "models.TradingViewSetup | None") -> str | None:
+    if setup is not None and setup.status in {"BLOCKED", "RETIRED"}:
+        return "SETUP_BLOCKED"
+    for key, ready in readiness.items():
+        if key == "can_activate":
+            continue
+        if not ready:
+            return _BLOCKER_CODES.get(key)
+    return None
+
 
 class InstanceError(ValueError):
     """Domain error with an HTTP-friendly status code."""
@@ -101,18 +125,56 @@ def _decorate_personal_instance(db, row: models.StrategyInstance, payload: dict[
         )
     ) is not None
     lot_size = current_nifty_lot_size()
-    readiness = {
-        "paper_mode": row.execution_mode in {"signal_only", "paper_live_data"},
-        "valid_lots": MIN_LOTS <= row.current_lots <= MAX_LOTS,
-        "active_credential": credential is not None,
-        "connection_tested": tested,
-    }
-    readiness["can_activate"] = all(readiness.values())
+
+    paper_mode = row.execution_mode in {"signal_only", "paper_live_data"}
+    valid_lots = MIN_LOTS <= row.current_lots <= MAX_LOTS
+    active_credential = credential is not None
+
+    # An instance running an owner's approved *personal Pine* must clear the
+    # full server-observed TradingView paper gate (genuine HOLD + confirmed
+    # paper entry + confirmed paper exit), never a HOLD connection test alone.
+    # NOVA catalog strategies (owner_user_id IS NULL, e.g. supertrend) keep the
+    # lighter connection-test gate — closing the "linked-but-no-setup" loophole
+    # without changing the raw personal-webhook journey.
+    catalog = db.get(models.StrategyCatalog, row.strategy_id)
+    is_personal_pine = catalog is not None and catalog.owner_user_id is not None
+    setup = db.scalar(
+        select(models.TradingViewSetup).where(
+            models.TradingViewSetup.strategy_instance_id == row.id
+        )
+    )
+
+    if is_personal_pine:
+        version = db.get(models.StrategyVersion, row.strategy_version_id)
+        readiness = {
+            "paper_mode": paper_mode,
+            "valid_lots": valid_lots,
+            "active_credential": active_credential,
+            "approved_version": version is not None and version.status == "approved",
+            "installation_confirmed": setup is not None and setup.installation_confirmed_at is not None,
+            "hold_verified": setup is not None and setup.hold_verified_at is not None,
+            "paper_entry_verified": setup is not None and setup.paper_entry_verified_at is not None,
+            "paper_exit_verified": setup is not None and setup.paper_exit_verified_at is not None,
+        }
+        blocked_setup = setup is not None and setup.status in {"BLOCKED", "RETIRED"}
+        readiness["can_activate"] = all(readiness.values()) and not blocked_setup
+    else:
+        readiness = {
+            "paper_mode": paper_mode,
+            "valid_lots": valid_lots,
+            "active_credential": active_credential,
+            "connection_tested": tested,
+        }
+        readiness["can_activate"] = all(readiness.values())
+
     payload.update(
         {
             "webhook_credential": _credential_public(credential) if credential else None,
             "credential_status": "active" if credential else "revoked" if latest_credential else "missing",
             "readiness": readiness,
+            "blocking_code": _first_blocker(readiness, setup),
+            "setup_type": setup.setup_type if setup else None,
+            "requires_managed_setup": bool(setup and setup.setup_type == "NOVA_MANAGED_TRADINGVIEW"),
             "lot_size": lot_size,
             "estimated_quantity": row.current_lots * lot_size,
             "last_signal_time": latest.created_at.isoformat() if latest and latest.created_at else None,
@@ -365,11 +427,14 @@ def _set_status(
     with session_scope() as db:
         row = _owned_instance(db, user_id, instance_id, for_update=True)
         if target is InstanceState.ACTIVE and row.source_journey == "PERSONAL_TRADINGVIEW":
-            readiness = _decorate_personal_instance(db, row, {})["readiness"]
+            decorated = _decorate_personal_instance(db, row, {})
+            readiness = decorated["readiness"]
             if not readiness["can_activate"]:
                 missing = [key.replace("_", " ") for key, ready in readiness.items() if key != "can_activate" and not ready]
                 raise InstanceError(
-                    f"Personal strategy is not ready: {', '.join(missing)}.", status_code=409
+                    f"Personal strategy is not ready: {', '.join(missing)}.",
+                    status_code=409,
+                    code=decorated.get("blocking_code"),
                 )
         if (
             target is InstanceState.STOPPED
@@ -654,6 +719,100 @@ def revoke_webhook_credential(user_id: uuid.UUID, instance_id: uuid.UUID | str, 
             "instance_id": str(row.id), "credential_id": str(current.id), "reason": reason,
         })
         return _credential_public(current)
+
+
+def admin_generate_managed_credential(
+    admin_id: uuid.UUID, setup_id: uuid.UUID | str, *, rotate: bool = False
+) -> dict[str, Any]:
+    """Issue the private-webhook credential for a NOVA-managed setup on behalf
+    of the owning instance. The non-Premium user never handles this secret; the
+    plaintext is returned exactly once to the authorized admin installer and is
+    stored only as a hash. Rotation revokes the previous credential."""
+    with session_scope() as db:
+        setup = db.scalar(
+            select(models.TradingViewSetup)
+            .where(models.TradingViewSetup.id == uuid.UUID(str(setup_id)))
+            .with_for_update()
+        )
+        if setup is None:
+            raise InstanceError("TradingView setup not found.", status_code=404)
+        if setup.setup_type != "NOVA_MANAGED_TRADINGVIEW":
+            raise InstanceError(
+                "Managed credentials are issued only for NOVA-managed setups.",
+                status_code=409,
+                code="NOT_MANAGED_SETUP",
+            )
+        instance = db.get(models.StrategyInstance, setup.strategy_instance_id)
+        if instance is None:
+            raise InstanceError("Strategy instance not found.", status_code=404)
+        current = _active_credential(db, instance.id)
+        if current is not None:
+            if not rotate:
+                raise InstanceError(
+                    "An active managed credential already exists. Rotate it instead.",
+                    status_code=409,
+                    code="CREDENTIAL_EXISTS",
+                )
+            current.revoked_at = _now()
+            current.revoked_reason = "managed_rotated"
+            db.flush()  # release the partial-unique active slot before reissue
+        credential, token = _issue_credential(db, instance)
+        if current is not None:
+            current.replaced_by_id = credential.id
+        _reset_setup_connectivity(db, instance.id)  # new secret ⇒ fresh HOLD required
+        _audit(db, admin_id, "MANAGED_TRADINGVIEW_CREDENTIAL_ISSUED", {
+            "setup_id": str(setup.id), "instance_id": str(instance.id),
+            "credential_id": str(credential.id), "rotated": current is not None,
+        })
+        payload = _credential_public(credential)
+        payload["token"] = token  # plaintext shown exactly once, to the admin installer
+        return payload
+
+
+def list_engine_strategies(user_id: uuid.UUID) -> dict[str, Any]:
+    """Owner-scoped engine strategy picker.
+
+    Returns this user's runnable strategy instances (personal Pine and NOVA
+    shared) with a single, unified eligibility verdict. A private strategy is
+    ``selectable`` only when it clears the same activation gate the lifecycle
+    controls enforce — no separate readiness standard. Never leaks credentials,
+    other users, or admin/broker internals.
+    """
+    with session_scope() as db:
+        query = (
+            select(models.StrategyInstance, models.StrategyCatalog)
+            .join(models.StrategyCatalog, models.StrategyCatalog.id == models.StrategyInstance.strategy_id)
+            .where(
+                models.StrategyInstance.user_id == user_id,
+                models.StrategyInstance.status != InstanceState.ARCHIVED.value,
+            )
+            .order_by(models.StrategyInstance.created_at.desc())
+        )
+        strategies = []
+        for row, catalog in db.execute(query).all():
+            decorated = _decorate_personal_instance(db, row, _instance_public(row, strategy=catalog))
+            readiness = decorated.get("readiness")
+            not_runnable = row.status in {InstanceState.STOPPED.value, InstanceState.ARCHIVED.value}
+            if readiness is not None:  # PERSONAL_TRADINGVIEW
+                selectable = bool(readiness["can_activate"]) and not not_runnable
+                blocking = decorated.get("blocking_code") or (
+                    "STRATEGY_STOPPED" if row.status == InstanceState.STOPPED.value else None
+                )
+            else:  # NOVA_SHARED
+                selectable = not not_runnable
+                blocking = "STRATEGY_STOPPED" if row.status == InstanceState.STOPPED.value else None
+            strategies.append({
+                "instance_id": str(row.id),
+                "display_name": row.label,
+                "source_type": row.source_journey,
+                "setup_type": decorated.get("setup_type"),
+                "status": "READY" if selectable else (blocking or row.status.upper()),
+                "instance_status": row.status,
+                "selectable": selectable,
+                "blocking_reason": blocking,
+                "owner": "self",
+            })
+        return {"strategies": strategies}
 
 
 # ---------------------------------------------------------------------------

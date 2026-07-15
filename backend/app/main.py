@@ -399,6 +399,7 @@ app.include_router(strategies_router.router)
 app.include_router(private_webhook_router.router)
 app.include_router(strategy_instances_router.router)
 app.include_router(strategy_instances_router.admin_router)
+app.include_router(strategy_instances_router.engine_router)
 app.include_router(personal_pine_router.router)
 app.include_router(personal_pine_router.link_router)
 app.include_router(personal_pine_router.admin_router)
@@ -418,6 +419,8 @@ def _health() -> dict:
         "dhan_mode": settings.DHAN_MODE.upper(),
         "engine_mode": get_engine_mode(legacy_fallback=False),
         "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
+        "private_webhook_execution_enabled": settings.PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED,
+        "private_webhook_live_execution_enabled": settings.PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED,
         "market_closed_debug": settings.MARKET_CLOSED_DEBUG,
         "force_allow_order_when_market_closed": settings.FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED,
         "webhook_trading_enabled": bool(app_state.get("webhook_trading_enabled")),

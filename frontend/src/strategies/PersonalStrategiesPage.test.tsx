@@ -219,4 +219,19 @@ describe('PersonalStrategiesPage', () => {
     expect(screen.getByRole('button', { name: /^stop$/i })).toBeInTheDocument()
     expect(document.body.textContent).not.toContain(TOKEN)
   })
+
+  it('hides credential provisioning and the private HOLD test from a NOVA-managed user, and shows the exact blocker', async () => {
+    arrange(instance({
+      requires_managed_setup: true, setup_type: 'NOVA_MANAGED_TRADINGVIEW', credential_status: 'active',
+      webhook_credential: { id: 'c', strategy_instance_id: 'instance-a', token_prefix: 'nwk_x', created_at: null, last_used_at: null, revoked_at: null },
+      readiness: { paper_mode: true, valid_lots: true, active_credential: true, approved_version: true, installation_confirmed: true, hold_verified: true, paper_entry_verified: true, paper_exit_verified: false, can_activate: false },
+      blocking_code: 'PAPER_EXIT_NOT_VERIFIED',
+    }))
+    render(<PersonalStrategiesPage />)
+    await screen.findByRole('heading', { name: 'My private strategy' })
+    expect(screen.queryByRole('button', { name: /generate credential/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /send paper HOLD test/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/Credential configured by NOVA/i)).toBeInTheDocument()
+    expect(screen.getByText(/Not ready — Waiting for a confirmed paper exit/i)).toBeInTheDocument()
+  })
 })

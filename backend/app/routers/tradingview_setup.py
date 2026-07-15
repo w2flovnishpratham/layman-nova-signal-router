@@ -82,6 +82,17 @@ def set_state(setup_id: uuid.UUID, payload: SetupStatePayload, admin: CurrentUse
     except Exception as exc: return _error(exc)
 
 
+@admin_router.post("/managed-tradingview-setups/{setup_id}/credential")
+def issue_managed_credential(setup_id: uuid.UUID, rotate: bool = False, admin: CurrentUser = Depends(require_admin)):
+    """Admin-only: provision the private credential for a NOVA-managed setup.
+    Plaintext is returned exactly once here and never in GET/list responses."""
+    from app.services import strategy_instance_service as instances
+    try:
+        return {"ok": True, "credential": instances.admin_generate_managed_credential(admin.id, setup_id, rotate=rotate)}
+    except Exception as exc:
+        return _error(exc)
+
+
 @admin_router.post("/strategy-instances/{instance_id}/tradingview-verification")
 def admin_verification(instance_id: uuid.UUID, payload: VerificationPayload, admin: CurrentUser = Depends(require_admin)):
     try: return {"ok": True, "setup": service.record_verification(admin.id, instance_id, payload.kind, payload.signal_id, admin=True)}

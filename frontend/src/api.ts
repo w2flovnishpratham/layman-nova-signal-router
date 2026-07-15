@@ -423,9 +423,20 @@ export interface StrategyInstance {
     paper_mode: boolean
     valid_lots: boolean
     active_credential: boolean
-    connection_tested: boolean
+    /** Lighter gate — only present for NOVA catalog personal-webhook instances. */
+    connection_tested?: boolean
+    /** Full server-observed gates — present for approved personal-Pine instances. */
+    approved_version?: boolean
+    installation_confirmed?: boolean
+    hold_verified?: boolean
+    paper_entry_verified?: boolean
+    paper_exit_verified?: boolean
     can_activate: boolean
   }
+  /** Safe code for the first failing activation gate, e.g. PAPER_EXIT_NOT_VERIFIED. */
+  blocking_code?: string | null
+  setup_type?: TradingViewSetupType | null
+  requires_managed_setup?: boolean
   lot_size?: number
   estimated_quantity?: number
   last_signal_time?: string | null
@@ -808,3 +819,27 @@ export const recordManagedTradingViewInstallation = (setupId: string, payload: {
 
 export const updateManagedTradingViewState = (setupId: string, status: 'SETUP_PENDING' | 'INSTALLATION_IN_PROGRESS' | 'ALERT_TEST_PENDING' | 'PAPER_VERIFICATION_PENDING' | 'BLOCKED' | 'RETIRED', reason?: string) =>
   setupCall(`/api/admin/managed-tradingview-setups/${setupId}/state` as `/${string}`, 'POST', { status, reason: reason ?? null })
+
+/** Admin-only: provision the private credential for a NOVA-managed setup.
+ * The plaintext token is returned exactly once and must not be persisted. */
+export const generateManagedTradingViewCredential = (setupId: string, rotate = false) =>
+  credentialCall(`/api/admin/managed-tradingview-setups/${setupId}/credential${rotate ? '?rotate=true' : ''}` as `/${string}`, 'POST')
+
+export interface EngineStrategy {
+  instance_id: string
+  display_name: string
+  source_type: 'NOVA_SHARED' | 'NOVA_HOSTED_PERSONAL' | 'PERSONAL_TRADINGVIEW'
+  setup_type: TradingViewSetupType | null
+  status: string
+  instance_status: string
+  selectable: boolean
+  blocking_reason: string | null
+  owner: 'self'
+}
+
+export async function getEngineStrategies(): Promise<EngineStrategy[]> {
+  const response = await apiFetch('/api/engine/strategies', { cache: 'no-store' })
+  const body = await response.json().catch(() => null) as { ok?: boolean; strategies?: EngineStrategy[]; error?: string } | null
+  if (!response.ok || !body?.ok || !body.strategies) throw new Error(body?.error || 'Could not load engine strategies.')
+  return body.strategies
+}

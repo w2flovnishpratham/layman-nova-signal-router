@@ -42,27 +42,52 @@ import {
   type WebhookExecution,
 } from '../api'
 import { backendHttpUrl } from '../lib/backend'
+import { EngineStrategyPicker } from './EngineStrategyPicker'
+import { blockerText } from './strategyBlockers'
 import './personalStrategies.css'
 
 const ACTIONS = ['BUY_CE', 'BUY_PE', 'EXIT', 'HOLD'] as const
 const PAGE_SIZE = 10
 
+const READINESS_LABELS: Record<string, string> = {
+  paper_mode: 'Paper mode',
+  valid_lots: 'Valid lots',
+  active_credential: 'Active credential',
+  connection_tested: 'Connection tested',
+  approved_version: 'Approved Pine version',
+  installation_confirmed: 'TradingView installed',
+  hold_verified: 'Genuine HOLD verified',
+  paper_entry_verified: 'Paper entry verified',
+  paper_exit_verified: 'Paper exit verified',
+}
+
+
 export function PersonalStrategiesPage({ user }: { user?: AuthUser }) {
-  const [journey, setJourney] = useState<'webhook' | 'pine'>('webhook')
+  const [journey, setJourney] = useState<'engine' | 'webhook' | 'pine'>('webhook')
+  const [focusInstanceId, setFocusInstanceId] = useState<string | null>(null)
   return (
     <>
       <nav className="ps-journey-tabs" aria-label="Personal strategy type">
+        <button type="button" className={journey === 'engine' ? 'active' : ''} onClick={() => setJourney('engine')}>Engine picker</button>
         <button type="button" className={journey === 'webhook' ? 'active' : ''} onClick={() => setJourney('webhook')}>TradingView webhooks</button>
         <button type="button" className={journey === 'pine' ? 'active' : ''} onClick={() => setJourney('pine')}>Imported Pine scripts</button>
       </nav>
-      {journey === 'pine' ? <ImportedPinePage isAdmin={Boolean(user?.is_admin)} /> : <TradingViewStrategiesPage />}
+      {journey === 'engine' ? (
+        <EngineStrategyPicker onManage={(id) => { setFocusInstanceId(id); setJourney('webhook') }} />
+      ) : journey === 'pine' ? (
+        <ImportedPinePage isAdmin={Boolean(user?.is_admin)} />
+      ) : (
+        <TradingViewStrategiesPage focusInstanceId={focusInstanceId} />
+      )}
     </>
   )
 }
 
-function TradingViewStrategiesPage() {
+function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: string | null }) {
   const [instances, setInstances] = useState<StrategyInstance[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Seeded from the engine picker's selection; this view remounts on tab switch
+  // so no effect is needed to react to a later focus change.
+  const [selectedId, setSelectedId] = useState<string | null>(focusInstanceId ?? null)
   const [detail, setDetail] = useState<StrategyInstance | null>(null)
   const [history, setHistory] = useState<WebhookExecution[]>([])
   const [offset, setOffset] = useState(0)
@@ -107,7 +132,7 @@ function TradingViewStrategiesPage() {
       .then((rows) => {
         if (!active) return
         setInstances(rows)
-        setSelectedId(rows[0]?.id ?? null)
+        setSelectedId((current) => current ?? rows[0]?.id ?? null)
       })
       .catch((reason: unknown) => {
         if (active) setError(messageOf(reason))
@@ -399,6 +424,9 @@ interface DetailProps {
 function StrategyDetail(props: DetailProps) {
   const { detail } = props
   const [lots, setLots] = useState(detail.current_lots)
+  // NOVA-managed (non-Premium): NOVA provisions the credential and configures
+  // the TradingView alert. The user never handles the private credential.
+  const managed = Boolean(detail.requires_managed_setup)
   const webhookUrl = backendHttpUrl('/api/webhooks/private')
   const displayToken = props.issuedToken && props.revealed ? props.issuedToken : '<PRIVATE_WEBHOOK_CREDENTIAL>'
   const copyToken = props.issuedToken ?? '<PRIVATE_WEBHOOK_CREDENTIAL>'
@@ -433,13 +461,13 @@ function StrategyDetail(props: DetailProps) {
           <Summary label="Last signal" value={formatDate(detail.last_signal_time)} />
         </div>
         <div className="ps-readiness" aria-label="Activation readiness">
-          {Object.entries({
-            'Paper mode': detail.readiness?.paper_mode,
-            'Valid lots': detail.readiness?.valid_lots,
-            'Active credential': detail.readiness?.active_credential,
-            'Connection tested': detail.readiness?.connection_tested,
-          }).map(([label, ready]) => <span key={label} className={ready ? 'ready' : ''}>{ready ? <Check size={12} /> : '○'} {label}</span>)}
+          {Object.entries(detail.readiness ?? {}).filter(([key]) => key !== 'can_activate').map(([key, ready]) => (
+            <span key={key} className={ready ? 'ready' : ''}>{ready ? <Check size={12} /> : '○'} {READINESS_LABELS[key] ?? key.replaceAll('_', ' ')}</span>
+          ))}
         </div>
+        {detail.readiness && !detail.readiness.can_activate ? (
+          <p className="ps-note" role="status">Not ready — {blockerText(detail.blocking_code)}.</p>
+        ) : null}
       </section>
 
       <section className="ps-card">
@@ -453,13 +481,16 @@ function StrategyDetail(props: DetailProps) {
       </section>
 
       <section className="ps-card">
-        <StepTitle number="3" title="Generate private webhook" />
-        {!detail.webhook_credential ? (
+        <StepTitle number="3" title={managed ? 'Private credential (NOVA-managed)' : 'Generate private webhook'} />
+        {managed ? (
+          <div className="ps-credential-status"><ShieldCheck size={16} /><span>{detail.webhook_credential ? 'Credential configured by NOVA' : detail.credential_status === 'revoked' ? 'Credential rotated — awaiting NOVA re-verification' : 'Credential provisioning pending with NOVA'}</span></div>
+        ) : !detail.webhook_credential ? (
           <button type="button" className="ps-primary" disabled={!!props.busy} onClick={() => void props.onIssue()}><KeyRound size={14} /> Generate credential</button>
         ) : (
           <div className="ps-credential-status"><ShieldCheck size={16} /><span>Credential active · {detail.webhook_credential.token_prefix}…</span></div>
         )}
-        {props.issuedToken ? (
+        {managed ? <p className="ps-note">NOVA installs your approved strategy on a NOVA-controlled TradingView account and never exposes the private credential to you.</p> : null}
+        {!managed && props.issuedToken ? (
           <div className="ps-secret-panel">
             <div><strong>Shown only now</strong><span>Update every TradingView alert before leaving this page.</span></div>
             <code>{props.revealed ? props.issuedToken : '••••••••••••••••••••••••••••••••••••••••'}</code>
@@ -468,11 +499,13 @@ function StrategyDetail(props: DetailProps) {
             </button>
           </div>
         ) : null}
-        <div className="ps-copy-row">
-          <code>{webhookUrl}</code>
-          <CopyButton label="Webhook URL" copied={props.copied} onClick={() => props.onCopy('Webhook URL', webhookUrl)} />
-        </div>
-        {detail.webhook_credential ? (
+        {!managed ? (
+          <div className="ps-copy-row">
+            <code>{webhookUrl}</code>
+            <CopyButton label="Webhook URL" copied={props.copied} onClick={() => props.onCopy('Webhook URL', webhookUrl)} />
+          </div>
+        ) : null}
+        {!managed && detail.webhook_credential ? (
           <>
             {detail.has_open_position ? <div className="ps-warning"><AlertTriangle size={16} /><span>Revoking this credential disables TradingView exit signals. NOVA manual and protective exits remain available.</span></div> : null}
             <div className="ps-actions">
@@ -483,6 +516,13 @@ function StrategyDetail(props: DetailProps) {
         ) : null}
       </section>
 
+      {managed ? (
+        <section className="ps-card">
+          <StepTitle number="4" title="NOVA configures TradingView" />
+          <p className="ps-note">A NOVA administrator installs your approved Pine on a NOVA-controlled TradingView account, creates the private alert, and verifies a genuine HOLD plus a confirmed paper entry and exit. No action is required from you here.</p>
+        </section>
+      ) : (
+      <>
       <section className="ps-card">
         <StepTitle number="4" title="Add TradingView alerts" />
         <div className="ps-warning"><AlertTriangle size={16} /><span>Do not share your credential or JSON alert message. Anyone with it may send signals to this strategy.</span></div>
@@ -511,6 +551,8 @@ function StrategyDetail(props: DetailProps) {
           <Send size={14} /> Send paper HOLD test
         </button>
       </section>
+      </>
+      )}
 
       <section className="ps-card">
         <StepTitle number="6" title="Control strategy" />

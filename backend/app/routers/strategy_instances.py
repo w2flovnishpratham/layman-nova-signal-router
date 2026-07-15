@@ -201,3 +201,12 @@ def admin_list_instances(
     admin: CurrentUser = Depends(require_admin),
 ) -> dict:
     return {"ok": True, "instances": instances.admin_list_instances(user_id=user_id)}
+
+
+engine_router = APIRouter(prefix="/api/engine", tags=["Engine Strategy Picker"])
+
+
+@engine_router.get("/strategies")
+def engine_strategies(user: CurrentUser = Depends(get_current_user)) -> dict:
+    """Owner-scoped engine picker: eligible strategies for this user only."""
+    return {"ok": True, **instances.list_engine_strategies(user.id)}

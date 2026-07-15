@@ -8,7 +8,7 @@ const api = vi.hoisted(() => ({
   source: vi.fn(), link: vi.fn(), instances: vi.fn(), reviews: vi.fn(), review: vi.fn(), decide: vi.fn(),
   conversionConfig: vi.fn(), conversionPackage: vi.fn(), convert: vi.fn(), conversion: vi.fn(), accept: vi.fn(), reject: vi.fn(), retry: vi.fn(),
   createSetup: vi.fn(), getSetup: vi.fn(),
-  managedSetups: vi.fn(), recordInstallation: vi.fn(),
+  managedSetups: vi.fn(), recordInstallation: vi.fn(), managedCredential: vi.fn(),
 }))
 vi.mock('../api', () => ({
   listPineStrategies: api.list, getPineStrategy: api.get, createPineStrategy: api.create,
@@ -20,7 +20,10 @@ vi.mock('../api', () => ({
   rejectPineConversion: api.reject, retryPineConversion: api.retry,
   createTradingViewSetup: api.createSetup, getTradingViewSetup: api.getSetup,
   listManagedTradingViewSetups: api.managedSetups, recordManagedTradingViewInstallation: api.recordInstallation,
+  generateManagedTradingViewCredential: api.managedCredential,
 }))
+
+const MANAGED_TOKEN = 'nwk_MANAGED_SENTINEL_CREDENTIAL_0987654321'
 
 const SOURCE = '//@version=6\nindicator("<script>alert(1)</script> NIFTY", overlay=true)\nalert("BUY_CE")\nalert("EXIT")\n'
 const finding = { code: 'BAR_CONFIRMATION_MISSING', severity: 'WARNING', title: 'Confirm bars', explanation: 'May repeat.', remediation: 'Use confirmed bars.', blocks_review: false, line: 3, column: 1, excerpt: 'alert("BUY_CE")' }
@@ -132,5 +135,25 @@ describe('ImportedPinePage', () => {
     await waitFor(() => expect(api.createSetup).toHaveBeenCalledWith('i1', 'NOVA_MANAGED_TRADINGVIEW'))
     expect(await screen.findByText(/Pending: TradingView installation/i)).toBeInTheDocument()
     expect(screen.queryByText('READY FOR PAPER USE')).not.toBeInTheDocument()
+  })
+
+  it('lets an admin provision a one-time managed credential, masked until revealed', async () => {
+    const user = userEvent.setup()
+    api.managedSetups.mockResolvedValue([{
+      id: 'tv1', user_id: 'user-1234-5678', status: 'ALERT_TEST_PENDING', blocking_step: 'HOLD connectivity test',
+      approved_source_sha256: 'deadbeef', strategy_instance_id: 'i1', credential_status: 'missing_or_revoked',
+      hold_verified_at: null, paper_entry_verified_at: null, paper_exit_verified_at: null,
+      setup_type: 'NOVA_MANAGED_TRADINGVIEW', ready_for_paper: false,
+    }])
+    api.managedCredential.mockResolvedValue({ id: 'c1', strategy_instance_id: 'i1', token_prefix: 'nwk_mng123', created_at: null, last_used_at: null, revoked_at: null, token: MANAGED_TOKEN })
+    render(<ImportedPinePage isAdmin />)
+    await user.click(screen.getByRole('button', { name: /admin review queue/i }))
+    await screen.findByText('Managed TradingView setup')
+    await user.click(await screen.findByRole('button', { name: /generate managed credential/i }))
+    await waitFor(() => expect(api.managedCredential).toHaveBeenCalledWith('tv1', false))
+    expect(await screen.findByText('Shown only now')).toBeInTheDocument()
+    expect(screen.queryByText(MANAGED_TOKEN)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^reveal$/i }))
+    expect(screen.getByText(MANAGED_TOKEN)).toBeInTheDocument()
   })
 })
