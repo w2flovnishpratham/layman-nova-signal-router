@@ -67,6 +67,7 @@ def _public_order_request(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalized_log_fields(signal: NormalizedSignal) -> dict[str, Any]:
+    raw = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
     return {
         "payload_format": signal.payload_format,
         "normalized_action": signal.action,
@@ -76,6 +77,9 @@ def _normalized_log_fields(signal: NormalizedSignal) -> dict[str, Any]:
         "normalized_strike": signal.strike,
         "normalized_expiry": signal.expiry,
         "normalized_option_side": signal.option_side,
+        # Why exits happened (SL/TP/reversal) so the chart can label exit markers.
+        "exit_reason": raw.get("exit_reason"),
+        "reversal_exit": bool(raw.get("reversal")),
     }
 
 

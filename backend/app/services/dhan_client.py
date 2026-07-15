@@ -1245,16 +1245,16 @@ class RealDhanClient:
             candles: list[dict[str, Any]] = []
             for i in range(count):
                 try:
-                    candles.append(
-                        {
-                            "time": int(float(timestamps[i])),
-                            "open": float(opens[i]),
-                            "high": float(highs[i]),
-                            "low": float(lows[i]),
-                            "close": float(closes[i]),
-                            "volume": float(volumes[i]) if i < len(volumes) and volumes[i] is not None else 0.0,
-                        }
-                    )
+                    candle = {
+                        "time": int(float(timestamps[i])),
+                        "open": float(opens[i]),
+                        "high": float(highs[i]),
+                        "low": float(lows[i]),
+                        "close": float(closes[i]),
+                    }
+                    if i < len(volumes) and volumes[i] is not None:
+                        candle["volume"] = float(volumes[i])
+                    candles.append(candle)
                 except (TypeError, ValueError):
                     continue
             return {

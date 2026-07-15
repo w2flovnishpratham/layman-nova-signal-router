@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import threading
 import time
+import math
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -78,15 +79,27 @@ def cache_key(interval: str, trading_date: date) -> str:
 
 
 def filter_today_session(candles: list[dict[str, Any]], trading_date: date) -> list[dict[str, Any]]:
-    """Keep only candles inside today's IST session window; sort asc; dedupe."""
+    """Keep valid, aligned five-minute candles inside the selected IST session."""
     start, end = session_bounds_ist(trading_date)
     start_epoch = int(start.timestamp())
     end_epoch = int(end.timestamp())
     seen: set[int] = set()
     filtered: list[dict[str, Any]] = []
     for candle in sorted(candles, key=lambda c: int(c.get("time") or 0)):
-        t = int(candle.get("time") or 0)
-        if t < start_epoch or t > end_epoch or t in seen:
+        try:
+            t = int(candle.get("time") or 0)
+            o, h, low, close = (float(candle[name]) for name in ("open", "high", "low", "close"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (
+            t < start_epoch
+            or t >= end_epoch
+            or (t - start_epoch) % 300
+            or t in seen
+            or not all(math.isfinite(value) and value > 0 for value in (o, h, low, close))
+            or h < max(o, low, close)
+            or low > min(o, h, close)
+        ):
             continue
         seen.add(t)
         filtered.append(candle)
@@ -168,8 +181,12 @@ def _fetch_candles(dhan_interval: str, interval_label: str, today: date) -> dict
         reason = "market_data_token_expired" if shared_market_data_configured() else "market_data_unavailable"
         return _unavailable(reason, "NIFTY chart is temporarily unavailable. Nova is reconnecting market data.", today)
 
-    from_date = session_start.strftime("%Y-%m-%d %H:%M:%S")
-    to_date = min(now_ist, session_end).strftime("%Y-%m-%d %H:%M:%S")
+    # Dhan's intraday toDate is DATE-exclusive and returns an empty set for a
+    # completed day when given same-day datetimes; date-only [day, day+1) is
+    # the only range that reliably returns a past session (verified against
+    # the live API). filter_today_session clips to the session window anyway.
+    from_date = today.isoformat()
+    to_date = (today + timedelta(days=1)).isoformat()
 
     # Shared data identity reads directly (no per-user egress proxy).
     client = RealDhanClient(proxy_url="")

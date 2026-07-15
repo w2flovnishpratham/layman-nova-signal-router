@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import math
+from datetime import date, datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Query
@@ -14,6 +17,87 @@ from app.workers.strategy_job_worker import strategy_job_worker_status
 
 
 router = APIRouter()
+
+
+def _marker_number(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _is_confirmed_chart_fill(event: dict[str, Any]) -> bool:
+    return (
+        event.get("phase") == "after_response"
+        and event.get("success") is not False
+        and str(event.get("status") or "").upper() in {"TRADED", "FILLED", "PARTIAL_FILL", "COMPLETED"}
+        and (_marker_number(event.get("avg_price")) or 0) > 0
+    )
+
+
+def _marker_exit_kind(event: dict[str, Any]) -> str:
+    if event.get("reversal_exit"):
+        return "REVERSAL"
+    reason = str(event.get("exit_reason") or "").strip().upper()
+    if reason in {"SL", "STOP_LOSS"} or reason.startswith("TRAIL"):
+        return "SL"
+    if reason in {"TP", "TAKE_PROFIT", "TARGET"}:
+        return "TARGET"
+    if reason in {"EOD", "EOD_FLATTEN"}:
+        return "EOD"
+    return "EXIT"
+
+
+def _build_nifty_markers(events: list[dict[str, Any]], *, mode: str, trading_date: date, limit: int) -> list[dict[str, Any]]:
+    """Convert only confirmed, uniquely identified fills into safe chart data."""
+    from app.services.market_chart_service import _IST
+    from app.services.portfolio_analytics import _dedupe_legs_by_order_id
+
+    legs = _dedupe_legs_by_order_id([
+        event for event in events
+        if isinstance(event, dict) and _is_confirmed_chart_fill(event) and str(event.get("mode") or "").lower() == mode
+    ])
+    markers: list[dict[str, Any]] = []
+    for event in legs:
+        action = str(event.get("normalized_action") or event.get("action") or "").upper()
+        order_id = str(event.get("order_id") or "").strip()
+        if action not in {"ENTRY", "EXIT"} or not order_id:
+            continue
+        try:
+            timestamp = datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        if timestamp.astimezone(_IST).date() != trading_date:
+            continue
+        option_side_value = str(event.get("normalized_option_side") or event.get("option_side") or "").upper()
+        option_side = option_side_value if option_side_value in {"CE", "PE"} else None
+        exit_kind = _marker_exit_kind(event) if action == "EXIT" else None
+        labels = {"SL": "SL EXIT", "TARGET": "TARGET", "REVERSAL": "REV EXIT", "EOD": "EOD EXIT", "EXIT": "EXIT"}
+        marker_id = hashlib.sha256(f"{order_id}|{timestamp.isoformat()}|{action}".encode()).hexdigest()[:24]
+        contract = str(event.get("trading_symbol") or "").strip()[:80] or None
+        quantity = _marker_number(event.get("filled_qty") or event.get("final_qty") or event.get("normalized_qty") or event.get("qty"))
+        markers.append({
+            "id": marker_id,
+            "time": int(timestamp.timestamp()),
+            "side": "BUY" if action == "ENTRY" else "SELL",
+            "option_side": option_side,
+            "exit_kind": exit_kind,
+            "label": labels[exit_kind] if exit_kind else (f"BUY {option_side}" if option_side else "BUY"),
+            "contract": contract,
+            "execution_price": _marker_number(event.get("avg_price")),
+            "quantity": quantity if quantity is not None and quantity > 0 else None,
+            "pnl": _marker_number(event.get("realized_pnl") or event.get("pnl")) if action == "EXIT" else None,
+            # Option premium is metadata only; it is never plotted on the NIFTY scale.
+            "price": None,
+            "approximate": True,
+            "mode": mode,
+            "source": "paper_trade" if mode == "paper" else "trade_execution",
+        })
+    # Python's stable sort preserves execution-log order for equal timestamps.
+    return sorted(markers, key=lambda marker: marker["time"])[-limit:]
 
 
 @router.get("/market/nifty-snapshot")
@@ -67,59 +151,17 @@ def nifty_markers(
     - DAY: only events on today's IST trading date are returned, so paper
       markers automatically expire when the trading date rolls over.
     """
-    from datetime import datetime, timezone
-
     from app.services.audit_logger import read_jsonl
-    from app.services.market_chart_service import _IST, trading_date_ist
-    from app.services.portfolio_analytics import _dedupe_legs_by_order_id, _is_filled
+    from app.services.market_chart_service import chart_trading_date_ist
     from app.services.state_store import get_engine_mode
 
     active_mode = (mode or get_engine_mode(legacy_fallback=False) or get_engine_mode() or "").lower()
-    today = trading_date_ist()
+    today = chart_trading_date_ist()
     base = {"symbol": "NIFTY", "trading_date": today.isoformat(), "mode": active_mode or None}
     if active_mode not in {"paper", "live"}:
         return {**base, "markers": []}
 
-    events = read_jsonl("order", limit=1000)
-    legs = [
-        ev
-        for ev in events
-        if isinstance(ev, dict) and _is_filled(ev) and str(ev.get("mode") or "").lower() == active_mode
-    ]
-    legs = _dedupe_legs_by_order_id(legs)
-
-    markers: list[dict[str, Any]] = []
-    for ev in legs[-limit:]:
-        action = str(ev.get("normalized_action") or ev.get("action") or "").upper()
-        if action not in {"ENTRY", "EXIT"}:
-            continue
-        try:
-            ts = datetime.fromisoformat(str(ev.get("timestamp")).replace("Z", "+00:00"))
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            epoch = int(ts.timestamp())
-        except (TypeError, ValueError):
-            continue
-        # Today-only: markers from previous trading days never render.
-        if ts.astimezone(_IST).date() != today:
-            continue
-        side = "BUY" if action == "ENTRY" else "SELL"
-        option_side = str(ev.get("normalized_option_side") or ev.get("option_side") or "").upper() or None
-        markers.append(
-            {
-                "time": epoch,
-                "side": side,
-                "option_side": option_side,
-                "label": f"{side} {option_side}" if option_side else side,
-                # Execution price is the option premium, not the index level, so
-                # the frontend snaps the marker to the nearest NIFTY candle.
-                "price": None,
-                "approximate": True,
-                "mode": active_mode,
-                "source": "paper_trade" if active_mode == "paper" else "trade_execution",
-            }
-        )
-    return {**base, "markers": markers}
+    return {**base, "markers": _build_nifty_markers(read_jsonl("order", limit=1000), mode=active_mode, trading_date=today, limit=limit)}
 
 
 @router.get("/system/health-strip")

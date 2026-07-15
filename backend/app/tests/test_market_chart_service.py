@@ -45,3 +45,23 @@ def test_chart_auth_failure_does_not_refresh_shared_market_token(monkeypatch):
     assert payload["status"] == "unavailable"
     assert payload["reason"] == "market_data_chart_auth_failed"
     assert calls["refresh"] == 0
+
+
+def test_session_filter_keeps_only_valid_aligned_five_minute_candles():
+    trading_date = datetime(2026, 7, 15, tzinfo=charts._IST).date()
+    start, end = charts.session_bounds_ist(trading_date)
+
+    def candle(at: datetime, **overrides):
+        return {"time": int(at.timestamp()), "open": 100.0, "high": 102.0, "low": 99.0, "close": 101.0, **overrides}
+
+    valid = candle(start)
+    rows = charts.filter_today_session([
+        candle(end),
+        candle(start + timedelta(minutes=1)),
+        candle(start + timedelta(minutes=5), high=100.0),
+        {**valid, "open": float("nan")},
+        valid,
+        valid,
+    ], trading_date)
+
+    assert rows == [valid]

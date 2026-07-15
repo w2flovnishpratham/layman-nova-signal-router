@@ -2332,7 +2332,7 @@ code {
   min-height: 0;
 }
 
-.engine-live-layout .nifty-chart-svg {
+.engine-live-layout .nifty-chart-canvas {
   flex: 1 1 auto;
   height: auto;
   min-height: 0;
@@ -2441,16 +2441,39 @@ code {
   font-size: 11px;
 }
 
-.nifty-chart-svg {
+.nifty-chart-canvas,
+.nova-live-chart {
   width: 100%;
   height: clamp(360px, 52vh, 560px);
   display: block;
+  /* Read-only chart: block all mouse/touch interaction. */
+  pointer-events: none;
+  user-select: none;
+  touch-action: none;
 }
 
 @media (max-width: 900px) {
-  .nifty-chart-svg {
+  .nifty-chart-canvas {
     height: 340px;
   }
+}
+
+.nifty-conn {
+  font-weight: 700;
+}
+
+.nifty-conn.live {
+  color: #34d399;
+}
+
+.nifty-conn.delayed,
+.nifty-conn.reconnecting,
+.nifty-conn.market-closed {
+  color: #f59e0b;
+}
+
+.nifty-conn.unavailable {
+  color: #fb7185;
 }
 
 /* Router banner slot: full-width strip directly under the app header */
@@ -2459,56 +2482,6 @@ code {
   max-width: 1480px;
   margin: 0 auto;
   padding: 6px 16px 0;
-}
-
-.nifty-grid-line {
-  stroke: rgba(255, 255, 255, 0.06);
-  stroke-width: 1;
-}
-
-.nifty-grid-label {
-  fill: var(--text-3);
-  font-size: 9px;
-}
-
-.nifty-candle line {
-  stroke-width: 1;
-}
-
-.nifty-candle.up line,
-.nifty-candle.up rect {
-  stroke: #34d399;
-  fill: #34d399;
-}
-
-.nifty-candle.down line,
-.nifty-candle.down rect {
-  stroke: #fb7185;
-  fill: #fb7185;
-}
-
-.nifty-last-line {
-  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
-  stroke-width: 1;
-  stroke-dasharray: 4 4;
-}
-
-.nifty-marker path {
-  stroke: none;
-}
-
-.nifty-marker.buy path {
-  fill: #34d399;
-}
-
-.nifty-marker.sell path {
-  fill: #fb7185;
-}
-
-.nifty-marker text {
-  fill: var(--text-2);
-  font-size: 8px;
-  font-weight: 700;
 }
 
 .engine-listening.paused {

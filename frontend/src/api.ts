@@ -158,7 +158,7 @@ export interface NiftyCandle {
   high: number
   low: number
   close: number
-  volume: number
+  volume?: number
 }
 
 export interface NiftyCandleSeries {
@@ -182,18 +182,24 @@ export interface NiftyCandleSeries {
 }
 
 export interface NiftyTradeMarker {
+  id: string
   time: number
   side: 'BUY' | 'SELL'
   option_side?: 'CE' | 'PE' | null
+  exit_kind?: 'SL' | 'TARGET' | 'REVERSAL' | 'EOD' | 'EXIT' | null
   label: string
+  contract?: string | null
+  execution_price?: number | null
+  quantity?: number | null
+  pnl?: number | null
   price?: number | null
   approximate?: boolean
   mode?: string | null
   source?: string
 }
 
-export async function getNiftyCandles(): Promise<NiftyCandleSeries> {
-  const response = await apiFetch('/api/market/nifty/candles?interval=5m', { cache: 'no-store' })
+export async function getNiftyCandles(signal?: AbortSignal): Promise<NiftyCandleSeries> {
+  const response = await apiFetch('/api/market/nifty/candles?interval=5m', { cache: 'no-store', signal })
   if (!response.ok) {
     throw new Error(`Could not load NIFTY candles: ${response.status}`)
   }
@@ -207,9 +213,9 @@ export interface NiftyMarkerResponse {
   markers: NiftyTradeMarker[]
 }
 
-export async function getNiftyMarkers(mode?: 'paper' | 'live'): Promise<NiftyMarkerResponse> {
+export async function getNiftyMarkers(mode?: 'paper' | 'live', signal?: AbortSignal): Promise<NiftyMarkerResponse> {
   const path: `/${string}` = mode ? `/api/market/nifty/markers?mode=${mode}` : '/api/market/nifty/markers'
-  const response = await apiFetch(path, { cache: 'no-store' })
+  const response = await apiFetch(path, { cache: 'no-store', signal })
   if (!response.ok) {
     throw new Error(`Could not load chart markers: ${response.status}`)
   }

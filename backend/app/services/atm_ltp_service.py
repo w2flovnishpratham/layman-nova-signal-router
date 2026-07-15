@@ -76,6 +76,8 @@ def get_atm_option_snapshot(
         "niftySpot": nifty_spot,
         "niftySpotSource": spot_source,
         "niftySpotStatus": spot_quote.get("status"),
+        "niftySpotReceivedAt": spot_quote.get("receivedAt"),
+        "niftySpotAgeSeconds": spot_quote.get("ageSeconds"),
         "atmStrike": atm_strike,
         "strikeStep": NIFTY_ATM_STEP,
         "lots": lots,

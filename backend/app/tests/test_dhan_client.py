@@ -568,6 +568,27 @@ def test_get_ltp_uses_v2_marketfeed_ltp_endpoint(monkeypatch):
     assert recorder["json"] == {"NSE_FNO": [49081]}
 
 
+def test_intraday_candles_do_not_invent_missing_volume(monkeypatch):
+    recorder = {}
+    response = httpx.Response(200, json={
+        "timestamp": [1784087100], "open": [25120.5], "high": [25142.8],
+        "low": [25115.2], "close": [25138.4],
+    })
+    patch_http_client(monkeypatch, response, recorder)
+
+    result = RealDhanClient().get_intraday_candles(
+        client_id="1000000001", access_token="token", security_id="13",
+        exchange_segment="IDX_I", instrument="INDEX", interval="5",
+        from_date="2026-07-15", to_date="2026-07-16",
+    )
+
+    assert result["success"] is True
+    assert result["candles"] == [{
+        "time": 1784087100, "open": 25120.5, "high": 25142.8,
+        "low": 25115.2, "close": 25138.4,
+    }]
+
+
 def test_poll_order_status_reads_average_traded_price(monkeypatch):
     recorder = {}
     response = httpx.Response(200, json={"orderId": "112111182198", "orderStatus": "TRADED", "averageTradedPrice": 123.45})
