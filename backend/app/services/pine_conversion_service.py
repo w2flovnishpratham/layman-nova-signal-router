@@ -17,7 +17,7 @@ from app.db.engine import session_scope
 from app.schemas.pine_conversion import ConversionOptions
 from app.services import personal_pine_service as pine, pine_conversion_provider, pine_validation
 
-PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "pine_conversion_v1.txt"
+PROMPT_PATH = Path(__file__).resolve().parents[1] / f"prompts/pine_conversion_{settings.PINE_CONVERSION_PROMPT_VERSION}.txt"
 ACTIVE = {"queued", "processing"}
 TERMINAL = {"succeeded", "validation_failed", "provider_failed", "rejected_secret_detected", "canceled", "rejected", "accepted"}
 SECRET_PATTERNS = (

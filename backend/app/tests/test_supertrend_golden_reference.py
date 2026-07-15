@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[3]
 PINE_PATH = ROOT / "docs" / "pine" / "golden-references" / "nova_supertrend_v2.pine"
 QUALIFICATION_PATH = ROOT / "docs" / "pine" / "golden-references" / "nova_supertrend_v2_qualification.json"
 OLD_PATH = ROOT / "nova_indicator_v2.pine"
+ORIGINAL_PATH = ROOT / "docs" / "pine" / "golden-references" / "original_tradingview_supertrend_v4.pine"
 PROMPT_PATH = ROOT / "backend" / "app" / "prompts" / "pine_conversion_v1.txt"
 
 
@@ -56,6 +57,7 @@ def test_qualification_manifest_pins_candidate_and_old_source():
     record = json.loads(QUALIFICATION_PATH.read_text(encoding="utf-8"))
     candidate_hash = hashlib.sha256(PINE_PATH.read_bytes()).hexdigest()
     old_hash = hashlib.sha256(OLD_PATH.read_bytes()).hexdigest()
+    original_hash = hashlib.sha256(ORIGINAL_PATH.read_bytes()).hexdigest()
     prompt_hash = hashlib.sha256(PROMPT_PATH.read_bytes()).hexdigest()
     assert record["candidate_source_sha256"] == candidate_hash
     assert record["old_nova_source_sha256"] == old_hash
@@ -64,8 +66,11 @@ def test_qualification_manifest_pins_candidate_and_old_source():
     assert record["qualification_status"] == "QUALIFICATION"
     assert record["static_validation_status"] == "PASSED_WITH_WARNINGS"
     assert record["static_validation_findings"] == ["UNDERLYING_GENERIC"]
-    assert record["original_source_sha256"] is None
-    assert record["original_source_blocker"] == "SOURCE_NOT_SUPPLIED"
+    assert record["original_source_sha256"] == original_hash
+    assert record["original_source_artifact"] == "docs/pine/golden-references/original_tradingview_supertrend_v4.pine"
+    assert record["original_source_classification"] == "EXTERNAL_REFERENCE_SOURCE"
+    assert record["original_source_blocker"] is None
+    assert record["source_lineage_history"][0]["reason"] == "SOURCE_NOT_SUPPLIED_TO_REPOSITORY_RUN"
     assert record["tradingview_compile_status"] == "BLOCKED"
     assert record["real_tradingview_alert_status"] == "BLOCKED"
     assert record["paper_entry_status"] == "BLOCKED"

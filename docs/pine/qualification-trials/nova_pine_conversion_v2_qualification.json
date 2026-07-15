@@ -1,0 +1,30 @@
+{
+  "prompt_version_id": "v2",
+  "version_label": "Canonical manual NOVA Pine conversion prompt v2",
+  "prompt_artifact": "backend/app/prompts/pine_conversion_v2.txt",
+  "content_sha256": "9138271759650bd48f2d579fd9291d81a0660d7ca94d8ad7df2ee4a2b97d54cf",
+  "status": "QUALIFICATION",
+  "created_by": "MANUAL_ENGINEERING",
+  "created_at": "2026-07-15T15:35:33.4965942+05:30",
+  "golden_reference_artifact": "docs/pine/golden-references/nova_supertrend_v2.pine",
+  "golden_reference_sha256": "55ac262ccdeb6e9569b81d99adfe6e20b1036a327f74419ee2aedb44bba0cdfe",
+  "qualification_trials": [
+    {
+      "strategy_type": "SUPERTREND_REVERSAL",
+      "classification": "MANUAL_MASTER_PROMPT_TRIAL",
+      "original_artifact": "docs/pine/golden-references/original_tradingview_supertrend_v4.pine",
+      "candidate_artifact": "docs/pine/qualification-trials/supertrend_v4_master_prompt_trial.pine",
+      "candidate_sha256": "9346245c185f05ae6d2e3b839609a7058a29dc95996ba3dccc458b294da08507",
+      "report_artifact": "docs/pine/qualification-trials/supertrend_v4_master_prompt_trial_report.md",
+      "report_sha256": "76acac8841752b939cdf4e72acbbe3e1aee601121eafd7ec94a43686ec78bccf",
+      "static_validation_status": "PASSED_WITH_WARNINGS",
+      "static_validation_findings": [
+        "UNDERLYING_GENERIC"
+      ],
+      "rubric_result": "PASS_STATIC",
+      "overall_outcome": "BLOCKED"
+    }
+  ],
+  "change_notes": "Adds the immutable original Supertrend lineage and the first manual prompt trial. TradingView compilation and real alert evidence remain required.",
+  "ai_conversion_enabled": false
+}

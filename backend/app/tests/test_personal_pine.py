@@ -6,6 +6,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.config import settings
 from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 from app.tests.test_strategy_instances import _create_instance, _seed_supertrend
 
@@ -48,7 +49,7 @@ def _create(client, source: str = VALID_PINE, name: str = "Imported Pine"):
 def _acceptance(version_id: str) -> dict:
     return {
         "original_version_id": version_id,
-        "prompt_version_id": "v1",
+        "prompt_version_id": settings.PINE_CONVERSION_PROMPT_VERSION,
         "setup_type": "USER_MANAGED_TRADINGVIEW",
         "assumptions": [],
         "reviewed_strategy": True,

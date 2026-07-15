@@ -5,8 +5,9 @@ Status: `QUALIFICATION`. Static inspection is not a TradingView compilation test
 ## Source evidence
 
 - Current NOVA source: [`nova_indicator_v2.pine`](../../../nova_indicator_v2.pine), SHA-256 `7595fe7e20e63f8a03eb4d95cdc7442415d34602426d4e32328dc03f4a223c7f`.
-- Original TradingView Pine v4 file: not present in the supplied attachment, repository, or Git history. Its exact source hash is therefore `BLOCKED_SOURCE_NOT_SUPPLIED`.
-- Original formula baseline: the ATR, band continuation, trend transition, reversal, plots, and highlighting evidenced in the current NOVA source. The corrected default preserves that formula while removing its default daily reset.
+- Original TradingView Pine v4 file: [`original_tradingview_supertrend_v4.pine`](original_tradingview_supertrend_v4.pine), SHA-256 `0ea1efffd67ad43b002e2ff8be0c378623224b8752e208269c68792df97ad9ea`, classified `EXTERNAL_REFERENCE_SOURCE`.
+- Phase 4D history: the artifact was unavailable to that repository run and was recorded as `SOURCE_NOT_SUPPLIED`. Phase 4E resolves that blocker without erasing it from the qualification record.
+- Original formula baseline: the registered v4 ATR, band continuation, trend transition, reversal, plots, and highlighting. The corrected default preserves that behavior while adding approved NOVA transport and safety changes; it is not a byte-level conversion.
 - Corrected candidate hash: pinned in `nova_supertrend_v2_qualification.json`.
 
 ## Comparison
