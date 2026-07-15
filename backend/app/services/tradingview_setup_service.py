@@ -265,6 +265,10 @@ def record_verification(actor_id, instance_id, kind: str, signal_id: str, *, adm
         else: row.reversal_signal_id, row.reversal_verified_at = signal_id, now
         row.status = "PAPER_VERIFICATION_PENDING"; row.updated_at = now
         crud.add_audit_log(db, user_id=actor_id, action="TRADINGVIEW_SERVER_EVIDENCE_PINNED", metadata={"setup_id": str(row.id), "kind": kind, "signal_id": signal_id})
+        # Once HOLD + paper entry + paper exit are all confirmed, exit controlled
+        # verification so the strategy becomes normally selectable/activatable.
+        from app.services.strategy_instance_service import complete_verification_if_ready
+        complete_verification_if_ready(db, instance)
         return _setup_public(db, row, include_admin=admin)
 
 

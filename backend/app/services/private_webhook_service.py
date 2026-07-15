@@ -205,6 +205,7 @@ def authenticate_credential(token: str, *, correlation_id: str | None = None) ->
             "instance_status": instance.status,
             "source_journey": instance.source_journey,
             "execution_mode": instance.execution_mode,
+            "verification_mode": bool(instance.verification_mode),
             "current_lots": int(instance.current_lots),
             "strategy_id": str(instance.strategy_id),
         }
@@ -233,11 +234,21 @@ def validate_instance_lifecycle(auth: dict[str, Any]) -> None:
             status_code=409,
             reason="INACTIVE_INSTANCE",
         )
-    if auth["instance_status"] not in {InstanceState.ACTIVE.value, InstanceState.PAUSED.value}:
+    in_verification = bool(auth.get("verification_mode"))
+    if auth["instance_status"] not in {InstanceState.ACTIVE.value, InstanceState.PAUSED.value} and not in_verification:
+        # A strategy in controlled verification is not yet ACTIVE but must accept
+        # genuine paper signals to produce entry/exit evidence.
         raise PrivateWebhookError(
             "Strategy instance is stopped or not active.",
             status_code=409,
             reason="INACTIVE_INSTANCE",
+        )
+    if in_verification and auth.get("execution_mode") != "paper_live_data":
+        # Verification is paper-only — a live instance can never ingest here.
+        raise PrivateWebhookError(
+            "Verification accepts paper strategies only.",
+            status_code=409,
+            reason="LIVE_EXECUTION_SAFETY_BLOCK",
         )
 
 
@@ -403,6 +414,7 @@ def test_connection(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[st
             "instance_status": instance.status,
             "source_journey": instance.source_journey,
             "execution_mode": instance.execution_mode,
+            "verification_mode": bool(instance.verification_mode),
             "current_lots": instance.current_lots,
             "strategy_id": str(instance.strategy_id),
         }

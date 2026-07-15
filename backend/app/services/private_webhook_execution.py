@@ -76,8 +76,16 @@ def _revalidate_instance(instance_id: uuid.UUID, job_user_id: Any, action: str):
         if instance.status == InstanceState.PAUSED.value and action == "ENTRY":
             yield {"error": _no_op("INSTANCE_PAUSED_ENTRIES_BLOCKED")}
             return
-        if instance.status not in {InstanceState.ACTIVE.value, InstanceState.PAUSED.value}:
+        in_verification = bool(getattr(instance, "verification_mode", False))
+        if instance.status not in {InstanceState.ACTIVE.value, InstanceState.PAUSED.value} and not in_verification:
+            # A strategy in controlled verification is not yet ACTIVE but must be
+            # able to produce genuine paper entry/exit evidence.
             yield {"error": _result("rejected", "INACTIVE_INSTANCE")}
+            return
+        if in_verification and instance.execution_mode != "paper_live_data":
+            # Verification is paper-only; a real-orders instance can never execute
+            # a verification signal. This is the hard guarantee against live orders.
+            yield {"error": _result("rejected", "LIVE_EXECUTION_SAFETY_BLOCK")}
             return
         lots = int(instance.current_lots or 0)
         if lots < 1:

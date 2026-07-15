@@ -93,6 +93,17 @@ def issue_managed_credential(setup_id: uuid.UUID, rotate: bool = False, admin: C
         return _error(exc)
 
 
+@admin_router.post("/managed-tradingview-setups/{setup_id}/verification-mode")
+def start_managed_verification(setup_id: uuid.UUID, admin: CurrentUser = Depends(require_admin)):
+    """Admin-only: start controlled paper verification for a NOVA-managed setup
+    on the owner's behalf. The non-Premium user never handles this step."""
+    from app.services import strategy_instance_service as instances
+    try:
+        return {"ok": True, "instance": instances.admin_start_managed_verification(admin.id, setup_id)}
+    except Exception as exc:
+        return _error(exc)
+
+
 @admin_router.post("/strategy-instances/{instance_id}/tradingview-verification")
 def admin_verification(instance_id: uuid.UUID, payload: VerificationPayload, admin: CurrentUser = Depends(require_admin)):
     try: return {"ok": True, "setup": service.record_verification(admin.id, instance_id, payload.kind, payload.signal_id, admin=True)}

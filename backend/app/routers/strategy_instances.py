@@ -15,6 +15,7 @@ from app.auth.dependencies import get_current_user, require_admin
 from app.schemas.strategy import (
     CloneInstancePayload,
     CreateInstancePayload,
+    SelectStrategyPayload,
     StatusReasonPayload,
     UpdateLotsPayload,
 )
@@ -126,6 +127,15 @@ def stop_instance(
     return _lifecycle(instances.stop_instance, instance_id, user, reason=payload.reason if payload else None)
 
 
+@router.post("/{instance_id}/verification-mode")
+def start_verification(instance_id: uuid.UUID, user: CurrentUser = Depends(get_current_user)):
+    """Premium owner starts controlled paper-only verification for their strategy."""
+    try:
+        return {"ok": True, "instance": instances.start_verification(user.id, instance_id)}
+    except Exception as exc:  # noqa: BLE001
+        return _error(exc)
+
+
 @router.post("/{instance_id}/archive")
 def archive_instance(instance_id: uuid.UUID, user: CurrentUser = Depends(get_current_user)):
     return _lifecycle(instances.archive_instance, instance_id, user)
@@ -210,3 +220,18 @@ engine_router = APIRouter(prefix="/api/engine", tags=["Engine Strategy Picker"])
 def engine_strategies(user: CurrentUser = Depends(get_current_user)) -> dict:
     """Owner-scoped engine picker: eligible strategies for this user only."""
     return {"ok": True, **instances.list_engine_strategies(user.id)}
+
+
+@engine_router.get("/selection")
+def get_engine_selection(user: CurrentUser = Depends(get_current_user)) -> dict:
+    """The user's persisted engine strategy selection."""
+    return {"ok": True, **instances.get_engine_selection(user.id)}
+
+
+@engine_router.put("/selection")
+def set_engine_selection(payload: SelectStrategyPayload, user: CurrentUser = Depends(get_current_user)):
+    """Persist the selected strategy instance (owner-scoped, eligible only)."""
+    try:
+        return {"ok": True, **instances.set_engine_selection(user.id, payload.strategy_instance_id)}
+    except Exception as exc:  # noqa: BLE001
+        return _error(exc)

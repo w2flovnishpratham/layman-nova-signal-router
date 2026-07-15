@@ -1,9 +1,15 @@
 """Request schemas for strategy-instance control endpoints (Phase 1)."""
 from __future__ import annotations
 
+import uuid
+
 from pydantic import BaseModel, Field
 
 from app.services.strategy_instance_service import MAX_LOTS, MIN_LOTS
+
+
+class SelectStrategyPayload(BaseModel):
+    strategy_instance_id: uuid.UUID
 
 
 class CreateInstancePayload(BaseModel):

@@ -28,6 +28,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false as sa_false,
     text as sa_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
@@ -935,6 +936,14 @@ class StrategyInstance(Base):
     # signal_only / paper_live_data / real_orders (live_engine.EXECUTION_MODES)
     execution_mode: Mapped[str] = mapped_column(String(30), default="signal_only", nullable=False)
     current_lots: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Controlled paper-only verification: when true, the private webhook path
+    # executes paper signals for this instance even though it is not ACTIVE, so
+    # a newly approved strategy can produce genuine paper entry/exit evidence
+    # without the readiness deadlock. Live orders remain impossible (enforced in
+    # the execution path). Cleared once full readiness is reached.
+    verification_mode: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false(), nullable=False)
+    verification_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Risk/config snapshot; structured but strategy-variable.
     risk_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     # Link to the pre-instance subscription this row was backfilled from
@@ -995,6 +1004,32 @@ class StrategyInstanceWebhookCredential(Base):
     replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
 
     instance: Mapped["StrategyInstance"] = relationship(back_populates="webhook_credentials")
+
+
+class UserEngineConfig(Base):
+    """One row per user pointing the engine picker at the user's currently
+    selected strategy instance.
+
+    Selection is a persisted UI/engine pointer, NOT execution authority: the
+    per-instance private webhook credential remains the sole binding between an
+    inbound signal and the instance it executes as, so this pointer never
+    reroutes a signal between instances.
+    """
+
+    __tablename__ = "user_engine_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    # SET NULL: an archived/deleted instance simply clears the selection.
+    selected_strategy_instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_instances.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 # Position states with an open broker exposure or an in-flight order. Shared

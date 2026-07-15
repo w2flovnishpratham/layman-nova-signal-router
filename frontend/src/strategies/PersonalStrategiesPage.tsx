@@ -35,6 +35,7 @@ import {
   resumeStrategyInstance,
   revokeInstanceWebhookCredential,
   rotateInstanceWebhookCredential,
+  startInstanceVerification,
   stopStrategyInstance,
   testInstanceWebhookConnection,
   updateStrategyInstanceLots,
@@ -369,6 +370,13 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
                   await loadList(detail.id)
                 })
               }}
+              onStartVerification={async () => {
+                await run('Verification', async () => {
+                  await startInstanceVerification(detail.id)
+                  await loadSelected(detail.id, offset)
+                  await loadList(detail.id)
+                })
+              }}
               onLifecycle={async (action) => {
                 await run(action, async () => {
                   if (action === 'Activate') await activateStrategyInstance(detail.id)
@@ -414,6 +422,7 @@ interface DetailProps {
   onRevoke: () => Promise<void>
   onLots: (lots: number) => Promise<void>
   onTest: () => Promise<void>
+  onStartVerification: () => Promise<void>
   onLifecycle: (action: 'Activate' | 'Resume' | 'Pause' | 'Stop') => Promise<void>
   onPage: (offset: number) => Promise<void>
   onActionFilter: (value: string) => void
@@ -467,6 +476,15 @@ function StrategyDetail(props: DetailProps) {
         </div>
         {detail.readiness && !detail.readiness.can_activate ? (
           <p className="ps-note" role="status">Not ready — {blockerText(detail.blocking_code)}.</p>
+        ) : null}
+        {detail.readiness && 'paper_entry_verified' in detail.readiness && !detail.readiness.can_activate ? (
+          detail.verification_mode ? (
+            <p className="ps-note" role="status"><strong>Verification in progress.</strong> Send genuine TradingView HOLD, entry and exit signals to complete it. Live orders remain impossible.</p>
+          ) : managed ? (
+            <p className="ps-note">A NOVA administrator starts and completes verification for managed strategies.</p>
+          ) : (
+            <button type="button" className="ps-primary" disabled={!!props.busy} onClick={() => void props.onStartVerification()}>Start verification (paper-only)</button>
+          )
         ) : null}
       </section>
 

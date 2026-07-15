@@ -437,6 +437,10 @@ export interface StrategyInstance {
   blocking_code?: string | null
   setup_type?: TradingViewSetupType | null
   requires_managed_setup?: boolean
+  /** Controlled paper-only verification is running (produces entry/exit evidence). */
+  verification_mode?: boolean
+  verification_started_at?: string | null
+  verification_completed_at?: string | null
   lot_size?: number
   estimated_quantity?: number
   last_signal_time?: string | null
@@ -832,14 +836,38 @@ export interface EngineStrategy {
   setup_type: TradingViewSetupType | null
   status: string
   instance_status: string
+  verification_mode?: boolean
   selectable: boolean
+  selected?: boolean
   blocking_reason: string | null
   owner: 'self'
 }
 
-export async function getEngineStrategies(): Promise<EngineStrategy[]> {
+export async function getEngineStrategies(): Promise<{ strategies: EngineStrategy[]; selected_instance_id: string | null }> {
   const response = await apiFetch('/api/engine/strategies', { cache: 'no-store' })
-  const body = await response.json().catch(() => null) as { ok?: boolean; strategies?: EngineStrategy[]; error?: string } | null
+  const body = await response.json().catch(() => null) as { ok?: boolean; strategies?: EngineStrategy[]; selected_instance_id?: string | null; error?: string } | null
   if (!response.ok || !body?.ok || !body.strategies) throw new Error(body?.error || 'Could not load engine strategies.')
-  return body.strategies
+  return { strategies: body.strategies, selected_instance_id: body.selected_instance_id ?? null }
 }
+
+export async function getEngineSelection(): Promise<{ selected_instance_id: string | null; selected: EngineStrategy | null }> {
+  const response = await apiFetch('/api/engine/selection', { cache: 'no-store' })
+  const body = await response.json().catch(() => null) as { ok?: boolean; selected_instance_id?: string | null; selected?: EngineStrategy | null; error?: string } | null
+  if (!response.ok || !body?.ok) throw new Error(body?.error || 'Could not load engine selection.')
+  return { selected_instance_id: body.selected_instance_id ?? null, selected: body.selected ?? null }
+}
+
+export async function setEngineSelection(strategy_instance_id: string): Promise<string> {
+  const response = await apiFetch('/api/engine/selection', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ strategy_instance_id }),
+  })
+  const body = await response.json().catch(() => null) as { ok?: boolean; selected_instance_id?: string; error?: string } | null
+  if (!response.ok || !body?.ok || !body.selected_instance_id) throw new Error(body?.error || 'Could not select strategy.')
+  return body.selected_instance_id
+}
+
+export const startInstanceVerification = (instanceId: string) =>
+  instanceCall(`/api/strategy-instances/${instanceId}/verification-mode` as `/${string}`, 'POST')
+
+export const startManagedTradingViewVerification = (setupId: string) =>
+  instanceCall(`/api/admin/managed-tradingview-setups/${setupId}/verification-mode` as `/${string}`, 'POST')

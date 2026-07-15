@@ -167,12 +167,21 @@ def _decorate_personal_instance(db, row: models.StrategyInstance, payload: dict[
         }
         readiness["can_activate"] = all(readiness.values())
 
+    in_verification = bool(row.verification_mode)
+    blocking_code = (
+        "VERIFICATION_IN_PROGRESS"
+        if in_verification and not readiness["can_activate"]
+        else _first_blocker(readiness, setup)
+    )
     payload.update(
         {
             "webhook_credential": _credential_public(credential) if credential else None,
             "credential_status": "active" if credential else "revoked" if latest_credential else "missing",
             "readiness": readiness,
-            "blocking_code": _first_blocker(readiness, setup),
+            "verification_mode": in_verification,
+            "verification_started_at": row.verification_started_at.isoformat() if row.verification_started_at else None,
+            "verification_completed_at": row.verification_completed_at.isoformat() if row.verification_completed_at else None,
+            "blocking_code": blocking_code,
             "setup_type": setup.setup_type if setup else None,
             "requires_managed_setup": bool(setup and setup.setup_type == "NOVA_MANAGED_TRADINGVIEW"),
             "lot_size": lot_size,
@@ -769,16 +778,49 @@ def admin_generate_managed_credential(
         return payload
 
 
+def _engine_eligibility(db, row: models.StrategyInstance, catalog: models.StrategyCatalog) -> tuple[dict[str, Any], bool, str | None]:
+    """Single source of truth for whether an instance is selectable in the
+    engine picker. Returns (decorated_payload, selectable, blocking_reason)."""
+    decorated = _decorate_personal_instance(db, row, _instance_public(row, strategy=catalog))
+    stopped = row.status in {InstanceState.STOPPED.value, InstanceState.ARCHIVED.value}
+    if row.verification_mode:
+        return decorated, False, "VERIFICATION_IN_PROGRESS"
+    if stopped:
+        return decorated, False, "STRATEGY_STOPPED"
+    readiness = decorated.get("readiness")
+    if readiness is not None:  # PERSONAL_TRADINGVIEW: full server-observed gate
+        selectable = bool(readiness["can_activate"])
+        return decorated, selectable, (None if selectable else decorated.get("blocking_code"))
+    return decorated, True, None  # NOVA_SHARED catalog strategy
+
+
+def _engine_entry(row: models.StrategyInstance, decorated: dict[str, Any], selectable: bool, blocking: str | None) -> dict[str, Any]:
+    return {
+        "instance_id": str(row.id),
+        "display_name": row.label,
+        "source_type": row.source_journey,
+        "setup_type": decorated.get("setup_type"),
+        "status": "READY" if selectable else (blocking or row.status.upper()),
+        "instance_status": row.status,
+        "verification_mode": bool(row.verification_mode),
+        "selectable": selectable,
+        "blocking_reason": blocking,
+        "owner": "self",
+    }
+
+
 def list_engine_strategies(user_id: uuid.UUID) -> dict[str, Any]:
     """Owner-scoped engine strategy picker.
 
     Returns this user's runnable strategy instances (personal Pine and NOVA
     shared) with a single, unified eligibility verdict. A private strategy is
     ``selectable`` only when it clears the same activation gate the lifecycle
-    controls enforce — no separate readiness standard. Never leaks credentials,
-    other users, or admin/broker internals.
+    controls enforce — no separate readiness standard. A strategy still in
+    controlled verification shows VERIFICATION_IN_PROGRESS and is not
+    selectable. Never leaks credentials, other users, or admin/broker internals.
     """
     with session_scope() as db:
+        selection = _current_selection_id(db, user_id)
         query = (
             select(models.StrategyInstance, models.StrategyCatalog)
             .join(models.StrategyCatalog, models.StrategyCatalog.id == models.StrategyInstance.strategy_id)
@@ -790,29 +832,152 @@ def list_engine_strategies(user_id: uuid.UUID) -> dict[str, Any]:
         )
         strategies = []
         for row, catalog in db.execute(query).all():
-            decorated = _decorate_personal_instance(db, row, _instance_public(row, strategy=catalog))
-            readiness = decorated.get("readiness")
-            not_runnable = row.status in {InstanceState.STOPPED.value, InstanceState.ARCHIVED.value}
-            if readiness is not None:  # PERSONAL_TRADINGVIEW
-                selectable = bool(readiness["can_activate"]) and not not_runnable
-                blocking = decorated.get("blocking_code") or (
-                    "STRATEGY_STOPPED" if row.status == InstanceState.STOPPED.value else None
-                )
-            else:  # NOVA_SHARED
-                selectable = not not_runnable
-                blocking = "STRATEGY_STOPPED" if row.status == InstanceState.STOPPED.value else None
-            strategies.append({
-                "instance_id": str(row.id),
-                "display_name": row.label,
-                "source_type": row.source_journey,
-                "setup_type": decorated.get("setup_type"),
-                "status": "READY" if selectable else (blocking or row.status.upper()),
-                "instance_status": row.status,
-                "selectable": selectable,
-                "blocking_reason": blocking,
-                "owner": "self",
-            })
-        return {"strategies": strategies}
+            decorated, selectable, blocking = _engine_eligibility(db, row, catalog)
+            entry = _engine_entry(row, decorated, selectable, blocking)
+            entry["selected"] = selection is not None and str(row.id) == str(selection)
+            strategies.append(entry)
+        return {"strategies": strategies, "selected_instance_id": str(selection) if selection else None}
+
+
+# ---------------------------------------------------------------------------
+# Controlled paper verification mode (breaks the readiness deadlock)
+# ---------------------------------------------------------------------------
+
+def _enter_verification(db, instance: models.StrategyInstance, setup: models.TradingViewSetup, actor_id: uuid.UUID) -> dict[str, Any]:
+    """Shared gate: start controlled paper-only verification for one instance.
+    Live orders are impossible — paper mode is required and the live posture is
+    checked. The instance stays READY; the private webhook path executes paper
+    signals while verification_mode is set."""
+    from app.config import settings
+
+    if instance.execution_mode != "paper_live_data":
+        raise InstanceError("Verification runs in paper mode only.", status_code=409, code="PAPER_EXECUTION_DISABLED")
+    if settings.ENABLE_LIVE_ORDERS or settings.PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED:
+        raise InstanceError("Live execution is enabled; verification is refused for safety.", status_code=409, code="LIVE_EXECUTION_SAFETY_BLOCK")
+    if not MIN_LOTS <= instance.current_lots <= MAX_LOTS:
+        raise InstanceError("Set a valid lot count before verification.", status_code=409, code="INVALID_LOTS")
+    version = db.get(models.StrategyVersion, instance.strategy_version_id)
+    if version is None or version.status != "approved":
+        raise InstanceError("An approved Pine version is required.", status_code=409, code="PINE_NOT_APPROVED")
+    if _active_credential(db, instance.id) is None:
+        raise InstanceError("An active private credential is required.", status_code=409, code="CREDENTIAL_INACTIVE")
+    if setup.status in {"BLOCKED", "RETIRED"}:
+        raise InstanceError("This setup is blocked.", status_code=409, code="SETUP_BLOCKED")
+    if instance.status not in {InstanceState.READY.value, InstanceState.PAUSED.value}:
+        raise InstanceError("Verification can start only from a ready strategy.", status_code=409, code="VERIFICATION_FAILED")
+    if not instance.verification_mode:
+        instance.verification_mode = True
+        instance.verification_started_at = _now()
+        instance.verification_completed_at = None
+        instance.updated_at = _now()
+        _audit(db, actor_id, "STRATEGY_VERIFICATION_STARTED", {
+            "instance_id": str(instance.id), "setup_id": str(setup.id), "setup_type": setup.setup_type,
+        })
+    strategy = db.get(models.StrategyCatalog, instance.strategy_id)
+    return _decorate_personal_instance(db, instance, _instance_public(instance, strategy=strategy))
+
+
+def start_verification(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
+    """Premium (user-managed) owner starts verification for their own strategy."""
+    with session_scope() as db:
+        instance = _owned_instance(db, user_id, instance_id, for_update=True)
+        setup = db.scalar(select(models.TradingViewSetup).where(
+            models.TradingViewSetup.strategy_instance_id == instance.id
+        ).with_for_update())
+        if setup is None:
+            raise InstanceError("Create a TradingView setup before verification.", status_code=409, code="TRADINGVIEW_NOT_INSTALLED")
+        if setup.setup_type == "NOVA_MANAGED_TRADINGVIEW":
+            raise InstanceError("A NOVA administrator starts verification for managed setups.", status_code=409, code="ADMIN_ACTION_REQUIRED")
+        return _enter_verification(db, instance, setup, user_id)
+
+
+def admin_start_managed_verification(admin_id: uuid.UUID, setup_id: uuid.UUID | str) -> dict[str, Any]:
+    """Admin starts verification for a NOVA-managed (non-Premium) setup once the
+    managed TradingView installation and credential are in place."""
+    with session_scope() as db:
+        setup = db.scalar(select(models.TradingViewSetup).where(
+            models.TradingViewSetup.id == uuid.UUID(str(setup_id))
+        ).with_for_update())
+        if setup is None:
+            raise InstanceError("TradingView setup not found.", status_code=404)
+        if setup.setup_type != "NOVA_MANAGED_TRADINGVIEW":
+            raise InstanceError("This endpoint is for NOVA-managed setups.", status_code=409, code="NOT_MANAGED_SETUP")
+        if setup.installation_confirmed_at is None:
+            raise InstanceError("Record the managed TradingView installation first.", status_code=409, code="TRADINGVIEW_NOT_INSTALLED")
+        instance = db.scalar(select(models.StrategyInstance).where(
+            models.StrategyInstance.id == setup.strategy_instance_id
+        ).with_for_update())
+        if instance is None:
+            raise InstanceError("Strategy instance not found.", status_code=404)
+        return _enter_verification(db, instance, setup, admin_id)
+
+
+def complete_verification_if_ready(db, instance: models.StrategyInstance) -> bool:
+    """Clear verification_mode once the full server-observed paper gate is met.
+    Called inside the setup verification transaction. Returns True when cleared."""
+    if not instance.verification_mode:
+        return False
+    strategy = db.get(models.StrategyCatalog, instance.strategy_id)
+    readiness = _decorate_personal_instance(db, instance, _instance_public(instance, strategy=strategy)).get("readiness")
+    if readiness and readiness.get("can_activate"):
+        instance.verification_mode = False
+        instance.verification_completed_at = _now()
+        instance.updated_at = _now()
+        _audit(db, instance.user_id, "STRATEGY_VERIFICATION_COMPLETED", {"instance_id": str(instance.id)})
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Engine strategy selection (persisted owner pointer; never reroutes signals)
+# ---------------------------------------------------------------------------
+
+def _current_selection_id(db, user_id: uuid.UUID) -> uuid.UUID | None:
+    config = db.scalar(select(models.UserEngineConfig).where(models.UserEngineConfig.user_id == user_id))
+    return config.selected_strategy_instance_id if config else None
+
+
+def get_engine_selection(user_id: uuid.UUID) -> dict[str, Any]:
+    with session_scope() as db:
+        selected_id = _current_selection_id(db, user_id)
+        if selected_id is None:
+            return {"selected_instance_id": None, "selected": None}
+        row = db.scalar(select(models.StrategyInstance).where(
+            models.StrategyInstance.id == selected_id,
+            models.StrategyInstance.user_id == user_id,
+        ))
+        if row is None or row.status == InstanceState.ARCHIVED.value:
+            return {"selected_instance_id": None, "selected": None}
+        catalog = db.get(models.StrategyCatalog, row.strategy_id)
+        decorated, selectable, blocking = _engine_eligibility(db, row, catalog)
+        return {"selected_instance_id": str(row.id), "selected": _engine_entry(row, decorated, selectable, blocking)}
+
+
+def set_engine_selection(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
+    """Persist the user's selected engine strategy instance. Only an
+    owner-scoped, currently-eligible instance may be selected."""
+    with session_scope() as db:
+        instance = _owned_instance(db, user_id, instance_id, for_update=True)
+        catalog = db.get(models.StrategyCatalog, instance.strategy_id)
+        decorated, selectable, blocking = _engine_eligibility(db, instance, catalog)
+        if not selectable:
+            raise InstanceError(
+                "This strategy is not eligible for selection yet.",
+                status_code=409,
+                code=blocking or "VERIFICATION_FAILED",
+            )
+        config = db.scalar(select(models.UserEngineConfig).where(
+            models.UserEngineConfig.user_id == user_id
+        ).with_for_update())
+        if config is None:
+            config = models.UserEngineConfig(user_id=user_id, selected_strategy_instance_id=instance.id)
+            db.add(config)
+        else:
+            config.selected_strategy_instance_id = instance.id
+            config.updated_at = _now()
+        _audit(db, user_id, "ENGINE_STRATEGY_SELECTED", {"instance_id": str(instance.id)})
+        db.flush()
+        return {"selected_instance_id": str(instance.id), "selected": _engine_entry(instance, decorated, selectable, blocking)}
 
 
 # ---------------------------------------------------------------------------

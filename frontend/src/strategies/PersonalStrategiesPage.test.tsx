@@ -6,7 +6,7 @@ import { PersonalStrategiesPage } from './PersonalStrategiesPage'
 
 const api = vi.hoisted(() => ({
   activate: vi.fn(), create: vi.fn(), generate: vi.fn(), get: vi.fn(), history: vi.fn(), list: vi.fn(),
-  pause: vi.fn(), resume: vi.fn(), revoke: vi.fn(), rotate: vi.fn(), stop: vi.fn(), test: vi.fn(), lots: vi.fn(),
+  pause: vi.fn(), resume: vi.fn(), revoke: vi.fn(), rotate: vi.fn(), stop: vi.fn(), test: vi.fn(), lots: vi.fn(), startVerify: vi.fn(),
   pineList: vi.fn(), pineGet: vi.fn(), pineCreate: vi.fn(), pineVersion: vi.fn(), pineValidate: vi.fn(),
   pineSubmit: vi.fn(), pineSource: vi.fn(), pineLink: vi.fn(), reviewList: vi.fn(), reviewGet: vi.fn(), reviewDecide: vi.fn(),
 }))
@@ -24,6 +24,7 @@ vi.mock('../api', () => ({
   rotateInstanceWebhookCredential: api.rotate,
   stopStrategyInstance: api.stop,
   testInstanceWebhookConnection: api.test,
+  startInstanceVerification: api.startVerify,
   updateStrategyInstanceLots: api.lots,
   listPineStrategies: api.pineList,
   getPineStrategy: api.pineGet,
@@ -233,5 +234,24 @@ describe('PersonalStrategiesPage', () => {
     expect(screen.queryByRole('button', { name: /send paper HOLD test/i })).not.toBeInTheDocument()
     expect(screen.getByText(/Credential configured by NOVA/i)).toBeInTheDocument()
     expect(screen.getByText(/Not ready — Waiting for a confirmed paper exit/i)).toBeInTheDocument()
+    // Managed users never start verification themselves.
+    expect(screen.queryByRole('button', { name: /start verification/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/A NOVA administrator starts and completes verification/i)).toBeInTheDocument()
+  })
+
+  it('lets a Premium (user-managed) owner start paper-only verification', async () => {
+    api.startVerify.mockResolvedValue(instance())
+    arrange(instance({
+      setup_type: 'USER_MANAGED_TRADINGVIEW', requires_managed_setup: false, verification_mode: false,
+      credential_status: 'active',
+      webhook_credential: { id: 'c', strategy_instance_id: 'instance-a', token_prefix: 'nwk_x', created_at: null, last_used_at: null, revoked_at: null },
+      readiness: { paper_mode: true, valid_lots: true, active_credential: true, approved_version: true, installation_confirmed: true, hold_verified: false, paper_entry_verified: false, paper_exit_verified: false, can_activate: false },
+      blocking_code: 'HOLD_NOT_VERIFIED',
+    }))
+    const user = userEvent.setup()
+    render(<PersonalStrategiesPage />)
+    await screen.findByRole('heading', { name: 'My private strategy' })
+    await user.click(screen.getByRole('button', { name: /start verification/i }))
+    await waitFor(() => expect(api.startVerify).toHaveBeenCalledWith('instance-a'))
   })
 })

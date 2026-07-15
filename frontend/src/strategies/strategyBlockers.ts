@@ -11,6 +11,12 @@ const BLOCKER_TEXT: Record<string, string> = {
   PAPER_EXIT_NOT_VERIFIED: 'Waiting for a confirmed paper exit',
   SETUP_BLOCKED: 'Setup is blocked; contact NOVA',
   STRATEGY_STOPPED: 'Strategy is stopped',
+  VERIFICATION_IN_PROGRESS: 'Verification in progress',
+  VERIFICATION_NOT_STARTED: 'Start verification to begin',
+  PAPER_EXECUTION_DISABLED: 'Paper execution is unavailable',
+  LIVE_EXECUTION_SAFETY_BLOCK: 'Blocked: live execution is enabled',
+  ADMIN_ACTION_REQUIRED: 'A NOVA admin must act next',
+  VERIFICATION_FAILED: 'Verification could not start',
 }
 
 export function blockerText(code?: string | null): string {
