@@ -1,0 +1,26 @@
+{
+  "candidate_code": "NOVA_SUPERTREND_V2",
+  "candidate_source_sha256": "55ac262ccdeb6e9569b81d99adfe6e20b1036a327f74419ee2aedb44bba0cdfe",
+  "old_nova_source_sha256": "7595fe7e20e63f8a03eb4d95cdc7442415d34602426d4e32328dc03f4a223c7f",
+  "original_source_sha256": null,
+  "original_source_blocker": "SOURCE_NOT_SUPPLIED",
+  "master_prompt_version": "v1",
+  "master_prompt_content_sha256": "4d5d99572c1fc1ba9bf4c16ba8663f6725dc11d9c67d080214857820d91c183d",
+  "qualification_status": "QUALIFICATION",
+  "static_validation_status": "PASSED_WITH_WARNINGS",
+  "static_validation_findings": [
+    "UNDERLYING_GENERIC"
+  ],
+  "tradingview_compile_status": "BLOCKED",
+  "real_tradingview_alert_status": "BLOCKED",
+  "paper_entry_status": "BLOCKED",
+  "paper_exit_status": "BLOCKED",
+  "reversal_status": "BLOCKED",
+  "duplicate_alert_status": "BLOCKED",
+  "data_classification": "STATIC_VALIDATION_ONLY",
+  "notes": [
+    "No original Pine v4 artifact was present in the supplied attachment, repository, or Git history, so its hash cannot be pinned honestly.",
+    "This portable record links the candidate to the immutable Phase 4C prompt. A database qualification trial requires real original and candidate StrategyVersion UUIDs and server-observed evidence.",
+    "No TradingView compilation, alert delivery, or PaperBroker qualification has been claimed."
+  ]
+}
