@@ -1,0 +1,25 @@
+//@version=6
+indicator("NOVA MACD Crossover Trial", overlay=false)
+fastLength = input.int(12, "Fast Length", minval=1)
+slowLength = input.int(26, "Slow Length", minval=2)
+signalLength = input.int(9, "Signal Length", minval=1)
+[macdLine, signalLine, histogram] = ta.macd(close, fastLength, slowLength, signalLength)
+bullish = ta.crossover(macdLine, signalLine)
+bearish = ta.crossunder(macdLine, signalLine)
+plot(macdLine, "MACD")
+plot(signalLine, "Signal")
+plot(histogram, "Histogram", style=plot.style_columns)
+
+placeholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"
+credential = input.string(placeholder, "NOVA Strategy Credential", group="NOVA Webhook")
+enableEodExit = input.bool(false, "Optional EOD EXIT", group="NOVA Webhook")
+ready = barstate.isrealtime and barstate.isconfirmed and credential != placeholder
+signalId(string action) => "NOVA-MACD:" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action
+payload(string action) => '{"credential":"' + credential + '","action":"' + action + '","signal_id":"' + signalId(action) + '","signal_time":"' + str.format_time(time_close, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + '"}'
+eodExit = enableEodExit and hour(time_close, "Asia/Kolkata") == 15 and minute(time_close, "Asia/Kolkata") == 15
+if ready and bullish
+    alert(payload("BUY_CE"), alert.freq_once_per_bar_close)
+if ready and bearish
+    alert(payload("BUY_PE"), alert.freq_once_per_bar_close)
+if ready and eodExit
+    alert(payload("EXIT"), alert.freq_once_per_bar_close)

@@ -1,0 +1,10 @@
+//@version=5
+indicator("Multi-Timeframe Qualification Source", overlay=true)
+higherTimeframe = input.timeframe("60", "Higher Timeframe")
+length = input.int(20, "HTF EMA Length", minval=1)
+higherEma = request.security(syminfo.tickerid, higherTimeframe, ta.ema(close, length), lookahead=barmerge.lookahead_off)
+bullish = ta.crossover(close, higherEma)
+bearish = ta.crossunder(close, higherEma)
+plot(higherEma, "Higher-Timeframe EMA")
+alertcondition(bullish, "MTF Bullish", "Close crossed above HTF EMA")
+alertcondition(bearish, "MTF Bearish", "Close crossed below HTF EMA")

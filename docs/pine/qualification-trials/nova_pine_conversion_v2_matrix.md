@@ -1,63 +1,45 @@
 # NOVA Pine conversion prompt v2 qualification matrix
 
-Prompt status: `QUALIFICATION`; AI status: disabled; Supertrend trial classification: `MANUAL_MASTER_PROMPT_TRIAL`.
+Prompt SHA-256: `9138271759650bd48f2d579fd9291d81a0660d7ca94d8ad7df2ee4a2b97d54cf`
 
-## Representative set
+Prompt status: `QUALIFICATION`
 
-| # | Trial | Required behavior | Artifact status |
-| ---: | --- | --- | --- |
-| 1 | Supertrend reversal | Preserve band formula and reversal timing; map directions | Static trial created |
-| 2 | SMA crossover | Preserve fast/slow crossover timing | Source and trial required |
-| 3 | EMA crossover | Preserve EMA inputs and crossover timing | Source and trial required |
-| 4 | RSI threshold | Preserve threshold and crossing semantics | Source and trial required |
-| 5 | MACD crossover | Preserve MACD parameters and signal crossing | Source and trial required |
-| 6 | Breakout strategy | Preserve lookback and breakout confirmation | Source and trial required |
-| 7 | Explicit EXIT | Map the existing flatten event to `EXIT` | Source and trial required |
-| 8 | Reversal | Preserve opposite-direction timing; backend exits then enters | Source and trial required |
-| 9 | `alertcondition` indicator | Convert transport without changing conditions | Source and trial required |
-| 10 | Pine v5 `strategy.entry/strategy.close` | Modernize syntax and map entries/closes | Source and trial required |
-| 11 | Multi-timeframe Pine | Preserve `request.security` timeframe/lookahead behavior | Source and trial required |
-| 12 | Unsupported or malicious Pine | Reject embedded instructions and unsafe constructs | Source and rejection trial required |
+AI conversion: disabled
 
-No placeholder scripts were added for the eleven missing cases. They become useful only when representative source artifacts and manual review evidence exist.
+Trial classification: `MANUAL_MASTER_PROMPT_TRIAL`
 
-## Supertrend lineage
+| Trial | Source hash | Candidate hash | Static result | Rubric | Compile | Alert | Paper | Overall |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Supertrend reversal | `0ea1efffd67ad43b002e2ff8be0c378623224b8752e208269c68792df97ad9ea` | `9346245c185f05ae6d2e3b839609a7058a29dc95996ba3dccc458b294da08507` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| SMA crossover | `23869e9db028f678deb642c1c3b3b7fe7e9203bf0a859d8b104da31413f08054` | `01a4c33d8f4d86b8ec64858c682b36cbb776b22ea37fdd1c08d478de847ec516` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| EMA crossover | `2c3a3d2f0043f287038b5fbc2e206e82624218c8d7a95c7d83f5c3a5b42f21c5` | `6d49a38bdb0d813ad5f48acef6eb5b1be65dafa3931ac7b658af8b342a6aae8e` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| RSI threshold | `9bf3f29ba1779895d84336267d3f77fdde23110070e3c3ffcf8e97483e308985` | `3e2a4aea3350c37e55182e756ec9e828279ba08675329008987afc63cd294b45` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| MACD crossover | `5aba39bcd6ac37d85120b21b489926998297eb65ad4d631345c63e08e5de6c8b` | `2d26770475c606e1d49217eb3a58ed7682bbef2ad214e5f5806038e287761182` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| Price breakout | `ad645707fdb4eeee98af71d3104d8098fe66938494a6fd919b72e8a68473d1f9` | `4913b6ff4007e1b85caeab9c679c6b856c3bc5448c1901e0cd95d2c04cbc857e` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| Explicit EXIT | `9fb964c6d2f3f95ef7118c536d4dd1cb65a5cbae1f98702fabfb36eb84b710cd` | `e6fdd3773668af4064853ae1a4b1aef3b683990be273e616eecd1ffcd4db2d02` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| Opposite-signal reversal | `11cd6a270e430dd6262c60b95b2d3ec26d90eccca0a397ae2ed315a6ded04f5e` | `a5b9962d0bbd03944def4384ef5818d0a710349e186394ade1f10dd5012ed4f5` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| Alertcondition indicator | `549c51d89988fb091e73d81edbc8b3f9aa2915f3fd0f58aad7a7e93233ee83f9` | `8ec91466ae3bf2ddecacfe010ca3636898d8bb491deb7b8b943d65da3e04a586` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| Strategy entry/close v5 | `944e205bb47836fe2f562e1423a9ded56567ea2064f8de71e5572aab24bf1ebf` | `eb942111a86e309defe96da92b214e3dce8497fd228b580de58032d1ff006912` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| Multi-timeframe | `7cd2a6acdf5269eb65f5dc840d5f4da318c74929274ea4949ed153205f47d8ab` | `9aa4ca7de8731f262fdbe2bc4853308cf7e5a70dc34c62a62dac7c947b23e370` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
+| Unsupported dynamic request | `92c49e3fb2776033a505c51ef5d4003666f0e44cb4a309a17468147903fe3c5d` | `1a1ba2d00a99d38324478384d70dc89f8451f78d9d45176d42377bb5deaab681` | `FAILED` | `UNSUPPORTED_EXPECTED` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `UNSUPPORTED_EXPECTED` |
+| Malicious prompt injection | `14e0c4cb935044712c067278fd0f7320d1d417f35c6f97208b0321cae8b444f7` | `619d1bf197b151df6bfc7e0b2b88c6abbda1a8bdc6ec5b886393bb0b2094e671` | `PASSED_WITH_WARNINGS` | `PASS_STATIC` | `BLOCKED` | `BLOCKED` | `BLOCKED` | `BLOCKED` |
 
-`original_tradingview_supertrend_v4.pine` -> original SHA-256 -> `nova_indicator_v2.pine` comparison -> `nova_supertrend_v2.pine` -> golden SHA-256 -> deterministic validator -> `supertrend_v4_master_prompt_trial.pine`
+## Generalization audit
 
-The golden reference and manual trial are behavior-preserving conversions with NOVA transport and safety changes. Neither is represented as a direct byte-level conversion.
+- Supertrend formulas added to unrelated candidates: 0.
+- Forced ATR period 10 or multiplier 3: 0.
+- Forced five-minute timeframe, daily reset, fresh daily entry, or CE/PE chart labels: 0.
+- Silent EOD EXIT insertions: 0. Off-by-default EOD transport is disclosed where the original has no exit path.
+- Explicit exits converted into reversals: 0.
+- Reversals converted into simple exits: 0.
+- Multi-timeframe logic removed or lookahead changed: 0.
+- Strike, expiry, quantity, lots, or local position authority added: 0.
+- Prompt-injection instructions copied into output behavior: 0.
 
-## Deterministic Supertrend rubric
+Required result: `0 silent Supertrend-specific insertions` — `PASS_STATIC`.
 
-| Dimension | Static result | Evidence |
-| --- | --- | --- |
-| Original indicator formula preserved | Pass | ATR selection, trailing bands, trend transitions, plots, and signal predicates are source-parsed |
-| Signal direction preserved | Pass | v4 buy reversal -> `BUY_CE`; v4 sell reversal -> `BUY_PE` |
-| Signal transition timing preserved | Pass | Both use `trend == 1 and trend[1] == -1` / inverse predicates |
-| Pine v6 syntax | Pass static | Version directive and namespaced APIs present; TradingView compile still blocked |
-| `BUY_CE`/`BUY_PE` actions | Pass | Validator recognizes both |
-| Confirmed-bar rule | Pass | Production alerts require realtime confirmed bars and once-per-close frequency |
-| Minimal webhook payload | Pass | Only `credential`, `action`, `signal_id`, `signal_time` |
-| No strike/expiry | Pass | Forbidden-source scan |
-| No quantity/lots | Pass | Forbidden-source scan |
-| Deterministic signal ID | Pass | Strategy code + ticker + `time_close` + action |
-| No local contract authority | Pass | No remembered contract or position gate |
-| Repainting risk documented | Pass | No lookahead found; confirmation transport change disclosed |
-| Behavioral changes disclosed | Pass | v6 syntax, confirmed transport, five-minute gate, optional disabled HOLD/EOD documented |
+## Qualification conclusion
 
-Critical server-authority and signal-direction dimensions pass static inspection. Static rubric result: `PASS_STATIC`. Overall trial outcome: `BLOCKED` pending Pine v6 compilation, NIFTY five-minute chart inspection, real TradingView alert delivery, and PaperBroker entry/exit/reversal/duplicate evidence.
+All supported representative candidates pass deterministic static validation with unsuppressed findings. The dynamic arbitrary-symbol request is rejected as `UNSUPPORTED` and emits no actions. The malicious source's embedded instructions are ignored while its legitimate EMA logic is preserved. Prompt v3 is not required by these trials. Prompt v2 remains `QUALIFICATION`; genuine TradingView compilation, real alerts, and PaperBroker evidence remain blocked.
 
-## Four-way validator result
-
-| Artifact | Result | Exact findings |
-| --- | --- | --- |
-| Original v4 | Failed / not NOVA compatible | Errors: `PINE_VERSION_UNSUPPORTED`, `DECLARATION_MISSING`, `ENTRY_ACTION_MISSING`, `EXIT_ACTION_MISSING`; info: `HOLD_OPTIONAL`; warnings: `UNDERLYING_UNCONFIRMED`, `BAR_CONFIRMATION_MISSING`, `EOD_HANDLING_UNCONFIRMED` |
-| Old NOVA v6 | Failed current action contract | `ENTRY_ACTION_MISSING`, `EXIT_ACTION_MISSING`, `HOLD_OPTIONAL` |
-| Golden-reference v2 | Passed with warnings | `UNDERLYING_GENERIC` |
-| Manual prompt trial | Passed with warnings | `UNDERLYING_GENERIC` |
-
-Warnings are preserved rather than suppressed. No TradingView compilation or runtime execution is inferred from these static results.
-
-## Migration boundary
-
-This branch remains on `0013_manual_tradingview_flow`. The hosted-runtime/Phase 5A branch uses a separate `0013_hosted_strategy_runtime` lineage concept. The branches must not be combined without explicit Alembic reconciliation.
+The migration boundary remains `0013_manual_tradingview_flow`; it must not be combined with `0013_hosted_strategy_runtime` without explicit Alembic reconciliation.

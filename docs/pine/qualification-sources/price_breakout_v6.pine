@@ -1,0 +1,11 @@
+//@version=6
+indicator("Prior Range Breakout Qualification Source", overlay=true)
+lookback = input.int(20, "Prior Range Lookback", minval=2)
+priorHigh = ta.highest(high[1], lookback)
+priorLow = ta.lowest(low[1], lookback)
+bullish = ta.crossover(close, priorHigh)
+bearish = ta.crossunder(close, priorLow)
+plot(priorHigh, "Prior High", color=color.green)
+plot(priorLow, "Prior Low", color=color.red)
+alertcondition(bullish, "Upside Breakout", "Close crossed prior range high")
+alertcondition(bearish, "Downside Breakout", "Close crossed prior range low")

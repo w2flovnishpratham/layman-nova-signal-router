@@ -1,0 +1,12 @@
+//@version=6
+indicator("EMA Crossover Qualification Source", overlay=true)
+fastLength = input.int(12, "Fast EMA", minval=1)
+slowLength = input.int(26, "Slow EMA", minval=2)
+fastEma = ta.ema(close, fastLength)
+slowEma = ta.ema(close, slowLength)
+bullish = ta.crossover(fastEma, slowEma)
+bearish = ta.crossunder(fastEma, slowEma)
+plot(fastEma, "Fast EMA", color=color.teal)
+plot(slowEma, "Slow EMA", color=color.purple)
+alertcondition(bullish, "EMA Bullish", "EMA bullish crossover")
+alertcondition(bearish, "EMA Bearish", "EMA bearish crossover")

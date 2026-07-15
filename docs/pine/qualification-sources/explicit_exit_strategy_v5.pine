@@ -1,0 +1,14 @@
+//@version=5
+strategy("Explicit Exit Qualification Source", overlay=true, pyramiding=0)
+fastLength = input.int(10, "Fast SMA", minval=1)
+slowLength = input.int(30, "Slow SMA", minval=2)
+exitLength = input.int(14, "Exit RSI Length", minval=1)
+fastSma = ta.sma(close, fastLength)
+slowSma = ta.sma(close, slowLength)
+rsiValue = ta.rsi(close, exitLength)
+longEntry = ta.crossover(fastSma, slowSma)
+longExit = ta.crossunder(rsiValue, 50)
+if longEntry
+    strategy.entry("Long", strategy.long)
+if longExit
+    strategy.close("Long")

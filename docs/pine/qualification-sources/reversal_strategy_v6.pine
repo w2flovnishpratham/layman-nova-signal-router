@@ -1,0 +1,12 @@
+//@version=6
+strategy("Opposite Signal Reversal Qualification Source", overlay=true, pyramiding=0)
+fastLength = input.int(8, "Fast EMA", minval=1)
+slowLength = input.int(34, "Slow EMA", minval=2)
+fastEma = ta.ema(close, fastLength)
+slowEma = ta.ema(close, slowLength)
+bullish = ta.crossover(fastEma, slowEma)
+bearish = ta.crossunder(fastEma, slowEma)
+if bullish
+    strategy.entry("Long", strategy.long)
+if bearish
+    strategy.entry("Short", strategy.short)

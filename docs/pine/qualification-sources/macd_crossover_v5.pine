@@ -1,0 +1,13 @@
+//@version=5
+indicator("MACD Crossover Qualification Source", overlay=false)
+fastLength = input.int(12, "Fast Length", minval=1)
+slowLength = input.int(26, "Slow Length", minval=2)
+signalLength = input.int(9, "Signal Length", minval=1)
+[macdLine, signalLine, histogram] = ta.macd(close, fastLength, slowLength, signalLength)
+bullish = ta.crossover(macdLine, signalLine)
+bearish = ta.crossunder(macdLine, signalLine)
+plot(macdLine, "MACD")
+plot(signalLine, "Signal")
+plot(histogram, "Histogram", style=plot.style_columns)
+alertcondition(bullish, "MACD Bullish", "MACD crossed above signal")
+alertcondition(bearish, "MACD Bearish", "MACD crossed below signal")

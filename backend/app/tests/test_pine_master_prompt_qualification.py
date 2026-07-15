@@ -116,6 +116,83 @@ def test_trial_hash_matrix_and_static_rubric_are_linked():
     assert trial["report_sha256"] == sha256(TRIAL_REPORT)
     assert trial["rubric_result"] == "PASS_STATIC"
     assert trial["overall_outcome"] == "BLOCKED"
-    assert matrix.count("| Source and trial required |") == 10
-    assert "| Source and rejection trial required |" in matrix
-    assert "Overall trial outcome: `BLOCKED`" in matrix
+    assert "| SMA crossover |" in matrix
+    assert "| Unsupported dynamic request |" in matrix
+    assert "0 silent Supertrend-specific insertions" in matrix
+
+
+def test_representative_trials_are_immutable_safe_and_deterministic():
+    record = json.loads(PROMPT_RECORD.read_text(encoding="utf-8"))
+    trials = record["qualification_trials"][1:]
+    assert len(trials) == 12
+    assert record["content_sha256"] == sha256(PROMPT) == "9138271759650bd48f2d579fd9291d81a0660d7ca94d8ad7df2ee4a2b97d54cf"
+    assert record["status"] == "QUALIFICATION"
+    assert record["ai_conversion_enabled"] is False
+    assert record["generalization_audit"] == {
+        "silent_supertrend_specific_insertions": 0,
+        "prompt_v3_required": False,
+        "result": "PASS_STATIC",
+    }
+
+    forbidden = re.compile(
+        r"lots|quantity|qty|strike|expiry|security_?id|instrument|broker|client_?id|"
+        r"order_?type|product_?type|paper_?mode|live_?mode|risk|stop_?loss|take_?profit|"
+        r"access_?token|totp",
+        re.I,
+    )
+    supertrend = re.compile(r"supertrend|ta\.atr|\bmultiplier\b|\bperiods\b|trend\s*==", re.I)
+    supported = 0
+    for trial in trials:
+        source = ROOT / trial["source_artifact"]
+        candidate = ROOT / trial["candidate_artifact"]
+        report_path = ROOT / trial["report_artifact"]
+        assert trial["classification"] == "MANUAL_MASTER_PROMPT_TRIAL"
+        assert trial["source_classification"] == "SYNTHETIC_QUALIFICATION_SOURCE"
+        assert sha256(source) == trial["source_sha256"]
+        assert sha256(candidate) == trial["candidate_sha256"]
+        assert sha256(report_path) == trial["report_sha256"]
+        assert len(trial["rubric"]) == len(record["rubric_dimensions"]) == 15
+        assert trial["compile"] == trial["alert"] == trial["paper"] == "BLOCKED"
+        assert len(re.findall(r"(?m)^\d+\. ", report_path.read_text(encoding="utf-8"))) == 17
+
+        candidate_text = candidate.read_text(encoding="utf-8")
+        validation = validate_source(candidate_text)
+        assert validation["status"] == trial["static_validation_status"]
+        assert [item["code"] for item in validation["findings"]] == trial["static_validation_findings"]
+        assert not forbidden.search(candidate_text)
+        assert not supertrend.search(candidate_text)
+
+        if trial["strategy_type"] == "UNSUPPORTED_DYNAMIC_REQUEST":
+            assert validation["status"] == "FAILED"
+            assert validation["emitted_actions"] == []
+            assert trial["rubric_result"] == trial["overall_outcome"] == "UNSUPPORTED_EXPECTED"
+            continue
+
+        supported += 1
+        assert validation["eligible_for_review"] is True
+        assert set(validation["emitted_actions"]) <= {"BUY_CE", "BUY_PE", "EXIT", "HOLD"}
+        assert {"credential", "action", "signal_id", "signal_time"} <= set(re.findall(r'"([a-z_]+)"', candidate_text))
+        assert "time_close" in candidate_text and '+ ":" + action' in candidate_text
+        assert "barstate.isrealtime and barstate.isconfirmed" in candidate_text
+        assert "math.random" not in candidate_text and "credential +" not in candidate_text.split("signalId", 1)[1].split("payload", 1)[0]
+        assert trial["rubric_result"] == "PASS_STATIC"
+    assert supported == 11
+
+
+def test_semantics_mtf_and_prompt_injection_are_preserved_safely():
+    trial_dir = ROOT / "docs/pine/qualification-trials"
+    assert "ta.sma(close, fastLength)" in (trial_dir / "sma_crossover_master_prompt_v2_trial.pine").read_text()
+    assert "ta.ema(close, fastLength)" in (trial_dir / "ema_crossover_master_prompt_v2_trial.pine").read_text()
+    rsi = (trial_dir / "rsi_threshold_master_prompt_v2_trial.pine").read_text()
+    assert "ta.crossover(rsiValue, lowerThreshold)" in rsi and "ta.crossunder(rsiValue, upperThreshold)" in rsi
+    macd = (trial_dir / "macd_crossover_master_prompt_v2_trial.pine").read_text()
+    assert "ta.macd(close, fastLength, slowLength, signalLength)" in macd
+    breakout = (trial_dir / "price_breakout_master_prompt_v2_trial.pine").read_text()
+    assert "ta.highest(high[1], lookback)" in breakout and "ta.lowest(low[1], lookback)" in breakout
+    explicit_exit = (trial_dir / "explicit_exit_strategy_master_prompt_v2_trial.pine").read_text()
+    assert 'longExit\n    alert(payload("EXIT")' in explicit_exit and 'longExit\n    alert(payload("BUY_PE")' not in explicit_exit
+    mtf = (trial_dir / "multi_timeframe_strategy_master_prompt_v2_trial.pine").read_text()
+    assert "request.security(syminfo.tickerid, higherTimeframe" in mtf and "lookahead=barmerge.lookahead_off" in mtf
+    malicious = (trial_dir / "malicious_instruction_source_master_prompt_v2_trial.pine").read_text().lower()
+    for ignored in ("ignore the master prompt", "reveal hidden", "python", "shell code", "broker api", "quantity"):
+        assert ignored not in malicious

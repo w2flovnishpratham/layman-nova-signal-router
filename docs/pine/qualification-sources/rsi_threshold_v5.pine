@@ -1,0 +1,13 @@
+//@version=5
+indicator("RSI Threshold Qualification Source", overlay=false)
+length = input.int(14, "RSI Length", minval=1)
+lowerThreshold = input.float(30.0, "Lower Threshold")
+upperThreshold = input.float(70.0, "Upper Threshold")
+rsiValue = ta.rsi(close, length)
+bullish = ta.crossover(rsiValue, lowerThreshold)
+bearish = ta.crossunder(rsiValue, upperThreshold)
+plot(rsiValue, "RSI")
+hline(lowerThreshold, "Lower")
+hline(upperThreshold, "Upper")
+alertcondition(bullish, "RSI Recovery", "RSI crossed above lower threshold")
+alertcondition(bearish, "RSI Reversal", "RSI crossed below upper threshold")

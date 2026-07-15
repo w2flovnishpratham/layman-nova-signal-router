@@ -1,0 +1,12 @@
+//@version=5
+indicator("SMA Crossover Qualification Source", overlay=true)
+fastLength = input.int(9, "Fast SMA", minval=1)
+slowLength = input.int(21, "Slow SMA", minval=2)
+fastSma = ta.sma(close, fastLength)
+slowSma = ta.sma(close, slowLength)
+bullish = ta.crossover(fastSma, slowSma)
+bearish = ta.crossunder(fastSma, slowSma)
+plot(fastSma, "Fast SMA", color=color.blue)
+plot(slowSma, "Slow SMA", color=color.orange)
+alertcondition(bullish, "SMA Bullish", "SMA bullish crossover")
+alertcondition(bearish, "SMA Bearish", "SMA bearish crossover")

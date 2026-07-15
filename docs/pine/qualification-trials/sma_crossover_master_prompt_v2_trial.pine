@@ -1,0 +1,24 @@
+//@version=6
+indicator("NOVA SMA Crossover Trial", overlay=true)
+fastLength = input.int(9, "Fast SMA", minval=1)
+slowLength = input.int(21, "Slow SMA", minval=2)
+fastSma = ta.sma(close, fastLength)
+slowSma = ta.sma(close, slowLength)
+bullish = ta.crossover(fastSma, slowSma)
+bearish = ta.crossunder(fastSma, slowSma)
+plot(fastSma, "Fast SMA", color=color.blue)
+plot(slowSma, "Slow SMA", color=color.orange)
+
+placeholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"
+credential = input.string(placeholder, "NOVA Strategy Credential", group="NOVA Webhook")
+enableEodExit = input.bool(false, "Optional EOD EXIT", group="NOVA Webhook")
+ready = barstate.isrealtime and barstate.isconfirmed and credential != placeholder
+signalId(string action) => "NOVA-SMA:" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action
+payload(string action) => '{"credential":"' + credential + '","action":"' + action + '","signal_id":"' + signalId(action) + '","signal_time":"' + str.format_time(time_close, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + '"}'
+eodExit = enableEodExit and hour(time_close, "Asia/Kolkata") == 15 and minute(time_close, "Asia/Kolkata") == 15
+if ready and bullish
+    alert(payload("BUY_CE"), alert.freq_once_per_bar_close)
+if ready and bearish
+    alert(payload("BUY_PE"), alert.freq_once_per_bar_close)
+if ready and eodExit
+    alert(payload("EXIT"), alert.freq_once_per_bar_close)

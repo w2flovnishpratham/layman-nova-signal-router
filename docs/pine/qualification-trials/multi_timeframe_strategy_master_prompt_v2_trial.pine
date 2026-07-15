@@ -1,0 +1,22 @@
+//@version=6
+indicator("NOVA Multi-Timeframe Trial", overlay=true)
+higherTimeframe = input.timeframe("60", "Higher Timeframe")
+length = input.int(20, "HTF EMA Length", minval=1)
+higherEma = request.security(syminfo.tickerid, higherTimeframe, ta.ema(close, length), lookahead=barmerge.lookahead_off)
+bullish = ta.crossover(close, higherEma)
+bearish = ta.crossunder(close, higherEma)
+plot(higherEma, "Higher-Timeframe EMA")
+
+placeholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"
+credential = input.string(placeholder, "NOVA Strategy Credential", group="NOVA Webhook")
+enableEodExit = input.bool(false, "Optional EOD EXIT", group="NOVA Webhook")
+ready = barstate.isrealtime and barstate.isconfirmed and credential != placeholder
+signalId(string action) => "NOVA-MTF:" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action
+payload(string action) => '{"credential":"' + credential + '","action":"' + action + '","signal_id":"' + signalId(action) + '","signal_time":"' + str.format_time(time_close, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + '"}'
+eodExit = enableEodExit and hour(time_close, "Asia/Kolkata") == 15 and minute(time_close, "Asia/Kolkata") == 15
+if ready and bullish
+    alert(payload("BUY_CE"), alert.freq_once_per_bar_close)
+if ready and bearish
+    alert(payload("BUY_PE"), alert.freq_once_per_bar_close)
+if ready and eodExit
+    alert(payload("EXIT"), alert.freq_once_per_bar_close)
