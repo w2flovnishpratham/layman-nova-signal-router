@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -118,6 +119,7 @@ class Settings(BaseSettings):
     # own additional flag and remains disabled for the whole phase.
     PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED: bool = False
     PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED: bool = False
+    CANONICAL_SIGNAL_SHADOW: bool = False
     PRIVATE_WEBHOOK_MAX_AGE_SECONDS: int = 300
     PRIVATE_WEBHOOK_MAX_FUTURE_SKEW_SECONDS: int = 30
     PRIVATE_WEBHOOK_MAX_BODY_BYTES: int = 4096
@@ -140,6 +142,19 @@ class Settings(BaseSettings):
     PINE_CONVERSION_QUALIFICATION_PACKAGE_ENABLED: bool = False
     PINE_CONVERSION_WORKER_POLL_SECONDS: float = 1.0
     PINE_CONVERSION_STALE_SECONDS: int = 300
+
+    @field_validator("CANONICAL_SIGNAL_SHADOW", mode="before")
+    @classmethod
+    def _safe_shadow_flag(cls, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off", ""}:
+                return False
+        return False
 
     DHAN_MODE: str = "MOCK"
     DHAN_READ_ONLY_REAL_DATA: bool = True

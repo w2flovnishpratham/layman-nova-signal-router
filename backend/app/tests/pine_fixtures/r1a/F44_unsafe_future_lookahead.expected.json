@@ -1,0 +1,1 @@
+{"required_capabilities":["UNSAFE_FUTURE_LOOKAHEAD"],"effective_capability_level":"L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE","temporal_classes":["T4_FUTURE_LEAKAGE_LOOKAHEAD"],"blocker_codes":["BLK_FUTURE_LEAK"],"confidence":"HIGH_CONFIDENCE_MATCH"}

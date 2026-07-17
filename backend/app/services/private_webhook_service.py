@@ -28,7 +28,7 @@ from app.db import crud, models
 from app.db.engine import database_configured, session_scope
 from app.schemas.signal import NormalizedSignal
 from app.services import webhook_replay_store
-from app.services.audit_logger import log_audit_event
+from app.services.audit_logger import log_audit_event, log_error_event
 from app.domain.strategy_instance_state_machine import InstanceState
 
 PRIVATE_STRATEGY_PREFIX = "instance:"
@@ -309,6 +309,78 @@ def build_normalized_signal(
     )
 
 
+def _shadow_compare_canonical(
+    auth: dict[str, Any],
+    payload: PrivateWebhookPayload,
+    action: str,
+    received_at: datetime,
+) -> bool | None:
+    """Compare the new pure adapter with the existing authoritative mapping."""
+    if not settings.CANONICAL_SIGNAL_SHADOW:
+        return None
+
+    def log_diagnostic(event: str, message: str, metadata: dict[str, Any]) -> None:
+        try:
+            log_error_event(event, message, metadata=metadata)
+        except Exception:
+            # Observability in a non-authoritative shadow cannot reject a webhook.
+            pass
+
+    try:
+        from app.domain.canonical_signal import CanonicalEventType, DesiredPositionState
+        from app.domain.legacy_signal_adapter import adapt_legacy_action, canonical_to_normalized_signal
+
+        event = adapt_legacy_action(
+            action,
+            signal_id=payload.signal_id,
+            signal_time=payload.signal_time,
+            strategy_version=payload.strategy_version,
+            timeframe=payload.timeframe,
+            metadata={
+                "reference_price": payload.reference_price,
+                "comment": payload.comment,
+            },
+        )
+        compatibility = canonical_to_normalized_signal(
+            event,
+            strategy_instance_id=auth["instance_id"],
+            received_at=received_at,
+        )
+        if action == "HOLD":
+            matches = (
+                event.event_type is CanonicalEventType.CONNECTIVITY_TEST
+                and event.desired_state is DesiredPositionState.NONE
+                and compatibility is None
+            )
+        else:
+            authoritative = build_normalized_signal(auth, payload, action, received_at=received_at)
+            matches = (
+                compatibility is not None
+                and compatibility.model_dump(mode="json") == authoritative.model_dump(mode="json")
+            )
+        if matches:
+            return True
+        log_diagnostic(
+            "CANONICAL_SIGNAL_SHADOW_MISMATCH",
+            "Canonical shadow output differed from the authoritative legacy mapping.",
+            {
+                "action": action,
+                "event_type": event.event_type.value,
+                "desired_state": event.desired_state.value,
+                "contract_version": event.contract_version.value,
+            },
+        )
+        return False
+    except Exception:
+        # Shadow mode must never alter the accepted request or reveal payload data.
+        log_diagnostic(
+            "CANONICAL_SIGNAL_SHADOW_ERROR",
+            "Canonical shadow comparison failed; authoritative legacy mapping retained.",
+            {"action": action},
+        )
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Durable ingestion
 # ---------------------------------------------------------------------------
@@ -369,6 +441,7 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
             "Webhook store unavailable.", status_code=503, reason="STORE_UNAVAILABLE"
         )
 
+    _shadow_compare_canonical(auth, payload, action, received_at)
     if action == "HOLD":
         result = _persist_hold(auth, payload, strategy_name, received_at)
     else:

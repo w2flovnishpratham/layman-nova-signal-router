@@ -1,0 +1,4 @@
+//@version=6
+indicator("F44")
+future = request.security(syminfo.tickerid, "60", high, lookahead=barmerge.lookahead_on)
+plot(future)

@@ -1,0 +1,1 @@
+{"required_capabilities":["CALC_ON_ORDER_FILLS"],"effective_capability_level":"L3_REQUIRES_BACKEND_CAPABILITY","blocker_codes":["BLK_FILL_DEPENDENT"],"confidence":"HIGH_CONFIDENCE_MATCH"}

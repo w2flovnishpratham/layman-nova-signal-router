@@ -1,0 +1,3 @@
+//@version=6
+strategy("F30", pyramiding=3)
+strategy.entry("Long", strategy.long)

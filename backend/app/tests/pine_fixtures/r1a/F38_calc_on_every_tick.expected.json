@@ -1,0 +1,1 @@
+{"required_capabilities":["CALC_ON_EVERY_TICK"],"effective_capability_level":"L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE","blocker_codes":["BLK_INTRABAR_TIMING"],"confidence":"HIGH_CONFIDENCE_MATCH"}

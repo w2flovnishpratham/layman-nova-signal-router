@@ -1,0 +1,4 @@
+//@version=6
+indicator("F45")
+values = request.security_lower_tf(syminfo.tickerid, "1", close)
+plot(array.avg(values))

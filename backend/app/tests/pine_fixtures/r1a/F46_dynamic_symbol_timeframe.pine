@@ -1,0 +1,6 @@
+//@version=6
+indicator("F46")
+string selected = input.symbol("NSE:NIFTY")
+string selectedTf = input.timeframe("60")
+series = request.security(selected, selectedTf, close)
+plot(series)

@@ -1,0 +1,3 @@
+//@version=6
+strategy("F11")
+strategy.entry("Long", strategy.long, limit=close - 10)

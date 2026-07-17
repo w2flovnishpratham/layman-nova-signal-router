@@ -1,0 +1,6 @@
+//@version=6
+strategy("F07", pyramiding=0)
+if close > open
+    strategy.entry("Long", strategy.long)
+if close > high[1]
+    strategy.entry("Long", strategy.long)
