@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from app.config import settings
 from app.db import crud, models
 from app.db.engine import session_scope
-from app.services import pine_validation
+from app.services import pine_semantic_analysis_persistence, pine_validation
 
 PINE_ARTIFACT = "pine_script"
 SOURCE_JOURNEY = "nova_hosted_personal"
@@ -322,6 +322,30 @@ def get_package_source(user_id: uuid.UUID, strategy_id, version_id):
         }
 
 
+def _persist_semantic_provenance(db, user_id: uuid.UUID, version) -> str | None:
+    """R1B-1: flag-gated immutable semantic-analysis provenance (evidence only).
+
+    With R1B_PINE_ANALYSIS_PERSISTENCE off (the default) this performs no
+    database query and no insert, and the qualification response is unchanged.
+    On persistence failure the whole validation transaction is aborted with a
+    safe error so qualification provenance is never falsely recorded.
+    """
+    if not settings.R1B_PINE_ANALYSIS_PERSISTENCE:
+        return None
+    artifact = _artifact(db, version.id)
+    try:
+        row = pine_semantic_analysis_persistence.persist_semantic_analysis(
+            db, artifact, artifact.content, owner_user_id=user_id
+        )
+    except pine_semantic_analysis_persistence.SemanticAnalysisPersistenceError as exc:
+        raise PineWorkflowError(
+            "Semantic-analysis provenance could not be recorded, so this validation was not saved. Retry later.",
+            503,
+            "SEMANTIC_PROVENANCE_UNAVAILABLE",
+        ) from exc
+    return str(row.id)
+
+
 def validate_version(user_id: uuid.UUID, strategy_id, version_id):
     with session_scope() as db:
         _, version = _owned_version(db, user_id, strategy_id, version_id, lock=True)
@@ -363,6 +387,7 @@ def validate_version(user_id: uuid.UUID, strategy_id, version_id):
         }
     with session_scope() as db:
         _, version = _owned_version(db, user_id, strategy_id, version_id, lock=True)
+        semantic_analysis_id = _persist_semantic_provenance(db, user_id, version)
         existing = db.scalar(select(models.StrategyValidationReport).where(
             models.StrategyValidationReport.strategy_version_id == version.id,
             models.StrategyValidationReport.stage == "compatibility",
@@ -371,7 +396,10 @@ def validate_version(user_id: uuid.UUID, strategy_id, version_id):
             models.StrategyValidationReport.source_sha256 == digest,
         ))
         if existing is not None:
-            return {"report": _report_public(existing), "reused": True, "version": _version_public(version, existing)}
+            reused = {"report": _report_public(existing), "reused": True, "version": _version_public(version, existing)}
+            if semantic_analysis_id is not None:
+                reused["semantic_analysis_id"] = semantic_analysis_id
+            return reused
         report = models.StrategyValidationReport(
             strategy_version_id=version.id,
             stage="compatibility",
@@ -393,7 +421,10 @@ def validate_version(user_id: uuid.UUID, strategy_id, version_id):
         version.updated_at = _now()
         db.flush()
         _audit(db, user_id, "PERSONAL_PINE_VALIDATED", strategy_id=str(strategy_id), version_id=str(version.id), report_id=str(report.id), source_sha256=digest, status=report.status)
-        return {"report": _report_public(report), "reused": False, "version": _version_public(version, report)}
+        response = {"report": _report_public(report), "reused": False, "version": _version_public(version, report)}
+        if semantic_analysis_id is not None:
+            response["semantic_analysis_id"] = semantic_analysis_id
+        return response
 
 
 def get_validation(user_id: uuid.UUID, strategy_id, version_id):

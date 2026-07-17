@@ -32,8 +32,11 @@ def test_every_revision_id_fits_alembic_version_column():
     )
 
 
-def test_single_head_is_verify_select_off_0013():
+def test_single_head_is_r1b_persistence_off_0014():
     script = _script_directory()
-    assert script.get_heads() == ["0014_verify_select"]
-    head = script.get_revision("0014_verify_select")
-    assert head.down_revision == "0013_manual_tradingview_flow"
+    assert script.get_heads() == ["0015_r1b_persistence"]
+    head = script.get_revision("0015_r1b_persistence")
+    assert head.down_revision == "0014_verify_select"
+    assert len(head.revision) == 20
+    previous = script.get_revision("0014_verify_select")
+    assert previous.down_revision == "0013_manual_tradingview_flow"

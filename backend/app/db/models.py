@@ -18,6 +18,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -28,6 +29,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     false as sa_false,
     text as sa_text,
 )
@@ -1189,6 +1191,388 @@ class PositionEvent(Base):
     event_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
     event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# R1B additive canonical evidence tables.
+#
+# EVIDENCE ONLY — NOT EXECUTION AUTHORITY. Nothing in the webhook path,
+# execution router, risk manager, broker adapters or position store reads
+# these tables, and no failure involving them may alter webhook responses,
+# replay results, job creation, broker routing or position mutation.
+# Rows are immutable: the ORM guard below rejects every UPDATE flush.
+# ---------------------------------------------------------------------------
+
+
+def _hash64_check(column: str, *, nullable: bool) -> str:
+    """Portable length-64 lowercase hash CHECK (PostgreSQL + SQLite).
+
+    ponytail: hex charset is not enforceable portably without dialect-specific
+    SQL; the writers only ever store hexdigest output, and length+lowercase is
+    enforced here on both dialects.
+    """
+    check = f"(length({column}) = 64 AND {column} = lower({column}))"
+    if nullable:
+        return f"({column} IS NULL OR {check})"
+    return check
+
+
+class CanonicalSignalDecision(Base):
+    """At most one immutable canonical interpretation per accepted StrategySignal.
+
+    EVIDENCE ONLY — NOT EXECUTION AUTHORITY. No writer exists in R1B-1; the
+    table stays empty until a separate R1B-2 review authorizes the decision
+    writer. Never store credentials, raw signal IDs, comments, request bodies,
+    broker tokens, sizing/risk fields or Pine source here.
+    """
+
+    __tablename__ = "canonical_signal_decisions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["strategy_instance_id", "user_id"],
+            ["strategy_instances.id", "strategy_instances.user_id"],
+            name="fk_canonical_decision_instance_owner",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("strategy_signal_id", name="uq_canonical_decision_signal"),
+        CheckConstraint(
+            "wire_action IN ('BUY_CE', 'BUY_PE', 'EXIT', 'HOLD')",
+            name="ck_canonical_decision_wire_action",
+        ),
+        CheckConstraint(
+            "event_type IN ('STRATEGY_SIGNAL', 'CONNECTIVITY_TEST')",
+            name="ck_canonical_decision_event_type",
+        ),
+        CheckConstraint(
+            "desired_state IN ('BULLISH', 'BEARISH', 'FLAT', 'NONE')",
+            name="ck_canonical_decision_desired_state",
+        ),
+        CheckConstraint(
+            "intent_reason IN ('DIRECTIONAL_SIGNAL', 'EXPLICIT_EXIT', 'CONNECTIVITY_TEST')",
+            name="ck_canonical_decision_intent_reason",
+        ),
+        CheckConstraint(
+            "compatibility_action IS NULL OR compatibility_action IN ('ENTRY', 'EXIT')",
+            name="ck_canonical_decision_compat_action",
+        ),
+        CheckConstraint(
+            "compatibility_side IS NULL OR compatibility_side IN ('BUY', 'SELL')",
+            name="ck_canonical_decision_compat_side",
+        ),
+        CheckConstraint(
+            "compatibility_option_side IS NULL OR compatibility_option_side IN ('CE', 'PE')",
+            name="ck_canonical_decision_compat_option_side",
+        ),
+        CheckConstraint(
+            "provenance_kind IN ('LIVE', 'BACKFILL')",
+            name="ck_canonical_decision_provenance_kind",
+        ),
+        CheckConstraint(
+            _hash64_check("payload_fingerprint", nullable=False),
+            name="ck_canonical_decision_payload_fp_hash",
+        ),
+        CheckConstraint(
+            "wire_action != 'HOLD' OR ("
+            "event_type = 'CONNECTIVITY_TEST'"
+            " AND desired_state = 'NONE'"
+            " AND intent_reason = 'CONNECTIVITY_TEST'"
+            " AND compatibility_action IS NULL"
+            " AND compatibility_side IS NULL"
+            " AND compatibility_option_side IS NULL)",
+            name="ck_canonical_decision_hold_consistency",
+        ),
+        CheckConstraint(
+            "wire_action != 'BUY_CE' OR ("
+            "event_type = 'STRATEGY_SIGNAL'"
+            " AND desired_state = 'BULLISH'"
+            " AND compatibility_action = 'ENTRY'"
+            " AND compatibility_side = 'BUY'"
+            " AND compatibility_option_side = 'CE')",
+            name="ck_canonical_decision_buy_ce_consistency",
+        ),
+        CheckConstraint(
+            "wire_action != 'BUY_PE' OR ("
+            "event_type = 'STRATEGY_SIGNAL'"
+            " AND desired_state = 'BEARISH'"
+            " AND compatibility_action = 'ENTRY'"
+            " AND compatibility_side = 'BUY'"
+            " AND compatibility_option_side = 'PE')",
+            name="ck_canonical_decision_buy_pe_consistency",
+        ),
+        CheckConstraint(
+            "wire_action != 'EXIT' OR ("
+            "event_type = 'STRATEGY_SIGNAL'"
+            " AND desired_state = 'FLAT'"
+            " AND compatibility_action = 'EXIT'"
+            " AND compatibility_side = 'SELL'"
+            " AND compatibility_option_side IS NULL)",
+            name="ck_canonical_decision_exit_consistency",
+        ),
+        Index("ix_canonical_decisions_user_received", "user_id", "received_at"),
+        Index("ix_canonical_decisions_instance_received", "strategy_instance_id", "received_at"),
+        Index("ix_canonical_decisions_webhook_event", "webhook_event_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_signal_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_signals.id", ondelete="CASCADE"), nullable=False
+    )
+    webhook_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("webhook_events.id", ondelete="SET NULL"), nullable=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    contract_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    adapter_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    wire_action: Mapped[str] = mapped_column(String(20), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    desired_state: Mapped[str] = mapped_column(String(20), nullable=False)
+    intent_reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    signal_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    compatibility_action: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    compatibility_side: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    compatibility_option_side: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    safe_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    payload_fingerprint: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    provenance_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    backfill_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    outcomes: Mapped[list["CanonicalSignalOutcome"]] = relationship(
+        back_populates="decision", lazy="select", passive_deletes=True
+    )
+
+
+class CanonicalSignalOutcome(Base):
+    """Append-only routing/state observation linked to a canonical decision.
+
+    EVIDENCE ONLY — NOT EXECUTION AUTHORITY. No writer exists in R1B-1.
+    """
+
+    __tablename__ = "canonical_signal_outcomes"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_canonical_outcome_idempotency"),
+        CheckConstraint(
+            "phase IN ('STATE_EVALUATED', 'ROUTING_COMPLETED', 'ROUTING_FAILED')",
+            name="ck_canonical_outcome_phase",
+        ),
+        CheckConstraint(
+            "current_state IS NULL OR current_state IN ('UNKNOWN', 'FLAT', 'BULLISH', 'BEARISH')",
+            name="ck_canonical_outcome_current_state",
+        ),
+        CheckConstraint(
+            "routing_result IN ("
+            "'NOT_EVALUATED', 'CONNECTIVITY_NO_JOB', 'STATE_NO_OP', 'ENTRY_ROUTED',"
+            " 'EXIT_ROUTED', 'REVERSAL_ROUTED', 'BLOCKED', 'FAILED', 'PENDING', 'PARTIAL')",
+            name="ck_canonical_outcome_routing_result",
+        ),
+        CheckConstraint(
+            "no_op_reason IS NULL OR no_op_reason IN ("
+            "'CONNECTIVITY_TEST', 'ALREADY_FLAT', 'ALREADY_BULLISH',"
+            " 'ALREADY_BEARISH', 'INSTANCE_PAUSED')",
+            name="ck_canonical_outcome_no_op_reason",
+        ),
+        CheckConstraint(
+            "exit_reason IS NULL OR exit_reason IN ("
+            "'EXPLICIT_EXIT', 'REVERSAL_EXIT', 'STOP_LOSS', 'TAKE_PROFIT',"
+            " 'TRAILING_STOP', 'SESSION_EXIT', 'MANUAL_EXIT', 'RISK_EXIT')",
+            name="ck_canonical_outcome_exit_reason",
+        ),
+        CheckConstraint("attempt IS NULL OR attempt > 0", name="ck_canonical_outcome_attempt_positive"),
+        CheckConstraint(
+            _hash64_check("result_sha256", nullable=True),
+            name="ck_canonical_outcome_result_hash",
+        ),
+        CheckConstraint(
+            _hash64_check("idempotency_key", nullable=False),
+            name="ck_canonical_outcome_idempotency_hash",
+        ),
+        Index("ix_canonical_outcomes_decision_created", "canonical_decision_id", "created_at"),
+        Index("ix_canonical_outcomes_execution_job", "execution_job_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    canonical_decision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("canonical_signal_decisions.id", ondelete="CASCADE"), nullable=False
+    )
+    execution_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_execution_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    phase: Mapped[str] = mapped_column(String(30), nullable=False)
+    current_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    routing_result: Mapped[str] = mapped_column(String(30), nullable=False)
+    no_op_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    exit_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    safe_detail_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    result_sha256: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    decision: Mapped["CanonicalSignalDecision"] = relationship(
+        back_populates="outcomes", lazy="select"
+    )
+
+
+class StrategySignalRejection(Base):
+    """Future safe, post-authentication ingress rejection evidence.
+
+    EVIDENCE ONLY — NOT EXECUTION AUTHORITY. No writer exists in R1B-1.
+    Never store credentials, full payloads, raw exceptions, Pine source,
+    emails or hostile metadata here.
+    """
+
+    __tablename__ = "strategy_signal_rejections"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["strategy_instance_id", "user_id"],
+            ["strategy_instances.id", "strategy_instances.user_id"],
+            name="fk_signal_rejection_instance_owner",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("dedupe_key", name="uq_signal_rejection_dedupe"),
+        CheckConstraint(
+            "stage IN ('LIFECYCLE', 'SIGNAL_TIME', 'REPLAY_CONFLICT',"
+            " 'CANONICAL_NORMALIZATION', 'SEMANTIC_POLICY', 'JOB_CREATION')",
+            name="ck_signal_rejection_stage",
+        ),
+        CheckConstraint(
+            "rejection_code IN ("
+            "'INVALID_ACTION', 'MISSING_TIMEZONE', 'STALE_SIGNAL', 'INACTIVE_INSTANCE',"
+            " 'LIVE_EXECUTION_SAFETY_BLOCK', 'CONFLICTING_DUPLICATE', 'STORE_UNAVAILABLE',"
+            " 'JOB_PERSISTENCE_FAILED')",
+            name="ck_signal_rejection_code",
+        ),
+        CheckConstraint(
+            _hash64_check("signal_id_sha256", nullable=True),
+            name="ck_signal_rejection_signal_id_hash",
+        ),
+        CheckConstraint(
+            _hash64_check("payload_fingerprint", nullable=True),
+            name="ck_signal_rejection_payload_fp_hash",
+        ),
+        CheckConstraint(
+            _hash64_check("dedupe_key", nullable=False),
+            name="ck_signal_rejection_dedupe_hash",
+        ),
+        Index("ix_signal_rejections_instance_received", "strategy_instance_id", "received_at"),
+        Index("ix_signal_rejections_user_received", "user_id", "received_at"),
+        Index("ix_signal_rejections_stage_code_received", "stage", "rejection_code", "received_at"),
+        Index("ix_signal_rejections_webhook_event", "webhook_event_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    webhook_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("webhook_events.id", ondelete="SET NULL"), nullable=True
+    )
+    signal_id_safe: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    signal_id_sha256: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    payload_fingerprint: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    stage: Mapped[str] = mapped_column(String(40), nullable=False)
+    rejection_code: Mapped[str] = mapped_column(String(60), nullable=False)
+    safe_detail: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    adapter_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    contract_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    dedupe_key: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class PineSemanticAnalysis(Base):
+    """Immutable Pine semantic-analysis provenance for one source artifact.
+
+    EVIDENCE ONLY — NOT EXECUTION AUTHORITY. The only R1B-1 table with a
+    writer (app.services.pine_semantic_analysis_persistence), gated behind
+    R1B_PINE_ANALYSIS_PERSISTENCE (default false). Rows bind the exact source
+    hash, analyzer version, registry identity/hash and canonical payload hash
+    so a qualification decision can be independently reproduced. Reanalysis
+    inserts a new row (optionally pointing supersedes_analysis_id at the old
+    one) and never mutates history. Never store Pine source, feature vectors,
+    raw lexer tokens, credentials, user comments, raw exceptions or
+    external-model output here.
+    """
+
+    __tablename__ = "pine_semantic_analyses"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_artifact_id",
+            "source_sha256",
+            "analyzer_version",
+            "registry_id",
+            "registry_version",
+            "registry_sha256",
+            "analysis_schema_version",
+            name="uq_pine_analysis_provenance",
+        ),
+        CheckConstraint(
+            _hash64_check("source_sha256", nullable=False),
+            name="ck_pine_analysis_source_hash",
+        ),
+        CheckConstraint(
+            _hash64_check("registry_sha256", nullable=False),
+            name="ck_pine_analysis_registry_hash",
+        ),
+        CheckConstraint(
+            _hash64_check("analysis_payload_sha256", nullable=False),
+            name="ck_pine_analysis_payload_hash",
+        ),
+        CheckConstraint(
+            "confidence IN ('HIGH_CONFIDENCE_MATCH', 'PARTIAL_MATCH', 'ANALYSIS_INDETERMINATE')",
+            name="ck_pine_analysis_confidence",
+        ),
+        CheckConstraint(
+            "effective_capability_level IN ("
+            "'L0_DIRECTLY_SUPPORTED', 'L1_NORMALIZED_WITHOUT_MATERIAL_CHANGE',"
+            " 'L2_SUPPORTED_WITH_DISCLOSED_CHANGE', 'L3_REQUIRES_BACKEND_CAPABILITY',"
+            " 'L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE')",
+            name="ck_pine_analysis_level",
+        ),
+        Index("ix_pine_analyses_artifact_created", "source_artifact_id", "created_at"),
+        Index("ix_pine_analyses_level", "effective_capability_level"),
+        Index("ix_pine_analyses_supersedes", "supersedes_analysis_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    source_artifact_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_source_artifacts.id", ondelete="CASCADE"), nullable=False
+    )
+    source_sha256: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    analyzer_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    registry_id: Mapped[str] = mapped_column(String(60), nullable=False)
+    registry_version: Mapped[str] = mapped_column(String(30), nullable=False)
+    registry_sha256: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    # VARCHAR(50): the closed schema version string is 42 characters.
+    analysis_schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    effective_capability_level: Mapped[str] = mapped_column(String(60), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(40), nullable=False)
+    analysis_payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    analysis_payload_sha256: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    supersedes_analysis_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("pine_semantic_analyses.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+R1B_EVIDENCE_MODELS = (
+    CanonicalSignalDecision,
+    CanonicalSignalOutcome,
+    StrategySignalRejection,
+    PineSemanticAnalysis,
+)
+
+
+def _reject_evidence_update(mapper, connection, target) -> None:
+    raise ValueError(
+        f"{type(target).__name__} rows are immutable R1B evidence; insert a new row instead."
+    )
+
+
+for _evidence_model in R1B_EVIDENCE_MODELS:
+    event.listens_for(_evidence_model, "before_update")(_reject_evidence_update)
 
 
 class PortfolioSnapshot(Base):

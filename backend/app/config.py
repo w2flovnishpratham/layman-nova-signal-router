@@ -121,6 +121,16 @@ class Settings(BaseSettings):
     PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED: bool = False
     PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED: bool = False
     CANONICAL_SIGNAL_SHADOW: bool = False
+    # R1B persistence flags. Server-side only (never API/webhook/frontend
+    # controllable); missing or invalid values resolve to False via the
+    # fail-safe validator below. In R1B-1 only the Pine-analysis flag has a
+    # writer; the other three are declared with zero call sites so the
+    # decision/outcome/rejection tables stay empty until R1B-2 authorizes
+    # their writers.
+    R1B_CANONICAL_DECISION_PERSISTENCE: bool = False
+    R1B_CANONICAL_OUTCOME_PERSISTENCE: bool = False
+    R1B_SIGNAL_REJECTION_PERSISTENCE: bool = False
+    R1B_PINE_ANALYSIS_PERSISTENCE: bool = False
     PRIVATE_WEBHOOK_MAX_AGE_SECONDS: int = 300
     PRIVATE_WEBHOOK_MAX_FUTURE_SKEW_SECONDS: int = 30
     PRIVATE_WEBHOOK_MAX_BODY_BYTES: int = 4096
@@ -144,7 +154,14 @@ class Settings(BaseSettings):
     PINE_CONVERSION_WORKER_POLL_SECONDS: float = 1.0
     PINE_CONVERSION_STALE_SECONDS: int = 300
 
-    @field_validator("CANONICAL_SIGNAL_SHADOW", mode="before")
+    @field_validator(
+        "CANONICAL_SIGNAL_SHADOW",
+        "R1B_CANONICAL_DECISION_PERSISTENCE",
+        "R1B_CANONICAL_OUTCOME_PERSISTENCE",
+        "R1B_SIGNAL_REJECTION_PERSISTENCE",
+        "R1B_PINE_ANALYSIS_PERSISTENCE",
+        mode="before",
+    )
     @classmethod
     def _safe_shadow_flag(cls, value):
         if isinstance(value, bool):
