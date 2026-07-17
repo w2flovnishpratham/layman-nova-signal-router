@@ -36,7 +36,7 @@ beforeEach(() => {
   api.list.mockResolvedValue([strategy]); api.get.mockResolvedValue({ strategy, versions: [version] })
   api.source.mockResolvedValue({ source: SOURCE, filename: 'safe.pine', source_sha256: 'abc', approved: false })
   api.instances.mockResolvedValue([]); api.reviews.mockResolvedValue([])
-  api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: false, provider: null, model: null, prompt_version: 'v1', contract_version: 1, daily_limit: 10 })
+  api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: false, provider: null, model: null, prompt_version: 'v1', prompt_status: 'DEPLOYED', transport_version: null, contract_version: 1, daily_limit: 10 })
   api.conversionPackage.mockResolvedValue({ package: `PRIVATE WARNING\n${SOURCE}`, filename: 'conversion.txt', package_sha256: 'pkg' })
   api.getSetup.mockRejectedValue(new Error('not configured'))
   api.managedSetups.mockResolvedValue([])
@@ -105,6 +105,17 @@ describe('ImportedPinePage', () => {
     await waitFor(() => expect(api.conversionPackage).toHaveBeenCalledWith('s1', 'v1'))
     expect(api.convert).not.toHaveBeenCalled()
     expect(await screen.findByRole('status')).toHaveTextContent('Package copy completed')
+  })
+
+  it('shows layman V3 package guidance and keeps the admin manifest separate', async () => {
+    api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: false, provider: null, model: null, prompt_version: 'v3', prompt_status: 'QUALIFICATION', transport_version: 'pine_transport_v1', contract_version: 1, daily_limit: 10 })
+    render(<ImportedPinePage />)
+    expect(await screen.findByText(/Prompt v3 · QUALIFICATION/i)).toBeInTheDocument()
+    expect(screen.getByText(/Copy this package into ChatGPT or Claude/i)).toBeInTheDocument()
+    expect(screen.getByText(/Copy only Artifact 1 back into NOVA/i)).toBeInTheDocument()
+    expect(screen.getByText(/Artifact 2 is a simple status/i)).toBeInTheDocument()
+    expect(screen.getByText(/Artifact 3 is for NOVA review/i)).toBeInTheDocument()
+    expect(screen.queryByLabelText(/Conversion assumptions/i)).not.toBeInTheDocument()
   })
 
   it('requires unselected consent before sending the exact version', async () => {

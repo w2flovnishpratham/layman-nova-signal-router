@@ -731,6 +731,8 @@ export interface PineConversionConfig {
   provider: string | null
   model: string | null
   prompt_version: string
+  prompt_status: 'DEPLOYED' | 'QUALIFICATION'
+  transport_version: string | null
   contract_version: number
   daily_limit: number
 }

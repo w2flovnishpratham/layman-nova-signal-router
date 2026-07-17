@@ -1,9 +1,11 @@
 """Deterministic, non-executing NOVA Pine compatibility validation."""
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import Any
 
 from app.config import settings
@@ -14,6 +16,17 @@ VALIDATION_ENGINE = "nova-pine-static"
 MAX_LINE_CHARS = 4096
 MAX_FINDINGS = 100
 SUPPORTED_ACTIONS = {"BUY_CE", "BUY_PE", "EXIT", "HOLD"}
+FROZEN_TRANSPORT_VERSION = "pine_transport_v1"
+FROZEN_TRANSPORT_MARKER = f"NOVA FROZEN TRANSPORT BEGIN: {FROZEN_TRANSPORT_VERSION}"
+FROZEN_TRANSPORT_END_MARKER = f"NOVA FROZEN TRANSPORT END: {FROZEN_TRANSPORT_VERSION}"
+FROZEN_TRANSPORT_PATH = Path(__file__).resolve().parents[1] / "prompts/pine_transport_v1.txt"
+MANIFEST_SCHEMA = "nova.pine-conversion-manifest.v1"
+MANIFEST_KEYS = {
+    "schema", "status", "strategy_code", "source_pine_version", "target_pine_version",
+    "actions", "explicit_exit_present", "reversal_mode", "signal_timing", "timeframe_policy",
+    "hold_test_included", "repainting_classification", "behavior_classification", "behavior_changes",
+    "unsupported_constructs", "admin_review_points", "blocked_reasons", "frozen_transport_version",
+}
 UNSUPPORTED_ACTIONS = {
     "BUY", "SELL", "LONG", "SHORT", "CALL", "PUT", "CLOSE_ALL", "MARKET_BUY", "MARKET_SELL"
 }
@@ -53,6 +66,68 @@ def canonicalize_source(source: str) -> str:
     if not isinstance(source, str):
         raise ValueError("Pine source must be UTF-8 text.")
     return source.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def validate_admin_manifest(value: str | dict[str, Any]) -> dict[str, Any]:
+    errors: list[str] = []
+    try:
+        manifest = json.loads(value) if isinstance(value, str) else value
+    except json.JSONDecodeError:
+        return {"valid": False, "errors": ["INVALID_JSON"], "manifest": None}
+    if not isinstance(manifest, dict):
+        return {"valid": False, "errors": ["MANIFEST_NOT_OBJECT"], "manifest": None}
+    missing, extra = MANIFEST_KEYS - manifest.keys(), manifest.keys() - MANIFEST_KEYS
+    if missing:
+        errors.append("MISSING_KEYS:" + ",".join(sorted(missing)))
+    if extra:
+        errors.append("UNKNOWN_KEYS:" + ",".join(sorted(extra)))
+    if manifest.get("schema") != MANIFEST_SCHEMA:
+        errors.append("INVALID_SCHEMA")
+    status = manifest.get("status")
+    if status not in {"READY_FOR_STATIC_VALIDATION", "READY_WITH_DISCLOSED_CHANGES", "BLOCKED"}:
+        errors.append("INVALID_STATUS")
+    if not isinstance(manifest.get("strategy_code"), str) or not re.fullmatch(r"[A-Z0-9_]+", manifest.get("strategy_code", "")):
+        errors.append("INVALID_STRATEGY_CODE")
+    if not isinstance(manifest.get("source_pine_version"), str) or manifest.get("target_pine_version") != "6":
+        errors.append("INVALID_PINE_VERSION")
+    actions = manifest.get("actions")
+    if not isinstance(actions, list) or any(not isinstance(action, str) or action not in SUPPORTED_ACTIONS for action in actions) or len(actions or []) != len(set(actions or [])):
+        errors.append("INVALID_ACTIONS")
+    if manifest.get("reversal_mode") != "BACKEND_EXIT_FIRST":
+        errors.append("INVALID_REVERSAL_MODE")
+    if manifest.get("signal_timing") not in {"CONFIRMED_BAR_CLOSE", "INTRABAR_APPROXIMATION", "BLOCKED"}:
+        errors.append("INVALID_SIGNAL_TIMING")
+    if manifest.get("timeframe_policy") not in {"CHART_TIMEFRAME", "SOURCE_FIXED_TIMEFRAME", "BLOCKED"}:
+        errors.append("INVALID_TIMEFRAME_POLICY")
+    if manifest.get("frozen_transport_version") != FROZEN_TRANSPORT_VERSION:
+        errors.append("INVALID_TRANSPORT_VERSION")
+    for key in ("explicit_exit_present", "hold_test_included"):
+        if not isinstance(manifest.get(key), bool):
+            errors.append("INVALID_" + key.upper())
+    for key in ("repainting_classification", "behavior_classification"):
+        if not isinstance(manifest.get(key), str) or not manifest.get(key):
+            errors.append("INVALID_" + key.upper())
+    for key in ("behavior_changes", "unsupported_constructs", "admin_review_points", "blocked_reasons"):
+        if not isinstance(manifest.get(key), list) or any(not isinstance(item, str) for item in manifest.get(key, [])):
+            errors.append("INVALID_" + key.upper())
+    if status == "BLOCKED":
+        if not manifest.get("blocked_reasons"):
+            errors.append("BLOCKED_REASON_REQUIRED")
+    elif manifest.get("blocked_reasons") or manifest.get("hold_test_included") is not True or "HOLD" not in (actions or []):
+        errors.append("SUPPORTED_MANIFEST_SAFETY_INVALID")
+    return {"valid": not errors, "errors": errors, "manifest": manifest if not errors else None}
+
+
+def _frozen_transport_matches(source: str) -> bool:
+    start, end = source.find(FROZEN_TRANSPORT_MARKER), source.find(FROZEN_TRANSPORT_END_MARKER)
+    if start < 0 or end < start:
+        return False
+    start = source.rfind("//", 0, start)
+    end = source.find("\n", end)
+    block = source[start:end if end >= 0 else len(source)].strip()
+    block = re.sub(r'(?m)^const string novaStrategyCode = "[A-Z0-9_]+"$', 'const string novaStrategyCode = "{{STRATEGY_CODE}}"', block)
+    block = re.sub(r'(?m)^const string novaStrategyVersion = "[A-Z0-9_]+"$', 'const string novaStrategyVersion = "{{STRATEGY_VERSION}}"', block)
+    return block == FROZEN_TRANSPORT_PATH.read_text(encoding="utf-8").strip()
 
 
 def _without_comments(source: str) -> str:
@@ -185,6 +260,7 @@ def validate_source(source: str) -> dict[str, Any]:
             add("CREDENTIAL_IN_SOURCE", "ERROR", "Credential-like value detected", "Private source must not contain credentials, tokens, database URLs or authentication headers.", "Remove the secret and rotate it if it may have been exposed.", offset=match.start(), secret=True)
 
     code = _without_comments(source)
+    has_frozen_transport = FROZEN_TRANSPORT_MARKER in source
     version_match = re.search(r"(?m)^\s*//@version\s*=\s*(\d+)\s*$", source)
     pine_version = int(version_match.group(1)) if version_match else None
     if pine_version is None:
@@ -225,7 +301,41 @@ def validate_source(source: str) -> dict[str, Any]:
     if "EXIT" not in emitted:
         add("EXIT_ACTION_MISSING", "ERROR", "EXIT action is missing", "Entry-capable scripts must expose an EXIT path.", "Emit EXIT for the current NOVA position.")
     if "HOLD" not in emitted:
-        add("HOLD_OPTIONAL", "INFO", "HOLD is optional", "No audit-only HOLD action was found.", "No change is required unless you want explicit no-op alerts.")
+        if has_frozen_transport:
+            add("HOLD_REQUIRED", "ERROR", "HOLD facility is missing", "Prompt v3 candidates require the canonical one-time HOLD facility.", "Restore the frozen pine_transport_v1 block without changes.")
+        else:
+            add("HOLD_OPTIONAL", "INFO", "HOLD is optional", "No audit-only HOLD action was found.", "No change is required unless you want explicit no-op alerts.")
+
+    if has_frozen_transport:
+        if not _frozen_transport_matches(source):
+            add("TRANSPORT_HASH_MISMATCH", "ERROR", "Frozen transport was changed", "The complete pine_transport_v1 block does not match the registered template after constant substitution.", "Restore the exact frozen transport block.")
+        required_transport = {
+            "TRANSPORT_END_MISSING": f"NOVA FROZEN TRANSPORT END: {FROZEN_TRANSPORT_VERSION}",
+            "TRANSPORT_VERSION_MISSING": f'novaTransportVersion = "{FROZEN_TRANSPORT_VERSION}"',
+            "CREDENTIAL_INPUT_INVALID": 'input.string(novaCredentialPlaceholder, "NOVA private credential"',
+            "CREDENTIAL_PLACEHOLDER_INVALID": 'novaCredentialPlaceholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"',
+            "SIGNAL_ID_INVALID": 'novaStrategyCode + ":" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action',
+            "SIGNAL_TIME_INVALID": 'str.format_time(time_close, "yyyy-MM-dd\'T\'HH:mm:ss\'Z\'", "UTC")',
+            "BAR_CLOSE_GATE_INVALID": "barstate.isrealtime and barstate.isconfirmed and novaCredentialReady",
+            "HOLD_INPUT_INVALID": 'input.bool(false, "Send one HOLD connectivity test"',
+            "HOLD_ONCE_INVALID": "novaSendHoldTest and not novaHoldSent",
+        }
+        for finding_code, fragment in required_transport.items():
+            if fragment not in source:
+                add(finding_code, "ERROR", "Frozen transport is incomplete", f"Required pine_transport_v1 element {finding_code} was not found.", "Restore the exact frozen transport block.")
+        payload_fields = set(re.findall(r'"([a-z_]+)"\s*:', code))
+        allowed_fields = {"credential", "action", "signal_id", "signal_time", "strategy_version", "timeframe", "reference_price", "comment"}
+        if payload_fields - allowed_fields:
+            add("PAYLOAD_FIELD_UNSUPPORTED", "ERROR", "Unsupported webhook field", "The v3 payload contains a field owned by NOVA.", "Keep only canonical required fields and permitted metadata.")
+        emitted_literals = set(re.findall(r'novaWebhookPayload\(\s*"([A-Z_]+)"', code))
+        if emitted_literals - SUPPORTED_ACTIONS:
+            add("ACTION_UNSUPPORTED", "ERROR", "Unsupported emitted action", "The frozen transport contains a non-contract action.", "Use only BUY_CE, BUY_PE, EXIT, and HOLD.")
+        for offset, call in alert_spans:
+            if not re.match(r'alert\s*\(\s*novaWebhookPayload\(\s*"(?:BUY_CE|BUY_PE|EXIT|HOLD)"\s*\)', call):
+                add("NONCANONICAL_ALERT", "ERROR", "Non-canonical alert detected", "Prompt v3 candidates may emit alerts only through the frozen NOVA transport.", "Remove strategy-layer alert calls and keep only canonical booleans.", offset=offset)
+        forbidden_input = re.search(r'input\.\w+\([^\n]*"[^"\n]*(?:strategy code|strategy version|timezone|webhook url|quantity|lots|strike|expiry|broker|execution mode|order type|product type)[^"\n]*"', code, re.I)
+        if forbidden_input:
+            add("TRANSPORT_AUTHORITY_INPUT", "ERROR", "Editable transport authority detected", "A normal-user input controls NOVA transport or execution authority.", "Remove the input and keep transport identity as constants.", offset=forbidden_input.start())
 
     upper_code = code.upper()
     for underlying in UNSUPPORTED_UNDERLYINGS:

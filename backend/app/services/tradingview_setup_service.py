@@ -47,9 +47,11 @@ def _json_hash(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def ensure_current_prompt(db) -> models.PinePromptVersion:
-    prompt_id = settings.PINE_CONVERSION_PROMPT_VERSION
-    content_hash = hashlib.sha256(conversion.PROMPT_PATH.read_bytes()).hexdigest()
+def ensure_prompt_version(db, prompt_id: str) -> models.PinePromptVersion:
+    path = conversion.prompt_path(prompt_id)
+    if not path.exists():
+        raise SetupError("Configured prompt artifact was not found.", 500, "PROMPT_NOT_FOUND")
+    content_hash = hashlib.sha256(path.read_bytes()).hexdigest()
     row = db.get(models.PinePromptVersion, prompt_id)
     if row is None:
         row = models.PinePromptVersion(
@@ -57,13 +59,17 @@ def ensure_current_prompt(db) -> models.PinePromptVersion:
             version_label=f"Manual conversion prompt {prompt_id}",
             content_sha256=content_hash,
             status="QUALIFICATION",
-            change_notes="Imported from the Phase 4B manual conversion package.",
+            change_notes="Immutable manual conversion prompt artifact.",
         )
         db.add(row)
         db.flush()
     elif row.content_sha256 != content_hash:
         raise SetupError("Configured prompt content does not match its immutable version record.", 409, "PROMPT_HASH_MISMATCH")
     return row
+
+
+def ensure_current_prompt(db) -> models.PinePromptVersion:
+    return ensure_prompt_version(db, conversion.manual_prompt_version())
 
 
 def prompt_status() -> dict[str, Any]:

@@ -17,7 +17,10 @@ from app.db.engine import session_scope
 from app.schemas.pine_conversion import ConversionOptions
 from app.services import personal_pine_service as pine, pine_conversion_provider, pine_validation
 
-PROMPT_PATH = Path(__file__).resolve().parents[1] / f"prompts/pine_conversion_{settings.PINE_CONVERSION_PROMPT_VERSION}.txt"
+PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts"
+PROMPT_PATH = PROMPT_DIR / f"pine_conversion_{settings.PINE_CONVERSION_PROMPT_VERSION}.txt"
+TRANSPORT_VERSION = "pine_transport_v1"
+TRANSPORT_PATH = PROMPT_DIR / f"{TRANSPORT_VERSION}.txt"
 ACTIVE = {"queued", "processing"}
 TERMINAL = {"succeeded", "validation_failed", "provider_failed", "rejected_secret_detected", "canceled", "rejected", "accepted"}
 SECRET_PATTERNS = (
@@ -45,6 +48,18 @@ def _hash(value: str) -> str:
 
 def _json_hash(value: Any) -> str:
     return _hash(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def manual_prompt_version() -> str:
+    if settings.PINE_CONVERSION_QUALIFICATION_PACKAGE_ENABLED:
+        return settings.PINE_CONVERSION_QUALIFICATION_PROMPT_VERSION
+    return settings.PINE_CONVERSION_PROMPT_VERSION
+
+
+def prompt_path(version: str) -> Path:
+    if not re.fullmatch(r"v\d+", version):
+        raise ConversionError("Configured Pine prompt version is invalid.", 500, "PROMPT_VERSION_INVALID")
+    return PROMPT_DIR / f"pine_conversion_{version}.txt"
 
 
 def contains_secret(source: str) -> bool:
@@ -82,12 +97,15 @@ def _public(row: models.PineConversionRequest) -> dict[str, Any]:
 
 
 def public_config() -> dict[str, Any]:
+    version = manual_prompt_version()
     return {
         "manual_package_enabled": settings.PINE_CONVERSION_MANUAL_PACKAGE_ENABLED,
         "ai_enabled": settings.PINE_CONVERSION_AI_ENABLED,
         "provider": settings.PINE_CONVERSION_PROVIDER if settings.PINE_CONVERSION_AI_ENABLED else None,
         "model": settings.PINE_CONVERSION_MODEL if settings.PINE_CONVERSION_AI_ENABLED else None,
-        "prompt_version": settings.PINE_CONVERSION_PROMPT_VERSION,
+        "prompt_version": version,
+        "prompt_status": "QUALIFICATION" if version == settings.PINE_CONVERSION_QUALIFICATION_PROMPT_VERSION else "DEPLOYED",
+        "transport_version": TRANSPORT_VERSION if version == "v3" else None,
         "contract_version": pine.CONTRACT_VERSION,
         "daily_limit": settings.PINE_CONVERSION_MAX_DAILY_REQUESTS_PER_USER,
     }
@@ -97,9 +115,11 @@ def manual_package(user_id: uuid.UUID, strategy_id, version_id) -> dict[str, Any
     if not settings.PINE_CONVERSION_MANUAL_PACKAGE_ENABLED:
         raise ConversionError("Manual conversion packages are disabled.", 404, "FEATURE_DISABLED")
     source = pine.get_source(user_id, strategy_id, version_id)
-    prompt_template = PROMPT_PATH.read_text(encoding="utf-8")
+    version = manual_prompt_version()
+    prompt_template = prompt_path(version).read_text(encoding="utf-8")
     prompt = prompt_template.replace("{{OPTIONS}}", json.dumps({"workflow": "manual_external_conversion"}, sort_keys=True)).replace("{{SOURCE}}", source["source"])
-    package = f"""# NOVA Pine Contract v1 conversion package
+    if version != "v3":
+        package = f"""# NOVA Pine Contract v1 conversion package
 
 Prompt version: {settings.PINE_CONVERSION_PROMPT_VERSION}
 Prompt content SHA-256: {_hash(prompt_template)}
@@ -119,7 +139,37 @@ Privacy warning: copying this package to an external assistant shares your Pine 
 - Paste into TradingView and confirm compilation separately; NOVA static validation is not compilation.
 - Add the script to the intended symbol/timeframe chart and use once-per-bar-close alerts where compatible.
 """
-    return {"package": package, "filename": "nova-pine-conversion-package.txt", "package_sha256": _hash(package), "source_sha256": source["source_sha256"], "prompt_version": settings.PINE_CONVERSION_PROMPT_VERSION, "prompt_content_sha256": _hash(prompt_template)}
+        return {"package": package, "filename": "nova-pine-conversion-package.txt", "package_sha256": _hash(package), "source_sha256": source["source_sha256"], "prompt_version": settings.PINE_CONVERSION_PROMPT_VERSION, "prompt_content_sha256": _hash(prompt_template)}
+
+    transport = TRANSPORT_PATH.read_text(encoding="utf-8")
+    prompt = prompt.replace("{{TRANSPORT}}", transport)
+    instructions = """1. Copy this package into ChatGPT or Claude.
+2. Copy only ARTIFACT 1 back into NOVA as the converted Pine.
+3. Artifact 2 is a simple status.
+4. Artifact 3 is for NOVA review; you do not need to edit it."""
+    package = f"""# NOVA Pine Contract v1 conversion package
+
+Prompt version: {version}
+Prompt status: {"QUALIFICATION" if version == "v3" else "DEPLOYED"}
+Prompt content SHA-256: {_hash(prompt_template)}
+Transport version: {TRANSPORT_VERSION}
+Transport content SHA-256: {_hash(transport)}
+
+Privacy warning: copying this package to an external assistant shares your Pine source with that service. Review that service's privacy terms before pasting private strategy code.
+
+## What to do
+{instructions}
+
+## Current master prompt
+{prompt}
+"""
+    return {
+        "package": package, "filename": "nova-pine-conversion-package.txt",
+        "package_sha256": _hash(package), "source_sha256": source["source_sha256"],
+        "prompt_version": version, "prompt_status": "QUALIFICATION" if version == "v3" else "DEPLOYED",
+        "prompt_content_sha256": _hash(prompt_template), "transport_version": TRANSPORT_VERSION,
+        "transport_content_sha256": _hash(transport),
+    }
 
 
 def create_request(user_id: uuid.UUID, strategy_id, version_id, options: ConversionOptions) -> dict[str, Any]:
