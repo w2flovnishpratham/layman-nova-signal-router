@@ -1,1 +1,23 @@
-{"required_capabilities":["CALC_ON_EVERY_TICK"],"effective_capability_level":"L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE","blocker_codes":["BLK_INTRABAR_TIMING"],"confidence":"HIGH_CONFIDENCE_MATCH"}
+{
+  "fixture_id": "F38",
+  "source_sha256": "8051ff22c4f87cbe4f37666f6f4004b3670ab3e5ec9db3222270a7b67a7fedce",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "CALC_ON_EVERY_TICK",
+    "MARKET_DIRECTIONAL_ENTRY"
+  ],
+  "effective_capability_level": "L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE",
+  "temporal_classes_exact": [
+    "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC",
+    "T8_INTRABAR_NONREPRODUCIBLE_STATE"
+  ],
+  "blocker_codes_exact": [
+    "BLK_INTRABAR_TIMING"
+  ],
+  "disclosure_codes_exact": [],
+  "admin_review_points_exact": [],
+  "confidence": "HIGH_CONFIDENCE_MATCH"
+}

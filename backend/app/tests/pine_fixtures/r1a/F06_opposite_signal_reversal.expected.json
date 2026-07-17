@@ -1,1 +1,24 @@
-{"required_capabilities":["MARKET_DIRECTIONAL_ENTRY","OPPOSITE_DIRECTION_REVERSAL_NORMALIZATION"],"effective_capability_level":"L1_NORMALIZED_WITHOUT_MATERIAL_CHANGE","confidence":"HIGH_CONFIDENCE_MATCH"}
+{
+  "fixture_id": "F06",
+  "source_sha256": "aa4099b0e066cfd6e33e194d36f566bf2861f1359b60173284cfc1f5a037d5b5",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "MARKET_DIRECTIONAL_ENTRY",
+    "OPPOSITE_DIRECTION_REVERSAL_NORMALIZATION"
+  ],
+  "effective_capability_level": "L1_NORMALIZED_WITHOUT_MATERIAL_CHANGE",
+  "temporal_classes_exact": [
+    "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC"
+  ],
+  "blocker_codes_exact": [],
+  "disclosure_codes_exact": [
+    "DISC_EXIT_FIRST_REVERSAL"
+  ],
+  "admin_review_points_exact": [
+    "Confirm source does not require atomic broker reversal."
+  ],
+  "confidence": "HIGH_CONFIDENCE_MATCH"
+}

@@ -544,7 +544,7 @@
       "blocker_code": null,
       "admin_review_points": ["Confirm the source does not depend on TradingView emulator fill timing."],
       "user_facing_message": "Order-close processing is normalized to NOVA confirmed-bar timing.",
-      "fixtures": ["F05"],
+      "fixtures": ["F39"],
       "effective_version": "v1",
       "deprecated_version": null,
       "priority": 65
@@ -565,7 +565,7 @@
       "blocker_code": "BLK_ORDER_SEMANTICS",
       "admin_review_points": ["Determine whether the order changes position independently of pyramiding."],
       "user_facing_message": "Generic strategy.order semantics are not enabled.",
-      "fixtures": ["F13"],
+      "fixtures": ["F67"],
       "effective_version": "v1",
       "deprecated_version": null,
       "priority": 88
@@ -586,7 +586,7 @@
       "blocker_code": null,
       "admin_review_points": ["Confirm removing Pine sizing does not alter the strategy thesis."],
       "user_facing_message": "Pine quantity is removed because NOVA owns sizing.",
-      "fixtures": ["F31"],
+      "fixtures": ["F28"],
       "effective_version": "v1",
       "deprecated_version": null,
       "priority": 70
@@ -607,7 +607,7 @@
       "blocker_code": "BLK_FILL_DEPENDENT",
       "admin_review_points": ["Identify logic that depends on TradingView emulator position state."],
       "user_facing_message": "Position-state feedback requires a future fill-feedback engine.",
-      "fixtures": ["F36"],
+      "fixtures": ["F34"],
       "effective_version": "v1",
       "deprecated_version": null,
       "priority": 86
@@ -628,7 +628,7 @@
       "blocker_code": "BLK_PENDING_ENGINE",
       "admin_review_points": ["Map cancellation identity and lifecycle before conversion."],
       "user_facing_message": "Pending-order cancellation is not supported.",
-      "fixtures": ["F13"],
+      "fixtures": ["F15"],
       "effective_version": "v1",
       "deprecated_version": null,
       "priority": 90

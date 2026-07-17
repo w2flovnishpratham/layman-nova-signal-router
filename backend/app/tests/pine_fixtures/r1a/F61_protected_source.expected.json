@@ -1,1 +1,23 @@
-{"required_capabilities":["PROTECTED_OR_UNAVAILABLE_SOURCE"],"effective_capability_level":"L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE","blocker_codes":["BLK_PROTECTED_SOURCE"],"confidence":"HIGH_CONFIDENCE_MATCH"}
+{
+  "fixture_id": "F61",
+  "source_sha256": "3808ec3bfb7bb40c1cf56f0d585a006d86e61f49fdb0dcb226df10feef411663",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "MALFORMED_SOURCE",
+    "PROTECTED_OR_UNAVAILABLE_SOURCE"
+  ],
+  "effective_capability_level": "L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE",
+  "temporal_classes_exact": [
+    "T9_EXTERNAL_OR_UNAVAILABLE_DATA"
+  ],
+  "blocker_codes_exact": [
+    "BLK_MALFORMED",
+    "BLK_PROTECTED_SOURCE"
+  ],
+  "disclosure_codes_exact": [],
+  "admin_review_points_exact": [],
+  "confidence": "ANALYSIS_INDETERMINATE"
+}

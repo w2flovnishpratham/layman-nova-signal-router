@@ -1,13 +1,13 @@
 {
-  "fixture_id": "F37",
-  "source_sha256": "d01efe14dbb7b4a5303a8a6f30ca7d0928a5bf3d08db18e4491c930f782ce46f",
+  "fixture_id": "F34",
+  "source_sha256": "32f045b4d0822e84daf21aaba72f21b33b313a4f3e8c6ed27c20b6fa553e75c5",
   "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
   "registry_id": "nova.pine-capabilities",
   "registry_version": "v1",
   "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
   "matched_capabilities_exact": [
-    "CALC_ON_ORDER_FILLS",
-    "MARKET_DIRECTIONAL_ENTRY"
+    "MARKET_DIRECTIONAL_ENTRY",
+    "POSITION_STATE_REFERENCE"
   ],
   "effective_capability_level": "L3_REQUIRES_BACKEND_CAPABILITY",
   "temporal_classes_exact": [
@@ -18,6 +18,8 @@
     "BLK_FILL_DEPENDENT"
   ],
   "disclosure_codes_exact": [],
-  "admin_review_points_exact": [],
+  "admin_review_points_exact": [
+    "Identify logic that depends on TradingView emulator position state."
+  ],
   "confidence": "HIGH_CONFIDENCE_MATCH"
 }

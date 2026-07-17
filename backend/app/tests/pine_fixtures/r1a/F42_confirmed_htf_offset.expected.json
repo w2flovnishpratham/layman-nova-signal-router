@@ -1,1 +1,25 @@
-{"required_capabilities":["CONFIRMED_HTF_OFFSET_PATTERN"],"effective_capability_level":"L1_NORMALIZED_WITHOUT_MATERIAL_CHANGE","temporal_classes":["T3_HTF_CONFIRMED_OFFSET_SERIES"],"confidence":"HIGH_CONFIDENCE_MATCH"}
+{
+  "fixture_id": "F42",
+  "source_sha256": "cc9a7aab0e97f1d87b44cf4c1f2cf59edb9709fab0e4caffc8d3ee7f8d569c25",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "BASIC_INDICATOR_BOOLEAN_SIGNAL",
+    "CONFIRMED_HTF_OFFSET_PATTERN"
+  ],
+  "effective_capability_level": "L1_NORMALIZED_WITHOUT_MATERIAL_CHANGE",
+  "temporal_classes_exact": [
+    "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC",
+    "T3_HTF_CONFIRMED_OFFSET_SERIES"
+  ],
+  "blocker_codes_exact": [],
+  "disclosure_codes_exact": [
+    "DISC_HTF_CONFIRMED_SOURCE"
+  ],
+  "admin_review_points_exact": [
+    "Verify the offset applies to the requested expression."
+  ],
+  "confidence": "HIGH_CONFIDENCE_MATCH"
+}

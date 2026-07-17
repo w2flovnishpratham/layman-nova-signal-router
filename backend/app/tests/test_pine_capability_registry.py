@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,10 @@ from app.domain.pine_capabilities import (
     load_registry,
     most_restrictive,
 )
+from app.services.pine_semantic_preanalyzer import analyze_source
+
+
+FIXTURES = Path(__file__).parent / "pine_fixtures" / "r1a"
 
 
 def _documents():
@@ -39,8 +44,8 @@ def test_registry_schema_types_hash_and_fixture_references_are_valid():
     assert all(entry.fixtures for entry in registry.capabilities)
 
 
-def test_canonical_hash_ignores_json_key_and_capability_entry_order():
-    value, _ = _documents()
+def test_canonical_hash_ignores_json_key_and_capability_entry_order(tmp_path):
+    value, schema = _documents()
     reversed_value = {
         "capabilities": list(reversed(value["capabilities"])),
         "effective_date": value["effective_date"],
@@ -48,6 +53,27 @@ def test_canonical_hash_ignores_json_key_and_capability_entry_order():
         "registry_id": value["registry_id"],
     }
     assert canonical_registry_json(value) == canonical_registry_json(reversed_value)
+    registry_path, schema_path = _write(tmp_path, reversed_value, schema)
+    assert load_registry(registry_path, schema_path).sha256 == load_registry().sha256
+
+
+def test_every_registry_fixture_resolves_and_proves_the_cited_capability():
+    fixtures = {
+        path.name.split("_", 1)[0]: path
+        for path in sorted(FIXTURES.glob("*.pine"))
+    }
+    registry = load_registry()
+    analyses = {
+        fixture_id: analyze_source(path.read_text(encoding="utf-8"))
+        for fixture_id, path in fixtures.items()
+    }
+    for entry in registry.capabilities:
+        for fixture_id in entry.fixtures:
+            assert fixture_id in fixtures, (entry.capability_id, fixture_id)
+            assert entry.capability_id in analyses[fixture_id].matched_capabilities, (
+                entry.capability_id,
+                fixture_id,
+            )
 
 
 @pytest.mark.parametrize(

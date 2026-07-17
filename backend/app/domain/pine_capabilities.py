@@ -15,7 +15,7 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "pine_capabilities" / "registry.v1.json"
 SCHEMA_PATH = ROOT / "pine_capabilities" / "registry.schema.json"
-FIXTURE_ID_PATTERN = re.compile(r"^F(?:0[1-9]|[1-5][0-9]|6[0-6])$")
+FIXTURE_ID_PATTERN = re.compile(r"^F(?:0[1-9]|[1-5][0-9]|6[0-7])$")
 
 
 class CapabilityLevel(StrEnum):

@@ -4,6 +4,8 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain.trading_constants import DEFAULT_EXCHANGE_SEGMENT
+
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -13,7 +15,6 @@ SUPPORT_PINE_MULTI_LEG_PAYLOAD = True
 DEFAULT_STRATEGY_CODE = "TRADINGVIEW_NIFTY_V1"
 DEFAULT_PRODUCT_TYPE = "INTRADAY"
 DEFAULT_ORDER_TYPE = "MARKET"
-DEFAULT_EXCHANGE_SEGMENT = "NSE_FNO"
 DEFAULT_INSTRUMENT_TYPE = "OPTIDX"
 QTY_MODE = "ABSOLUTE"
 DISABLED_OPTION_SL_PERCENT = 99.9

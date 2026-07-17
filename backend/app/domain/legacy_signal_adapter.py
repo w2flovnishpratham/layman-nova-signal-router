@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from app.config import DEFAULT_EXCHANGE_SEGMENT
 from app.domain.canonical_signal import (
     CanonicalContractVersion,
     CanonicalEventType,
@@ -12,6 +11,7 @@ from app.domain.canonical_signal import (
     CanonicalSignalEvent,
     DesiredPositionState,
 )
+from app.domain.trading_constants import DEFAULT_EXCHANGE_SEGMENT
 from app.schemas.signal import NormalizedSignal
 
 

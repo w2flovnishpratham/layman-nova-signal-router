@@ -1,0 +1,3 @@
+//@version=6
+strategy("F15")
+strategy.cancel_all()

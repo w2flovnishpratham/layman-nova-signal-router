@@ -188,16 +188,31 @@ def _unbalanced(code: str) -> bool:
     return bool(stack)
 
 
-def _detect(source: str) -> tuple[set[str], bool]:
+def _named_argument(call: str, name: str) -> str | None:
+    for argument in _first_arguments(call):
+        match = re.fullmatch(rf"{re.escape(name)}\s*=\s*(.+)", argument, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def _is_numeric_literal(value: str | None) -> bool:
+    return bool(value and re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?", value, re.I))
+
+
+def _detect(source: str) -> tuple[set[str], bool, bool]:
     comments_masked = _mask(source, strings=False)
     code = _mask(source, strings=True)
     matched: set[str] = set()
+    partial = False
     indeterminate = False
 
     if "NOVA_WORKFLOW_MARKER: PROTECTED_SOURCE_UNAVAILABLE" in source:
         matched.add("PROTECTED_OR_UNAVAILABLE_SOURCE")
+        indeterminate = True
     if _unbalanced(code) or not _DECLARATION.search(code):
         matched.add("MALFORMED_SOURCE")
+        indeterminate = True
     if _HOSTILE_INSTRUCTION.search(source):
         matched.add("PROMPT_INJECTION_LIKE_CONTENT")
 
@@ -234,6 +249,11 @@ def _detect(source: str) -> tuple[set[str], bool]:
             matched.add("PENDING_STOP_ENTRY")
         elif call in entry_calls:
             matched.add("MARKET_DIRECTIONAL_ENTRY")
+        if any(
+            value is not None and not _is_numeric_literal(value)
+            for value in (_named_argument(call, "limit"), _named_argument(call, "stop"))
+        ):
+            partial = True
         if re.search(r"\bqty\s*=", call):
             matched.add("PINE_CONTROLLED_ENTRY_QUANTITY")
         args = _first_arguments(call)
@@ -269,8 +289,20 @@ def _detect(source: str) -> tuple[set[str], bool]:
         matched.add("BACKEND_MANAGED_BRACKET")
     if any(re.search(r"\b(?:qty|qty_percent)\s*=", call) for call in exit_calls):
         matched.add("PARTIAL_EXIT")
+    if any(
+        value is not None and not _is_numeric_literal(value)
+        for call in exit_calls
+        for value in (_named_argument(call, "qty"), _named_argument(call, "qty_percent"))
+    ):
+        partial = True
     if re.search(r"\bstrategy\.(?:position_avg_price|opentrades|closedtrades)\b", code):
         matched.add("FILL_DEPENDENT_STRATEGY_STATE")
+    trade_state_calls = re.findall(
+        r"\bstrategy\.(?:opentrades|closedtrades)\.[A-Za-z_]\w*\s*\(([^()]*)\)",
+        code,
+    )
+    if any(arguments.strip() and not _is_numeric_literal(arguments.strip()) for arguments in trade_state_calls):
+        partial = True
 
     pyramiding = re.search(r"\bpyramiding\s*=\s*(\d+)\b", declaration)
     if pyramiding:
@@ -293,13 +325,13 @@ def _detect(source: str) -> tuple[set[str], bool]:
                 literal_symbols.add(args[0][1:-1])
             elif args[0] != "syminfo.tickerid":
                 matched.add("MULTI_SYMBOL_OR_DYNAMIC_REQUEST")
-                indeterminate = True
+                partial = True
         if len(args) > 1 and not (
             re.fullmatch(r"[\"'][^\"']+[\"']", args[1])
             or args[1] == "timeframe.period"
         ):
             matched.add("MULTI_SYMBOL_OR_DYNAMIC_REQUEST")
-            indeterminate = True
+            partial = True
         if "barmerge.lookahead_on" in call:
             if re.search(r"\[[1-9]\d*\]", call):
                 matched.add("CONFIRMED_HTF_OFFSET_PATTERN")
@@ -325,6 +357,12 @@ def _detect(source: str) -> tuple[set[str], bool]:
     ]
     if any(value.lstrip().startswith("{") and value.rstrip().endswith("}") for value in string_literals):
         matched.add("CUSTOM_ALERT_JSON")
+    elif re.search(r"\b(?:alert|alertcondition)\s*\(", code) and any(
+        value.lstrip().startswith("{") or value.rstrip().endswith("}")
+        for value in string_literals
+    ):
+        matched.add("CUSTOM_ALERT_JSON")
+        partial = True
     if any(
         "{" in value
         and any(re.search(rf"[\"']?{re.escape(key)}[\"']?\s*:", value, re.I) for key in _AUTHORITY_KEYS)
@@ -337,7 +375,7 @@ def _detect(source: str) -> tuple[set[str], bool]:
         api = token.split("(", 1)[0].strip()
         if not _calls(comments_masked, api, locator=code):
             indeterminate = True
-    return matched, indeterminate
+    return matched, partial, indeterminate
 
 
 def analyze_source(
@@ -365,13 +403,24 @@ def analyze_source(
             confidence=AnalysisConfidence.ANALYSIS_INDETERMINATE,
         )
 
-    matched_ids, indeterminate = _detect(source)
+    matched_ids, partial, indeterminate = _detect(source)
     entries_by_id = registry.by_id()
     entries = tuple(entries_by_id[capability_id] for capability_id in sorted(matched_ids) if capability_id in entries_by_id)
     effective = most_restrictive(entries) or CapabilityLevel.L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE
+    # Severity and evidence completeness are independent. Partial evidence can
+    # never yield L0/L1, and indeterminate analysis always fails closed at L4.
+    if indeterminate:
+        effective = CapabilityLevel.L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE
+    elif partial and effective in {
+        CapabilityLevel.L0_DIRECTLY_SUPPORTED,
+        CapabilityLevel.L1_NORMALIZED_WITHOUT_MATERIAL_CHANGE,
+    }:
+        effective = CapabilityLevel.L2_SUPPORTED_WITH_DISCLOSED_CHANGE
     confidence = (
         AnalysisConfidence.ANALYSIS_INDETERMINATE
         if indeterminate or not entries
+        else AnalysisConfidence.PARTIAL_MATCH
+        if partial
         else AnalysisConfidence.HIGH_CONFIDENCE_MATCH
     )
     return PineSemanticAnalysisResult(

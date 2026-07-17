@@ -75,7 +75,7 @@
         "user_facing_message": {"type": "string", "minLength": 1},
         "fixtures": {
           "type": "array",
-          "items": {"type": "string", "pattern": "^F(?:0[1-9]|[1-5][0-9]|6[0-6])$"},
+          "items": {"type": "string", "pattern": "^F(?:0[1-9]|[1-5][0-9]|6[0-7])$"},
           "uniqueItems": true
         },
         "effective_version": {"type": "string", "pattern": "^v[0-9]+$"},

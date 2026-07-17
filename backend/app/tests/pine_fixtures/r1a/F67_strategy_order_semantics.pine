@@ -1,0 +1,3 @@
+//@version=6
+strategy("F67")
+strategy.order("L", strategy.long)
