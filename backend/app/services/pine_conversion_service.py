@@ -7,7 +7,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from sqlalchemy import func, select
 
@@ -21,6 +21,18 @@ PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts"
 PROMPT_PATH = PROMPT_DIR / f"pine_conversion_{settings.PINE_CONVERSION_PROMPT_VERSION}.txt"
 TRANSPORT_VERSION = "pine_transport_v1"
 TRANSPORT_PATH = PROMPT_DIR / f"{TRANSPORT_VERSION}.txt"
+PROMPT_V3_SHA256 = "7ccf88726d47732a5326d586a78b2639d1f23ec4043aca82d4cf7d4e6f4e29f7"
+TRANSPORT_V1_SHA256 = "b72f2efcf839e693c83773e40c2324009065ded7a2ddfcbdb31a1f110efdc611"
+PACKAGE_PLACEHOLDERS = {"{{TRANSPORT}}", "{{OPTIONS}}", "{{SOURCE}}"}
+TRANSPORT_PLACEHOLDERS = {"{{STRATEGY_CODE}}", "{{STRATEGY_VERSION}}"}
+RESERVED_DELIMITERS = (
+    "BEGIN_FROZEN_NOVA_TRANSPORT", "END_FROZEN_NOVA_TRANSPORT",
+    "BEGIN_UNTRUSTED_CONVERSION_OPTIONS", "END_UNTRUSTED_CONVERSION_OPTIONS",
+    "BEGIN_UNTRUSTED_PINE_SOURCE", "END_UNTRUSTED_PINE_SOURCE",
+)
+SUPPORTED_PACKAGE_OPTIONS = {"requested_setup_type", "intended_symbol", "intended_timeframe"}
+PLACEHOLDER_PATTERN = re.compile(r"{{[A-Z][A-Z0-9_]*}}")
+PACKAGE_ASSEMBLY_ERROR = "The NOVA conversion package could not be generated safely. Please retry or contact NOVA support."
 ACTIVE = {"queued", "processing"}
 TERMINAL = {"succeeded", "validation_failed", "provider_failed", "rejected_secret_detected", "canceled", "rejected", "accepted"}
 SECRET_PATTERNS = (
@@ -60,6 +72,78 @@ def prompt_path(version: str) -> Path:
     if not re.fullmatch(r"v\d+", version):
         raise ConversionError("Configured Pine prompt version is invalid.", 500, "PROMPT_VERSION_INVALID")
     return PROMPT_DIR / f"pine_conversion_{version}.txt"
+
+
+def _assembly_failed() -> ConversionError:
+    return ConversionError(PACKAGE_ASSEMBLY_ERROR, 500, "PINE_PACKAGE_ASSEMBLY_FAILED")
+
+
+def _read_canonical(path: Path, expected_sha256: str) -> str:
+    try:
+        content = path.read_bytes()
+        if hashlib.sha256(content).hexdigest() != expected_sha256:
+            raise _assembly_failed()
+        return content.decode("utf-8")
+    except ConversionError:
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise _assembly_failed() from exc
+
+
+def _serialize_package_options(options: Mapping[str, Any] | None) -> str:
+    values = dict(options or {})
+    if values.keys() - SUPPORTED_PACKAGE_OPTIONS or any(not isinstance(value, str) for value in values.values()):
+        raise _assembly_failed()
+    return json.dumps(values, sort_keys=True, separators=(",", ":"))
+
+
+def _section(package: str, begin: str, end: str) -> str:
+    if package.count(begin) != 1 or package.count(end) != 1:
+        raise _assembly_failed()
+    start = package.index(begin) + len(begin)
+    finish = package.index(end, start)
+    if package[start:start + 1] != "\n" or package[finish - 1:finish] != "\n":
+        raise _assembly_failed()
+    return package[start + 1:finish - 1]
+
+
+def _validate_v3_package(package: str, prompt_template: str, transport: str, source: str, options_json: str) -> None:
+    if "Prompt version: v3" not in package or "Prompt status: QUALIFICATION" not in package:
+        raise _assembly_failed()
+    transport_block = _section(package, "BEGIN_FROZEN_NOVA_TRANSPORT", "END_FROZEN_NOVA_TRANSPORT")
+    options_block = _section(package, "BEGIN_UNTRUSTED_CONVERSION_OPTIONS", "END_UNTRUSTED_CONVERSION_OPTIONS")
+    source_block = _section(package, "BEGIN_UNTRUSTED_PINE_SOURCE", "END_UNTRUSTED_PINE_SOURCE")
+    if not transport_block or not options_block or not source_block:
+        raise _assembly_failed()
+    if transport_block != transport or hashlib.sha256(transport_block.encode("utf-8")).hexdigest() != TRANSPORT_V1_SHA256:
+        raise _assembly_failed()
+    if options_block != options_json or source_block != source:
+        raise _assembly_failed()
+    if package.count(transport) != 1 or package.count(source) != 1:
+        raise _assembly_failed()
+    if any(token in package for token in PACKAGE_PLACEHOLDERS):
+        raise _assembly_failed()
+    if set(PLACEHOLDER_PATTERN.findall(package)) != TRANSPORT_PLACEHOLDERS:
+        raise _assembly_failed()
+    if hashlib.sha256(prompt_template.encode("utf-8")).hexdigest() != PROMPT_V3_SHA256:
+        raise _assembly_failed()
+
+
+def _assemble_v3_prompt(prompt_template: str, transport: str, source: str, options: Mapping[str, Any] | None = None) -> tuple[str, str]:
+    if not source or any(delimiter in source for delimiter in RESERVED_DELIMITERS) or PLACEHOLDER_PATTERN.search(source):
+        raise _assembly_failed()
+    prompt_placeholders = set(PLACEHOLDER_PATTERN.findall(prompt_template))
+    if not PACKAGE_PLACEHOLDERS <= prompt_placeholders or prompt_placeholders - PACKAGE_PLACEHOLDERS - TRANSPORT_PLACEHOLDERS:
+        raise _assembly_failed()
+    if set(PLACEHOLDER_PATTERN.findall(transport)) != TRANSPORT_PLACEHOLDERS:
+        raise _assembly_failed()
+    options_json = _serialize_package_options(options)
+    prompt = prompt_template
+    for placeholder, value in (("{{TRANSPORT}}", transport), ("{{OPTIONS}}", options_json), ("{{SOURCE}}", source)):
+        if prompt.count(placeholder) != 1:
+            raise _assembly_failed()
+        prompt = prompt.replace(placeholder, value, 1)
+    return prompt, options_json
 
 
 def contains_secret(source: str) -> bool:
@@ -116,9 +200,9 @@ def manual_package(user_id: uuid.UUID, strategy_id, version_id) -> dict[str, Any
         raise ConversionError("Manual conversion packages are disabled.", 404, "FEATURE_DISABLED")
     source = pine.get_source(user_id, strategy_id, version_id)
     version = manual_prompt_version()
-    prompt_template = prompt_path(version).read_text(encoding="utf-8")
-    prompt = prompt_template.replace("{{OPTIONS}}", json.dumps({"workflow": "manual_external_conversion"}, sort_keys=True)).replace("{{SOURCE}}", source["source"])
     if version != "v3":
+        prompt_template = prompt_path(version).read_text(encoding="utf-8")
+        prompt = prompt_template.replace("{{OPTIONS}}", json.dumps({"workflow": "manual_external_conversion"}, sort_keys=True)).replace("{{SOURCE}}", source["source"])
         package = f"""# NOVA Pine Contract v1 conversion package
 
 Prompt version: {settings.PINE_CONVERSION_PROMPT_VERSION}
@@ -141,8 +225,9 @@ Privacy warning: copying this package to an external assistant shares your Pine 
 """
         return {"package": package, "filename": "nova-pine-conversion-package.txt", "package_sha256": _hash(package), "source_sha256": source["source_sha256"], "prompt_version": settings.PINE_CONVERSION_PROMPT_VERSION, "prompt_content_sha256": _hash(prompt_template)}
 
-    transport = TRANSPORT_PATH.read_text(encoding="utf-8")
-    prompt = prompt.replace("{{TRANSPORT}}", transport)
+    prompt_template = _read_canonical(prompt_path(version), PROMPT_V3_SHA256)
+    transport = _read_canonical(TRANSPORT_PATH, TRANSPORT_V1_SHA256)
+    prompt, options_json = _assemble_v3_prompt(prompt_template, transport, source["source"])
     instructions = """1. Copy this package into ChatGPT or Claude.
 2. Copy only ARTIFACT 1 back into NOVA as the converted Pine.
 3. Artifact 2 is a simple status.
@@ -163,6 +248,7 @@ Privacy warning: copying this package to an external assistant shares your Pine 
 ## Current master prompt
 {prompt}
 """
+    _validate_v3_package(package, prompt_template, transport, source["source"], options_json)
     return {
         "package": package, "filename": "nova-pine-conversion-package.txt",
         "package_sha256": _hash(package), "source_sha256": source["source_sha256"],

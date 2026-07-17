@@ -107,6 +107,18 @@ describe('ImportedPinePage', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Package copy completed')
   })
 
+  it('shows only the safe package-assembly error', async () => {
+    const user = userEvent.setup()
+    api.conversionPackage.mockRejectedValueOnce(new Error('The NOVA conversion package could not be generated safely. Please retry or contact NOVA support.'))
+    render(<ImportedPinePage />)
+    await user.click(await screen.findByRole('button', { name: /copy conversion package/i }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('could not be generated safely')
+    expect(alert).not.toHaveTextContent('{{TRANSPORT}}')
+    expect(alert).not.toHaveTextContent('{{OPTIONS}}')
+    expect(alert).not.toHaveTextContent('{{SOURCE}}')
+  })
+
   it('shows layman V3 package guidance and keeps the admin manifest separate', async () => {
     api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: false, provider: null, model: null, prompt_version: 'v3', prompt_status: 'QUALIFICATION', transport_version: 'pine_transport_v1', contract_version: 1, daily_limit: 10 })
     render(<ImportedPinePage />)
