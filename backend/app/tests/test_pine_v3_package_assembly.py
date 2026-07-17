@@ -59,9 +59,15 @@ def test_complete_v3_package_assembly(mu_db, monkeypatch):
     _, _, response = _v3_response(monkeypatch, "v3-complete@example.com")
     assert response.status_code == 200
     package = response.json()["package"]
-    assert response.json()["prompt_version"] == "v3"
+    assert response.json()["prompt_version"] == "v3.1"
     assert response.json()["prompt_status"] == "QUALIFICATION"
     assert package.index("BEGIN_FROZEN_NOVA_TRANSPORT") < package.index("BEGIN_UNTRUSTED_CONVERSION_OPTIONS") < package.index("BEGIN_UNTRUSTED_PINE_SOURCE")
+    transport = service.TRANSPORT_V2_PATH.read_text(encoding="utf-8")
+    assert response.json()["transport_version"] == "pine_transport_v2"
+    assert service._section(package, "BEGIN_FROZEN_NOVA_TRANSPORT", "END_FROZEN_NOVA_TRANSPORT") == transport
+    assert package.count(transport) == 1
+    assert "NOVA FROZEN TRANSPORT BEGIN: pine_transport_v1" not in package
+    assert '"frozen_transport_version": "pine_transport_v2"' in package
 
 
 def test_exact_transport_v1_is_injected_once():
@@ -115,15 +121,21 @@ def test_unknown_unresolved_placeholder_is_rejected():
 
 
 def test_missing_transport_file_fails_closed(mu_db, monkeypatch, tmp_path):
-    monkeypatch.setattr(service, "TRANSPORT_PATH", tmp_path / "missing-transport.txt")
+    monkeypatch.setitem(service.QUALIFICATION_PACKAGES, "v3.1", (
+        service.PROMPT_V31_SHA256, service.TRANSPORT_V2_VERSION,
+        tmp_path / "missing-transport.txt", service.TRANSPORT_V2_SHA256,
+    ))
     _, _, response = _v3_response(monkeypatch, "v3-missing-transport@example.com")
     _assert_safe_failure(response)
 
 
 def test_transport_hash_mismatch_fails_closed(mu_db, monkeypatch, tmp_path):
-    altered = tmp_path / "pine_transport_v1.txt"
+    altered = tmp_path / "pine_transport_v2.txt"
     altered.write_text("// altered transport", encoding="utf-8")
-    monkeypatch.setattr(service, "TRANSPORT_PATH", altered)
+    monkeypatch.setitem(service.QUALIFICATION_PACKAGES, "v3.1", (
+        service.PROMPT_V31_SHA256, service.TRANSPORT_V2_VERSION,
+        altered, service.TRANSPORT_V2_SHA256,
+    ))
     _, _, response = _v3_response(monkeypatch, "v3-transport-drift@example.com")
     _assert_safe_failure(response)
 

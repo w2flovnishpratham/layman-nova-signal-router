@@ -23,6 +23,14 @@ TRANSPORT_VERSION = "pine_transport_v1"
 TRANSPORT_PATH = PROMPT_DIR / f"{TRANSPORT_VERSION}.txt"
 PROMPT_V3_SHA256 = "7ccf88726d47732a5326d586a78b2639d1f23ec4043aca82d4cf7d4e6f4e29f7"
 TRANSPORT_V1_SHA256 = "b72f2efcf839e693c83773e40c2324009065ded7a2ddfcbdb31a1f110efdc611"
+PROMPT_V31_SHA256 = "4fc31dbd5a94429806227754a32959716e87f68cbb20b952c746d8a11e8785b7"
+TRANSPORT_V2_VERSION = "pine_transport_v2"
+TRANSPORT_V2_PATH = PROMPT_DIR / f"{TRANSPORT_V2_VERSION}.txt"
+TRANSPORT_V2_SHA256 = "18a3247c93c0c17e2bb70847a635c721bacf6e231d8d14c14db7871da56ef96f"
+QUALIFICATION_PACKAGES = {
+    "v3": (PROMPT_V3_SHA256, TRANSPORT_VERSION, TRANSPORT_PATH, TRANSPORT_V1_SHA256),
+    "v3.1": (PROMPT_V31_SHA256, TRANSPORT_V2_VERSION, TRANSPORT_V2_PATH, TRANSPORT_V2_SHA256),
+}
 PACKAGE_PLACEHOLDERS = {"{{TRANSPORT}}", "{{OPTIONS}}", "{{SOURCE}}"}
 TRANSPORT_PLACEHOLDERS = {"{{STRATEGY_CODE}}", "{{STRATEGY_VERSION}}"}
 RESERVED_DELIMITERS = (
@@ -69,7 +77,7 @@ def manual_prompt_version() -> str:
 
 
 def prompt_path(version: str) -> Path:
-    if not re.fullmatch(r"v\d+", version):
+    if not re.fullmatch(r"v\d+(?:\.\d+)?", version):
         raise ConversionError("Configured Pine prompt version is invalid.", 500, "PROMPT_VERSION_INVALID")
     return PROMPT_DIR / f"pine_conversion_{version}.txt"
 
@@ -107,15 +115,26 @@ def _section(package: str, begin: str, end: str) -> str:
     return package[start + 1:finish - 1]
 
 
-def _validate_v3_package(package: str, prompt_template: str, transport: str, source: str, options_json: str) -> None:
-    if "Prompt version: v3" not in package or "Prompt status: QUALIFICATION" not in package:
+def _validate_v3_package(
+    package: str,
+    prompt_template: str,
+    transport: str,
+    source: str,
+    options_json: str,
+    *,
+    version: str = "v3",
+    prompt_sha256: str = PROMPT_V3_SHA256,
+    transport_sha256: str = TRANSPORT_V1_SHA256,
+    selected_source_sha256: str | None = None,
+) -> None:
+    if f"Prompt version: {version}" not in package or "Prompt status: QUALIFICATION" not in package:
         raise _assembly_failed()
     transport_block = _section(package, "BEGIN_FROZEN_NOVA_TRANSPORT", "END_FROZEN_NOVA_TRANSPORT")
     options_block = _section(package, "BEGIN_UNTRUSTED_CONVERSION_OPTIONS", "END_UNTRUSTED_CONVERSION_OPTIONS")
     source_block = _section(package, "BEGIN_UNTRUSTED_PINE_SOURCE", "END_UNTRUSTED_PINE_SOURCE")
     if not transport_block or not options_block or not source_block:
         raise _assembly_failed()
-    if transport_block != transport or hashlib.sha256(transport_block.encode("utf-8")).hexdigest() != TRANSPORT_V1_SHA256:
+    if transport_block != transport or hashlib.sha256(transport_block.encode("utf-8")).hexdigest() != transport_sha256:
         raise _assembly_failed()
     if options_block != options_json or source_block != source:
         raise _assembly_failed()
@@ -125,8 +144,12 @@ def _validate_v3_package(package: str, prompt_template: str, transport: str, sou
         raise _assembly_failed()
     if set(PLACEHOLDER_PATTERN.findall(package)) != TRANSPORT_PLACEHOLDERS:
         raise _assembly_failed()
-    if hashlib.sha256(prompt_template.encode("utf-8")).hexdigest() != PROMPT_V3_SHA256:
+    if hashlib.sha256(prompt_template.encode("utf-8")).hexdigest() != prompt_sha256:
         raise _assembly_failed()
+    if selected_source_sha256:
+        header = package.partition("\n\nPrivacy warning:")[0]
+        if f"Selected source SHA-256: {selected_source_sha256}" not in header:
+            raise _assembly_failed()
 
 
 def _assemble_v3_prompt(prompt_template: str, transport: str, source: str, options: Mapping[str, Any] | None = None) -> tuple[str, str]:
@@ -182,6 +205,7 @@ def _public(row: models.PineConversionRequest) -> dict[str, Any]:
 
 def public_config() -> dict[str, Any]:
     version = manual_prompt_version()
+    qualification = QUALIFICATION_PACKAGES.get(version)
     return {
         "manual_package_enabled": settings.PINE_CONVERSION_MANUAL_PACKAGE_ENABLED,
         "ai_enabled": settings.PINE_CONVERSION_AI_ENABLED,
@@ -189,7 +213,7 @@ def public_config() -> dict[str, Any]:
         "model": settings.PINE_CONVERSION_MODEL if settings.PINE_CONVERSION_AI_ENABLED else None,
         "prompt_version": version,
         "prompt_status": "QUALIFICATION" if version == settings.PINE_CONVERSION_QUALIFICATION_PROMPT_VERSION else "DEPLOYED",
-        "transport_version": TRANSPORT_VERSION if version == "v3" else None,
+        "transport_version": qualification[1] if qualification else None,
         "contract_version": pine.CONTRACT_VERSION,
         "daily_limit": settings.PINE_CONVERSION_MAX_DAILY_REQUESTS_PER_USER,
     }
@@ -198,9 +222,10 @@ def public_config() -> dict[str, Any]:
 def manual_package(user_id: uuid.UUID, strategy_id, version_id) -> dict[str, Any]:
     if not settings.PINE_CONVERSION_MANUAL_PACKAGE_ENABLED:
         raise ConversionError("Manual conversion packages are disabled.", 404, "FEATURE_DISABLED")
-    source = pine.get_source(user_id, strategy_id, version_id)
+    source = pine.get_package_source(user_id, strategy_id, version_id)
     version = manual_prompt_version()
-    if version != "v3":
+    qualification = QUALIFICATION_PACKAGES.get(version)
+    if qualification is None:
         prompt_template = prompt_path(version).read_text(encoding="utf-8")
         prompt = prompt_template.replace("{{OPTIONS}}", json.dumps({"workflow": "manual_external_conversion"}, sort_keys=True)).replace("{{SOURCE}}", source["source"])
         package = f"""# NOVA Pine Contract v1 conversion package
@@ -225,8 +250,9 @@ Privacy warning: copying this package to an external assistant shares your Pine 
 """
         return {"package": package, "filename": "nova-pine-conversion-package.txt", "package_sha256": _hash(package), "source_sha256": source["source_sha256"], "prompt_version": settings.PINE_CONVERSION_PROMPT_VERSION, "prompt_content_sha256": _hash(prompt_template)}
 
-    prompt_template = _read_canonical(prompt_path(version), PROMPT_V3_SHA256)
-    transport = _read_canonical(TRANSPORT_PATH, TRANSPORT_V1_SHA256)
+    prompt_sha256, transport_version, transport_path, transport_sha256 = qualification
+    prompt_template = _read_canonical(prompt_path(version), prompt_sha256)
+    transport = _read_canonical(transport_path, transport_sha256)
     prompt, options_json = _assemble_v3_prompt(prompt_template, transport, source["source"])
     instructions = """1. Copy this package into ChatGPT or Claude.
 2. Copy only ARTIFACT 1 back into NOVA as the converted Pine.
@@ -235,10 +261,11 @@ Privacy warning: copying this package to an external assistant shares your Pine 
     package = f"""# NOVA Pine Contract v1 conversion package
 
 Prompt version: {version}
-Prompt status: {"QUALIFICATION" if version == "v3" else "DEPLOYED"}
-Prompt content SHA-256: {_hash(prompt_template)}
-Transport version: {TRANSPORT_VERSION}
-Transport content SHA-256: {_hash(transport)}
+Prompt status: QUALIFICATION
+Selected source SHA-256: {source["source_sha256"]}
+Prompt V3 SHA-256: {_hash(prompt_template)}
+Transport version: {transport_version}
+Transport SHA-256: {_hash(transport)}
 
 Privacy warning: copying this package to an external assistant shares your Pine source with that service. Review that service's privacy terms before pasting private strategy code.
 
@@ -248,12 +275,16 @@ Privacy warning: copying this package to an external assistant shares your Pine 
 ## Current master prompt
 {prompt}
 """
-    _validate_v3_package(package, prompt_template, transport, source["source"], options_json)
+    _validate_v3_package(
+        package, prompt_template, transport, source["source"], options_json,
+        version=version, prompt_sha256=prompt_sha256, transport_sha256=transport_sha256,
+        selected_source_sha256=source["source_sha256"],
+    )
     return {
         "package": package, "filename": "nova-pine-conversion-package.txt",
         "package_sha256": _hash(package), "source_sha256": source["source_sha256"],
-        "prompt_version": version, "prompt_status": "QUALIFICATION" if version == "v3" else "DEPLOYED",
-        "prompt_content_sha256": _hash(prompt_template), "transport_version": TRANSPORT_VERSION,
+        "prompt_version": version, "prompt_status": "QUALIFICATION",
+        "prompt_content_sha256": _hash(prompt_template), "transport_version": transport_version,
         "transport_content_sha256": _hash(transport),
     }
 

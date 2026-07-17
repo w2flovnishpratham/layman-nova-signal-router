@@ -16,8 +16,11 @@ from app.tests.test_pine_conversion import _client, _create
 ROOT = Path(__file__).resolve().parents[3]
 PROMPT_V2 = ROOT / "backend/app/prompts/pine_conversion_v2.txt"
 PROMPT_V3 = ROOT / "backend/app/prompts/pine_conversion_v3.txt"
-TRANSPORT = ROOT / "backend/app/prompts/pine_transport_v1.txt"
+PROMPT_V31 = ROOT / "backend/app/prompts/pine_conversion_v3.1.txt"
+TRANSPORT_V1 = ROOT / "backend/app/prompts/pine_transport_v1.txt"
+TRANSPORT = ROOT / "backend/app/prompts/pine_transport_v2.txt"
 RECORD = ROOT / "docs/pine/qualification-trials/nova_pine_conversion_v3_qualification.json"
+RECORD_V31 = ROOT / "docs/pine/qualification-trials/nova_pine_conversion_v31_qualification.json"
 V2_SHA256 = "9138271759650bd48f2d579fd9291d81a0660d7ca94d8ad7df2ee4a2b97d54cf"
 
 
@@ -52,18 +55,18 @@ def manifest(**overrides):
         "unsupported_constructs": [],
         "admin_review_points": [],
         "blocked_reasons": [],
-        "frozen_transport_version": "pine_transport_v1",
+        "frozen_transport_version": "pine_transport_v2",
     }
     value.update(overrides)
     return value
 
 
-def test_v2_immutable_and_v3_transport_are_registered_separately(mu_db):
-    record = json.loads(RECORD.read_text(encoding="utf-8"))
+def test_v2_v3_and_v31_are_registered_separately(mu_db):
+    record = json.loads(RECORD_V31.read_text(encoding="utf-8"))
     assert sha256(PROMPT_V2) == V2_SHA256
-    assert record["prompt_version_id"] == "v3"
-    assert record["prompt_sha256"] == sha256(PROMPT_V3)
-    assert record["transport_version_id"] == "pine_transport_v1"
+    assert record["prompt_version_id"] == "v3.1"
+    assert record["prompt_sha256"] == sha256(PROMPT_V31)
+    assert record["transport_version_id"] == "pine_transport_v2"
     assert record["transport_sha256"] == sha256(TRANSPORT)
     assert record["status"] == "QUALIFICATION"
     assert settings.PINE_CONVERSION_PROMPT_VERSION == "v2"
@@ -71,9 +74,11 @@ def test_v2_immutable_and_v3_transport_are_registered_separately(mu_db):
     with session_scope() as db:
         v2 = tradingview_setup_service.ensure_prompt_version(db, "v2")
         v3 = tradingview_setup_service.ensure_prompt_version(db, "v3")
+        v31 = tradingview_setup_service.ensure_prompt_version(db, "v3.1")
         assert v2.id == "v2" and v2.content_sha256 == V2_SHA256
         assert v3.id == "v3" and v3.content_sha256 == sha256(PROMPT_V3)
-        assert v2.status == v3.status == "QUALIFICATION"
+        assert v31.id == "v3.1" and v31.content_sha256 == sha256(PROMPT_V31)
+        assert v2.status == v3.status == v31.status == "QUALIFICATION"
 
 
 def test_v3_manual_package_is_owner_scoped_layman_safe_and_makes_no_ai_request(mu_db, monkeypatch):
@@ -85,8 +90,8 @@ def test_v3_manual_package_is_owner_scoped_layman_safe_and_makes_no_ai_request(m
     response = client.post(path)
     assert response.status_code == 200 and other.post(path).status_code == 404
     body, package = response.json(), response.json()["package"]
-    assert body["prompt_version"] == "v3" and body["prompt_status"] == "QUALIFICATION"
-    assert body["transport_version"] == "pine_transport_v1"
+    assert body["prompt_version"] == "v3.1" and body["prompt_status"] == "QUALIFICATION"
+    assert body["transport_version"] == "pine_transport_v2"
     assert body["transport_content_sha256"] == sha256(TRANSPORT)
     for instruction in (
         "Copy this package into ChatGPT or Claude",
@@ -100,7 +105,7 @@ def test_v3_manual_package_is_owner_scoped_layman_safe_and_makes_no_ai_request(m
 
 
 def test_prompt_contract_is_layman_safe_deterministic_and_injection_resistant():
-    prompt = PROMPT_V3.read_text(encoding="utf-8")
+    prompt = PROMPT_V31.read_text(encoding="utf-8")
     for required in (
         "ARTIFACT_1_FINAL_NOVA_PINE", "ARTIFACT_2_USER_RESULT", "ARTIFACT_3_NOVA_ADMIN_MANIFEST",
         "bool novaBuyCeSignal", "bool novaBuyPeSignal", "bool novaExitSignal",
@@ -117,15 +122,16 @@ def test_prompt_contract_is_layman_safe_deterministic_and_injection_resistant():
 
 def test_frozen_transport_uses_golden_bar_close_identity_placeholder_guard_and_one_time_hold():
     text = TRANSPORT.read_text(encoding="utf-8")
+    assert sha256(TRANSPORT_V1) == "b72f2efcf839e693c83773e40c2324009065ded7a2ddfcbdb31a1f110efdc611"
     for required in (
-        "NOVA FROZEN TRANSPORT BEGIN: pine_transport_v1",
+        "NOVA FROZEN TRANSPORT BEGIN: pine_transport_v2",
         'input.string(novaCredentialPlaceholder, "NOVA private credential"',
         'novaCredentialPlaceholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"',
         'novaStrategyCode + ":" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action',
         'str.format_time(time_close, "yyyy-MM-dd\'T\'HH:mm:ss\'Z\'", "UTC")',
         "barstate.isrealtime and barstate.isconfirmed and novaCredentialReady",
         'input.bool(false, "Send one HOLD connectivity test"',
-        "novaSendHoldTest and not novaHoldSent",
+        "if novaAlertReady", "if novaSendHoldTest", "if not novaHoldSent",
         'novaWebhookPayload("HOLD")', 'alert.freq_once_per_bar_close',
     ):
         assert required in text
@@ -169,7 +175,7 @@ plot(basis)"""
         assert result["status"] == "PASSED_WITH_WARNINGS"
         assert {item["code"] for item in result["findings"]} == {"UNDERLYING_GENERIC"}
         assert result["emitted_actions"] == ["BUY_CE", "BUY_PE", "EXIT", "HOLD"]
-        assert source.count("NOVA FROZEN TRANSPORT BEGIN: pine_transport_v1") == 1
+        assert source.count("NOVA FROZEN TRANSPORT BEGIN: pine_transport_v2") == 1
         assert "bool novaExitSignal = false" in source
     assert "ta.ema" in legend_logic and "ta.macd" in legend_logic and "ta.dmi" in legend_logic
     assert "ta.sma" in bollinger_logic and "ta.stdev" in bollinger_logic and "ta.rsi" in bollinger_logic

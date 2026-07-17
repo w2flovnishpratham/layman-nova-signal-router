@@ -20,6 +20,7 @@ EXECUTION_KIND = "nova_runtime"
 PAYLOAD_SPEC_VERSION = "nova.pine.v1"
 CONTRACT_VERSION = pine_validation.CONTRACT_VERSION
 REVIEW_STATUSES = {"submitted", "under_review", "changes_requested", "approved", "rejected"}
+PACKAGE_SOURCE_ERROR = "The selected Pine source could not be verified. Create a new immutable version and retry."
 
 
 class PineWorkflowError(ValueError):
@@ -298,6 +299,25 @@ def get_source(user_id: uuid.UUID, strategy_id, version_id):
             "filename": artifact.original_filename or "strategy.pine",
             "source": artifact.content,
             "source_sha256": artifact.content_sha256,
+            "approved": version.status == "approved",
+        }
+
+
+def get_package_source(user_id: uuid.UUID, strategy_id, version_id):
+    """Return only a verified, owner-scoped immutable version artifact."""
+    with session_scope() as db:
+        strategy, version = _owned_version(db, user_id, strategy_id, version_id)
+        artifact = _artifact(db, version.id)
+        source = artifact.content
+        digest = _source_hash(source)
+        if not source.strip() or digest != artifact.content_sha256 or digest != version.source_sha256:
+            raise PineWorkflowError(PACKAGE_SOURCE_ERROR, 409, "PINE_PACKAGE_SOURCE_INVALID")
+        return {
+            "strategy_name": strategy.display_name,
+            "version": version.version,
+            "filename": artifact.original_filename or "strategy.pine",
+            "source": source,
+            "source_sha256": digest,
             "approved": version.status == "approved",
         }
 

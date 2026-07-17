@@ -20,6 +20,10 @@ FROZEN_TRANSPORT_VERSION = "pine_transport_v1"
 FROZEN_TRANSPORT_MARKER = f"NOVA FROZEN TRANSPORT BEGIN: {FROZEN_TRANSPORT_VERSION}"
 FROZEN_TRANSPORT_END_MARKER = f"NOVA FROZEN TRANSPORT END: {FROZEN_TRANSPORT_VERSION}"
 FROZEN_TRANSPORT_PATH = Path(__file__).resolve().parents[1] / "prompts/pine_transport_v1.txt"
+FROZEN_TRANSPORTS = {
+    FROZEN_TRANSPORT_VERSION: FROZEN_TRANSPORT_PATH,
+    "pine_transport_v2": Path(__file__).resolve().parents[1] / "prompts/pine_transport_v2.txt",
+}
 MANIFEST_SCHEMA = "nova.pine-conversion-manifest.v1"
 MANIFEST_KEYS = {
     "schema", "status", "strategy_code", "source_pine_version", "target_pine_version",
@@ -99,7 +103,7 @@ def validate_admin_manifest(value: str | dict[str, Any]) -> dict[str, Any]:
         errors.append("INVALID_SIGNAL_TIMING")
     if manifest.get("timeframe_policy") not in {"CHART_TIMEFRAME", "SOURCE_FIXED_TIMEFRAME", "BLOCKED"}:
         errors.append("INVALID_TIMEFRAME_POLICY")
-    if manifest.get("frozen_transport_version") != FROZEN_TRANSPORT_VERSION:
+    if manifest.get("frozen_transport_version") not in FROZEN_TRANSPORTS:
         errors.append("INVALID_TRANSPORT_VERSION")
     for key in ("explicit_exit_present", "hold_test_included"):
         if not isinstance(manifest.get(key), bool):
@@ -118,8 +122,10 @@ def validate_admin_manifest(value: str | dict[str, Any]) -> dict[str, Any]:
     return {"valid": not errors, "errors": errors, "manifest": manifest if not errors else None}
 
 
-def _frozen_transport_matches(source: str) -> bool:
-    start, end = source.find(FROZEN_TRANSPORT_MARKER), source.find(FROZEN_TRANSPORT_END_MARKER)
+def _frozen_transport_matches(source: str, version: str) -> bool:
+    start_marker = f"NOVA FROZEN TRANSPORT BEGIN: {version}"
+    end_marker = f"NOVA FROZEN TRANSPORT END: {version}"
+    start, end = source.find(start_marker), source.find(end_marker)
     if start < 0 or end < start:
         return False
     start = source.rfind("//", 0, start)
@@ -127,7 +133,7 @@ def _frozen_transport_matches(source: str) -> bool:
     block = source[start:end if end >= 0 else len(source)].strip()
     block = re.sub(r'(?m)^const string novaStrategyCode = "[A-Z0-9_]+"$', 'const string novaStrategyCode = "{{STRATEGY_CODE}}"', block)
     block = re.sub(r'(?m)^const string novaStrategyVersion = "[A-Z0-9_]+"$', 'const string novaStrategyVersion = "{{STRATEGY_VERSION}}"', block)
-    return block == FROZEN_TRANSPORT_PATH.read_text(encoding="utf-8").strip()
+    return block == FROZEN_TRANSPORTS[version].read_text(encoding="utf-8").strip()
 
 
 def _without_comments(source: str) -> str:
@@ -260,7 +266,9 @@ def validate_source(source: str) -> dict[str, Any]:
             add("CREDENTIAL_IN_SOURCE", "ERROR", "Credential-like value detected", "Private source must not contain credentials, tokens, database URLs or authentication headers.", "Remove the secret and rotate it if it may have been exposed.", offset=match.start(), secret=True)
 
     code = _without_comments(source)
-    has_frozen_transport = FROZEN_TRANSPORT_MARKER in source
+    frozen_versions = [version for version in FROZEN_TRANSPORTS if f"NOVA FROZEN TRANSPORT BEGIN: {version}" in source]
+    frozen_transport_version = frozen_versions[0] if len(frozen_versions) == 1 else None
+    has_frozen_transport = frozen_transport_version is not None
     version_match = re.search(r"(?m)^\s*//@version\s*=\s*(\d+)\s*$", source)
     pine_version = int(version_match.group(1)) if version_match else None
     if pine_version is None:
@@ -302,27 +310,27 @@ def validate_source(source: str) -> dict[str, Any]:
         add("EXIT_ACTION_MISSING", "ERROR", "EXIT action is missing", "Entry-capable scripts must expose an EXIT path.", "Emit EXIT for the current NOVA position.")
     if "HOLD" not in emitted:
         if has_frozen_transport:
-            add("HOLD_REQUIRED", "ERROR", "HOLD facility is missing", "Prompt v3 candidates require the canonical one-time HOLD facility.", "Restore the frozen pine_transport_v1 block without changes.")
+            add("HOLD_REQUIRED", "ERROR", "HOLD facility is missing", "Prompt v3 candidates require the canonical one-time HOLD facility.", f"Restore the frozen {frozen_transport_version} block without changes.")
         else:
             add("HOLD_OPTIONAL", "INFO", "HOLD is optional", "No audit-only HOLD action was found.", "No change is required unless you want explicit no-op alerts.")
 
     if has_frozen_transport:
-        if not _frozen_transport_matches(source):
-            add("TRANSPORT_HASH_MISMATCH", "ERROR", "Frozen transport was changed", "The complete pine_transport_v1 block does not match the registered template after constant substitution.", "Restore the exact frozen transport block.")
+        if not _frozen_transport_matches(source, frozen_transport_version):
+            add("TRANSPORT_HASH_MISMATCH", "ERROR", "Frozen transport was changed", f"The complete {frozen_transport_version} block does not match the registered template after constant substitution.", "Restore the exact frozen transport block.")
         required_transport = {
-            "TRANSPORT_END_MISSING": f"NOVA FROZEN TRANSPORT END: {FROZEN_TRANSPORT_VERSION}",
-            "TRANSPORT_VERSION_MISSING": f'novaTransportVersion = "{FROZEN_TRANSPORT_VERSION}"',
+            "TRANSPORT_END_MISSING": f"NOVA FROZEN TRANSPORT END: {frozen_transport_version}",
+            "TRANSPORT_VERSION_MISSING": f'novaTransportVersion = "{frozen_transport_version}"',
             "CREDENTIAL_INPUT_INVALID": 'input.string(novaCredentialPlaceholder, "NOVA private credential"',
             "CREDENTIAL_PLACEHOLDER_INVALID": 'novaCredentialPlaceholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"',
             "SIGNAL_ID_INVALID": 'novaStrategyCode + ":" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action',
             "SIGNAL_TIME_INVALID": 'str.format_time(time_close, "yyyy-MM-dd\'T\'HH:mm:ss\'Z\'", "UTC")',
             "BAR_CLOSE_GATE_INVALID": "barstate.isrealtime and barstate.isconfirmed and novaCredentialReady",
             "HOLD_INPUT_INVALID": 'input.bool(false, "Send one HOLD connectivity test"',
-            "HOLD_ONCE_INVALID": "novaSendHoldTest and not novaHoldSent",
+            "HOLD_ONCE_INVALID": "not novaHoldSent",
         }
         for finding_code, fragment in required_transport.items():
             if fragment not in source:
-                add(finding_code, "ERROR", "Frozen transport is incomplete", f"Required pine_transport_v1 element {finding_code} was not found.", "Restore the exact frozen transport block.")
+                add(finding_code, "ERROR", "Frozen transport is incomplete", f"Required {frozen_transport_version} element {finding_code} was not found.", "Restore the exact frozen transport block.")
         payload_fields = set(re.findall(r'"([a-z_]+)"\s*:', code))
         allowed_fields = {"credential", "action", "signal_id", "signal_time", "strategy_version", "timeframe", "reference_price", "comment"}
         if payload_fields - allowed_fields:

@@ -120,9 +120,9 @@ describe('ImportedPinePage', () => {
   })
 
   it('shows layman V3 package guidance and keeps the admin manifest separate', async () => {
-    api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: false, provider: null, model: null, prompt_version: 'v3', prompt_status: 'QUALIFICATION', transport_version: 'pine_transport_v1', contract_version: 1, daily_limit: 10 })
+    api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: false, provider: null, model: null, prompt_version: 'v3.1', prompt_status: 'QUALIFICATION', transport_version: 'pine_transport_v2', contract_version: 1, daily_limit: 10 })
     render(<ImportedPinePage />)
-    expect(await screen.findByText(/Prompt v3 · QUALIFICATION/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Prompt v3.1 · QUALIFICATION/i)).toBeInTheDocument()
     expect(screen.getByText(/Copy this package into ChatGPT or Claude/i)).toBeInTheDocument()
     expect(screen.getByText(/Copy only Artifact 1 back into NOVA/i)).toBeInTheDocument()
     expect(screen.getByText(/Artifact 2 is a simple status/i)).toBeInTheDocument()

@@ -34,6 +34,21 @@
       "source_boundary_valid": false,
       "manual_repair_applied": false,
       "external_rerun_status": "NOT_RUN"
+    },
+    {
+      "trial_id": "legend-claude-v3-wrong-selected-source",
+      "case_id": 6,
+      "provider": "Claude",
+      "model": "UNRECORDED",
+      "execution_timestamp": "UNRECORDED",
+      "raw_response_sha256": null,
+      "raw_response_evidence": "PRESERVED_OUTSIDE_REPOSITORY",
+      "result": "FAIL",
+      "primary_cause": "PACKAGE_SOURCE_MISMATCH",
+      "external_model_behavior": "SOURCE_FIDELITY_PASS",
+      "artifact_format": "PASS",
+      "transport_defect": "HOLD_NOT_ISOLATED",
+      "manual_repair": "NO"
     }
   ],
   "qualification_cases": [
