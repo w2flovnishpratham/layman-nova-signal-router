@@ -1,12 +1,17 @@
 """Controlled paper verification mode and persisted engine strategy selection.
 
-Revision ID: 0014_strategy_verification_and_selection
+Revision ID: 0014_verify_select
 Revises: 0013_manual_tradingview_flow
 
 Adds the fields that break the readiness deadlock (a personal strategy can run
 paper-only verification signals before it is generally activatable) and persist
 the engine picker's selected strategy instance. Branches from the Phase 4B
 lineage, not Phase 5A's parked hosted-runtime revision.
+
+The revision id is kept <= 32 chars so it fits the deployed
+``alembic_version.version_num VARCHAR(32)`` column (PostgreSQL enforces the
+length; SQLite does not, which is why an over-long id must be caught by the
+migration-metadata test, not only by a SQLite upgrade).
 """
 from alembic import op
 import sqlalchemy as sa
@@ -14,7 +19,7 @@ import sqlalchemy as sa
 from app.db import models
 
 
-revision = "0014_strategy_verification_and_selection"
+revision = "0014_verify_select"
 down_revision = "0013_manual_tradingview_flow"
 branch_labels = None
 depends_on = None

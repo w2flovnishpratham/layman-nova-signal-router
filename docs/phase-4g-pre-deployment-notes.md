@@ -11,7 +11,7 @@ provisioning, and a real engine strategy picker.
 | --- | --- |
 | Feature checkpoint commit | `3960bc3ac2cb6c6dbc0c78ae0926227c53d4b7d3` |
 | This branch | `phase-4g-pre-readiness-unification` |
-| Database migration head | `0014_strategy_verification_and_selection` (adds `strategy_instances.verification_mode` + timestamps and the `user_engine_configs` table) |
+| Database migration head | `0014_verify_select` (adds `strategy_instances.verification_mode` + timestamps and the `user_engine_configs` table; id kept ≤32 chars for `alembic_version.version_num`) |
 | Frontend (Vercel) source | Configured to build from `main` |
 | Backend (systemd pull+restart) source | Feature branch on the trading host |
 
