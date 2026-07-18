@@ -15,7 +15,10 @@ Boundaries:
   supersedes_analysis_id at the earlier one. No update API exists here.
 - Never persists or logs Pine source, feature vectors, credentials or raw
   exceptions. Failures surface as SemanticAnalysisPersistenceError with a
-  closed safe code only.
+  closed safe code only (PERSISTENCE_DISABLED, INVALID_SOURCE,
+  SOURCE_HASH_MISMATCH, ARTIFACT_OWNERSHIP_MISMATCH,
+  REGISTRY_PROVENANCE_INVALID, ANALYSIS_UNAVAILABLE, PAYLOAD_TOO_LARGE,
+  PERSISTENCE_UNAVAILABLE).
 - No AI, TradingView, broker or other network access.
 """
 from __future__ import annotations
@@ -113,9 +116,23 @@ def persist_semantic_analysis(
     if first_hash != source_artifact.content_sha256:
         raise SemanticAnalysisPersistenceError("SOURCE_HASH_MISMATCH")
     if owner_user_id is not None:
-        _verify_owner(session, source_artifact, owner_user_id)
+        # R1B-2A (review finding 1): the owner-chain query lives inside the
+        # closed translation envelope so a database failure here surfaces as
+        # PERSISTENCE_UNAVAILABLE, never as a raw driver exception.
+        try:
+            _verify_owner(session, source_artifact, owner_user_id)
+        except SemanticAnalysisPersistenceError:
+            raise
+        except SQLAlchemyError:
+            raise SemanticAnalysisPersistenceError("PERSISTENCE_UNAVAILABLE") from None
 
-    result = analyze_source(source_text)
+    # R1B-2A (review finding 2): the analyzer is designed to fail closed, but
+    # an unexpected raise must still become a closed code with no source,
+    # registry, stack or path content.
+    try:
+        result = analyze_source(source_text)
+    except Exception:
+        raise SemanticAnalysisPersistenceError("ANALYSIS_UNAVAILABLE") from None
 
     # Recompute after analysis: the exact bytes we hash must be the exact
     # bytes that were analyzed and the exact bytes the artifact pinned.

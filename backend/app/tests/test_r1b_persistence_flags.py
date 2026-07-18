@@ -68,11 +68,20 @@ def _runtime_sources() -> list[Path]:
     ]
 
 
-def test_declared_only_flags_have_zero_runtime_call_sites():
+def test_declared_only_flags_are_confined_to_their_writer_libraries():
+    # R1B-2A: each flag may appear only inside its own insert-only writer
+    # library (which has zero production call sites — proven separately by
+    # test_r1b2a_zero_call_sites.py).
+    flag_homes = {
+        "R1B_CANONICAL_DECISION_PERSISTENCE": "canonical_signal_decision_persistence.py",
+        "R1B_CANONICAL_OUTCOME_PERSISTENCE": "canonical_signal_outcome_persistence.py",
+        "R1B_SIGNAL_REJECTION_PERSISTENCE": "strategy_signal_rejection_persistence.py",
+    }
     for path in _runtime_sources():
         text = path.read_text(encoding="utf-8")
-        for flag in DECLARED_ONLY_FLAGS:
-            assert flag not in text, f"{flag} referenced by {path}"
+        for flag, home in flag_homes.items():
+            if flag in text:
+                assert path.name == home, f"{flag} referenced by {path}"
 
 
 def test_analysis_flag_is_confined_to_the_qualification_flow():

@@ -319,6 +319,85 @@ def test_writer_exposes_no_update_and_imports_no_network(db):
         assert not any(token in name.lower() for token in forbidden), name
 
 
+def test_owner_query_db_failure_is_translated_r1b2a(db, analysis_flag_on):
+    """R1B-2A envelope fix (review finding 1): a database failure during the
+    owner-chain query becomes the closed PERSISTENCE_UNAVAILABLE code."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.services import pine_semantic_analysis_persistence as svc
+
+    owner, artifact = _seed_artifact(db, VALID_SOURCE)
+
+    class _OwnerQueryDead:
+        def scalar(self, *_a, **_k):
+            raise OperationalError("connect to server at 10.0.0.1 failed", {}, Exception("down"))
+
+        def __getattr__(self, name):
+            return getattr(db, name)
+
+    with pytest.raises(svc.SemanticAnalysisPersistenceError) as excinfo:
+        svc.persist_semantic_analysis(_OwnerQueryDead(), artifact, VALID_SOURCE, owner_user_id=owner.id)
+    assert excinfo.value.code == "PERSISTENCE_UNAVAILABLE"
+    assert "10.0.0.1" not in str(excinfo.value)
+    assert excinfo.value.__cause__ is None
+    assert _analysis_count(db) == 0
+
+
+def test_analyzer_exception_is_translated_r1b2a(db, analysis_flag_on, monkeypatch):
+    """R1B-2A envelope fix (review finding 2): an unexpected analyzer raise
+    becomes the closed ANALYSIS_UNAVAILABLE code with no leaked content."""
+    from app.services import pine_semantic_analysis_persistence as svc
+
+    owner, artifact = _seed_artifact(db, VALID_SOURCE)
+
+    def _explode(source):
+        raise RuntimeError("analyzer blew up at C:\\secret\\path with nwk_leaked_token")
+
+    monkeypatch.setattr(svc, "analyze_source", _explode)
+    with pytest.raises(svc.SemanticAnalysisPersistenceError) as excinfo:
+        svc.persist_semantic_analysis(db, artifact, VALID_SOURCE, owner_user_id=owner.id)
+    assert excinfo.value.code == "ANALYSIS_UNAVAILABLE"
+    message = str(excinfo.value)
+    assert "nwk_leaked_token" not in message
+    assert "secret" not in message
+    assert excinfo.value.__cause__ is None
+    assert _analysis_count(db) == 0
+
+
+def test_owner_db_failure_yields_closed_503_at_api_r1b2a(mu_db, monkeypatch):  # noqa: F811
+    """End-to-end: the previously-leaking owner-query failure now surfaces as
+    the closed 503 SEMANTIC_PROVENANCE_UNAVAILABLE with nothing recorded."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.config import settings
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import pine_semantic_analysis_persistence as svc
+    from app.tests.test_personal_pine import _client, _create
+
+    user = make_user(f"env-{uuid.uuid4().hex[:8]}@example.com")
+    client = _client(user)
+    created = _create(client)
+    monkeypatch.setattr(settings, "R1B_PINE_ANALYSIS_PERSISTENCE", True, raising=False)
+
+    real_verify = svc._verify_owner
+
+    def _dead_verify(session, artifact, owner_user_id):
+        raise OperationalError("connect to server at 10.0.0.1 failed", {}, Exception("down"))
+
+    monkeypatch.setattr(svc, "_verify_owner", _dead_verify)
+    response = _validate(client, created)
+    monkeypatch.setattr(svc, "_verify_owner", real_verify)
+    assert response.status_code == 503
+    assert response.json()["reason"] == "SEMANTIC_PROVENANCE_UNAVAILABLE"
+    assert "10.0.0.1" not in response.text and "OperationalError" not in response.text
+    with session_scope() as db:
+        assert _analysis_count(db) == 0
+        assert db.scalar(select(func.count()).select_from(models.StrategyValidationReport)) == 0
+        version = db.get(models.StrategyVersion, uuid.UUID(created["version"]["id"]))
+        assert version.status == "draft"
+
+
 # ---------------------------------------------------------------------------
 # Qualification-flow integration (owner-scoped validate endpoint)
 # ---------------------------------------------------------------------------
