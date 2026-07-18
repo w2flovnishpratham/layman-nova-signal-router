@@ -28,14 +28,18 @@ def _called_names(path: Path) -> list[str]:
     return names
 
 
-def test_decision_writer_has_exactly_one_runtime_call_site():
-    matches = [
+def test_decision_writer_call_sites_are_exactly_the_two_evidence_helpers():
+    # R1B-2B3 added the trading helper as the second authorized caller; the
+    # exhaustive graph (guards included) is asserted by
+    # test_r1b2b3_runtime_call_sites.py.
+    trading_helper = SERVICES / "trading_canonical_decision_evidence.py"
+    matches = sorted(
         path
         for path in _runtime_sources()
         for name in _called_names(path)
         if name == "persist_canonical_signal_decision"
-    ]
-    assert matches == [HELPER]
+    )
+    assert matches == sorted([HELPER, trading_helper])
 
 
 def test_outcome_and_rejection_writers_remain_disconnected():

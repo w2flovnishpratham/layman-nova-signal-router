@@ -163,20 +163,31 @@ def test_duplicate_never_backfills_missing_decision(client, monkeypatch):  # noq
 
 
 @pytest.mark.parametrize("action", ["BUY_CE", "BUY_PE", "EXIT"])
-def test_trading_actions_never_persist_decisions(
+def test_trading_actions_persist_via_the_trading_helper_only(
     client, monkeypatch, action
 ):  # noqa: F811
+    # R1B-2B3 boundary update: trading actions now record intent through the
+    # separate trading helper (exhaustively tested in the r1b2b3 suites);
+    # the HOLD helper itself must never run for them.
     from app.config import settings
     from app.db import models
+    from app.services import hold_canonical_decision_evidence as hold_evidence
 
     monkeypatch.setattr(
         settings, "R1B_CANONICAL_DECISION_PERSISTENCE", True, raising=False
+    )
+    hold_calls: list[dict] = []
+    monkeypatch.setattr(
+        hold_evidence,
+        "persist_hold_decision_best_effort",
+        lambda **kwargs: hold_calls.append(kwargs),
     )
     user = make_user(f"trade-{action.lower()}-{uuid.uuid4().hex[:8]}@example.com")
     instance_id = _make_instance(user)
     response = _post(client, _issue_token(user, instance_id), _payload(action=action))
     assert response.status_code == 202
-    assert _count(models.CanonicalSignalDecision) == 0
+    assert hold_calls == []
+    assert _count(models.CanonicalSignalDecision) == 1
 
 
 def test_hold_remains_valid_setup_evidence_without_job(client, monkeypatch):  # noqa: F811

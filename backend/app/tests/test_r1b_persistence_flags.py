@@ -74,6 +74,7 @@ def test_evidence_flags_are_confined_to_authorized_libraries():
         "R1B_CANONICAL_DECISION_PERSISTENCE": {
             "canonical_signal_decision_persistence.py",
             "hold_canonical_decision_evidence.py",
+            "trading_canonical_decision_evidence.py",
         },
         "R1B_CANONICAL_OUTCOME_PERSISTENCE": {
             "canonical_signal_outcome_persistence.py"
@@ -126,10 +127,10 @@ def _evidence_counts() -> dict[str, int]:
 
 
 @pytest.mark.parametrize("flags_forced_true", [False, True])
-def test_webhook_flows_write_only_authorized_hold_decision(
+def test_webhook_flows_write_only_authorized_decisions(
     client, monkeypatch, flags_forced_true
 ):  # noqa: F811
-    """Forced flags connect only the fresh HOLD decision writer."""
+    """Forced flags connect only the fresh HOLD and trading decision writers."""
     from app.config import settings
 
     if flags_forced_true:
@@ -172,5 +173,8 @@ def test_webhook_flows_write_only_authorized_hold_decision(
     counts = _evidence_counts()
     expected = {name: 0 for name in counts}
     if flags_forced_true:
-        expected["CanonicalSignalDecision"] = 1
+        # R1B-2B3: fresh HOLD + fresh BUY_CE + paused BUY_CE (accepted at
+        # ingress; the pause block is worker-time) each record intent.
+        # Duplicate, conflicting, invalid and stale flows still write nothing.
+        expected["CanonicalSignalDecision"] = 3
     assert counts == expected, counts

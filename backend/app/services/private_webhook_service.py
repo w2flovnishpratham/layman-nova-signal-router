@@ -27,7 +27,11 @@ from app.config import DEFAULT_EXCHANGE_SEGMENT, settings
 from app.db import crud, models
 from app.db.engine import database_configured, session_scope
 from app.schemas.signal import NormalizedSignal
-from app.services import hold_canonical_decision_evidence, webhook_replay_store
+from app.services import (
+    hold_canonical_decision_evidence,
+    trading_canonical_decision_evidence,
+    webhook_replay_store,
+)
 from app.services.audit_logger import log_audit_event, log_error_event
 from app.domain.strategy_instance_state_machine import InstanceState
 
@@ -461,6 +465,28 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
                     pass
     else:
         result = _persist_execution_job(auth, payload, action, strategy_name, received_at)
+        # R1B-2B3: optional post-commit trading-intent evidence. Runs only
+        # after the signal/job transaction inside _persist_execution_job has
+        # committed and only for the fresh, non-duplicate path. Evidence can
+        # never alter the committed rows or this HTTP result.
+        if (
+            status == "fresh"
+            and action in trading_canonical_decision_evidence.TRADING_DECISION_ACTIONS
+            and not result.get("duplicate")
+        ):
+            try:
+                trading_canonical_decision_evidence.persist_trading_decision_best_effort(
+                    webhook_event_id=claim.get("webhook_event_id"),
+                    strategy_instance_id=auth["instance_id"],
+                    owner_user_id=auth["user_id"],
+                )
+            except Exception:
+                try:
+                    trading_canonical_decision_evidence.record_trading_decision_failure(
+                        "PERSISTENCE_UNAVAILABLE"
+                    )
+                except Exception:
+                    pass
     _audit_signal(auth, payload.signal_id, result["status"], action)
     return result
 
