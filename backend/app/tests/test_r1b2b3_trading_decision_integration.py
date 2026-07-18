@@ -73,7 +73,7 @@ def test_flag_false_is_a_true_no_op_before_session(monkeypatch):
     )
 
 
-def test_flag_is_evaluated_exactly_once(monkeypatch, mu_db):  # noqa: F811
+def test_false_helper_gate_is_evaluated_once_before_return(monkeypatch, mu_db):  # noqa: F811
     from app.services import trading_canonical_decision_evidence as evidence
 
     class _CountingSettings:

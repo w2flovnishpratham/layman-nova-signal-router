@@ -11,8 +11,9 @@ PostgreSQL is authoritative for commit ordering, evidence rollback and
 concurrency. Verifies, per action: flag-off zero evidence; fresh decision with
 exact mapping + committed fingerprint; duplicate/no-backfill; conflicting
 duplicate; concurrent identical ingest races; evidence unique race;
-worker-ahead states; evidence DB/commit failures after authoritative commit;
-authoritative failure inverse; owner/reference suppression; flag-once rule.
+real worker completion and worker/helper races; adversarial mutable summaries;
+evidence DB/commit failures after authoritative commit; authoritative failure
+inverse; owner-scoped reload suppression; and the dual fail-closed flag gate.
 """
 from __future__ import annotations
 
@@ -50,6 +51,7 @@ command.upgrade(config, "head")
 from app.services import private_webhook_service as service  # noqa: E402
 from app.services import trading_canonical_decision_evidence as evidence  # noqa: E402
 from app.services.private_webhook_service import PrivateWebhookPayload  # noqa: E402
+from app.workers import strategy_job_worker  # noqa: E402
 
 
 def now_iso() -> str:
@@ -233,27 +235,106 @@ for t in threads:
 assert len(decisions_for(ids_ev[1])) == 1
 print("evidence unique race: one immutable row OK")
 
-# --- worker-ahead states -----------------------------------------------------
-for signal_status, job_status in (("processing", "running"), ("completed", "completed"),
-                                  ("completed_with_errors", "failed")):
-    ids_w = seed(f"worker-{job_status}")
+# --- real worker-ahead mutation, per action ---------------------------------
+for action in ("BUY_CE", "BUY_PE", "EXIT"):
+    ids_w = seed(f"worker-{action.lower()}")
     settings.R1B_CANONICAL_DECISION_PERSISTENCE = False
-    service.ingest(auth_for(*ids_w), payload("BUY_PE", f"w-{job_status}"))
+    service.ingest(auth_for(*ids_w), payload(action, f"w-{action}"))
     with eng.session_scope() as db:
         name = f"instance:{ids_w[1]}"
         signal = db.scalar(select(models.StrategySignal).where(models.StrategySignal.strategy_name == name))
         job = db.scalar(select(models.StrategyExecutionJob).where(models.StrategyExecutionJob.strategy_name == name))
-        signal.status = signal_status
-        job.status = job_status
-        job.attempts = 1
         event_id = db.scalar(select(models.WebhookEvent.id).where(
             models.WebhookEvent.provider == f"instance-webhook:{ids_w[1]}"))
+        job_snapshot = {"id": job.id, "strategy_signal_id": signal.id}
+    strategy_job_worker._complete_job(
+        job_snapshot,
+        status="completed",
+        result={"status": "traded", "worker_proof": action},
+    )
+    with eng.session_scope() as db:
+        signal = db.scalar(select(models.StrategySignal).where(models.StrategySignal.strategy_name == name))
+        assert signal.status == "completed"
+        assert "action" not in signal.result_summary
     settings.R1B_CANONICAL_DECISION_PERSISTENCE = True
     evidence.persist_trading_decision_best_effort(
         webhook_event_id=event_id, strategy_instance_id=ids_w[1], owner_user_id=ids_w[0])
     rows = decisions_for(ids_w[1])
-    assert len(rows) == 1 and rows[0].wire_action == "BUY_PE"
-print("worker-ahead (running/completed/failed): decision still recorded OK")
+    assert len(rows) == 1 and rows[0].wire_action == action
+print("real worker-ahead BUY_CE/BUY_PE/EXIT: replaced summaries, exact decisions OK")
+
+# --- adversarial mutable summaries, per action ------------------------------
+for action, wrong in (("BUY_CE", "BUY_PE"), ("BUY_PE", "EXIT"), ("EXIT", "BUY_CE")):
+    for suffix, summary in (("empty", {}), ("wrong", {"action": wrong})):
+        ids_s = seed(f"summary-{action.lower()}-{suffix}")
+        settings.R1B_CANONICAL_DECISION_PERSISTENCE = False
+        service.ingest(auth_for(*ids_s), payload(action, f"s-{action}-{suffix}"))
+        with eng.session_scope() as db:
+            name = f"instance:{ids_s[1]}"
+            signal = db.scalar(select(models.StrategySignal).where(
+                models.StrategySignal.strategy_name == name))
+            signal.result_summary = summary
+            event_id = db.scalar(select(models.WebhookEvent.id).where(
+                models.WebhookEvent.provider == f"instance-webhook:{ids_s[1]}"))
+        settings.R1B_CANONICAL_DECISION_PERSISTENCE = True
+        evidence.persist_trading_decision_best_effort(
+            webhook_event_id=event_id,
+            strategy_instance_id=ids_s[1],
+            owner_user_id=ids_s[0],
+        )
+        rows = decisions_for(ids_s[1])
+        assert len(rows) == 1 and rows[0].wire_action == action
+print("empty/opposite mutable summaries: immutable ingress action wins OK")
+
+# --- genuine worker/helper race with separate PostgreSQL sessions -----------
+for action in ("BUY_CE", "BUY_PE", "EXIT"):
+    ids_wr = seed(f"worker-race-{action.lower()}")
+    settings.R1B_CANONICAL_DECISION_PERSISTENCE = False
+    service.ingest(auth_for(*ids_wr), payload(action, f"wr-{action}"))
+    with eng.session_scope() as db:
+        name = f"instance:{ids_wr[1]}"
+        signal = db.scalar(select(models.StrategySignal).where(
+            models.StrategySignal.strategy_name == name))
+        job = db.scalar(select(models.StrategyExecutionJob).where(
+            models.StrategyExecutionJob.strategy_name == name))
+        event_id = db.scalar(select(models.WebhookEvent.id).where(
+            models.WebhookEvent.provider == f"instance-webhook:{ids_wr[1]}"))
+        job_snapshot = {"id": job.id, "strategy_signal_id": signal.id}
+    settings.R1B_CANONICAL_DECISION_PERSISTENCE = True
+    worker_barrier = threading.Barrier(2)
+
+    def complete_worker(job_snapshot=job_snapshot, action=action):
+        worker_barrier.wait()
+        strategy_job_worker._complete_job(
+            job_snapshot,
+            status="completed",
+            result={"status": "traded", "race_proof": action},
+        )
+
+    def persist_evidence(event_id=event_id, ids_wr=ids_wr):
+        worker_barrier.wait()
+        evidence.persist_trading_decision_best_effort(
+            webhook_event_id=event_id,
+            strategy_instance_id=ids_wr[1],
+            owner_user_id=ids_wr[0],
+        )
+
+    threads = [
+        threading.Thread(target=complete_worker),
+        threading.Thread(target=persist_evidence),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(30)
+        assert not thread.is_alive()
+    rows = decisions_for(ids_wr[1])
+    assert len(rows) == 1 and rows[0].wire_action == action
+    with eng.session_scope() as db:
+        signal = db.scalar(select(models.StrategySignal).where(
+            models.StrategySignal.strategy_name == name))
+        assert signal.status == "completed" and "action" not in signal.result_summary
+print("real PostgreSQL worker/helper races: one exact decision per action OK")
 
 # --- evidence DB failure + commit failure after authoritative commit ---------
 ids_fail = seed("evfail")
@@ -328,31 +409,91 @@ assert calls == 0
 assert len(decisions_for(ids_af[1])) == 0
 print("authoritative commit failure: evidence never invoked OK")
 
-# --- owner/reference mismatch -------------------------------------------------
+# --- owner-scoped job reload -------------------------------------------------
 ids_a = seed("mm-a")
 ids_b = seed("mm-b")
+settings.R1B_CANONICAL_DECISION_PERSISTENCE = False
 service.ingest(auth_for(*ids_a), payload("BUY_CE", "mm-1"))
 with eng.session_scope() as db:
     event_id = db.scalar(select(models.WebhookEvent.id).where(
         models.WebhookEvent.provider == f"instance-webhook:{ids_a[1]}"))
-before = count(models.CanonicalSignalDecision)
+    job = db.scalar(select(models.StrategyExecutionJob).where(
+        models.StrategyExecutionJob.strategy_name == f"instance:{ids_a[1]}"))
+    job.user_id = uuid.UUID(ids_b[0])
+    before_job = (job.status, job.attempts, job.signal_payload)
+settings.R1B_CANONICAL_DECISION_PERSISTENCE = True
 evidence.persist_trading_decision_best_effort(
-    webhook_event_id=event_id, strategy_instance_id=ids_a[1], owner_user_id=ids_b[0])
-evidence.persist_trading_decision_best_effort(
-    webhook_event_id=event_id, strategy_instance_id=ids_b[1], owner_user_id=ids_b[0])
-assert count(models.CanonicalSignalDecision) == before
-print("owner/reference mismatch: suppression only OK")
+    webhook_event_id=event_id,
+    strategy_instance_id=ids_a[1],
+    owner_user_id=ids_a[0],
+)
+assert len(decisions_for(ids_a[1])) == 0
+with eng.session_scope() as db:
+    job = db.scalar(select(models.StrategyExecutionJob).where(
+        models.StrategyExecutionJob.strategy_name == f"instance:{ids_a[1]}"))
+    assert (job.status, job.attempts, job.signal_payload) == before_job
+print("owner-scoped job reload: foreign-owner job selects no row and writes nothing OK")
 
-# --- flag observed once at helper entry --------------------------------------
+# --- dual fail-closed feature-flag gate --------------------------------------
+settings.R1B_CANONICAL_DECISION_PERSISTENCE = False
+real_scope = evidence.session_scope
+
+
+def forbidden_scope():
+    raise AssertionError("helper false gate opened a session")
+
+
+evidence.session_scope = forbidden_scope
+evidence.persist_trading_decision_best_effort(
+    webhook_event_id="invalid",
+    strategy_instance_id="invalid",
+    owner_user_id="invalid",
+)
+evidence.session_scope = real_scope
+print("dual gate false/helper: return before parsing or session OK")
+
 ids_flag = seed("flagflip")
 settings.R1B_CANONICAL_DECISION_PERSISTENCE = False
 service.ingest(auth_for(*ids_flag), payload("BUY_PE", "flag-1"))
-# Simulates "authoritative commit done, flag flipped false before helper
-# entry": ingest above already skipped evidence because the helper observed
-# False once at entry. Enabling now must not retroactively write anything.
 settings.R1B_CANONICAL_DECISION_PERSISTENCE = True
 assert len(decisions_for(ids_flag[1])) == 0
-print("flag-once rule: value observed at helper entry controls the attempt OK")
+print("dual gate false-to-true: no activation, retry or backfill OK")
+
+for reenable in (False, True):
+    ids_gate = seed(f"gate-{reenable}")
+    settings.R1B_CANONICAL_DECISION_PERSISTENCE = False
+    service.ingest(auth_for(*ids_gate), payload("EXIT", f"gate-{reenable}"))
+    with eng.session_scope() as db:
+        event_id = db.scalar(select(models.WebhookEvent.id).where(
+            models.WebhookEvent.provider == f"instance-webhook:{ids_gate[1]}"))
+    real_writer = evidence.persist_canonical_signal_decision
+
+    def disable_at_writer(
+        *args,
+        _real_writer=real_writer,
+        _reenable=reenable,
+        **kwargs,
+    ):
+        settings.R1B_CANONICAL_DECISION_PERSISTENCE = False
+        try:
+            return _real_writer(*args, **kwargs)
+        finally:
+            if _reenable:
+                settings.R1B_CANONICAL_DECISION_PERSISTENCE = True
+
+    evidence.persist_canonical_signal_decision = disable_at_writer
+    settings.R1B_CANONICAL_DECISION_PERSISTENCE = True
+    evidence.persist_trading_decision_best_effort(
+        webhook_event_id=event_id,
+        strategy_instance_id=ids_gate[1],
+        owner_user_id=ids_gate[0],
+    )
+    evidence.persist_canonical_signal_decision = real_writer
+    assert len(decisions_for(ids_gate[1])) == 0
+    name = f"instance:{ids_gate[1]}"
+    assert count(models.StrategySignal, models.StrategySignal.strategy_name == name) == 1
+    assert count(models.StrategyExecutionJob, models.StrategyExecutionJob.strategy_name == name) == 1
+print("dual gate true-to-false (with/without later re-enable): fail closed OK")
 
 settings.R1B_CANONICAL_DECISION_PERSISTENCE = False
 print("R1B2B3 PG VERIFY: ALL PASS")

@@ -65,6 +65,7 @@ def _post_action(client, monkeypatch, action="BUY_CE", *, comment=None):
 @pytest.mark.parametrize(
     "code",
     [
+        "PERSISTENCE_DISABLED",
         "INVALID_INPUT",
         "OWNER_INSTANCE_MISMATCH",
         "FOREIGN_REFERENCE",

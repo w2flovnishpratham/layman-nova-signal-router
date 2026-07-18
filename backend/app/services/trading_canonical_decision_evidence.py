@@ -109,8 +109,8 @@ def persist_trading_decision_best_effort(
     lookups bind to exactly the same unique constraints that made the commit
     authoritative.
     """
-    # Feature flag: read exactly once; the value observed here controls this
-    # entire attempt even if configuration changes mid-helper.
+    # Gate 1 of the dual fail-closed contract. The writer independently
+    # evaluates the same flag immediately before persistence.
     enabled = settings.R1B_CANONICAL_DECISION_PERSISTENCE is True
     if not enabled:
         return
@@ -150,31 +150,46 @@ def persist_trading_decision_best_effort(
                     models.StrategySignal.signal_id == webhook_event.event_id,
                 )
             )
-            summary = (
-                strategy_signal.result_summary
-                if strategy_signal is not None
-                and isinstance(strategy_signal.result_summary, dict)
-                else {}
-            )
-            # Immutable accepted-intent binding only. The worker may already
-            # have advanced signal.status (processing/completed/failed) and
-            # rewritten parts of the summary — deliberately NO transient
-            # status precondition here (design §8 step 5; worker-race rule).
-            if strategy_signal is None or summary.get("action") != action:
+            # The worker may already have advanced signal.status and replaced
+            # result_summary. Neither mutable field is evidence authority.
+            if strategy_signal is None:
                 raise _closed_error("FOREIGN_REFERENCE")
 
             execution_job = db.scalar(
                 select(models.StrategyExecutionJob).where(
+                    models.StrategyExecutionJob.strategy_signal_id
+                    == strategy_signal.id,
                     models.StrategyExecutionJob.strategy_name == strategy_name,
                     models.StrategyExecutionJob.signal_id == webhook_event.event_id,
+                    models.StrategyExecutionJob.user_id == owner_uuid,
                 )
             )
             # Proof of acceptance: exactly one committed job per accepted
             # trading signal. Job status/attempts are deliberately ignored.
+            if execution_job is None:
+                raise _closed_error("FOREIGN_REFERENCE")
+
+            # The job payload is the committed immutable ingress snapshot.
+            # Workers update status/results, but never rewrite signal_payload.
+            signal_payload = (
+                execution_job.signal_payload
+                if isinstance(execution_job.signal_payload, dict)
+                else {}
+            )
+            raw_payload = (
+                signal_payload.get("raw_payload")
+                if isinstance(signal_payload.get("raw_payload"), dict)
+                else {}
+            )
+            signal_action = raw_payload.get("normalized_action")
             if (
-                execution_job is None
-                or execution_job.strategy_signal_id != strategy_signal.id
-                or execution_job.user_id != owner_uuid
+                signal_action not in TRADING_DECISION_ACTIONS
+                or signal_action != action
+                or signal_payload.get("strategy_code") != strategy_name
+                or raw_payload.get("private_instance_webhook") is not True
+                or raw_payload.get("strategy_instance_id")
+                != str(strategy_instance.id)
+                or raw_payload.get("signal_id") != webhook_event.event_id
             ):
                 raise _closed_error("FOREIGN_REFERENCE")
 
@@ -194,7 +209,6 @@ def persist_trading_decision_best_effort(
                 webhook_event=webhook_event,
             )
     except CanonicalDecisionPersistenceError as exc:
-        if exc.code != "PERSISTENCE_DISABLED":
-            record_trading_decision_failure(exc.code, action_class)
+        record_trading_decision_failure(exc.code, action_class)
     except Exception:
         record_trading_decision_failure("PERSISTENCE_UNAVAILABLE", action_class)

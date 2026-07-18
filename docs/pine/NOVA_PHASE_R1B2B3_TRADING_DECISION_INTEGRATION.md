@@ -46,30 +46,35 @@ evidence helper reloads the committed rows the job may already be claimed,
 completed, failed or resolved as a no-op, and the signal's status/summary
 may have been rewritten by `_complete_job`/`_refresh_signal_summary`. The
 helper therefore validates only immutable identity and accepted-intent
-facts — signal/event/instance/owner/job linkage and the committed action —
-and deliberately has **no** precondition on `StrategySignal.status`,
+facts. The server-owned `WebhookEvent.event_metadata["action"]` must equal
+the independently committed
+`StrategyExecutionJob.signal_payload["raw_payload"]["normalized_action"]`.
+The latter is the normalized signal ingress snapshot written when the job is
+created; no runtime service mutates `signal_payload`. The mutable
+`StrategySignal.result_summary` is never read as action authority. The helper
+also has **no** precondition on `StrategySignal.status`,
 `StrategyExecutionJob.status`, attempts, or execution results. Worker-ahead
-states (running / completed / failed) are tested on SQLite and PostgreSQL
-and still record the correct decision, because a decision records accepted
-intent, not execution outcome.
+completed, failed and blocked/no-op results are tested through the real
+`_complete_job()` → `_refresh_signal_summary()` machinery and still record
+the correct decision, because a decision records accepted intent, not
+execution outcome.
 
 ## Separate helper and session
 
 [trading_canonical_decision_evidence.py](../../backend/app/services/trading_canonical_decision_evidence.py)
 (`persist_trading_decision_best_effort(webhook_event_id,
 strategy_instance_id, owner_user_id)`) mirrors the reviewed HOLD helper: the
-flag is read exactly once at entry (`is not True` → return before any
-parsing, session, query or logging); one independent `session_scope` reloads
+helper gate is read at entry (`is not True` → return before any parsing,
+session, query or logging); one independent `session_scope` reloads
 the committed WebhookEvent, StrategyInstance, StrategySignal and
-StrategyExecutionJob by committed identifiers/unique keys; owner, provider,
+StrategyExecutionJob by committed identifiers/unique keys. The job SQL
+predicate includes `strategy_signal_id`, `strategy_name`, `signal_id` and
+`user_id`, so a foreign-owner job is not selected. Owner, provider,
 metadata-instance, metadata-action, signal↔event, job↔signal and job↔owner
 consistency are enforced; the canonical event is built by the approved
 legacy adapter from the committed action; the reviewed decision writer runs
-inside the evidence session, which is the only session the helper commits,
-rolls back or closes; the helper returns `None` always. The committed signal
-and job are looked up by their committed unique keys rather than passed as
-parameters because the authoritative response body is the return value of
-`_persist_execution_job` and must not grow identifier fields.
+inside the evidence session and independently evaluates the same feature
+flag at the final persistence boundary. The helper returns `None` always.
 
 ## Exact action mappings
 
@@ -101,13 +106,15 @@ and no worker behavior changed.
 ## Feature-flag coupling
 
 `R1B_CANONICAL_DECISION_PERSISTENCE` (default/missing/empty/invalid →
-false; server-side only) now gates **both** the HOLD and the trading
-integrations: enabling it after the R1B-2B4 review activates all four
-accepted-action decisions together. It must remain false during deployment;
-enable in paper first. The flag is evaluated exactly once per helper
-invocation — the value observed at helper entry controls that attempt, and a
-mid-request configuration change has no effect on it (tested, including on
-PostgreSQL).
+false; server-side only) gates **both** the HOLD and trading integrations. The
+trading path deliberately uses `DUAL_FAIL_CLOSED_GATE`: the helper must
+observe literal `True` before parsing or database access, and the reviewed
+insert-only writer independently checks the flag immediately before its
+query/insert behavior. Enabling can never activate a request whose helper
+already observed false. Disabling can safely suppress optional evidence
+before final insertion. A later re-enable does not retry or backfill the
+suppressed attempt. This asymmetry is intentional defense in depth; no flag
+bypass exists.
 
 ## Response equivalence and failure isolation
 
@@ -160,7 +167,9 @@ and evidence **commit-failure rollback** after the authoritative commit
 (signal/job durable, decision fully rolled back — PostgreSQL is
 authoritative here because the pysqlite driver auto-commits around
 SAVEPOINT); authoritative failure inverse (zero helper calls);
-owner/reference suppression; and the flag-once rule. ALL PASS.
+owner-scoped job suppression; real worker-ahead mutation and worker/helper
+races; adversarial mutable summaries; and the dual fail-closed gate. ALL
+PASS.
 
 ## Rollback
 
