@@ -5,12 +5,11 @@ interpretation of one accepted StrategySignal, derived exclusively from
 trusted, already-persisted server objects plus the immutable R1A
 CanonicalSignalEvent.
 
-R1B-2A boundary: this library has ZERO production call sites. It is never
-called from the webhook, worker, router, brokers or any background loop, and
-it never authenticates, validates replay, creates signals or jobs, routes,
-reads or writes JSON position state, or affects an HTTP response. Any failure
-raises a closed CanonicalDecisionPersistenceError; the (future) caller treats
-evidence failure as a metric, never as signal rejection.
+R1B-2B boundary: the one production call path is fresh committed HOLD through
+the post-commit hold_canonical_decision_evidence helper. Trading actions,
+outcomes and rejections remain disconnected. This writer never authenticates,
+validates replay, creates signals or jobs, routes, reads or writes JSON
+position state, or affects an HTTP response.
 
 Rows are never updated: a conflicting reinterpretation of the same
 StrategySignal raises CANONICAL_DECISION_CONFLICT and leaves the original

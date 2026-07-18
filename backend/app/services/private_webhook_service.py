@@ -27,7 +27,7 @@ from app.config import DEFAULT_EXCHANGE_SEGMENT, settings
 from app.db import crud, models
 from app.db.engine import database_configured, session_scope
 from app.schemas.signal import NormalizedSignal
-from app.services import webhook_replay_store
+from app.services import hold_canonical_decision_evidence, webhook_replay_store
 from app.services.audit_logger import log_audit_event, log_error_event
 from app.domain.strategy_instance_state_machine import InstanceState
 
@@ -444,6 +444,21 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
     _shadow_compare_canonical(auth, payload, action, received_at)
     if action == "HOLD":
         result = _persist_hold(auth, payload, strategy_name, received_at)
+        if status == "fresh":
+            try:
+                hold_canonical_decision_evidence.persist_hold_decision_best_effort(
+                    webhook_event_id=claim.get("webhook_event_id"),
+                    strategy_instance_id=auth["instance_id"],
+                    owner_user_id=auth["user_id"],
+                )
+            except Exception:
+                # Evidence cannot alter a committed HOLD or its HTTP result.
+                try:
+                    hold_canonical_decision_evidence.record_hold_decision_failure(
+                        "PERSISTENCE_UNAVAILABLE"
+                    )
+                except Exception:
+                    pass
     else:
         result = _persist_execution_job(auth, payload, action, strategy_name, received_at)
     _audit_signal(auth, payload.signal_id, result["status"], action)

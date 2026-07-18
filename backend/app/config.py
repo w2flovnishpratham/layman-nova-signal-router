@@ -123,10 +123,9 @@ class Settings(BaseSettings):
     CANONICAL_SIGNAL_SHADOW: bool = False
     # R1B persistence flags. Server-side only (never API/webhook/frontend
     # controllable); missing or invalid values resolve to False via the
-    # fail-safe validator below. In R1B-1 only the Pine-analysis flag has a
-    # writer; the other three are declared with zero call sites so the
-    # decision/outcome/rejection tables stay empty until R1B-2 authorizes
-    # their writers.
+    # fail-safe validator below. R1B-2B connects decision evidence only to
+    # freshly committed HOLD signals; trading actions, outcomes and rejections
+    # remain disconnected.
     R1B_CANONICAL_DECISION_PERSISTENCE: bool = False
     R1B_CANONICAL_OUTCOME_PERSISTENCE: bool = False
     R1B_SIGNAL_REJECTION_PERSISTENCE: bool = False

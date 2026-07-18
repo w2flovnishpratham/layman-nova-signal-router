@@ -1,5 +1,4 @@
-"""R1B-2A static guarantee: the three evidence writers have zero production
-call sites and cannot reach execution machinery."""
+"""R1B-2B static boundary for the HOLD decision evidence integration."""
 from __future__ import annotations
 
 import ast
@@ -14,6 +13,7 @@ WRITER_MODULES = {
     "strategy_signal_rejection_persistence.py",
     "r1b_evidence_safety.py",
 }
+HOLD_INTEGRATION = "hold_canonical_decision_evidence.py"
 WRITER_FUNCTIONS = (
     "persist_canonical_signal_decision",
     "persist_canonical_signal_outcome",
@@ -48,15 +48,25 @@ def _runtime_sources() -> list[Path]:
     return [path for path in APP_ROOT.rglob("*.py") if "tests" not in path.parts]
 
 
-def test_writers_have_zero_production_call_sites():
+def test_only_hold_helper_calls_decision_writer():
     for path in _runtime_sources():
         if path.name in WRITER_MODULES:
             continue
         text = path.read_text(encoding="utf-8")
         for name in WRITER_FUNCTIONS:
+            if name == "persist_canonical_signal_decision" and path.name == HOLD_INTEGRATION:
+                continue
             assert name not in text, f"{name} referenced by runtime file {path}"
         for module in WRITER_MODULES:
             stem = module.removesuffix(".py")
+            if (
+                stem in {
+                    "canonical_signal_decision_persistence",
+                    "r1b_evidence_safety",
+                }
+                and path.name == HOLD_INTEGRATION
+            ):
+                continue
             assert stem not in text, f"writer module {stem} referenced by runtime file {path}"
     # Explicit spot-check of the sensitive files (fails loudly if moved).
     for name in FORBIDDEN_RUNTIME_FILES:
@@ -71,7 +81,7 @@ def test_writers_import_no_execution_machinery():
         "broker", "live_engine", "fastapi", "atm_ltp", "security_id_resolver",
         "webhook_replay_store", "strategy_job_worker",
     )
-    for module in WRITER_MODULES:
+    for module in WRITER_MODULES | {HOLD_INTEGRATION}:
         path = APP_ROOT / "services" / module
         tree = ast.parse(path.read_text(encoding="utf-8"))
         imported: set[str] = set()
@@ -88,7 +98,7 @@ def test_writers_import_no_execution_machinery():
 
 
 def test_no_execution_service_reads_evidence_tables():
-    allowed = WRITER_MODULES | {"models.py"}
+    allowed = WRITER_MODULES | {HOLD_INTEGRATION, "models.py"}
     for path in _runtime_sources():
         if path.name in allowed or "alembic" in path.parts:
             continue
@@ -99,14 +109,21 @@ def test_no_execution_service_reads_evidence_tables():
 
 def test_writer_flags_stay_confined_to_their_writers():
     flag_homes = {
-        "R1B_CANONICAL_DECISION_PERSISTENCE": "canonical_signal_decision_persistence.py",
-        "R1B_CANONICAL_OUTCOME_PERSISTENCE": "canonical_signal_outcome_persistence.py",
-        "R1B_SIGNAL_REJECTION_PERSISTENCE": "strategy_signal_rejection_persistence.py",
+        "R1B_CANONICAL_DECISION_PERSISTENCE": {
+            "canonical_signal_decision_persistence.py",
+            HOLD_INTEGRATION,
+        },
+        "R1B_CANONICAL_OUTCOME_PERSISTENCE": {
+            "canonical_signal_outcome_persistence.py"
+        },
+        "R1B_SIGNAL_REJECTION_PERSISTENCE": {
+            "strategy_signal_rejection_persistence.py"
+        },
     }
     for path in _runtime_sources():
         if path.name == "config.py":
             continue
         text = path.read_text(encoding="utf-8")
-        for flag, home in flag_homes.items():
+        for flag, homes in flag_homes.items():
             if flag in text:
-                assert path.name == home, f"{flag} referenced by {path}"
+                assert path.name in homes, f"{flag} referenced by {path}"

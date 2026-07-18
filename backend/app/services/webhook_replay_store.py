@@ -85,7 +85,11 @@ def claim_webhook_event(
             )
             db.add(row)
             db.flush()
-        return {"status": "fresh", "raw_body_sha256": digest}
+        return {
+            "status": "fresh",
+            "raw_body_sha256": digest,
+            "webhook_event_id": str(row.id),
+        }
     except IntegrityError:
         with session_scope() as db:
             existing = db.scalar(

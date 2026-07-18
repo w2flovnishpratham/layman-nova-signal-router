@@ -1,4 +1,5 @@
-"""R1B-1 persistence flags: safe defaults, zero call sites, zero writes."""
+"""R1B persistence flags: safe defaults and narrowly confined writes."""
+# ruff: noqa: F811
 from __future__ import annotations
 
 import uuid
@@ -26,7 +27,6 @@ R1B_FLAGS = (
     "R1B_SIGNAL_REJECTION_PERSISTENCE",
     "R1B_PINE_ANALYSIS_PERSISTENCE",
 )
-DECLARED_ONLY_FLAGS = R1B_FLAGS[:3]
 EMPTY_EVIDENCE_MODELS = (
     "CanonicalSignalDecision",
     "CanonicalSignalOutcome",
@@ -68,20 +68,25 @@ def _runtime_sources() -> list[Path]:
     ]
 
 
-def test_declared_only_flags_are_confined_to_their_writer_libraries():
-    # R1B-2A: each flag may appear only inside its own insert-only writer
-    # library (which has zero production call sites — proven separately by
-    # test_r1b2a_zero_call_sites.py).
+def test_evidence_flags_are_confined_to_authorized_libraries():
+    # R1B-2B authorizes only the decision writer and its post-commit HOLD helper.
     flag_homes = {
-        "R1B_CANONICAL_DECISION_PERSISTENCE": "canonical_signal_decision_persistence.py",
-        "R1B_CANONICAL_OUTCOME_PERSISTENCE": "canonical_signal_outcome_persistence.py",
-        "R1B_SIGNAL_REJECTION_PERSISTENCE": "strategy_signal_rejection_persistence.py",
+        "R1B_CANONICAL_DECISION_PERSISTENCE": {
+            "canonical_signal_decision_persistence.py",
+            "hold_canonical_decision_evidence.py",
+        },
+        "R1B_CANONICAL_OUTCOME_PERSISTENCE": {
+            "canonical_signal_outcome_persistence.py"
+        },
+        "R1B_SIGNAL_REJECTION_PERSISTENCE": {
+            "strategy_signal_rejection_persistence.py"
+        },
     }
     for path in _runtime_sources():
         text = path.read_text(encoding="utf-8")
-        for flag, home in flag_homes.items():
+        for flag, homes in flag_homes.items():
             if flag in text:
-                assert path.name == home, f"{flag} referenced by {path}"
+                assert path.name in homes, f"{flag} referenced by {path}"
 
 
 def test_analysis_flag_is_confined_to_the_qualification_flow():
@@ -121,9 +126,10 @@ def _evidence_counts() -> dict[str, int]:
 
 
 @pytest.mark.parametrize("flags_forced_true", [False, True])
-def test_webhook_flows_write_no_evidence_rows(client, monkeypatch, flags_forced_true):  # noqa: F811
-    """Even with the three declared-only flags forced true, no writer exists,
-    so every ingress flow leaves all evidence tables empty."""
+def test_webhook_flows_write_only_authorized_hold_decision(
+    client, monkeypatch, flags_forced_true
+):  # noqa: F811
+    """Forced flags connect only the fresh HOLD decision writer."""
     from app.config import settings
 
     if flags_forced_true:
@@ -164,4 +170,7 @@ def test_webhook_flows_write_no_evidence_rows(client, monkeypatch, flags_forced_
         assert response.status_code < 500, (name, response.text)
 
     counts = _evidence_counts()
-    assert counts == {name: 0 for name in counts}, counts
+    expected = {name: 0 for name in counts}
+    if flags_forced_true:
+        expected["CanonicalSignalDecision"] = 1
+    assert counts == expected, counts
