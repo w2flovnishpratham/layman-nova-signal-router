@@ -39,6 +39,7 @@ PROVIDER = "anthropic_claude"
 PROVIDER_MODE_API = "CLAUDE_API"
 PROVIDER_MODE_CACHE = "CLAUDE_API_CACHE"
 PROVIDER_MODE_MANUAL = "MANUAL_ADMIN_COPY_PASTE"
+SOURCE_INTEGRITY_CODE = "SOURCE_ARTIFACT_INTEGRITY_MISMATCH"
 MAX_LINES = 20_000
 STRATEGY_LAYER_ARTIFACT = "master_prompt_output"
 REPAIRABLE_CODES = {
@@ -360,6 +361,77 @@ def _owned(db, admin_id: uuid.UUID, conversion_id: uuid.UUID | str, *, lock: boo
     if row is None:
         raise AdminConversionError("Admin Pine conversion not found.", 404, "NOT_FOUND")
     return row
+
+
+def _verified_current_source_artifact(
+    db,
+    row: models.PineConversionRequest,
+    *,
+    response_sha256: str | None = None,
+    lock: bool,
+):
+    strategy_query = select(models.StrategyCatalog).where(
+        models.StrategyCatalog.id == row.strategy_id,
+        models.StrategyCatalog.owner_user_id == row.owner_user_id,
+        models.StrategyCatalog.owner_type == "personal",
+        models.StrategyCatalog.visibility == "private",
+    )
+    version_query = select(models.StrategyVersion).where(
+        models.StrategyVersion.id == row.input_version_id,
+        models.StrategyVersion.strategy_id == row.strategy_id,
+        models.StrategyVersion.created_by_user_id == row.owner_user_id,
+    )
+    artifact_query = select(models.StrategySourceArtifact).where(
+        models.StrategySourceArtifact.strategy_version_id == row.input_version_id,
+        models.StrategySourceArtifact.artifact_type == pine.PINE_ARTIFACT,
+        models.StrategySourceArtifact.submitted_by_user_id == row.owner_user_id,
+    )
+    if lock:
+        strategy_query = strategy_query.with_for_update()
+        version_query = version_query.with_for_update()
+        artifact_query = artifact_query.with_for_update()
+    strategy = db.scalar(strategy_query)
+    version = db.scalar(version_query)
+    artifact = db.scalar(artifact_query)
+    if strategy is None or version is None or artifact is None:
+        return None, SOURCE_INTEGRITY_CODE
+    request_sha = row.input_source_sha256
+    authoritative_hashes = (
+        version.source_sha256,
+        artifact.content_sha256,
+        _hash(artifact.content),
+    )
+    if not all(value == request_sha for value in authoritative_hashes):
+        return None, SOURCE_INTEGRITY_CODE
+    if response_sha256 is not None and response_sha256 != request_sha:
+        return None, "SOURCE_SHA_MISMATCH"
+    return artifact, None
+
+
+def _record_closed_source_failure(
+    row: models.PineConversionRequest,
+    *,
+    provider_mode: str,
+    code: str,
+) -> None:
+    completed = _now()
+    row.status = "manual_conversion_required"
+    row.safe_error_code = code
+    row.completed_at = completed
+    summary = dict(row.usage_summary or {})
+    provenance = dict(summary.get("provenance") or {})
+    provenance.update({
+        "completion_time": completed.isoformat(),
+        "latency_ms": _latency_ms(row.started_at, completed),
+        "structured_output_valid": False,
+    })
+    summary.update({
+        "provider_mode": provider_mode,
+        "validation_status": "NOT_RUN",
+        "review_status": "PENDING",
+        "provenance": provenance,
+    })
+    row.usage_summary = summary
 
 
 def _layer_artifact(db, version_id: uuid.UUID | None):
@@ -725,9 +797,17 @@ def convert(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[str, An
             row.safe_error_code = "REPAIR_POLICY_INVALID"
             return {"conversion": _public(db, row, include_source=False)}
         _quota_check(db, admin_id)
-        source_artifact = pine._artifact(db, row.input_version_id)
-        if source_artifact.content_sha256 != row.input_source_sha256 or _hash(source_artifact.content) != row.input_source_sha256:
-            raise AdminConversionError("Submitted source changed.", 409, "SOURCE_SHA_MISMATCH")
+        source_artifact, source_error = _verified_current_source_artifact(
+            db,
+            row,
+            lock=True,
+        )
+        if source_error:
+            raise AdminConversionError(
+                "Submitted source integrity changed.",
+                409,
+                source_error,
+            )
         cached = _find_cache(db, row)
         if cached:
             cached_candidate = pine._artifact(db, cached.candidate_version_id)
@@ -820,6 +900,8 @@ def convert(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[str, An
         status = "ai_failed_retryable" if exc.code in {"PROVIDER_TIMEOUT", "PROVIDER_RATE_LIMITED", "PROVIDER_UNAVAILABLE"} else "manual_conversion_required"
         _set_failure(admin_id, conversion_id, exc.code, status)
         return get_conversion(admin_id, conversion_id)
+    except AdminConversionError:
+        raise
     except Exception:
         _set_failure(admin_id, conversion_id, "INTERNAL_CONVERSION_ERROR", "manual_conversion_required")
         return get_conversion(admin_id, conversion_id)
@@ -836,66 +918,89 @@ def _persist_candidate(
     cache_hit: bool,
     counted_input_tokens: int | None = None,
 ) -> dict[str, Any]:
+    integrity_error: str | None = None
     with session_scope() as db:
         row = _owned(db, admin_id, conversion_id, lock=True)
         if row.status not in {"ai_conversion_running", "ready_for_conversion", "ai_failed_retryable"}:
             raise AdminConversionError("Conversion result arrived in an invalid state.", 409, "STATE_CONFLICT")
-        strategy = db.get(models.StrategyCatalog, row.strategy_id)
-        candidate, candidate_sha = _assemble_candidate(output.strategy_layer, strategy.code, "C1_CANDIDATE")
-        layer_errors = _validate_layer(
-            output,
-            expected_source_sha256=row.input_source_sha256,
-            analysis=(row.usage_summary or {}).get("analysis") or {},
-        )
-        if layer_errors:
-            raise AdminConversionError("Candidate layer failed validation.", 422, layer_errors[0])
-        version = _create_exact_version(
+        _source_artifact, source_error = _verified_current_source_artifact(
             db,
-            admin_id=admin_id,
-            strategy=strategy,
-            source=candidate,
-            filename="nova-claude-candidate.pine",
-            changelog=f"C1 {provider_mode} candidate",
-            conversion_method="claude_api" if provider_mode != PROVIDER_MODE_MANUAL else "manual_admin_copy_paste",
-            strategy_layer=output.strategy_layer,
+            row,
+            response_sha256=output.source_sha256,
+            lock=True,
         )
-        row.candidate_version_id = version.id
-        row.provider_request_id = provider_result.request_id if provider_result else None
-        row.status = "validating"
-        row.conversion_summary = output.user_summary
-        row.unsupported_features = output.capabilities.unsupported
-        row.warnings = list(dict.fromkeys(output.admin_review_points + output.capabilities.manual_review))
-        row.action_mapping = output.signal_mapping.model_dump(mode="json")
-        summary = dict(row.usage_summary or {})
-        provenance = dict(summary.get("provenance") or {})
-        usage = dict(provider_result.usage or {}) if provider_result else {}
-        if counted_input_tokens is not None:
-            usage.setdefault("counted_input_tokens", counted_input_tokens)
-        completed = _now()
-        provenance.update({
-            "request_time": row.started_at.isoformat() if row.started_at else None,
-            "completion_time": completed.isoformat(),
-            "latency_ms": _latency_ms(row.started_at, completed),
-            "input_token_count": usage.get("input_tokens", usage.get("counted_input_tokens")),
-            "output_token_count": usage.get("output_tokens"),
-            "cache_status": "HIT" if cache_hit else "MISS",
-            "repair_count": repair_count,
-            "structured_output_valid": True,
-            "candidate_sha256": candidate_sha,
-            "strategy_layer_sha256": _hash(output.strategy_layer),
-            "provider_request_id": provider_result.request_id if provider_result else None,
-        })
-        summary.update({
-            "provider_mode": provider_mode,
-            "provenance": provenance,
-            "handled_capabilities": output.capabilities.handled,
-            "validation_status": "RUNNING",
-            "review_status": "PENDING",
-            "usage": usage,
-        })
-        row.usage_summary = summary
-        row.updated_at = _now()
-        candidate_id, strategy_id = version.id, strategy.id
+        if source_error:
+            _record_closed_source_failure(
+                row,
+                provider_mode=provider_mode,
+                code=source_error,
+            )
+            integrity_error = source_error
+        else:
+            strategy = db.get(models.StrategyCatalog, row.strategy_id)
+            candidate, candidate_sha = _assemble_candidate(output.strategy_layer, strategy.code, "C1_CANDIDATE")
+            layer_errors = _validate_layer(
+                output,
+                expected_source_sha256=row.input_source_sha256,
+                analysis=(row.usage_summary or {}).get("analysis") or {},
+            )
+            if layer_errors:
+                raise AdminConversionError("Candidate layer failed validation.", 422, layer_errors[0])
+            version = _create_exact_version(
+                db,
+                admin_id=admin_id,
+                strategy=strategy,
+                source=candidate,
+                filename="nova-claude-candidate.pine",
+                changelog=f"C1 {provider_mode} candidate",
+                conversion_method="claude_api" if provider_mode != PROVIDER_MODE_MANUAL else "manual_admin_copy_paste",
+                strategy_layer=output.strategy_layer,
+            )
+            row.candidate_version_id = version.id
+            row.provider_request_id = provider_result.request_id if provider_result else None
+            row.status = "validating"
+            row.conversion_summary = output.user_summary
+            row.unsupported_features = output.capabilities.unsupported
+            row.warnings = list(dict.fromkeys(output.admin_review_points + output.capabilities.manual_review))
+            row.action_mapping = output.signal_mapping.model_dump(mode="json")
+            summary = dict(row.usage_summary or {})
+            provenance = dict(summary.get("provenance") or {})
+            usage = dict(provider_result.usage or {}) if provider_result else {}
+            if counted_input_tokens is not None:
+                usage.setdefault("counted_input_tokens", counted_input_tokens)
+            completed = _now()
+            provenance.update({
+                "request_time": row.started_at.isoformat() if row.started_at else None,
+                "completion_time": completed.isoformat(),
+                "latency_ms": _latency_ms(row.started_at, completed),
+                "input_token_count": usage.get("input_tokens", usage.get("counted_input_tokens")),
+                "output_token_count": usage.get("output_tokens"),
+                "cache_status": "HIT" if cache_hit else "MISS",
+                "repair_count": repair_count,
+                "structured_output_valid": True,
+                "candidate_sha256": candidate_sha,
+                "strategy_layer_sha256": _hash(output.strategy_layer),
+                "provider_request_id": provider_result.request_id if provider_result else None,
+            })
+            summary.update({
+                "provider_mode": provider_mode,
+                "provenance": provenance,
+                "handled_capabilities": output.capabilities.handled,
+                "validation_status": "RUNNING",
+                "review_status": "PENDING",
+                "usage": usage,
+            })
+            row.usage_summary = summary
+            row.updated_at = _now()
+            candidate_id, strategy_id = version.id, strategy.id
+    if integrity_error:
+        raise AdminConversionError(
+            "Submitted source integrity changed."
+            if integrity_error == SOURCE_INTEGRITY_CODE
+            else "Conversion response source SHA does not match.",
+            409 if integrity_error == SOURCE_INTEGRITY_CODE else 422,
+            integrity_error,
+        )
     validated = pine.validate_version(admin_id, strategy_id, candidate_id)
     with session_scope() as db:
         row = _owned(db, admin_id, conversion_id, lock=True)
@@ -1016,16 +1121,38 @@ def submit_manual_response(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, 
         output = ClaudePineConversionOutput.model_validate(raw)
     except (json.JSONDecodeError, ValidationError) as exc:
         raise AdminConversionError("Manual response is not valid structured conversion JSON.", 422, "INVALID_MANUAL_RESPONSE") from exc
+    integrity_error: str | None = None
     with session_scope() as db:
         row = _owned(db, admin_id, conversion_id, lock=True)
         if row.status not in {"ready_for_conversion", "ai_failed_retryable", "manual_conversion_required", "validation_failed"}:
             raise AdminConversionError("Manual response is not allowed in this state.", 409, "STATE_CONFLICT")
-        row.status = "ai_conversion_running"
-        row.started_at = _now()
-    with session_scope() as db:
-        current = _owned(db, admin_id, conversion_id)
-        expected_source_sha256 = current.input_source_sha256
-        analysis = (current.usage_summary or {}).get("analysis") or {}
+        _source_artifact, source_error = _verified_current_source_artifact(
+            db,
+            row,
+            response_sha256=output.source_sha256,
+            lock=True,
+        )
+        if source_error:
+            _record_closed_source_failure(
+                row,
+                provider_mode=PROVIDER_MODE_MANUAL,
+                code=source_error,
+            )
+            integrity_error = source_error
+        else:
+            row.status = "ai_conversion_running"
+            row.started_at = _now()
+            row.safe_error_code = None
+            expected_source_sha256 = row.input_source_sha256
+            analysis = (row.usage_summary or {}).get("analysis") or {}
+    if integrity_error:
+        raise AdminConversionError(
+            "Submitted source integrity changed."
+            if integrity_error == SOURCE_INTEGRITY_CODE
+            else "Manual response source SHA does not match.",
+            409 if integrity_error == SOURCE_INTEGRITY_CODE else 422,
+            integrity_error,
+        )
     errors = _validate_layer(
         output,
         expected_source_sha256=expected_source_sha256,

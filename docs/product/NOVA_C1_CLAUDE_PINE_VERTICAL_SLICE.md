@@ -47,12 +47,18 @@ parallel conversion system.
 6. L3 backend-required or L4 unsafe/unrepresentable sources become
    `UNSUPPORTED_STRATEGY`; provider call count remains zero.
 7. A permitted admin may run API conversion or use the manual package.
-8. NOVA validates the strict response, source SHA, capability manifest, and
-   strategy-layer boundary.
-9. NOVA renders and appends exactly one frozen Transport V2 block.
-10. Existing static validation gates the assembled candidate.
-11. A passing candidate becomes `READY_FOR_ADMIN_REVIEW`.
-12. Approval records exact source, layer, candidate, prompt, registry, options,
+8. NOVA reloads and locks the conversion, original version, and source artifact.
+   The request SHA, stored artifact SHA, fresh exact-byte content SHA, and
+   response SHA must agree before manual ingestion proceeds.
+9. NOVA validates the strict response, capability manifest, and strategy-layer
+   boundary.
+10. The shared candidate-persistence transaction reloads and locks the current
+    source chain and repeats the same integrity check before any candidate row
+    is created.
+11. NOVA renders and appends exactly one frozen Transport V2 block.
+12. Existing static validation gates the assembled candidate.
+13. A passing candidate becomes `READY_FOR_ADMIN_REVIEW`.
+14. Approval records exact source, layer, candidate, prompt, registry, options,
     model, schema, and transport hashes as
     `APPROVED_FOR_TRADINGVIEW_COMPILE`.
 
@@ -136,6 +142,26 @@ mismatch, incomplete/unknown capability manifests, unresolved placeholders,
 credentials, alert transport in the strategy layer, duplicate/missing
 canonical signals, and `logic_changed=true` without manual-review status.
 
+The current original artifact is bound by a four-way invariant:
+
+```text
+PineConversionRequest.input_source_sha256
+==
+StrategySourceArtifact.content_sha256
+==
+SHA256(StrategySourceArtifact.content.encode("utf-8"))
+==
+ClaudePineConversionOutput.source_sha256
+```
+
+The version, artifact type, strategy, and administrator ownership chain must
+also match the conversion request. Manual ingestion checks this under row locks
+before changing workflow state. The shared API/manual candidate transaction
+reloads and rechecks committed state to close the interval between response
+validation and candidate persistence. A mismatch returns HTTP 409
+`SOURCE_ARTIFACT_INTEGRITY_MISMATCH`, creates no candidate or validation/review
+evidence, and cannot reach `READY_FOR_ADMIN_REVIEW`.
+
 ## Cache and cost controls
 
 The exact cache key includes source SHA, Prompt V3.1 version/SHA, registry
@@ -184,8 +210,9 @@ Transport V2 source, API key, or execution secret.
 The package requests exactly one raw JSON object and a strategy layer without
 transport. The administrator pastes only that JSON back into NOVA. Manual
 output passes the same C1 Pydantic model, source binding, capability, layer,
-Transport V2 assembly, and final validation path as API output. Provenance records
-`MANUAL_ADMIN_COPY_PASTE`; manual candidates receive no weaker standard.
+Transport V2 assembly, shared persistence-time source recheck, and final
+validation path as API output. Provenance records `MANUAL_ADMIN_COPY_PASTE`;
+manual candidates receive no weaker standard.
 
 ## API routes
 
@@ -229,7 +256,9 @@ preservation, input rejection, deterministic pre-analysis, zero-call blockers,
 disabled/missing-key behavior, structured conversion, transport ownership,
 candidate SHA, source/manifest/logic rejection, cache hit/miss, token/quota
 controls, one repair, manual parity, approval/rejection binding, mutation
-detection, and absence of instances/credentials/jobs.
+detection, four-way current-source binding, persistence-time TOCTOU rejection,
+owner/reference isolation, exact LF/CRLF/trailing-newline/Unicode preservation,
+candidate atomicity, and absence of instances/credentials/jobs.
 
 Frontend tests cover rehydration, submission/upload, analysis, blocked state,
 loading/failure, manual fallback, validation/diff/transport/provenance, approval

@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.schemas.pine_conversion import ClaudePineConversionOutput
-from app.services import pine_conversion_provider, pine_conversion_service
+from app.services import (
+    admin_pine_conversion_service,
+    pine_conversion_provider,
+    pine_conversion_service,
+)
 
 pytest_plugins = ("app.tests.conftest_multiuser",)
 
@@ -94,6 +100,53 @@ def _output(conversion: dict, *, layer: str = LAYER, **changes):
     }
     value.update(changes)
     return ClaudePineConversionOutput.model_validate(value)
+
+
+def _assert_no_candidate_evidence(conversion: dict):
+    from app.db import models
+    from app.db.engine import session_scope
+
+    with session_scope() as db:
+        row = db.get(models.PineConversionRequest, uuid.UUID(conversion["id"]))
+        assert row.status == "manual_conversion_required"
+        assert row.safe_error_code == "SOURCE_ARTIFACT_INTEGRITY_MISMATCH"
+        assert row.candidate_version_id is None
+        assert row.validation_report_id is None
+        assert db.query(models.StrategyVersion).filter_by(strategy_id=row.strategy_id).count() == 1
+        assert db.query(models.StrategyValidationReport).join(
+            models.StrategyVersion,
+            models.StrategyValidationReport.strategy_version_id == models.StrategyVersion.id,
+        ).filter(models.StrategyVersion.strategy_id == row.strategy_id).count() == 0
+        assert db.query(models.StrategyAdminReview).join(
+            models.StrategyVersion,
+            models.StrategyAdminReview.strategy_version_id == models.StrategyVersion.id,
+        ).filter(models.StrategyVersion.strategy_id == row.strategy_id).count() == 0
+        assert db.query(models.StrategyInstance).count() == 0
+        assert db.query(models.StrategyInstanceWebhookCredential).count() == 0
+        assert db.query(models.StrategyExecutionJob).count() == 0
+
+
+def _assert_source_integrity_failure(client: TestClient, conversion: dict, *, response_sha: str | None = None):
+    output = _output(conversion)
+    if response_sha is not None:
+        output = output.model_copy(update={"source_sha256": response_sha})
+    response = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/manual-response",
+        json={"response_json": json.dumps(output.model_dump())},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["reason"] == "SOURCE_ARTIFACT_INTEGRITY_MISMATCH"
+    detail_response = client.get(f"/api/admin/pine-conversions/{conversion['id']}")
+    if detail_response.status_code == 200:
+        detail = detail_response.json()["conversion"]
+        assert detail["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
+        assert detail["safe_error_code"] == "SOURCE_ARTIFACT_INTEGRITY_MISMATCH"
+        assert detail["candidate_version_id"] is None
+        assert detail["validation"] is None
+    else:
+        assert detail_response.status_code == 404
+        assert detail_response.json()["reason"] == "SOURCE_NOT_FOUND"
+    _assert_no_candidate_evidence(conversion)
 
 
 def test_admin_submission_preserves_exact_source_and_normal_user_is_denied(mu_db, monkeypatch):
@@ -392,6 +445,220 @@ def test_manual_response_contract_fails_closed_for_invalid_shapes(mu_db, monkeyp
     )
     assert response.status_code == 422
     assert response.json()["reason"] == "INVALID_MANUAL_RESPONSE"
+
+
+def test_manual_source_mutations_fail_before_candidate_creation(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-source-mutation-admin@example.com", is_admin=True))
+    cases = (
+        "content-only",
+        "stored-sha-only",
+        "content-and-stored-sha",
+        "response-uses-new-sha",
+    )
+    for index, case in enumerate(cases):
+        conversion = _submit(
+            client,
+            SOURCE + f"\n// source-integrity-{index}\n",
+            f"Source integrity {case}",
+        )
+        package = client.post(
+            f"/api/admin/pine-conversions/{conversion['id']}/manual-package"
+        )
+        assert package.status_code == 200
+        response_sha = None
+        from app.db.engine import session_scope
+        with session_scope() as db:
+            from app.db import models
+
+            row = db.get(models.PineConversionRequest, uuid.UUID(conversion["id"]))
+            artifact = db.query(models.StrategySourceArtifact).filter_by(
+                strategy_version_id=row.input_version_id,
+                artifact_type="pine_script",
+            ).one()
+            if case == "content-only":
+                artifact.content += "\n// changed after package"
+            elif case == "stored-sha-only":
+                artifact.content_sha256 = "0" * 64
+            else:
+                artifact.content += "\n// retarget attempt"
+                new_sha = hashlib.sha256(artifact.content.encode("utf-8")).hexdigest()
+                artifact.content_sha256 = new_sha
+                if case == "response-uses-new-sha":
+                    response_sha = new_sha
+        _assert_source_integrity_failure(
+            client,
+            conversion,
+            response_sha=response_sha,
+        )
+
+
+def test_manual_toctou_source_mutation_fails_in_persistence_transaction(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-manual-toctou-admin@example.com", is_admin=True))
+    conversion = _submit(client, SOURCE + "\n// manual-toctou\n", "Manual TOCTOU")
+    client.post(f"/api/admin/pine-conversions/{conversion['id']}/manual-package")
+    original_persist = admin_pine_conversion_service._persist_candidate
+    mutated = False
+
+    def mutate_then_persist(*args, **kwargs):
+        nonlocal mutated
+        if not mutated:
+            from app.db import models
+            from app.db.engine import session_scope
+
+            with session_scope() as db:
+                row = db.get(models.PineConversionRequest, uuid.UUID(conversion["id"]))
+                artifact = db.query(models.StrategySourceArtifact).filter_by(
+                    strategy_version_id=row.input_version_id,
+                    artifact_type="pine_script",
+                ).one()
+                artifact.content += "\n// changed between checks"
+            mutated = True
+        return original_persist(*args, **kwargs)
+
+    monkeypatch.setattr(admin_pine_conversion_service, "_persist_candidate", mutate_then_persist)
+    _assert_source_integrity_failure(client, conversion)
+    assert mutated is True
+
+
+def test_api_toctou_source_mutation_fails_in_shared_persistence(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-api-toctou-admin@example.com", is_admin=True))
+    conversion = _submit(client, SOURCE + "\n// api-toctou\n", "API TOCTOU")
+    provider = pine_conversion_provider.FakePineConversionProvider(_output(conversion))
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: provider)
+    original_persist = admin_pine_conversion_service._persist_candidate
+
+    def mutate_then_persist(*args, **kwargs):
+        from app.db import models
+        from app.db.engine import session_scope
+
+        with session_scope() as db:
+            row = db.get(models.PineConversionRequest, uuid.UUID(conversion["id"]))
+            artifact = db.query(models.StrategySourceArtifact).filter_by(
+                strategy_version_id=row.input_version_id,
+                artifact_type="pine_script",
+            ).one()
+            artifact.content += "\n// changed after provider validation"
+        return original_persist(*args, **kwargs)
+
+    monkeypatch.setattr(admin_pine_conversion_service, "_persist_candidate", mutate_then_persist)
+    response = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert")
+    assert response.status_code == 409, response.text
+    assert response.json()["reason"] == "SOURCE_ARTIFACT_INTEGRITY_MISMATCH"
+    assert provider.count_calls == provider.convert_calls == 1
+    detail = client.get(f"/api/admin/pine-conversions/{conversion['id']}").json()["conversion"]
+    assert detail["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
+    assert detail["candidate_version_id"] is None
+    assert detail["validation"] is None
+    _assert_no_candidate_evidence(conversion)
+
+
+def test_api_source_mutation_fails_before_provider_use(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-api-precheck-admin@example.com", is_admin=True))
+    conversion = _submit(client, SOURCE + "\n// api-precheck\n", "API precheck")
+    provider = pine_conversion_provider.FakePineConversionProvider(_output(conversion))
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: provider)
+    from app.db import models
+    from app.db.engine import session_scope
+
+    with session_scope() as db:
+        row = db.get(models.PineConversionRequest, uuid.UUID(conversion["id"]))
+        artifact = db.query(models.StrategySourceArtifact).filter_by(
+            strategy_version_id=row.input_version_id,
+            artifact_type="pine_script",
+        ).one()
+        artifact.content += "\n// changed before API conversion"
+    response = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert")
+    assert response.status_code == 409, response.text
+    assert response.json()["reason"] == "SOURCE_ARTIFACT_INTEGRITY_MISMATCH"
+    assert provider.count_calls == provider.convert_calls == provider.repair_calls == 0
+    with session_scope() as db:
+        row = db.get(models.PineConversionRequest, uuid.UUID(conversion["id"]))
+        assert row.status == "ready_for_conversion"
+        assert row.candidate_version_id is None
+
+
+def test_source_artifact_owner_and_reference_mismatches_fail_closed(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    owner = make_user("c1-reference-owner@example.com", is_admin=True)
+    other_owner = make_user("c1-reference-foreign@example.com", is_admin=True)
+    client = _client(owner)
+    other_client = _client(other_owner)
+
+    for index, case in enumerate(("foreign-conversion", "foreign-owner", "missing-artifact", "request-version-mismatch")):
+        conversion = _submit(client, SOURCE + f"\n// reference-{index}\n", f"Reference {case}")
+        donor = (
+            _submit(other_client, SOURCE + f"\n// foreign-{index}\n", f"Foreign {case}")
+            if case == "foreign-owner"
+            else _submit(client, SOURCE + f"\n// donor-{index}\n", f"Donor {case}")
+        )
+        from app.db import models
+        from app.db.engine import session_scope
+        with session_scope() as db:
+            row = db.get(models.PineConversionRequest, uuid.UUID(conversion["id"]))
+            donor_row = db.get(models.PineConversionRequest, uuid.UUID(donor["id"]))
+            if case in {"foreign-conversion", "foreign-owner"}:
+                row.input_version_id = donor_row.input_version_id
+            elif case == "missing-artifact":
+                artifact = db.query(models.StrategySourceArtifact).filter_by(
+                    strategy_version_id=row.input_version_id,
+                    artifact_type="pine_script",
+                ).one()
+                db.delete(artifact)
+            else:
+                row.strategy_id = donor_row.strategy_id
+        _assert_source_integrity_failure(client, conversion)
+
+
+BYTE_EXACT_SOURCES = (
+    pytest.param(
+        '//@version=6\nindicator("LF source", overlay=true)\nbool sourceSignal = close > open\n',
+        id="lf",
+    ),
+    pytest.param(
+        '//@version=6\r\nindicator("CRLF source", overlay=true)\r\nbool sourceSignal = close > open\r\n',
+        id="crlf",
+    ),
+    pytest.param(
+        '//@version=6\nindicator("No trailing newline", overlay=true)\nbool sourceSignal = close > open',
+        id="no-trailing-newline",
+    ),
+    pytest.param(
+        '//@version=6\nindicator("Two trailing newlines", overlay=true)\nbool sourceSignal = close > open\n\n',
+        id="trailing-newlines",
+    ),
+    pytest.param(
+        '//@version=6\nindicator("Unicode Ω संकेत", overlay=true)\nbool sourceSignal = close > open\n',
+        id="unicode",
+    ),
+)
+
+
+@pytest.mark.parametrize("source", BYTE_EXACT_SOURCES)
+def test_valid_manual_source_byte_variants_remain_exact(mu_db, monkeypatch, source):
+    _enable(monkeypatch)
+    client = _client(make_user(f"c1-bytes-{hashlib.sha256(source.encode()).hexdigest()[:8]}@example.com", is_admin=True))
+    conversion = _submit(client, source, "Exact byte variant")
+    expected_sha = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    assert conversion["source_sha256"] == expected_sha
+    package = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/manual-package"
+    ).json()["package"]
+    assert package.split("BEGIN_UNTRUSTED_PINE_SOURCE\n", 1)[1].split(
+        "\nEND_UNTRUSTED_PINE_SOURCE",
+        1,
+    )[0] == source
+    response = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/manual-response",
+        json={"response_json": json.dumps(_output(conversion).model_dump())},
+    )
+    assert response.status_code == 200, response.text
+    detail = response.json()["conversion"]
+    assert detail["original_source"] == source
+    assert detail["conversion_status"] == "READY_FOR_ADMIN_REVIEW"
 
 
 def test_logic_changed_manual_response_cannot_become_review_ready(mu_db, monkeypatch):
