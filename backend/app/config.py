@@ -152,6 +152,17 @@ class Settings(BaseSettings):
     PINE_CONVERSION_QUALIFICATION_PACKAGE_ENABLED: bool = False
     PINE_CONVERSION_WORKER_POLL_SECONDS: float = 1.0
     PINE_CONVERSION_STALE_SECONDS: int = 300
+    # Admin-only C1 Claude conversion. This is independent from the existing
+    # owner opt-in queue and remains disabled unless explicitly configured.
+    CLAUDE_CONVERSION_ENABLED: bool = False
+    ANTHROPIC_API_KEY: str = ""
+    CLAUDE_CONVERSION_MODEL: str = ""
+    CLAUDE_CONVERSION_TIMEOUT_SECONDS: int = 120
+    CLAUDE_CONVERSION_MAX_REPAIRS: int = 1
+    CLAUDE_CONVERSION_MAX_INPUT_TOKENS: int = 120000
+    CLAUDE_CONVERSION_MAX_OUTPUT_TOKENS: int = 16000
+    CLAUDE_CONVERSION_DAILY_ADMIN_LIMIT: int = 10
+    CLAUDE_CONVERSION_DAILY_GLOBAL_LIMIT: int = 50
 
     @field_validator(
         "CANONICAL_SIGNAL_SHADOW",

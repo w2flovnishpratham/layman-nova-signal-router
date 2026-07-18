@@ -168,6 +168,27 @@
 .pine-diff > div { min-width: 0; }
 .pine-diff pre { max-height: 420px; overflow: auto; white-space: pre; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 11px; }
 .pine-conversion-meta { font-size: 11.5px; }
+.c1-workspace { margin-bottom: 14px; }
+.c1-submit-grid { display: grid; grid-template-columns: minmax(240px, .7fr) minmax(0, 1.5fr); gap: 14px; margin: 16px 0 12px; }
+.c1-submit-form, .c1-detail, .c1-capabilities, .c1-provenance, .c1-findings, .c1-manual { display: grid; gap: 9px; min-width: 0; }
+.c1-submit-form label, .c1-source-label, .c1-manual label, .c1-review-reason { display: grid; gap: 6px; color: var(--text-2); font-size: 11px; font-weight: 600; }
+.c1-submit-form textarea, .c1-manual textarea, .c1-review-reason textarea { min-height: 80px; resize: vertical; padding: 9px; color: var(--text-1); border: 1px solid var(--border-hi); border-radius: 8px; background: var(--bg-2); }
+.c1-options { display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: 8px; }
+.c1-file-button { position: relative; justify-self: start; display: inline-flex !important; align-items: center; gap: 6px; padding: 8px 12px; cursor: pointer; }
+.c1-conversion-grid { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 14px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); align-items: start; }
+.c1-capabilities, .c1-provenance, .c1-findings { margin: 12px 0; padding: 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-2); color: var(--text-3); font-size: 11px; }
+.c1-capabilities strong, .c1-provenance strong, .c1-findings strong { color: var(--text-1); }
+.c1-blocker { color: var(--danger); }
+.c1-manual { margin-top: 10px; }
+.c1-line-diff { margin-top: 12px; }
+.c1-line-diff pre, .c1-transport pre { max-height: 420px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); font-size: 10.5px; white-space: pre; }
+.c1-line-diff span { display: block; min-height: 1.45em; }
+.c1-diff-added { color: var(--success); background: color-mix(in srgb, var(--success) 7%, transparent); }
+.c1-diff-removed { color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); }
+.c1-diff-unchanged { color: var(--text-3); }
+.c1-transport { margin-top: 12px; color: var(--text-2); font-size: 11px; }
+.c1-transport summary { cursor: pointer; font-weight: 650; }
+.c1-review-reason { margin: 12px 0; }
 
 @media (max-width: 900px) {
   .ps-layout { grid-template-columns: 1fr; }
@@ -179,6 +200,8 @@
   .pine-link { grid-template-columns: 1fr; }
   .pine-managed-grid { grid-template-columns: 1fr; }
   .pine-diff { grid-template-columns: 1fr; }
+  .c1-submit-grid, .c1-conversion-grid { grid-template-columns: 1fr; }
+  .c1-options { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 620px) {

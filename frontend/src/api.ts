@@ -758,6 +758,102 @@ export interface PineConversion {
   validation?: PineValidation | null
 }
 
+export interface AdminPineDiffLine {
+  kind: 'added' | 'removed' | 'unchanged'
+  text: string
+}
+
+export interface AdminPineAnalysis {
+  analyzer_version: string
+  registry_version: string
+  registry_sha256: string
+  source_sha256: string
+  matched_capabilities: string[]
+  unsupported_capabilities: string[]
+  warnings: string[]
+  blockers: string[]
+  admin_review_points: string[]
+  effective_capability_level: string
+  confidence: string
+}
+
+export interface AdminPineConversion {
+  id: string
+  strategy_id: string
+  strategy_name: string
+  input_version_id: string
+  candidate_version_id: string | null
+  source_sha256: string
+  candidate_sha256: string | null
+  strategy_layer_sha256: string | null
+  submitted_at: string | null
+  analysis_status: string
+  conversion_status: string
+  provider: string
+  model: string
+  provider_mode: string | null
+  validation_status: string
+  review_status: string
+  safe_error_code: string | null
+  analysis: AdminPineAnalysis
+  provenance: Record<string, unknown>
+  validation: PineValidation | null
+  conversion_summary: string | null
+  warnings: string[]
+  unsupported_features: string[]
+  action_mapping: Record<string, string>
+  original_source?: string
+  strategy_layer?: string | null
+  final_candidate?: string | null
+  transport_source?: string | null
+  diff?: AdminPineDiffLine[]
+  approval_integrity?: boolean | null
+}
+
+export interface AdminPineSubmissionPayload {
+  strategy_name: string
+  source: string
+  original_filename: string
+  internal_notes?: string
+  options: {
+    requested_setup_type: 'USER_MANAGED_TRADINGVIEW' | 'NOVA_MANAGED_TRADINGVIEW'
+    intended_symbol: string
+    intended_timeframe: string
+  }
+}
+
+export const listAdminPineConversions = async () =>
+  (await pineCall<{ conversions: AdminPineConversion[] }>('/api/admin/pine-conversions')).conversions
+export const getAdminPineConversion = async (id: string) =>
+  (await pineCall<{ conversion: AdminPineConversion }>(`/api/admin/pine-conversions/${id}` as `/${string}`)).conversion
+export const submitAdminPineConversion = async (payload: AdminPineSubmissionPayload) =>
+  (await pineCall<{ conversion: AdminPineConversion }>('/api/admin/pine-conversions', 'POST', payload)).conversion
+export const runAdminPineConversion = async (id: string) =>
+  (await pineCall<{ conversion: AdminPineConversion }>(`/api/admin/pine-conversions/${id}/convert` as `/${string}`, 'POST')).conversion
+export const getAdminPineManualPackage = async (id: string) =>
+  pineCall<{ package: string; filename: string; package_sha256: string; source_sha256: string }>(
+    `/api/admin/pine-conversions/${id}/manual-package` as `/${string}`,
+    'POST',
+  )
+export const submitAdminPineManualResponse = async (id: string, responseJson: string) =>
+  (await pineCall<{ conversion: AdminPineConversion }>(
+    `/api/admin/pine-conversions/${id}/manual-response` as `/${string}`,
+    'POST',
+    { response_json: responseJson },
+  )).conversion
+export const approveAdminPineConversion = async (id: string, reason?: string) =>
+  (await pineCall<{ conversion: AdminPineConversion }>(
+    `/api/admin/pine-conversions/${id}/approve` as `/${string}`,
+    'POST',
+    { reason: reason || null },
+  )).conversion
+export const rejectAdminPineConversion = async (id: string, reason: string) =>
+  (await pineCall<{ conversion: AdminPineConversion }>(
+    `/api/admin/pine-conversions/${id}/reject` as `/${string}`,
+    'POST',
+    { reason },
+  )).conversion
+
 export const getPineConversionConfig = () => pineCall<PineConversionConfig>('/api/pine-conversions/config')
 export const generatePineConversionPackage = (strategyId: string, versionId: string) =>
   pineCall<{ package: string; filename: string; package_sha256: string }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/conversion-package` as `/${string}`, 'POST')

@@ -8,7 +8,7 @@ from typing import Any, Protocol
 import httpx
 
 from app.config import settings
-from app.schemas.pine_conversion import PineConversionOutput
+from app.schemas.pine_conversion import ClaudePineConversionOutput, PineConversionOutput
 
 
 class ProviderError(RuntimeError):
@@ -33,6 +33,159 @@ class PineConversionProviderResult:
 
 class PineConversionProvider(Protocol):
     def convert(self, request: PineConversionProviderRequest) -> PineConversionProviderResult: ...
+
+
+@dataclass(frozen=True)
+class ClaudePineConversionProviderRequest:
+    system: str
+    prompt: str
+    model: str
+    timeout_seconds: int
+    max_output_tokens: int
+
+
+@dataclass(frozen=True)
+class ClaudePineConversionProviderResult:
+    output: ClaudePineConversionOutput
+    request_id: str | None = None
+    usage: dict[str, int] | None = None
+
+
+class ClaudePineConversionProvider(Protocol):
+    def count_tokens(self, request: ClaudePineConversionProviderRequest) -> int: ...
+    def convert(self, request: ClaudePineConversionProviderRequest) -> ClaudePineConversionProviderResult: ...
+    def repair(self, request: ClaudePineConversionProviderRequest) -> ClaudePineConversionProviderResult: ...
+
+
+class DisabledPineConversionProvider:
+    def count_tokens(self, request: ClaudePineConversionProviderRequest) -> int:
+        raise ProviderError("AI_DISABLED")
+
+    def convert(self, request: ClaudePineConversionProviderRequest) -> ClaudePineConversionProviderResult:
+        raise ProviderError("AI_DISABLED")
+
+    def repair(self, request: ClaudePineConversionProviderRequest) -> ClaudePineConversionProviderResult:
+        raise ProviderError("AI_DISABLED")
+
+
+class FakePineConversionProvider:
+    """Deterministic test provider; it never performs network I/O."""
+
+    def __init__(
+        self,
+        output: ClaudePineConversionOutput,
+        *,
+        repair_output: ClaudePineConversionOutput | None = None,
+        input_tokens: int = 100,
+    ) -> None:
+        self.output = output
+        self.repair_output = repair_output
+        self.input_tokens = input_tokens
+        self.count_calls = 0
+        self.convert_calls = 0
+        self.repair_calls = 0
+
+    def count_tokens(self, request: ClaudePineConversionProviderRequest) -> int:
+        self.count_calls += 1
+        return self.input_tokens
+
+    def convert(self, request: ClaudePineConversionProviderRequest) -> ClaudePineConversionProviderResult:
+        self.convert_calls += 1
+        return ClaudePineConversionProviderResult(
+            self.output, "fake-claude-request", {"input_tokens": self.input_tokens, "output_tokens": 100}
+        )
+
+    def repair(self, request: ClaudePineConversionProviderRequest) -> ClaudePineConversionProviderResult:
+        self.repair_calls += 1
+        if self.repair_output is None:
+            raise ProviderError("REPAIR_FAILED")
+        return ClaudePineConversionProviderResult(
+            self.repair_output, "fake-claude-repair", {"input_tokens": self.input_tokens, "output_tokens": 100}
+        )
+
+
+class AnthropicClaudePineConversionProvider:
+    """One-shot Anthropic Messages adapter with no tools or external authority."""
+
+    @staticmethod
+    def _client(request: ClaudePineConversionProviderRequest):
+        try:
+            from anthropic import Anthropic
+        except ImportError as exc:  # pragma: no cover - deployment dependency check
+            raise ProviderError("PROVIDER_SDK_UNAVAILABLE") from exc
+        return Anthropic(
+            api_key=settings.ANTHROPIC_API_KEY,
+            timeout=float(request.timeout_seconds),
+            max_retries=0,
+        )
+
+    @staticmethod
+    def _message_args(request: ClaudePineConversionProviderRequest) -> dict[str, Any]:
+        return {
+            "model": request.model,
+            "max_tokens": request.max_output_tokens,
+            "system": request.system,
+            "messages": [{"role": "user", "content": request.prompt}],
+        }
+
+    def count_tokens(self, request: ClaudePineConversionProviderRequest) -> int:
+        try:
+            response = self._client(request).messages.count_tokens(
+                model=request.model,
+                system=request.system,
+                messages=[{"role": "user", "content": request.prompt}],
+            )
+            return int(response.input_tokens)
+        except Exception as exc:
+            raise self._safe_error(exc) from exc
+
+    def convert(self, request: ClaudePineConversionProviderRequest) -> ClaudePineConversionProviderResult:
+        return self._run(request)
+
+    def repair(self, request: ClaudePineConversionProviderRequest) -> ClaudePineConversionProviderResult:
+        return self._run(request)
+
+    def _run(self, request: ClaudePineConversionProviderRequest) -> ClaudePineConversionProviderResult:
+        try:
+            message = self._client(request).messages.parse(
+                **self._message_args(request),
+                output_format=ClaudePineConversionOutput,
+            )
+            if getattr(message, "stop_reason", None) in {"refusal", "max_tokens"}:
+                raise ProviderError("PROVIDER_REFUSED" if message.stop_reason == "refusal" else "OUTPUT_TOKEN_LIMIT")
+            output = getattr(message, "parsed_output", None)
+            if output is None:
+                raise ProviderError("EMPTY_PROVIDER_RESPONSE")
+            output = ClaudePineConversionOutput.model_validate(output)
+            usage = {
+                "input_tokens": int(getattr(message.usage, "input_tokens", 0)),
+                "output_tokens": int(getattr(message.usage, "output_tokens", 0)),
+            }
+            request_id = getattr(message, "_request_id", None)
+            return ClaudePineConversionProviderResult(output, str(request_id)[:120] if request_id else None, usage)
+        except ProviderError:
+            raise
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ProviderError("INVALID_PROVIDER_RESPONSE") from exc
+        except Exception as exc:
+            raise self._safe_error(exc) from exc
+
+    @staticmethod
+    def _safe_error(exc: Exception) -> ProviderError:
+        name = type(exc).__name__
+        if name in {"APITimeoutError", "TimeoutError"}:
+            return ProviderError("PROVIDER_TIMEOUT")
+        if name == "RateLimitError":
+            return ProviderError("PROVIDER_RATE_LIMITED")
+        if name in {"AuthenticationError", "PermissionDeniedError"}:
+            return ProviderError("PROVIDER_AUTH_FAILED")
+        return ProviderError("PROVIDER_UNAVAILABLE")
+
+
+def get_claude_provider() -> ClaudePineConversionProvider:
+    if not settings.CLAUDE_CONVERSION_ENABLED:
+        return DisabledPineConversionProvider()
+    return AnthropicClaudePineConversionProvider()
 
 
 class OpenAICompatibleProvider:

@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   conversionConfig: vi.fn(), conversionPackage: vi.fn(), convert: vi.fn(), conversion: vi.fn(), accept: vi.fn(), reject: vi.fn(), retry: vi.fn(),
   createSetup: vi.fn(), getSetup: vi.fn(),
   managedSetups: vi.fn(), recordInstallation: vi.fn(), managedCredential: vi.fn(),
+  adminConversions: vi.fn(), adminConversion: vi.fn(),
 }))
 vi.mock('../api', () => ({
   listPineStrategies: api.list, getPineStrategy: api.get, createPineStrategy: api.create,
@@ -21,6 +22,10 @@ vi.mock('../api', () => ({
   createTradingViewSetup: api.createSetup, getTradingViewSetup: api.getSetup,
   listManagedTradingViewSetups: api.managedSetups, recordManagedTradingViewInstallation: api.recordInstallation,
   generateManagedTradingViewCredential: api.managedCredential,
+  listAdminPineConversions: api.adminConversions, getAdminPineConversion: api.adminConversion,
+  submitAdminPineConversion: vi.fn(), runAdminPineConversion: vi.fn(),
+  getAdminPineManualPackage: vi.fn(), submitAdminPineManualResponse: vi.fn(),
+  approveAdminPineConversion: vi.fn(), rejectAdminPineConversion: vi.fn(),
 }))
 
 const MANAGED_TOKEN = 'nwk_MANAGED_SENTINEL_CREDENTIAL_0987654321'
@@ -40,6 +45,7 @@ beforeEach(() => {
   api.conversionPackage.mockResolvedValue({ package: `PRIVATE WARNING\n${SOURCE}`, filename: 'conversion.txt', package_sha256: 'pkg' })
   api.getSetup.mockRejectedValue(new Error('not configured'))
   api.managedSetups.mockResolvedValue([])
+  api.adminConversions.mockResolvedValue([])
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
 afterEach(() => cleanup())

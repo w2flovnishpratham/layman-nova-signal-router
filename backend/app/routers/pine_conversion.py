@@ -6,7 +6,15 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import get_current_user, require_admin
-from app.schemas.pine_conversion import CreateConversionPayload, RejectConversionPayload, RetryConversionPayload
+from app.schemas.pine_conversion import (
+    AdminManualResponsePayload,
+    AdminPineDecisionPayload,
+    AdminPineSubmission,
+    CreateConversionPayload,
+    RejectConversionPayload,
+    RetryConversionPayload,
+)
+from app.services import admin_pine_conversion_service as admin_service
 from app.services import pine_conversion_service as service
 from app.services.user_context import CurrentUser
 from app.workers.pine_conversion_worker import wake_pine_conversion_worker
@@ -16,6 +24,10 @@ admin_router = APIRouter(prefix="/api/admin/pine-conversions", tags=["Pine Conve
 
 
 def _error(exc):
+    if isinstance(exc, admin_service.AdminConversionError):
+        body = {"ok": False, "error": str(exc)}
+        if exc.code: body["reason"] = exc.code
+        return JSONResponse(status_code=exc.status_code, content=body)
     if isinstance(exc, service.ConversionError):
         body = {"ok": False, "error": str(exc)}
         if exc.code: body["reason"] = exc.code
@@ -90,3 +102,79 @@ def usage(admin: CurrentUser = Depends(require_admin)):
     with session_scope() as db:
         rows = db.execute(select(models.PineConversionRequest.provider, models.PineConversionRequest.model, models.PineConversionRequest.status, func.count()).group_by(models.PineConversionRequest.provider, models.PineConversionRequest.model, models.PineConversionRequest.status)).all()
         return {"ok": True, "usage": [{"provider": p, "model": m, "status": s, "requests": count} for p, m, s, count in rows]}
+
+
+@admin_router.post("")
+def admin_submit(payload: AdminPineSubmission, admin: CurrentUser = Depends(require_admin)):
+    try:
+        return {"ok": True, **admin_service.submit(admin.id, payload)}
+    except Exception as exc:
+        return _error(exc)
+
+
+@admin_router.get("")
+def admin_list(limit: int = 50, offset: int = 0, admin: CurrentUser = Depends(require_admin)):
+    try:
+        return {"ok": True, **admin_service.list_conversions(admin.id, limit=limit, offset=offset)}
+    except Exception as exc:
+        return _error(exc)
+
+
+@admin_router.get("/{conversion_id}")
+def admin_detail(conversion_id: uuid.UUID, admin: CurrentUser = Depends(require_admin)):
+    try:
+        return {"ok": True, **admin_service.get_conversion(admin.id, conversion_id)}
+    except Exception as exc:
+        return _error(exc)
+
+
+@admin_router.post("/{conversion_id}/convert")
+def admin_convert(conversion_id: uuid.UUID, admin: CurrentUser = Depends(require_admin)):
+    try:
+        return {"ok": True, **admin_service.convert(admin.id, conversion_id)}
+    except Exception as exc:
+        return _error(exc)
+
+
+@admin_router.post("/{conversion_id}/manual-package")
+def admin_manual_package(conversion_id: uuid.UUID, admin: CurrentUser = Depends(require_admin)):
+    try:
+        return {"ok": True, **admin_service.manual_package(admin.id, conversion_id)}
+    except Exception as exc:
+        return _error(exc)
+
+
+@admin_router.post("/{conversion_id}/manual-response")
+def admin_manual_response(
+    conversion_id: uuid.UUID,
+    payload: AdminManualResponsePayload,
+    admin: CurrentUser = Depends(require_admin),
+):
+    try:
+        return {"ok": True, **admin_service.submit_manual_response(admin.id, conversion_id, payload.response_json)}
+    except Exception as exc:
+        return _error(exc)
+
+
+@admin_router.post("/{conversion_id}/approve")
+def admin_approve(
+    conversion_id: uuid.UUID,
+    payload: AdminPineDecisionPayload | None = None,
+    admin: CurrentUser = Depends(require_admin),
+):
+    try:
+        return {"ok": True, **admin_service.approve(admin.id, conversion_id, payload.reason if payload else None)}
+    except Exception as exc:
+        return _error(exc)
+
+
+@admin_router.post("/{conversion_id}/reject")
+def admin_reject(
+    conversion_id: uuid.UUID,
+    payload: AdminPineDecisionPayload,
+    admin: CurrentUser = Depends(require_admin),
+):
+    try:
+        return {"ok": True, **admin_service.reject(admin.id, conversion_id, payload.reason)}
+    except Exception as exc:
+        return _error(exc)

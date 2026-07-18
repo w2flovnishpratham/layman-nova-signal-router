@@ -40,3 +40,70 @@ class RetryConversionPayload(BaseModel):
 
 class RejectConversionPayload(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
+
+
+class AdminConversionOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requested_setup_type: Literal["USER_MANAGED_TRADINGVIEW", "NOVA_MANAGED_TRADINGVIEW"] = "USER_MANAGED_TRADINGVIEW"
+    intended_symbol: str = Field(default="NIFTY", min_length=1, max_length=30)
+    intended_timeframe: str = Field(default="5", min_length=1, max_length=20)
+
+
+class AdminPineSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_name: str = Field(min_length=1, max_length=160)
+    source: str = Field(min_length=1)
+    original_filename: str = Field(default="strategy.pine", min_length=1, max_length=120)
+    internal_notes: str | None = Field(default=None, max_length=2000)
+    options: AdminConversionOptions = Field(default_factory=AdminConversionOptions)
+
+
+class ClaudeSignalMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    buy_ce_source: str = Field(min_length=1, max_length=2000)
+    buy_pe_source: str = Field(min_length=1, max_length=2000)
+    exit_source: str = Field(min_length=1, max_length=2000)
+
+
+class ClaudeBehaviorPreservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    logic_changed: bool
+    change_summary: list[str] = Field(default_factory=list, max_length=50)
+
+
+class ClaudeCapabilityResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    handled: list[str] = Field(default_factory=list, max_length=100)
+    unsupported: list[str] = Field(default_factory=list, max_length=100)
+    manual_review: list[str] = Field(default_factory=list, max_length=100)
+
+
+class ClaudePineConversionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["nova.claude-pine-conversion.v1"]
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal["CONVERTED", "MANUAL_REVIEW_REQUIRED", "BLOCKED"]
+    strategy_layer: str = Field(min_length=1)
+    signal_mapping: ClaudeSignalMapping
+    behavior_preservation: ClaudeBehaviorPreservation
+    capabilities: ClaudeCapabilityResult
+    user_summary: str = Field(min_length=1, max_length=2000)
+    admin_review_points: list[str] = Field(default_factory=list, max_length=100)
+
+
+class AdminManualResponsePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    response_json: str = Field(min_length=2)
+
+
+class AdminPineDecisionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=500)

@@ -36,6 +36,7 @@ import {
   type TradingViewSetup,
   type TradingViewSetupType,
 } from '../api'
+import { AdminPineConversionWorkspace } from './AdminPineConversion'
 
 const MAX_BYTES = 256 * 1024
 
@@ -242,7 +243,7 @@ function AdminReview() {
 }
 
 function AdminWorkspace() {
-  return <><AdminReview /><ManagedSetupQueue /></>
+  return <><AdminPineConversionWorkspace /><AdminReview /><ManagedSetupQueue /></>
 }
 
 function ManagedSetupQueue() {
