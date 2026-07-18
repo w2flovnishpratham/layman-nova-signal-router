@@ -534,8 +534,12 @@ def _validate_layer(
     errors: list[str] = []
     if expected_source_sha256 and output.source_sha256 != expected_source_sha256:
         errors.append("SOURCE_SHA_MISMATCH")
-    if output.behavior_preservation.logic_changed and output.status != "MANUAL_REVIEW_REQUIRED":
-        errors.append("LOGIC_CHANGED_STATUS_INVALID")
+    if output.behavior_preservation.logic_changed:
+        errors.append(
+            "LOGIC_CHANGED_STATUS_INVALID"
+            if output.status != "MANUAL_REVIEW_REQUIRED"
+            else "LOGIC_CHANGED_REQUIRES_MANUAL_CORRECTION"
+        )
     if output.capabilities.unsupported and output.status == "CONVERTED":
         errors.append("UNSUPPORTED_CAPABILITY_STATUS_INVALID")
     if analysis is not None:
@@ -926,22 +930,65 @@ def manual_package(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[
         if row.status in {"unsupported_strategy", "approved_for_tv_compile", "rejected"}:
             raise AdminConversionError("Manual fallback is not allowed in this state.", 409, "STATE_CONFLICT")
         source = pine._artifact(db, row.input_version_id)
-        request = _build_request(row, source.content)
+        analysis = (row.usage_summary or {}).get("analysis") or {}
+        response_schema = ClaudePineConversionOutput.model_json_schema(mode="validation")
         package = f"""# NOVA C1 ADMIN MANUAL CLAUDE CONVERSION
 
 Provider mode: {PROVIDER_MODE_MANUAL}
 Source SHA-256: {row.input_source_sha256}
 Response schema: {RESPONSE_SCHEMA_VERSION}
 
-Copy the controlled request below into Claude. Paste only Claude's JSON response
-back into NOVA. The response must contain the strategy layer only. NOVA appends
-and validates server-owned Transport V2. Do not add credentials or execution data.
+OUTPUT CONTRACT
+Return exactly one raw JSON object matching the authoritative schema below.
+Return no Markdown fence, explanatory prose, or additional artifact.
+Use schema_version {RESPONSE_SCHEMA_VERSION} and source_sha256
+{row.input_source_sha256} exactly. Unknown fields are forbidden.
 
-SYSTEM POLICY
-{request.system}
+strategy_layer must contain one complete Pine v6 indicator or strategy with
+exactly one bool definition for novaBuyCeSignal, novaBuyPeSignal, and
+novaExitSignal. It must contain strategy logic only. Do not include transport,
+alert(), webhook URLs, credentials, broker fields, lots, quantity, strike,
+expiry, security ID, or paper/live mode.
 
-CONTROLLED REQUEST
-{request.prompt}
+When behavior cannot be preserved, use status MANUAL_REVIEW_REQUIRED, set
+behavior_preservation.logic_changed=true, and explain the issue only through
+behavior_preservation.change_summary, user_summary, and admin_review_points.
+Do not invent or silently simplify logic. Such a response will not become
+review-ready until the strategy layer is corrected.
+
+NOVA validates this JSON with the same C1 model used by API conversion,
+extracts strategy_layer, appends hash-pinned Transport V2 server-side, and runs
+the same deterministic validators. Claude must not generate transport.
+
+CONTRACT DISTINCTION
+Prompt V3.1 is the reviewed historical conversion foundation; its legacy output
+format is not the response contract for this package. The C1 JSON schema below
+is authoritative. Transport V2 is always owned and appended by NOVA.
+
+BEHAVIOR AND SECURITY POLICY
+{SYSTEM_POLICY}
+
+AUTHORITATIVE C1 RESPONSE JSON SCHEMA
+{json.dumps(response_schema, sort_keys=True, indent=2, ensure_ascii=False)}
+
+APPROVED CONVERSION OPTIONS
+{json.dumps(row.options, sort_keys=True, separators=(",", ":"), ensure_ascii=False)}
+
+MATCHED CAPABILITY IDS
+{json.dumps(analysis.get("matched_capabilities", []), separators=(",", ":"), ensure_ascii=False)}
+
+RELEVANT CAPABILITY POLICIES
+{json.dumps(_relevant_policies(analysis.get("matched_capabilities", [])), sort_keys=True, separators=(",", ":"), ensure_ascii=False)}
+
+PRE-ANALYZER FINDINGS
+{json.dumps(analysis, sort_keys=True, separators=(",", ":"), ensure_ascii=False)}
+
+EXACT SOURCE SHA-256
+{row.input_source_sha256}
+
+BEGIN_UNTRUSTED_PINE_SOURCE
+{source.content}
+END_UNTRUSTED_PINE_SOURCE
 """
         package_sha = _hash(package)
         summary = dict(row.usage_summary or {})

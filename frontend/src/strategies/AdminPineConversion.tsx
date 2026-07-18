@@ -25,6 +25,7 @@ export function AdminPineConversionWorkspace() {
   const [timeframe, setTimeframe] = useState('5')
   const [setupType, setSetupType] = useState<'USER_MANAGED_TRADINGVIEW' | 'NOVA_MANAGED_TRADINGVIEW'>('USER_MANAGED_TRADINGVIEW')
   const [manualResponse, setManualResponse] = useState('')
+  const [manualPackage, setManualPackage] = useState('')
   const [reviewReason, setReviewReason] = useState('')
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
@@ -60,11 +61,13 @@ export function AdminPineConversionWorkspace() {
   }
 
   async function open(id: string) {
+    setManualPackage('')
     await run('Conversion refresh', async () => setSelected(await getAdminPineConversion(id)))
   }
 
   async function submit() {
     await run('Source submission', async () => {
+      setManualPackage('')
       const conversion = await submitAdminPineConversion({
         strategy_name: strategyName.trim(),
         source,
@@ -136,12 +139,13 @@ export function AdminPineConversionWorkspace() {
           {selected ? <ConversionDetail
             conversion={selected}
             busy={busy}
+            manualPackage={manualPackage}
             manualResponse={manualResponse}
             reviewReason={reviewReason}
             onManualResponse={setManualResponse}
             onReviewReason={setReviewReason}
             onConvert={() => run('AI conversion', async () => { const value = await runAdminPineConversion(selected.id); setSelected(value); await refresh(selected.id) })}
-            onManualPackage={() => run('Manual package copy', async () => { const value = await getAdminPineManualPackage(selected.id); await navigator.clipboard.writeText(value.package) })}
+            onManualPackage={() => run('Manual package copy', async () => { const value = await getAdminPineManualPackage(selected.id); setManualPackage(value.package); await navigator.clipboard.writeText(value.package) })}
             onSubmitManual={() => run('Manual response', async () => { const value = await submitAdminPineManualResponse(selected.id, manualResponse); setSelected(value); await refresh(selected.id) })}
             onApprove={() => run('Candidate approval', async () => { if (!window.confirm('Approve this exact candidate for TradingView compilation only?')) return; const value = await approveAdminPineConversion(selected.id, reviewReason); setSelected(value); await refresh(selected.id) })}
             onReject={() => run('Candidate rejection', async () => { const value = await rejectAdminPineConversion(selected.id, reviewReason); setSelected(value); await refresh(selected.id) })}
@@ -153,11 +157,12 @@ export function AdminPineConversionWorkspace() {
 }
 
 function ConversionDetail({
-  conversion, busy, manualResponse, reviewReason, onManualResponse, onReviewReason,
+  conversion, busy, manualPackage, manualResponse, reviewReason, onManualResponse, onReviewReason,
   onConvert, onManualPackage, onSubmitManual, onApprove, onReject,
 }: {
   conversion: AdminPineConversion
   busy: string
+  manualPackage: string
   manualResponse: string
   reviewReason: string
   onManualResponse: (value: string) => void
@@ -192,6 +197,7 @@ function ConversionDetail({
       <button className="ps-primary" type="button" disabled={!canConvert || !!busy} onClick={() => void onConvert()}><Sparkles size={14} /> Run AI Conversion</button>
       <button className="secondary-button" type="button" disabled={!canManual || !!busy} onClick={() => void onManualPackage()}><Copy size={14} /> Open Manual Fallback</button>
     </div>
+    {manualPackage ? <details open className="c1-transport"><summary>Current C1 manual package</summary><pre>{manualPackage}</pre></details> : null}
     {canManual ? <div className="c1-manual"><label>Structured manual Claude response<textarea aria-label="Manual Claude response JSON" value={manualResponse} onChange={(event) => onManualResponse(event.target.value)} /></label><button className="secondary-button" type="button" disabled={!manualResponse.trim() || !!busy} onClick={() => void onSubmitManual()}>Submit Manual Response</button></div> : null}
     {conversion.original_source ? <div className="pine-diff"><CodePanel title="Exact original source" value={conversion.original_source} /><CodePanel title="Converted strategy layer" value={conversion.strategy_layer ?? 'No candidate yet'} /></div> : null}
     {conversion.diff?.length ? <div className="c1-line-diff"><strong>Source / final candidate line diff</strong><pre>{conversion.diff.map((line, index) => <span className={`c1-diff-${line.kind}`} key={`${index}-${line.text}`}>{line.kind === 'added' ? '+ ' : line.kind === 'removed' ? '- ' : '  '}{line.text}{'\n'}</span>)}</pre></div> : null}

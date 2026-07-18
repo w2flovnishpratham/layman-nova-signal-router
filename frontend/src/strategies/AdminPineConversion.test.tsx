@@ -135,6 +135,8 @@ describe('AdminPineConversionWorkspace', () => {
     await user.click(await screen.findByRole('button', { name: /open manual fallback/i }))
     await waitFor(() => expect(api.manualPackage).toHaveBeenCalledWith('c1'))
     expect(screen.getByRole('status')).toHaveTextContent('Manual package copy completed')
+    expect(screen.getByText('Current C1 manual package')).toBeInTheDocument()
+    expect(screen.getByText('CONTROLLED PACKAGE')).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Manual Claude response JSON'), { target: { value: '{"schema_version":"v1"}' } })
     await user.click(screen.getByRole('button', { name: /submit manual response/i }))
     await waitFor(() => expect(api.manualResponse).toHaveBeenCalledWith('c1', '{"schema_version":"v1"}'))

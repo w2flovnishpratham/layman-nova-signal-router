@@ -26,7 +26,8 @@ admin_router = APIRouter(prefix="/api/admin/pine-conversions", tags=["Pine Conve
 def _error(exc):
     if isinstance(exc, admin_service.AdminConversionError):
         body = {"ok": False, "error": str(exc)}
-        if exc.code: body["reason"] = exc.code
+        if exc.code:
+            body["reason"] = exc.code
         return JSONResponse(status_code=exc.status_code, content=body)
     if isinstance(exc, service.ConversionError):
         body = {"ok": False, "error": str(exc)}

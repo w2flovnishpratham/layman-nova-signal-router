@@ -8,8 +8,9 @@ from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.schemas.pine_conversion import ClaudePineConversionOutput
-from app.services import pine_conversion_provider
-from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
+from app.services import pine_conversion_provider, pine_conversion_service
+
+pytest_plugins = ("app.tests.conftest_multiuser",)
 
 SOURCE = """//@version=6\r
 indicator("C1 NIFTY source", overlay=true)\r
@@ -18,6 +19,12 @@ slow = ta.ema(close, 13)\r
 longCondition = ta.crossover(fast, slow)\r
 shortCondition = ta.crossunder(fast, slow)\r
 """
+
+
+def make_user(*args, **kwargs):
+    from app.tests.conftest_multiuser import make_user as create_user
+
+    return create_user(*args, **kwargs)
 
 LAYER = """//@version=6
 indicator("C1 NIFTY converted", overlay=true)
@@ -285,7 +292,28 @@ def test_manual_fallback_same_validation_rejection_and_no_execution_rows(mu_db, 
     package = client.post(f"/api/admin/pine-conversions/{conversion['id']}/manual-package").json()
     assert conversion["source_sha256"] in package["package"]
     assert SOURCE in package["package"]
+    assert package["package"].count(SOURCE) == 1
     assert "test-only-anthropic-key" not in package["package"]
+    assert "nova.claude-pine-conversion.v1" in package["package"]
+    packaged_schema = json.loads(
+        package["package"]
+        .split("AUTHORITATIVE C1 RESPONSE JSON SCHEMA\n", 1)[1]
+        .split("\n\nAPPROVED CONVERSION OPTIONS", 1)[0]
+    )
+    assert packaged_schema == ClaudePineConversionOutput.model_json_schema(mode="validation")
+    for field in ClaudePineConversionOutput.model_fields:
+        assert f'"{field}"' in package["package"]
+    assert '"CONVERTED"' in package["package"]
+    assert '"MANUAL_REVIEW_REQUIRED"' in package["package"]
+    assert '"BLOCKED"' in package["package"]
+    assert "exactly one raw JSON object" in package["package"]
+    assert "Return exactly three artifacts" not in package["package"]
+    assert "ARTIFACT_1_FINAL_NOVA_PINE" not in package["package"]
+    assert "BEGIN_FROZEN_NOVA_TRANSPORT" not in package["package"]
+    assert "NOVA FROZEN TRANSPORT BEGIN" not in package["package"]
+    assert "{{TRANSPORT}}" not in package["package"]
+    assert pine_conversion_service.TRANSPORT_V2_PATH.read_text(encoding="utf-8") not in package["package"]
+    assert "Claude must not generate transport" in package["package"]
     invalid = client.post(
         f"/api/admin/pine-conversions/{conversion['id']}/manual-response",
         json={"response_json": '{"unknown":true}'},
@@ -298,12 +326,19 @@ def test_manual_fallback_same_validation_rejection_and_no_execution_rows(mu_db, 
     assert manual.status_code == 200, manual.text
     detail = manual.json()["conversion"]
     assert detail["provider_mode"] == "MANUAL_ADMIN_COPY_PASTE"
+    assert detail["provenance"]["structured_output_valid"] is True
     assert detail["validation"]["eligible_for_review"] is True
-    rejected = client.post(
-        f"/api/admin/pine-conversions/{conversion['id']}/reject",
-        json={"reason": "TradingView review found a mismatch"},
+    assert detail["strategy_layer"] == LAYER
+    assert "NOVA FROZEN TRANSPORT BEGIN: pine_transport_v2" not in detail["strategy_layer"]
+    assert detail["final_candidate"].count("NOVA FROZEN TRANSPORT BEGIN: pine_transport_v2") == 1
+    assert detail["candidate_sha256"] == hashlib.sha256(detail["final_candidate"].encode()).hexdigest()
+    approved = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/approve",
+        json={"reason": "Manual candidate reviewed for compile"},
     ).json()["conversion"]
-    assert rejected["conversion_status"] == "REJECTED"
+    assert approved["conversion_status"] == "APPROVED_FOR_TRADINGVIEW_COMPILE"
+    assert approved["approval_integrity"] is True
+    assert approved["candidate_sha256"] == detail["candidate_sha256"]
 
     from app.db import models
     from app.db.engine import session_scope
@@ -311,6 +346,82 @@ def test_manual_fallback_same_validation_rejection_and_no_execution_rows(mu_db, 
         assert db.query(models.StrategyInstance).count() == 0
         assert db.query(models.StrategyInstanceWebhookCredential).count() == 0
         assert db.query(models.StrategyExecutionJob).count() == 0
+
+
+def test_manual_response_contract_fails_closed_for_invalid_shapes(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-manual-invalid-admin@example.com", is_admin=True))
+
+    cases = [
+        ("wrong-sha", lambda conversion: _output(conversion).model_copy(update={"source_sha256": "0" * 64}).model_dump()),
+        ("missing-source-sha", lambda conversion: {
+            key: value for key, value in _output(conversion).model_dump().items() if key != "source_sha256"
+        }),
+        ("missing-field", lambda conversion: {
+            key: value for key, value in _output(conversion).model_dump().items() if key != "signal_mapping"
+        }),
+        ("unknown-field", lambda conversion: {**_output(conversion).model_dump(), "tools": ["bash"]}),
+        ("transport", lambda conversion: _output(
+            conversion,
+            layer=LAYER + "\n// === NOVA FROZEN TRANSPORT BEGIN: pine_transport_v2 ===\n",
+        ).model_dump()),
+        ("empty-layer", lambda conversion: {**_output(conversion).model_dump(), "strategy_layer": ""}),
+        ("wrong-schema", lambda conversion: {
+            **_output(conversion).model_dump(), "schema_version": "nova.claude-pine-conversion.v2"
+        }),
+    ]
+    for index, (name, build) in enumerate(cases):
+        conversion = _submit(client, SOURCE + f"\n// manual invalid {index}\n", f"Manual {name}")
+        response = client.post(
+            f"/api/admin/pine-conversions/{conversion['id']}/manual-response",
+            json={"response_json": json.dumps(build(conversion))},
+        )
+        assert response.status_code == 422, (name, response.text)
+        assert response.json()["reason"] in {
+            "INVALID_MANUAL_RESPONSE",
+            "SOURCE_SHA_MISMATCH",
+            "MODEL_TRANSPORT_FORBIDDEN",
+        }
+        detail = client.get(f"/api/admin/pine-conversions/{conversion['id']}").json()["conversion"]
+        assert detail["candidate_version_id"] is None
+
+    prose = _submit(client, SOURCE + "\n// legacy prose\n", "Legacy package response")
+    response = client.post(
+        f"/api/admin/pine-conversions/{prose['id']}/manual-response",
+        json={"response_json": "ARTIFACT_1_FINAL_NOVA_PINE\n```pine\n//@version=6\n```"},
+    )
+    assert response.status_code == 422
+    assert response.json()["reason"] == "INVALID_MANUAL_RESPONSE"
+
+
+def test_logic_changed_manual_response_cannot_become_review_ready(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-manual-logic-admin@example.com", is_admin=True))
+    conversion = _submit(client, SOURCE + "\n// logic changed\n", "Logic changed")
+    raw = _output(conversion).model_dump()
+    raw["status"] = "MANUAL_REVIEW_REQUIRED"
+    raw["behavior_preservation"] = {
+        "logic_changed": True,
+        "change_summary": ["Source behavior could not be preserved."],
+    }
+    response = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/manual-response",
+        json={"response_json": json.dumps(raw)},
+    )
+    assert response.status_code == 422
+    assert response.json()["reason"] == "LOGIC_CHANGED_REQUIRES_MANUAL_CORRECTION"
+    detail = client.get(f"/api/admin/pine-conversions/{conversion['id']}").json()["conversion"]
+    assert detail["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
+    assert detail["candidate_version_id"] is None
+
+
+def test_normal_user_cannot_generate_or_view_manual_package(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    admin = _client(make_user("c1-manual-owner@example.com", is_admin=True))
+    normal = _client(make_user("c1-manual-normal@example.com"))
+    conversion = _submit(admin, SOURCE + "\n// auth\n", "Manual auth")
+    assert normal.post(f"/api/admin/pine-conversions/{conversion['id']}/manual-package").status_code == 403
+    assert normal.get(f"/api/admin/pine-conversions/{conversion['id']}").status_code == 403
 
 
 def test_candidate_mutation_invalidates_approval_binding(mu_db, monkeypatch):

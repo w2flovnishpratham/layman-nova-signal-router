@@ -21,8 +21,10 @@ compilation. No `StrategyInstance` or credential is created in this phase.
 - `StrategyAdminReview` stores immutable compile-review decisions.
 - `pine_semantic_preanalyzer` and the version-controlled capability registry
   run before any provider operation.
-- Prompt V3.1 and its reviewed SHA remain unchanged and are included in the
-  controlled conversion request.
+- Prompt V3.1 and its reviewed SHA remain unchanged. API conversion retains the
+  reviewed controlled request; the C1 manual package identifies V3.1 only as
+  the historical behavior-preservation foundation and uses the current C1
+  structured response envelope.
 - Transport V2 and its reviewed SHA remain unchanged and are rendered only by
   the backend.
 - `pine_validation.validate_source` remains the final static qualification
@@ -173,12 +175,16 @@ behavior redesign are non-repairable. A failed or forbidden repair ends in
 ## Manual fallback
 
 The admin-only manual package contains the exact source/SHA, stable policy,
-Prompt V3.1 package, matched policies, analyzer findings, and strict response
-instructions. It contains no API key or execution secret.
+matched policies, analyzer findings, approved options, and the JSON Schema
+generated directly from `ClaudePineConversionOutput`. It identifies Prompt
+V3.1 as the historical behavior-preservation foundation without embedding its
+legacy three-artifact or model-owned-transport output contract. It contains no
+Transport V2 source, API key, or execution secret.
 
-The administrator pastes only structured JSON back into NOVA. Manual output
-passes the same source binding, capability, layer, Transport V2, and final
-validation path. Provenance records
+The package requests exactly one raw JSON object and a strategy layer without
+transport. The administrator pastes only that JSON back into NOVA. Manual
+output passes the same C1 Pydantic model, source binding, capability, layer,
+Transport V2 assembly, and final validation path as API output. Provenance records
 `MANUAL_ADMIN_COPY_PASTE`; manual candidates receive no weaker standard.
 
 ## API routes
@@ -236,7 +242,10 @@ submit -> analyze -> fake Claude -> append Transport V2 -> validate -> diff -> a
 ```
 
 Blocked, provider-disabled, manual, repair, and rejection paths are exercised
-without a live Anthropic request or trading action.
+without a live Anthropic request or trading action. Manual tests also pin the
+generated schema contract, reject the obsolete multi-artifact response,
+exercise wrong/missing/unknown fields and transport-in-layer failures, and
+prove server-owned Transport V2 assembly and manual candidate SHA binding.
 
 ## Rollback
 
