@@ -37,6 +37,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     # Clients pass the version they last read; mismatched writes return 409.
     "_version": 0,
     "allowed_option_side": "BOTH",
+    "configured_lots": 1,
     "max_trades_per_day": 0,
     "max_daily_loss": 0.0,
     # SL disable — when True, _broker_exit_levels sets the Super Order SL

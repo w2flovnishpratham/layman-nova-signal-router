@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.auth.dependencies import get_optional_user
@@ -167,8 +168,31 @@ def google_callback(request: Request, code: str | None = None, state: str | None
     return response
 
 
+class LogoutRequest(BaseModel):
+    engine_action: str = "keep_running"
+
+
 @router.post("/auth/logout")
-def logout(request: Request, response: Response) -> JSONResponse:
+def logout(
+    request: Request,
+    response: Response,
+    body: LogoutRequest | None = None,
+) -> JSONResponse:
+    action = (body or LogoutRequest()).engine_action.strip().lower()
+    if action not in {"keep_running", "stop_engine"}:
+        raise HTTPException(status_code=400, detail="engine_action must be keep_running or stop_engine.")
+    user = get_optional_user(request)
+    runtime = None
+    if user is not None:
+        from app.services.execution_context import bind_user_execution_context
+        from app.services import runtime_reliability
+
+        with bind_user_execution_context(user):
+            runtime = (
+                runtime_reliability.stop_engine(user, reason="logout")
+                if action == "stop_engine"
+                else runtime_reliability.checkpoint(user, reason="logout_keep_running")
+            )
     cookie = request.cookies.get(settings.SESSION_COOKIE_NAME)
     session_id = read_session_id(cookie)
     if session_id is not None and database_configured():
@@ -176,11 +200,16 @@ def logout(request: Request, response: Response) -> JSONResponse:
             with session_scope() as db:
                 row = crud.get_active_session(db, session_id)
                 if row is not None:
-                    crud.add_audit_log(db, user_id=row.user_id, action="LOGOUT", metadata={})
+                    crud.add_audit_log(
+                        db,
+                        user_id=row.user_id,
+                        action="LOGOUT",
+                        metadata={"engine_action": action},
+                    )
                 crud.revoke_session(db, session_id)
         except Exception:
             pass
-    out = JSONResponse({"ok": True})
+    out = JSONResponse({"ok": True, "engine_action": action, "runtime": runtime})
     clear_session_cookie(out)
     return out
 

@@ -86,11 +86,125 @@ export function googleLoginUrl(): string {
   return backendHttpUrl('/api/auth/google/start')
 }
 
-export async function logout(): Promise<void> {
-  const response = await apiFetch('/api/auth/logout', { method: 'POST' })
+export type LogoutEngineAction = 'keep_running' | 'stop_engine'
+
+export async function logout(engineAction: LogoutEngineAction = 'keep_running'): Promise<void> {
+  const response = await apiFetch('/api/auth/logout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ engine_action: engineAction }),
+  })
   if (!response.ok) {
     throw new Error(`Could not log out: ${response.status}`)
   }
+}
+
+export interface RuntimeStatus {
+  ok: boolean
+  owner_user_id: string
+  engine: {
+    state: 'STARTING' | 'RUNNING' | 'STOPPING' | 'STOPPED' | string
+    running: boolean
+    accepting_signals: boolean
+    mode: 'paper' | 'live' | null
+    display: string
+    last_transition_at: string | null
+  }
+  exit: {
+    state: 'NONE' | 'EXIT_PENDING' | 'CONFIRMED_FLAT' | 'RECONCILIATION_REQUIRED' | string
+    operation_id: string | null
+    requested_at: string | null
+  }
+  position: {
+    has_open_position: boolean
+    security_id: string | null
+    trading_symbol: string | null
+    option_side: string | null
+    qty: number
+    lots: number
+    entry_price: number | null
+    opened_at: string | null
+    unrealized_pnl: number | null
+    ltp: {
+      value: number | null
+      source: string | null
+      status: string
+      received_at: string | null
+      age_seconds: number | null
+      stale: boolean
+      message: string | null
+    }
+  }
+  pnl: {
+    realized: number | null
+    unrealized: number | null
+    session: number | null
+    available_balance: number | null
+  }
+  config: {
+    active: Record<string, unknown>
+    paper: Record<string, unknown>
+    live: Record<string, unknown>
+  }
+  account: {
+    dhan_client_id_masked: string | null
+    has_dhan_access_token: boolean
+    dhan_token_saved_at: string | null
+    token_age_minutes: number | null
+    token_expired: boolean | null
+    token_estimated_expiry_at: string | null
+  }
+  safety: {
+    dhan_mode: string
+    live_orders_enabled: boolean
+  }
+}
+
+async function runtimeCall(path: `/${string}`, method = 'GET', payload?: unknown): Promise<RuntimeStatus> {
+  const response = await apiFetch(path, {
+    method,
+    cache: 'no-store',
+    headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as (RuntimeStatus & { detail?: string | RuntimeStatus; message?: string }) | null
+  if (!response.ok) {
+    const detail = body?.detail
+    const message = typeof detail === 'string'
+      ? detail
+      : (detail as { message?: string } | undefined)?.message
+    throw new Error(message || body?.message || `Runtime request failed: ${response.status}`)
+  }
+  if (!body) throw new Error('Runtime response was empty.')
+  return body
+}
+
+export const getRuntimeStatus = () => runtimeCall('/api/runtime/status')
+export const stopRuntimeEngine = () => runtimeCall('/api/runtime/stop', 'POST')
+export const squareOffRuntime = () => runtimeCall('/api/runtime/square-off', 'POST')
+export const switchRuntimeMode = (mode: 'paper' | 'live') =>
+  runtimeCall('/api/runtime/mode', 'PUT', { mode })
+export const saveRuntimeConfig = (
+  mode: 'paper' | 'live',
+  lots: number,
+  stopLossPercent: number,
+  targetProfitPercent: number,
+) => runtimeCall('/api/runtime/config', 'PUT', {
+  mode,
+  lots,
+  stop_loss_percent: stopLossPercent,
+  target_profit_percent: targetProfitPercent,
+})
+export const resetPaperRuntime = (startingBalance?: number) =>
+  runtimeCall('/api/runtime/paper/reset', 'POST', {
+    starting_balance: startingBalance ?? null,
+  })
+
+export async function refreshRuntimeAccount(): Promise<Record<string, unknown>> {
+  const response = await apiFetch('/api/runtime/account/refresh', { method: 'POST' })
+  const body = await response.json().catch(() => null) as { detail?: Record<string, unknown> } & Record<string, unknown> | null
+  if (!response.ok) return body?.detail ?? body ?? { ok: false, status: 'UNAVAILABLE' }
+  return body ?? { ok: false, status: 'UNAVAILABLE' }
 }
 
 export interface ManualEntryPayload {

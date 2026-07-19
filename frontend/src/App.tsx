@@ -16,14 +16,21 @@ import type { NovaView } from './types'
 import {
   getCurrentUser,
   getMarketSnapshot,
+  getRuntimeStatus,
   getSession,
   getSystemHealth,
   googleLoginUrl,
   logout,
   prepareReconfigure,
+  refreshRuntimeAccount,
+  resetPaperRuntime,
+  saveRuntimeConfig,
+  squareOffRuntime,
   startSession,
+  stopRuntimeEngine,
+  switchRuntimeMode,
 } from './api'
-import type { AuthUser } from './api'
+import type { AuthUser, LogoutEngineAction, RuntimeStatus } from './api'
 import { DEFAULT_NIFTY_LOT_SIZE } from './lib/trading'
 import { useSessionStore } from './state/sessionStore'
 import { SessionWS } from './ws'
@@ -39,6 +46,7 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [marketSnapshot, setMarketSnapshot] = useState<MarketSnapshot | null>(null)
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false)
   const [rightDrawerOpen, setRightDrawerOpen] = useState(false)
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false)
@@ -147,10 +155,11 @@ function App() {
     let timer: number | null = null
 
     const poll = () => {
-      Promise.allSettled([getMarketSnapshot(), getSystemHealth()]).then(([market, health]) => {
+      Promise.allSettled([getMarketSnapshot(), getSystemHealth(), getRuntimeStatus()]).then(([market, health, runtime]) => {
         if (!mounted) return
         if (market.status === 'fulfilled') setMarketSnapshot(market.value)
         if (health.status === 'fulfilled') setSystemHealth(health.value)
+        if (runtime.status === 'fulfilled') setRuntimeStatus(runtime.value)
       })
       timer = window.setTimeout(poll, 15000)
     }
@@ -200,6 +209,12 @@ function App() {
     setBootError('')
     try {
       await prepareReconfigure()
+      const status = await getRuntimeStatus()
+      setRuntimeStatus(status)
+      if (status.position.has_open_position) {
+        setBootError('Engine stopped. Configuration changes remain blocked until the tracked position is flat.')
+        return
+      }
       wsRef.current?.close()
       resetSession()
       setSnapshotLoaded(false)
@@ -209,15 +224,26 @@ function App() {
     }
   }
 
-  async function handleLogout() {
-    wsRef.current?.close()
-    resetSession()
-    setSnapshotLoaded(false)
+  async function handleLogout(engineAction: LogoutEngineAction) {
     setBootError('')
     try {
-      await logout()
-    } finally {
+      await logout(engineAction)
+      wsRef.current?.close()
+      resetSession()
+      setSnapshotLoaded(false)
+      setRuntimeStatus(null)
       setAuthUser(null)
+    } catch (error) {
+      setBootError(error instanceof Error ? error.message : 'Could not log out')
+    }
+  }
+
+  async function updateRuntime(action: () => Promise<RuntimeStatus>) {
+    setBootError('')
+    try {
+      setRuntimeStatus(await action())
+    } catch (error) {
+      setBootError(error instanceof Error ? error.message : 'Runtime action failed')
     }
   }
 
@@ -232,7 +258,7 @@ function App() {
     )
   }
 
-  const sessionEngineLive = setupState === 'LIVE' || setupState === 'PAUSED'
+  const sessionEngineLive = runtimeStatus?.engine.running ?? (setupState === 'LIVE' || setupState === 'PAUSED')
   const runtimeEntriesBlocked = sessionEngineLive && systemHealth?.engine === 'paused'
   const effectiveSetupState = runtimeEntriesBlocked || setupState === 'PAUSED' ? 'PAUSED' : setupState
   const engineLive = sessionEngineLive
@@ -295,6 +321,7 @@ function App() {
       <Header
         status={wsStatus}
         clientId={config.broker?.clientId}
+        runtime={runtimeStatus}
         engineLive={engineLive}
         engineMode={engineMode}
         setupState={effectiveSetupState}
@@ -302,10 +329,27 @@ function App() {
         user={authUser}
         view={view}
         onNavigate={setView}
-        onKill={() => send({ type: 'session.kill', data: {} })}
+        onKill={() => void updateRuntime(squareOffRuntime)}
+        onStop={() => void updateRuntime(stopRuntimeEngine)}
         onReconfigure={reconfigure}
         onLogout={handleLogout}
+        onMode={(mode) => void updateRuntime(() => switchRuntimeMode(mode))}
+        onSaveConfig={(mode, lots, sl, tp) => void updateRuntime(() => saveRuntimeConfig(mode, lots, sl, tp))}
+        onPaperReset={() => void updateRuntime(() => resetPaperRuntime())}
+        onAccountRefresh={async () => {
+          const result = await refreshRuntimeAccount()
+          const message = String(result.message || result.status || 'Account refresh completed.')
+          setBootError(result.ok === false ? message : '')
+          const latest = await getRuntimeStatus()
+          setRuntimeStatus(latest)
+        }}
       />
+
+      {runtimeStatus?.position.has_open_position && runtimeStatus.engine.state === 'STOPPED' ? (
+        <div className="error-banner mx-4 mt-3" role="status">
+          POSITION OPEN — ENGINE STOPPED. New entries are blocked; the tracked position remains visible and monitored.
+        </div>
+      ) : null}
 
       {engineLive && view === 'trading' ? (
         <div className="router-banner-slot">

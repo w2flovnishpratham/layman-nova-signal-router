@@ -1,7 +1,7 @@
 import { BarChart3, Check, Copy, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, Webhook, Wifi, X, Zap } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
-import type { AuthUser } from '../api'
+import type { AuthUser, LogoutEngineAction, RuntimeStatus } from '../api'
 import { getEgressStatus } from '../api'
 import { modeBadgeText } from '../lib/mode'
 import { MotionPing, MotionProgressFill, softEase, useAppReducedMotion } from './MotionPrimitives'
@@ -10,6 +10,7 @@ import type { EngineMode, NovaView, SetupState, SystemHealth, WsStatus } from '.
 interface Props {
   status: WsStatus
   clientId?: string
+  runtime: RuntimeStatus | null
   engineLive: boolean
   engineMode: EngineMode | null
   setupState: SetupState
@@ -18,13 +19,19 @@ interface Props {
   view: NovaView
   onNavigate: (view: NovaView) => void
   onKill: () => void
+  onStop: () => void
   onReconfigure: () => void
-  onLogout: () => void
+  onLogout: (action: LogoutEngineAction) => void
+  onMode: (mode: 'paper' | 'live') => void
+  onSaveConfig: (mode: 'paper' | 'live', lots: number, sl: number, tp: number) => void
+  onPaperReset: () => void
+  onAccountRefresh: () => void
 }
 
 export function Header({
   status,
   clientId,
+  runtime,
   engineLive,
   engineMode,
   setupState,
@@ -33,12 +40,22 @@ export function Header({
   view,
   onNavigate,
   onKill,
+  onStop,
   onReconfigure,
   onLogout,
+  onMode,
+  onSaveConfig,
+  onPaperReset,
+  onAccountRefresh,
 }: Props) {
   const [killDialogOpen, setKillDialogOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [holdingKill, setHoldingKill] = useState(false)
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false)
+  const [reconfigureDialogOpen, setReconfigureDialogOpen] = useState(false)
+  const [lots, setLots] = useState<number | null>(null)
+  const [slPercent, setSlPercent] = useState<number | null>(null)
+  const [tpPercent, setTpPercent] = useState<number | null>(null)
   const [staticIp, setStaticIp] = useState<string | null>(null)
   const [ipCopied, setIpCopied] = useState(false)
   const holdTimer = useRef<number | null>(null)
@@ -54,6 +71,18 @@ export function Header({
       .catch(() => { if (active) setStaticIp(null) })
     return () => { active = false }
   }, [menuOpen])
+
+  const activeConfig = runtime?.config.active
+  const displayedLots = lots ?? Number(activeConfig?.configured_lots ?? 1)
+  const displayedSlPercent = slPercent ?? Number(activeConfig?.option_sl_percent ?? 10)
+  const displayedTpPercent = tpPercent ?? Number(activeConfig?.option_tp_percent ?? 20)
+
+  function chooseMode(mode: 'paper' | 'live') {
+    setLots(null)
+    setSlPercent(null)
+    setTpPercent(null)
+    onMode(mode)
+  }
 
   function copyStaticIp() {
     if (!staticIp) return
@@ -172,12 +201,31 @@ export function Header({
                   </div>
                 </div>
 
-                {clientId && (
+                {(runtime?.account.dhan_client_id_masked || clientId) && (
                   <div className="text-xs text-white/70 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/5 flex justify-between items-center">
                     <span className="opacity-70">Client ID:</span>
-                    <strong className="font-mono">{maskClientId(clientId)}</strong>
+                    <strong className="font-mono">{runtime?.account.dhan_client_id_masked || maskClientId(clientId || '')}</strong>
                   </div>
                 )}
+
+                {runtime ? (
+                  <div className="text-xs bg-white/5 px-2.5 py-2 rounded-lg border border-white/5 flex flex-col gap-1">
+                    <strong className={runtime.engine.running ? 'text-emerald-300' : 'text-amber-300'}>
+                      {runtime.engine.display}
+                    </strong>
+                    <span className="text-white/55">
+                      {runtime.engine.mode?.toUpperCase() || 'NO MODE'} · P&amp;L {runtime.pnl.session ?? '—'}
+                    </span>
+                    {runtime.position.has_open_position ? (
+                      <span className="text-amber-200">
+                        {runtime.position.trading_symbol || runtime.position.option_side || 'Position'} · Qty {runtime.position.qty}
+                      </span>
+                    ) : null}
+                    <span className={runtime.position.ltp.stale ? 'text-amber-300' : 'text-white/45'}>
+                      LTP {runtime.position.ltp.value ?? 'Unavailable'} · {runtime.position.ltp.status}
+                    </span>
+                  </div>
+                ) : null}
 
                 {staticIp && (
                   <div className="text-xs text-white/70 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/5 flex justify-between items-center gap-2">
@@ -205,8 +253,64 @@ export function Header({
                 )}
 
                 <div className="flex flex-col gap-2 pt-2 border-t border-white/5">
+                  {runtime && runtime.engine.state === 'STOPPED' ? (
+                    <div className="flex flex-col gap-2 pb-2 border-b border-white/5">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-white/40">Stopped configuration</span>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(['paper', 'live'] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            disabled={runtime.position.has_open_position}
+                            onClick={() => chooseMode(mode)}
+                            className={`py-1.5 rounded-lg border text-xs font-semibold ${
+                              runtime.engine.mode === mode
+                                ? 'border-violet-400/60 bg-violet-500/20 text-white'
+                                : 'border-white/10 bg-white/5 text-white/60'
+                            } disabled:opacity-40`}
+                          >
+                            {mode === 'paper' ? 'Paper' : 'Live'}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <label className="text-[10px] text-white/50">Lots
+                          <input aria-label="Runtime lots" type="number" min={1} max={20} value={displayedLots} onChange={(event) => setLots(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
+                        </label>
+                        <label className="text-[10px] text-white/50">SL %
+                          <input aria-label="Runtime stop loss percent" type="number" min={0} max={100} value={displayedSlPercent} onChange={(event) => setSlPercent(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
+                        </label>
+                        <label className="text-[10px] text-white/50">TP %
+                          <input aria-label="Runtime target profit percent" type="number" min={0} max={1000} value={displayedTpPercent} onChange={(event) => setTpPercent(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
+                        </label>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={!runtime.engine.mode || runtime.position.has_open_position}
+                        onClick={() => runtime.engine.mode && onSaveConfig(runtime.engine.mode, displayedLots, displayedSlPercent, displayedTpPercent)}
+                        className="secondary-button py-1.5 rounded-lg text-xs disabled:opacity-40"
+                      >
+                        Save {runtime.engine.mode?.toUpperCase() || ''} settings
+                      </button>
+                      {runtime.engine.mode === 'paper' ? (
+                        <button type="button" disabled={runtime.position.has_open_position} onClick={onPaperReset} className="secondary-button py-1.5 rounded-lg text-xs disabled:opacity-40">
+                          Reset Paper session
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {engineLive && (
                     <>
+                      <button
+                        className="secondary-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/80 bg-white/5 border border-white/10 text-sm font-medium"
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          onStop()
+                        }}
+                      >
+                        Stop Engine
+                      </button>
                       <button
                         className="kill-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-red-400 hover:text-white bg-red-950/30 hover:bg-red-900/40 border border-red-900/30 hover:border-red-500/40 transition-all font-medium text-sm"
                         type="button"
@@ -223,7 +327,7 @@ export function Header({
                         type="button"
                         onClick={() => {
                           setMenuOpen(false)
-                          onReconfigure()
+                          setReconfigureDialogOpen(true)
                         }}
                       >
                         <RotateCcw size={14} />
@@ -231,12 +335,28 @@ export function Header({
                       </button>
                     </>
                   )}
+                  {!engineLive && runtime?.engine.state === 'STOPPED' && (
+                    <button
+                      className="secondary-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/80 bg-white/5 border border-white/10 text-sm font-medium"
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        setReconfigureDialogOpen(true)
+                      }}
+                    >
+                      <RotateCcw size={14} />
+                      Re-Configure
+                    </button>
+                  )}
+                  <button type="button" onClick={onAccountRefresh} className="secondary-button w-full py-2 rounded-lg text-xs">
+                    Refresh Dhan account
+                  </button>
                   <button
                     className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/15 transition-all text-sm font-medium"
                     type="button"
                     onClick={() => {
                       setMenuOpen(false)
-                      onLogout()
+                      setLogoutDialogOpen(true)
                     }}
                   >
                     <LogOut size={14} />
@@ -321,6 +441,47 @@ export function Header({
                 Cancel
               </button>
             </div>
+            </motion.section>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence initial={false}>
+        {logoutDialogOpen ? (
+          <motion.div className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.section className="kill-dialog w-full max-w-[420px] bg-[#12101c] border border-white/10 rounded-2xl shadow-2xl p-6 flex flex-col gap-4" role="dialog" aria-modal="true" aria-labelledby="logout-dialog-title">
+              <h2 id="logout-dialog-title" className="text-lg font-bold text-white m-0">Log out of NOVA</h2>
+              <p className="text-xs text-white/60 m-0">
+                Choose what the server should do with your engine. Closing this browser alone never stops it.
+              </p>
+              <button type="button" className="secondary-button py-3 rounded-xl text-sm" onClick={() => { setLogoutDialogOpen(false); onLogout('keep_running') }}>
+                Keep engine running and log out
+              </button>
+              <button type="button" className="secondary-button py-3 rounded-xl text-sm" onClick={() => { setLogoutDialogOpen(false); onLogout('stop_engine') }}>
+                Stop engine and log out
+              </button>
+              <button type="button" className="py-2 text-xs text-white/50" onClick={() => setLogoutDialogOpen(false)}>
+                Cancel
+              </button>
+            </motion.section>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence initial={false}>
+        {reconfigureDialogOpen ? (
+          <motion.div className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.section className="kill-dialog w-full max-w-[420px] bg-[#12101c] border border-white/10 rounded-2xl shadow-2xl p-6 flex flex-col gap-4" role="dialog" aria-modal="true" aria-labelledby="reconfigure-dialog-title">
+              <h2 id="reconfigure-dialog-title" className="text-lg font-bold text-white m-0">Stop engine and reconfigure?</h2>
+              <p className="text-xs text-white/60 m-0">
+                The engine will stop and will not restart automatically. Any tracked open position is preserved; position-invalidating changes stay blocked until flat.
+              </p>
+              <button type="button" className="secondary-button py-3 rounded-xl text-sm" onClick={() => { setReconfigureDialogOpen(false); onReconfigure() }}>
+                Stop and continue
+              </button>
+              <button type="button" className="py-2 text-xs text-white/50" onClick={() => setReconfigureDialogOpen(false)}>
+                Cancel
+              </button>
             </motion.section>
           </motion.div>
         ) : null}

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.routers.setup import setup_readiness, setup_status_payload
@@ -11,7 +11,9 @@ from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import dhan_token_age_metadata
 from app.services.dhan_debugger import get_outgoing_ip
 from app.services.paper_portfolio import get_paper_portfolio
-from app.services.state_store import get_app_state, get_engine_mode, get_open_position, set_engine_mode, update_app_state
+from app.services.state_store import get_app_state, get_engine_mode, set_engine_mode, update_app_state
+from app.services.execution_context import current_execution_user
+from app.services import runtime_reliability
 
 
 router = APIRouter()
@@ -20,6 +22,28 @@ router = APIRouter()
 class StartEngineRequest(BaseModel):
     confirm_live_orders: bool = False
     engine_mode: Literal["paper", "live"] | None = None
+
+
+class RuntimeModeRequest(BaseModel):
+    mode: Literal["paper", "live"]
+
+
+class RuntimeConfigRequest(BaseModel):
+    mode: Literal["paper", "live"]
+    lots: int = Field(ge=1, le=20)
+    stop_loss_percent: float = Field(ge=0, le=100)
+    target_profit_percent: float = Field(ge=0, le=1000)
+
+
+class PaperResetRequest(BaseModel):
+    starting_balance: float | None = Field(default=None, ge=10_000, le=10_000_000)
+
+
+def _execution_user():
+    user = current_execution_user()
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authenticated execution context required.")
+    return user
 
 
 def _build_engine_readiness_checks(
@@ -265,6 +289,7 @@ def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
             },
         )
 
+    runtime_reliability.mark_starting()
     update_app_state(
         state="WAITING_ENTRY",
         engine_started=True,
@@ -286,6 +311,7 @@ def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
             "token_age_minutes": token_meta.get("token_age_minutes"),
         },
     )
+    runtime_reliability.mark_running()
     return {
         "success": True,
         "engine_started": True,
@@ -300,24 +326,34 @@ def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
 
 @router.post("/engine/stop")
 def stop_engine() -> dict[str, Any]:
-    update_app_state(
-        state="ENGINE_STOPPED",
-        engine_started=False,
-        webhook_trading_enabled=False,
-        last_message="Engine stopped. New entries are blocked.",
-    )
-    log_audit_event("ENGINE_STOPPED", "Webhook trading disabled. New entries are blocked.", severity="WARNING")
-    return {"success": True, "engine_started": False, "app_state": get_app_state()}
+    status = runtime_reliability.stop_engine(_execution_user())
+    return {
+        "success": True,
+        "engine_started": False,
+        "app_state": get_app_state(),
+        "runtime": status,
+    }
 
 
 @router.post("/engine/reconfigure")
 def prepare_reconfigure() -> dict[str, Any]:
-    if get_open_position().get("has_open_position"):
-        raise HTTPException(status_code=409, detail="Cannot reconfigure with an open position. Stop and square off first.")
-    stop_engine()
-    log_audit_event("ENGINE_RECONFIGURE_READY", "Flat engine stopped and ready for mode selection.")
-    set_engine_mode(None)
-    return {"success": True, "engine_started": False, "engine_mode": None, "app_state": get_app_state()}
+    user = _execution_user()
+    status = runtime_reliability.stop_engine(user, reason="reconfigure")
+    position_open = bool(status["position"]["has_open_position"])
+    if not position_open:
+        set_engine_mode(None)
+    log_audit_event(
+        "ENGINE_RECONFIGURE_READY",
+        "Engine stopped for reconfiguration; open position preserved." if position_open else "Flat engine stopped.",
+    )
+    return {
+        "success": True,
+        "engine_started": False,
+        "engine_mode": get_engine_mode(legacy_fallback=False),
+        "configuration_blocked_by_open_position": position_open,
+        "app_state": get_app_state(),
+        "runtime": runtime_reliability.runtime_status(user),
+    }
 
 
 @router.get("/engine/status")
@@ -331,4 +367,62 @@ def engine_status() -> dict[str, Any]:
         "token_age": token_meta,
         "setup": setup_status_payload(include_outgoing_ip=False),
         "engine_mode": get_engine_mode(legacy_fallback=False),
+        "runtime": runtime_reliability.runtime_status(_execution_user()),
     }
+
+
+@router.get("/runtime/status")
+def hydrated_runtime_status() -> dict[str, Any]:
+    return runtime_reliability.runtime_status(_execution_user())
+
+
+@router.post("/runtime/stop")
+def runtime_stop() -> dict[str, Any]:
+    return runtime_reliability.stop_engine(_execution_user())
+
+
+@router.post("/runtime/square-off")
+def runtime_square_off() -> dict[str, Any]:
+    return runtime_reliability.square_off(_execution_user())
+
+
+@router.put("/runtime/mode")
+def runtime_mode(body: RuntimeModeRequest) -> dict[str, Any]:
+    try:
+        return runtime_reliability.switch_mode(_execution_user(), body.mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/runtime/config")
+def runtime_config(body: RuntimeConfigRequest) -> dict[str, Any]:
+    try:
+        return runtime_reliability.configure_mode(
+            _execution_user(),
+            mode=body.mode,
+            lots=body.lots,
+            stop_loss_percent=body.stop_loss_percent,
+            target_profit_percent=body.target_profit_percent,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runtime/paper/reset")
+def runtime_paper_reset(body: PaperResetRequest | None = None) -> dict[str, Any]:
+    try:
+        return runtime_reliability.reset_paper_session(
+            _execution_user(),
+            (body or PaperResetRequest()).starting_balance,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runtime/account/refresh")
+def runtime_account_refresh() -> dict[str, Any]:
+    result = runtime_reliability.refresh_account(_execution_user())
+    if not result.get("ok"):
+        # The response is intentionally controlled and contains no credential.
+        raise HTTPException(status_code=409, detail=result)
+    return result

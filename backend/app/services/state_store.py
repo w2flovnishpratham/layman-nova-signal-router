@@ -27,6 +27,8 @@ PAPER_PORTFOLIO_FILE = RUNTIME_STATE_DIR / "paper_portfolio.json"
 EXTERNAL_POSITIONS_FILE = RUNTIME_STATE_DIR / "external_positions.json"
 SEEN_SIGNALS_FILE = RUNTIME_STATE_DIR / "seen_signals.json"
 SETTINGS_FILE = RUNTIME_STATE_DIR / "settings.json"
+PAPER_SETTINGS_FILE = RUNTIME_STATE_DIR / "paper_settings.json"
+LIVE_SETTINGS_FILE = RUNTIME_STATE_DIR / "live_settings.json"
 
 LOG_FILES = {
     "webhook": RUNTIME_LOG_DIR / "webhook_events.jsonl",
@@ -34,6 +36,7 @@ LOG_FILES = {
     "audit": RUNTIME_LOG_DIR / "audit_events.jsonl",
     "error": RUNTIME_LOG_DIR / "errors.jsonl",
     "paper_orders": RUNTIME_LOG_DIR / "paper_orders.jsonl",
+    "runtime_snapshots": RUNTIME_LOG_DIR / "runtime_snapshots.jsonl",
 }
 
 
@@ -90,6 +93,12 @@ def default_app_state() -> dict[str, Any]:
         "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
         "dhan_mode": settings.DHAN_MODE.upper(),
         "engine_mode": None,
+        "engine_lifecycle": "STOPPED",
+        "accepting_signals": False,
+        "exit_state": "NONE",
+        "exit_operation_id": None,
+        "exit_requested_at": None,
+        "last_lifecycle_transition_at": utc_now(),
         "emergency_stop": DEFAULT_RUNTIME_SETTINGS["emergency_stop"],
         "global_kill_switch": DEFAULT_RUNTIME_SETTINGS["global_kill_switch"],
         "wallet": default_wallet_snapshot(),
@@ -196,6 +205,8 @@ def _state_defaults() -> dict[Path, Callable[[], dict[str, Any]]]:
         EXTERNAL_POSITIONS_FILE: default_external_positions,
         SEEN_SIGNALS_FILE: default_seen_signals,
         SETTINGS_FILE: default_settings,
+        PAPER_SETTINGS_FILE: default_settings,
+        LIVE_SETTINGS_FILE: default_settings,
         _daily_risk_file(): default_daily_risk,
     }
 
@@ -234,6 +245,14 @@ def _write_json(path: Path, data: dict[str, Any]) -> dict[str, Any]:
 def init_runtime_files() -> None:
     scoped_runtime_path(RUNTIME_STATE_DIR).mkdir(parents=True, exist_ok=True)
     scoped_runtime_path(RUNTIME_LOG_DIR).mkdir(parents=True, exist_ok=True)
+    # One-time, non-destructive split of the legacy shared settings file. Each
+    # mode owns its configuration after this point.
+    legacy_path = scoped_runtime_path(SETTINGS_FILE)
+    if legacy_path.exists():
+        legacy = _read_json(SETTINGS_FILE, default_settings)
+        for mode_path in (PAPER_SETTINGS_FILE, LIVE_SETTINGS_FILE):
+            if not scoped_runtime_path(mode_path).exists():
+                _atomic_write_json(mode_path, legacy)
     for path, default_factory in _state_defaults().items():
         if not scoped_runtime_path(path).exists():
             _atomic_write_json(path, default_factory())
@@ -549,7 +568,11 @@ def record_entry_trade(signal_id: str) -> dict[str, Any]:
 
 
 def get_runtime_settings() -> dict[str, Any]:
-    data = _read_json(SETTINGS_FILE, default_settings)
+    path = _runtime_settings_file()
+    legacy_path = scoped_runtime_path(SETTINGS_FILE)
+    if not scoped_runtime_path(path).exists() and legacy_path.exists():
+        _write_json(path, _read_json(SETTINGS_FILE, default_settings))
+    data = _read_json(path, default_settings)
     defaults = default_settings()
     changed = False
     allowed_keys = set(defaults)
@@ -573,6 +596,30 @@ def get_runtime_settings() -> dict[str, Any]:
     return data
 
 
+def _runtime_settings_file(mode: str | None = None) -> Path:
+    normalized = str(mode or get_engine_mode(legacy_fallback=True)).strip().lower()
+    # Derive from SETTINGS_FILE so existing isolated-test fixtures that replace
+    # the legacy path continue to isolate both new mode-specific files.
+    filename = "live_settings.json" if normalized == "live" else "paper_settings.json"
+    return SETTINGS_FILE.parent / filename
+
+
+def get_mode_runtime_settings(mode: str) -> dict[str, Any]:
+    normalized = str(mode).strip().lower()
+    if normalized not in {"paper", "live"}:
+        raise ValueError("mode must be paper or live.")
+    path = _runtime_settings_file(normalized)
+    legacy_path = scoped_runtime_path(SETTINGS_FILE)
+    if not scoped_runtime_path(path).exists() and legacy_path.exists():
+        _write_json(path, _read_json(SETTINGS_FILE, default_settings))
+    data = _read_json(path, default_settings)
+    defaults = default_settings()
+    sanitized = {key: data.get(key, value) for key, value in defaults.items()}
+    if sanitized != data:
+        _write_json(path, sanitized)
+    return sanitized
+
+
 class SettingsVersionMismatch(Exception):
     """H8 — Raised when an optimistic-locking save sees a stale version."""
 
@@ -591,14 +638,20 @@ def set_runtime_settings(data: dict[str, Any]) -> dict[str, Any]:
     value (not from `data._version`) so the version is owned by the store,
     never by the caller."""
     with _LOCK:
-        existing = _read_json(SETTINGS_FILE, default_settings)
+        path = _runtime_settings_file()
+        existing = _read_json(path, default_settings)
         try:
             current_version = int(existing.get("_version", 0))
         except (TypeError, ValueError):
             current_version = 0
         data = dict(data)
         data["_version"] = current_version + 1
-        return _write_json(SETTINGS_FILE, data)
+        saved = _write_json(path, data)
+        # Compatibility mirror for maintenance tooling that still inspects
+        # settings.json. It is never used as the post-split mode authority.
+        if path != SETTINGS_FILE:
+            _write_json(SETTINGS_FILE, saved)
+        return saved
 
 
 def set_runtime_settings_if_version(
@@ -609,7 +662,8 @@ def set_runtime_settings_if_version(
     `expected_version` matches the current on-disk version. Raises
     `SettingsVersionMismatch` otherwise."""
     with _LOCK:
-        existing = _read_json(SETTINGS_FILE, default_settings)
+        path = _runtime_settings_file()
+        existing = _read_json(path, default_settings)
         try:
             current_version = int(existing.get("_version", 0))
         except (TypeError, ValueError):
@@ -622,7 +676,10 @@ def set_runtime_settings_if_version(
             )
         data = dict(data)
         data["_version"] = current_version + 1
-        return _write_json(SETTINGS_FILE, data)
+        saved = _write_json(path, data)
+        if path != SETTINGS_FILE:
+            _write_json(SETTINGS_FILE, saved)
+        return saved
 
 
 def update_runtime_settings_if_version(

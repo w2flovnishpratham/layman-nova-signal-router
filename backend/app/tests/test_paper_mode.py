@@ -500,7 +500,7 @@ def test_reconfigure_stops_flat_engine_and_clears_mode(tmp_path, monkeypatch):
     assert state_store.get_app_state()["webhook_trading_enabled"] is False
 
 
-def test_reconfigure_rejects_open_paper_position(tmp_path, monkeypatch):
+def test_reconfigure_stops_engine_and_preserves_open_paper_position(tmp_path, monkeypatch):
     _isolate_paper_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("paper")
     state_store.set_paper_position({"has_open_position": True, "trading_symbol": "NIFTY TEST CE"})
@@ -510,9 +510,11 @@ def test_reconfigure_rejects_open_paper_position(tmp_path, monkeypatch):
     with TestClient(app) as client:
         response = client.post("/api/engine/reconfigure")
 
-    assert response.status_code == 409
+    assert response.status_code == 200
+    assert response.json()["configuration_blocked_by_open_position"] is True
     assert state_store.get_engine_mode(legacy_fallback=False) == "paper"
-    assert state_store.get_app_state()["webhook_trading_enabled"] is True
+    assert state_store.get_app_state()["webhook_trading_enabled"] is False
+    assert state_store.get_paper_position()["has_open_position"] is True
 
 
 def test_eod_squareoff_routes_the_selected_paper_position(tmp_path, monkeypatch):
