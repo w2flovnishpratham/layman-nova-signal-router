@@ -52,4 +52,20 @@ describe('EngineStrategyPicker', () => {
     await waitFor(() => expect(screen.getByText('Only mine')).toBeInTheDocument())
     expect(screen.queryByText(/someone else/i)).not.toBeInTheDocument()
   })
+
+  it('keeps a selected C2 strategy visible but disabled when the kill switch is off', async () => {
+    api.getEngineStrategies.mockResolvedValue(feed([
+      strategy({
+        selected: true,
+        selectable: false,
+        status: 'C2_FEATURE_DISABLED',
+        blocking_reason: 'C2_FEATURE_DISABLED',
+      }),
+    ], 'inst-1'))
+    render(<EngineStrategyPicker onManage={vi.fn()} />)
+    expect((await screen.findAllByText('Bollinger + RSI')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/feature disabled/i).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /select strategy/i })).not.toBeInTheDocument()
+    expect(api.setEngineSelection).not.toHaveBeenCalled()
+  })
 })

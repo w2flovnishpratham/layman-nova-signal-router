@@ -12,8 +12,13 @@ routing only. Paper eligibility does not start the engine.
 
 The feature is controlled by
 `C2_TRADINGVIEW_INSTALLATION_ENABLED`, which defaults to `false`. No C2 write
-operation is available while the flag is disabled. Existing C1 reads and the
-legacy private-webhook lifecycle remain independent.
+operation is available while the flag is disabled. The same flag is an
+operational kill switch inside authoritative readiness: existing C2 rows,
+compile evidence, credentials, and HOLD evidence remain stored, but Paper
+eligibility and engine selection immediately fail with
+`C2_FEATURE_DISABLED`. Re-enabling restores readiness only if every other gate
+still passes. Existing C1 reads and the legacy private-webhook lifecycle remain
+independent.
 
 ## Reused components
 
@@ -115,6 +120,15 @@ Rotation and revocation run under row locks. The active-credential uniqueness
 constraint remains authoritative under concurrency. Audit records contain only
 identifiers and short hash references.
 
+Compiler errors, compile setup notes, and administrator suspension reasons use
+one backend untrusted-operator-text sanitizer before persistence. It removes
+unsafe control characters, bounds output to the field limit, and
+conservatively redacts authentication headers, cookies/sessions, token and
+credential assignments, OTP/TOTP, sensitive database/service URLs, private-key
+blocks, absolute filesystem paths, and NOVA broker/provider/webhook secret
+labels. Persisted values are already safe; response serialization is not the
+security boundary.
+
 ## API surface
 
 Owner routes:
@@ -122,7 +136,7 @@ Owner routes:
 - `GET /api/strategy-installations/config`
 - `GET /api/strategies/my-installations`
 - `GET /api/strategies/my-installations/{installation_id}`
-- `POST /api/strategies/my-installations/{installation_id}/credential`
+- `POST /api/strategies/my-installations/{installation_id}/self-credential`
 - `POST /api/strategies/my-installations/{installation_id}/credential/rotate`
 - `POST /api/strategies/my-installations/{installation_id}/credential/revoke`
 
@@ -138,6 +152,10 @@ Admin routes:
 Webhook:
 
 - `POST /api/webhooks/private`
+
+The setup package intentionally emits this relative webhook path. The
+operator/UI must combine it with the configured NOVA backend origin; a
+credential must remain in the JSON body and must never be placed in that URL.
 
 All resource reads are owner-scoped or admin-scoped. Request schemas reject
 unknown fields, including attempts to smuggle execution or order controls.
@@ -187,6 +205,14 @@ The C2 backend integration suite covers:
   candidate-mutated cases;
 - Paper eligibility, owner-only engine selection, and no implicit engine start.
 
+The focused C2F suite additionally covers route/database/log secret-marker
+removal, deterministic/idempotent sanitization, flag-off deactivation and
+flag-on restoration, 13 independent C1 mutation cases at both compile and
+installation boundaries, concurrent installation and credential requests, and
+independent fail-closed evidence for every Paper-readiness gate. The database
+constraints and row-lock paths remain PostgreSQL-authoritative; the same tests
+also run on the isolated SQLite path used by the repository.
+
 Frontend coverage verifies flag gating, compile controls, owner/mode selection,
 installation creation, one-time credential behavior, state rehydration, managed
 secret hiding, Paper readiness, and permanent Live unavailability.
@@ -227,8 +253,10 @@ review; automated browser control is outside C2.
 Application rollback:
 
 1. Set `C2_TRADINGVIEW_INSTALLATION_ENABLED=false`.
-2. Roll back the application to the prior reviewed release.
-3. Leave the additive migration in place if any C2 records must be retained.
+2. Confirm existing C2 entries become non-selectable with
+   `C2_FEATURE_DISABLED`; historical rows are retained.
+3. Roll back the application to the prior reviewed release if required.
+4. Leave the additive migration in place if any C2 records must be retained.
 
 Database rollback, only when C2 data can be discarded:
 

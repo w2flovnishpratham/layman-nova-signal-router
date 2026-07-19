@@ -22,6 +22,7 @@ from app.db.engine import session_scope
 from app.services import admin_pine_conversion_service as c1
 from app.services import personal_pine_service as pine
 from app.services import pine_conversion_service as frozen
+from app.services.untrusted_text_sanitizer import sanitize_untrusted_operator_text
 
 
 SELF = "SELF"
@@ -34,12 +35,6 @@ SETUP_TO_MODE = {value: key for key, value in MODE_TO_SETUP.items()}
 WEBHOOK_PATH = "/api/webhooks/private"
 PLACEHOLDER = "{{ONE_TIME_CREDENTIAL}}"
 SAFE_MODES = {"signal_only", "paper_live_data"}
-
-_SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(password|cookie|session|secret|token|api[_ -]?key|credential)\b\s*[:=]\s*\S+"
-)
-_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")
-
 
 class C2Error(ValueError):
     def __init__(self, message: str, status_code: int = 400, code: str | None = None) -> None:
@@ -68,15 +63,6 @@ def public_config() -> dict[str, Any]:
         "live_eligibility": False,
         "browser_automation": False,
     }
-
-
-def _safe_text(value: str | None, *, required: bool = False) -> str | None:
-    text = " ".join(_CONTROL.sub(" ", value or "").split()).strip()
-    text = _SECRET_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
-    text = text[:1000] or None
-    if required and text is None:
-        raise C2Error("A sanitized compiler-error summary is required.", 422, "SUMMARY_REQUIRED")
-    return text
 
 
 def _query_one(db, model, *criteria, lock: bool = False):
@@ -276,8 +262,14 @@ def record_compile(
 ) -> dict[str, Any]:
     _require_enabled()
     result = "SUCCESS" if succeeded else "FAILURE"
-    error_summary = _safe_text(compiler_error_summary, required=not succeeded)
-    safe_notes = _safe_text(setup_notes)
+    error_summary = sanitize_untrusted_operator_text(compiler_error_summary)
+    if not succeeded and error_summary is None:
+        raise C2Error(
+            "A sanitized compiler-error summary is required.",
+            422,
+            "SUMMARY_REQUIRED",
+        )
+    safe_notes = sanitize_untrusted_operator_text(setup_notes)
     with session_scope() as db:
         context = _approved_context(db, conversion_id, lock=True)
         existing = _compile_for(db, conversion_id, lock=True)
@@ -394,10 +386,13 @@ def _readiness(db, setup: models.TradingViewSetup) -> dict[str, Any]:
     instance = db.get(models.StrategyInstance, setup.strategy_instance_id)
     credential = _active_credential(db, setup.strategy_instance_id) if instance else None
     context = None
+    evaluation_available = True
     try:
         context = _approved_context(db, setup.pine_conversion_request_id, lock=False)
     except C2Error:
         pass
+    except Exception:  # Readiness must fail closed on malformed or unavailable evidence.
+        evaluation_available = False
     compile_evidence = (
         db.get(models.TradingViewCompileEvidence, setup.compile_evidence_id)
         if setup.compile_evidence_id
@@ -407,7 +402,13 @@ def _readiness(db, setup: models.TradingViewSetup) -> dict[str, Any]:
         context
         and setup.approved_version_id == context["candidate_version"].id
         and setup.approved_candidate_sha256 == context["binding"]["candidate_sha256"]
+    )
+    source_integrity = bool(
+        context
         and setup.approved_source_sha256 == context["binding"]["source_sha256"]
+    )
+    strategy_layer_integrity = bool(
+        context
         and setup.approved_strategy_layer_sha256
         == context["binding"]["strategy_layer_sha256"]
     )
@@ -424,10 +425,9 @@ def _readiness(db, setup: models.TradingViewSetup) -> dict[str, Any]:
         and instance.approved_candidate_sha256 == setup.approved_candidate_sha256
         and instance.installation_mode == SETUP_TO_MODE.get(setup.setup_type)
     )
-    credential_active = bool(
-        credential
-        and setup.current_credential_id == credential.id
-        and setup.credential_revoked_at is None
+    credential_active = bool(credential and setup.credential_revoked_at is None)
+    current_credential_binding = bool(
+        credential and setup.current_credential_id == credential.id
     )
     hold_verified = bool(
         setup.hold_verified_at
@@ -437,29 +437,44 @@ def _readiness(db, setup: models.TradingViewSetup) -> dict[str, Any]:
         and setup.hold_credential_id == credential.id
     )
     paper_safe = bool(instance and instance.execution_mode in SAFE_MODES)
+    installation_active = bool(
+        setup.installation_confirmed_at
+        and setup.status not in {"BLOCKED", "RETIRED"}
+    )
     not_suspended = setup.suspended_at is None and setup.status != "INSTALLATION_SUSPENDED"
     gates = {
+        "feature_enabled": bool(settings.C2_TRADINGVIEW_INSTALLATION_ENABLED),
+        "evaluation_available": evaluation_available,
         "c1_approval": context is not None,
         "compile_success": compile_success,
-        "installation": True,
+        "installation_active": installation_active,
         "strategy_instance": instance is not None,
         "owner_bound": owner_bound,
         "credential_active": credential_active,
+        "current_credential_binding": current_credential_binding,
         "hold_verified": hold_verified,
         "candidate_integrity": candidate_integrity,
+        "source_integrity": source_integrity,
+        "strategy_layer_integrity": strategy_layer_integrity,
         "installation_not_suspended": not_suspended,
         "paper_safe_mode": paper_safe,
     }
     eligible = all(gates.values())
     reasons = []
     for key, label in (
+        ("feature_enabled", "Feature disabled"),
+        ("evaluation_available", "Readiness unavailable"),
         ("c1_approval", "Candidate changed"),
         ("compile_success", "Awaiting compile"),
+        ("installation_active", "Installation inactive"),
         ("strategy_instance", "Awaiting installation"),
         ("owner_bound", "Installation ownership invalid"),
         ("credential_active", "Credential not generated"),
+        ("current_credential_binding", "Credential binding invalid"),
         ("hold_verified", "Awaiting HOLD"),
         ("candidate_integrity", "Candidate changed"),
+        ("source_integrity", "Source changed"),
+        ("strategy_layer_integrity", "Strategy layer changed"),
         ("installation_not_suspended", "Installation suspended"),
         ("paper_safe_mode", "Paper-safe mode required"),
     ):
@@ -546,7 +561,13 @@ def _installation_public(
         "candidate_sha256": setup.approved_candidate_sha256,
         "source_sha256": setup.approved_source_sha256,
         "mode": SETUP_TO_MODE.get(setup.setup_type),
-        "status": "PAPER_ELIGIBLE" if readiness["paper_eligible"] else setup.status,
+        "status": (
+            "PAPER_ELIGIBLE"
+            if readiness["paper_eligible"]
+            else "FEATURE_DISABLED"
+            if not readiness["gates"]["feature_enabled"]
+            else setup.status
+        ),
         "strategy_instance_id": str(setup.strategy_instance_id),
         "instance_label": instance.label if instance else None,
         "instance_status": instance.status if instance else None,
@@ -735,65 +756,77 @@ def generate_credential(
     _require_enabled()
     from app.services import strategy_instance_service as instances
 
-    with session_scope() as db:
-        setup = _get_setup(db, installation_id, lock=True)
-        _authorize_credential_action(setup, actor_id, admin=admin)
-        context = _approved_context(db, setup.pine_conversion_request_id, lock=True)
-        if setup.suspended_at is not None:
-            raise C2Error("Installation is suspended.", 409, "INSTALLATION_SUSPENDED")
-        compile_evidence = db.get(
-            models.TradingViewCompileEvidence, setup.compile_evidence_id
-        )
-        if not _compile_matches(compile_evidence, context):
-            raise C2Error(
-                "Compile evidence no longer matches the approved candidate.",
-                409,
-                "COMPILE_EVIDENCE_INVALID",
+    try:
+        with session_scope() as db:
+            setup = _get_setup(db, installation_id, lock=True)
+            _authorize_credential_action(setup, actor_id, admin=admin)
+            context = _approved_context(db, setup.pine_conversion_request_id, lock=True)
+            if setup.suspended_at is not None:
+                raise C2Error("Installation is suspended.", 409, "INSTALLATION_SUSPENDED")
+            compile_evidence = db.get(
+                models.TradingViewCompileEvidence, setup.compile_evidence_id
             )
-        instance = _query_one(
-            db,
-            models.StrategyInstance,
-            models.StrategyInstance.id == setup.strategy_instance_id,
-            models.StrategyInstance.user_id == setup.user_id,
-            lock=True,
-        )
-        if instance is None or instance.execution_mode not in SAFE_MODES:
-            raise C2Error("Paper-safe StrategyInstance is required.", 409, "INSTANCE_INVALID")
-        if _active_credential(db, instance.id, lock=True):
-            raise C2Error(
-                "An active credential already exists. Rotate it instead.",
-                409,
-                "CREDENTIAL_EXISTS",
+            if not _compile_matches(compile_evidence, context):
+                raise C2Error(
+                    "Compile evidence no longer matches the approved candidate.",
+                    409,
+                    "COMPILE_EVIDENCE_INVALID",
+                )
+            instance = _query_one(
+                db,
+                models.StrategyInstance,
+                models.StrategyInstance.id == setup.strategy_instance_id,
+                models.StrategyInstance.user_id == setup.user_id,
+                lock=True,
             )
-        credential, token = instances._issue_credential(db, instance)  # noqa: SLF001
-        setup.current_credential_id = credential.id
-        setup.credential_revoked_at = None
-        setup.hold_signal_id = None
-        setup.hold_verified_at = None
-        setup.hold_credential_id = None
-        setup.hold_webhook_event_id = None
-        setup.paper_eligible_at = None
-        setup.status = "AWAITING_HOLD"
-        setup.blocking_reason = "Send a real TradingView HOLD alert."
-        setup.updated_at = _now()
-        action = "STRATEGY_CREDENTIAL_GENERATED"
-        crud.add_audit_log(
-            db,
-            user_id=actor_id,
-            action=action,
-            metadata={
-                "actor_user_id": str(actor_id),
-                "owner_user_id": str(setup.user_id),
-                "installation_id": str(setup.id),
-                "instance_id": str(instance.id),
-                "credential_id": str(credential.id),
-                "installation_mode": SETUP_TO_MODE[setup.setup_type],
-                "new_status": setup.status,
-            },
-        )
-        package = _setup_package(setup, context, credential=token)
-        package["instance_label"] = instance.label
-        return _credential_payload(credential, token, package)
+            if instance is None or instance.execution_mode not in SAFE_MODES:
+                raise C2Error(
+                    "Paper-safe StrategyInstance is required.",
+                    409,
+                    "INSTANCE_INVALID",
+                )
+            if _active_credential(db, instance.id, lock=True):
+                raise C2Error(
+                    "An active credential already exists. Rotate it instead.",
+                    409,
+                    "CREDENTIAL_EXISTS",
+                )
+            credential, token = instances._issue_credential(  # noqa: SLF001
+                db, instance
+            )
+            setup.current_credential_id = credential.id
+            setup.credential_revoked_at = None
+            setup.hold_signal_id = None
+            setup.hold_verified_at = None
+            setup.hold_credential_id = None
+            setup.hold_webhook_event_id = None
+            setup.paper_eligible_at = None
+            setup.status = "AWAITING_HOLD"
+            setup.blocking_reason = "Send a real TradingView HOLD alert."
+            setup.updated_at = _now()
+            crud.add_audit_log(
+                db,
+                user_id=actor_id,
+                action="STRATEGY_CREDENTIAL_GENERATED",
+                metadata={
+                    "actor_user_id": str(actor_id),
+                    "owner_user_id": str(setup.user_id),
+                    "installation_id": str(setup.id),
+                    "instance_id": str(instance.id),
+                    "credential_id": str(credential.id),
+                    "installation_mode": SETUP_TO_MODE[setup.setup_type],
+                    "new_status": setup.status,
+                },
+            )
+            package = _setup_package(setup, context, credential=token)
+            package["instance_label"] = instance.label
+            return _credential_payload(credential, token, package)
+    except IntegrityError as exc:
+        raise C2Error(
+            "An active credential already exists. Rotate it instead.",
+            409,
+            "CREDENTIAL_EXISTS",
+        ) from exc
 
 
 def rotate_credential(
@@ -898,7 +931,13 @@ def revoke_credential(
 
 def suspend_installation(admin_id, installation_id, reason: str) -> dict[str, Any]:
     _require_enabled()
-    safe_reason = _safe_text(reason, required=True)
+    safe_reason = sanitize_untrusted_operator_text(reason)
+    if safe_reason is None:
+        raise C2Error(
+            "A sanitized suspension reason is required.",
+            422,
+            "REASON_REQUIRED",
+        )
     with session_scope() as db:
         setup = _get_setup(db, installation_id, lock=True)
         if setup.suspended_at is None:
@@ -986,12 +1025,16 @@ def validate_webhook_hold(auth: dict[str, Any], action: str | None) -> bool:
 
     False means "not a C2 instance"; the caller retains its legacy lifecycle.
     """
-    if not settings.C2_TRADINGVIEW_INSTALLATION_ENABLED:
-        return False
     with session_scope() as db:
         setup = c2_setup_for_instance(db, auth["instance_id"])
         if setup is None:
             return False
+        if not settings.C2_TRADINGVIEW_INSTALLATION_ENABLED:
+            raise C2Error(
+                "TradingView installation is disabled.",
+                409,
+                "C2_FEATURE_DISABLED",
+            )
         if action != "HOLD":
             raise C2Error(
                 "C2 installation accepts HOLD verification only.",

@@ -41,6 +41,8 @@ WEBHOOK_JOURNEYS = {"PERSONAL_TRADINGVIEW"}
 
 # Safe, user-facing blocker codes for the first failing activation gate.
 _BLOCKER_CODES = {
+    "feature_enabled": "C2_FEATURE_DISABLED",
+    "evaluation_available": "C2_READINESS_UNAVAILABLE",
     "paper_mode": "PAPER_MODE_REQUIRED",
     "valid_lots": "INVALID_LOTS",
     "active_credential": "CREDENTIAL_INACTIVE",
@@ -52,10 +54,14 @@ _BLOCKER_CODES = {
     "paper_exit_verified": "PAPER_EXIT_NOT_VERIFIED",
     "c1_approval": "C1_APPROVAL_INVALID",
     "compile_success": "TRADINGVIEW_COMPILE_REQUIRED",
+    "installation_active": "INSTALLATION_INACTIVE",
     "strategy_instance": "TRADINGVIEW_NOT_INSTALLED",
     "owner_bound": "INSTALLATION_OWNER_INVALID",
     "credential_active": "CREDENTIAL_INACTIVE",
+    "current_credential_binding": "CREDENTIAL_BINDING_INVALID",
     "candidate_integrity": "CANDIDATE_INTEGRITY_INVALID",
+    "source_integrity": "SOURCE_INTEGRITY_INVALID",
+    "strategy_layer_integrity": "STRATEGY_LAYER_INTEGRITY_INVALID",
     "installation_not_suspended": "INSTALLATION_SUSPENDED",
     "paper_safe_mode": "PAPER_MODE_REQUIRED",
 }

@@ -77,8 +77,8 @@ export function EngineStrategyPicker({ onManage }: { onManage: (instanceId: stri
       <section className="ps-card">
         <div className="ps-card-head"><div><span>Engine</span><h2>Currently selected</h2></div></div>
         {selected ? (
-          <div className="ps-picker-item ready">
-            <div><strong>{selected.display_name}</strong><span>{sourceLabel(selected)} · Ready for paper</span></div>
+          <div className={`ps-picker-item ${selected.selectable ? 'ready' : 'pending'}`}>
+            <div><strong>{selected.display_name}</strong><span>{sourceLabel(selected)} · {selected.selectable ? 'Ready for paper' : blockerText(selected.blocking_reason)}</span></div>
             <button type="button" className="secondary-button" onClick={() => onManage(selected.instance_id)}><Settings2 size={14} /> Manage</button>
           </div>
         ) : <div className="ps-empty-small"><Lock size={22} /><strong>No strategy selected</strong><span>Select a verified strategy below to point the engine at it.</span></div>}
