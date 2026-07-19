@@ -77,7 +77,7 @@ export function PersonalStrategiesPage({ user }: { user?: AuthUser }) {
     return () => { active = false }
   }, [])
   return (
-    <>
+    <div className="ps-page">
       <nav className="ps-journey-tabs" aria-label="Personal strategy type">
         <button type="button" className={journey === 'engine' ? 'active' : ''} onClick={() => setJourney('engine')}>Engine picker</button>
         <button type="button" className={journey === 'webhook' ? 'active' : ''} onClick={() => setJourney('webhook')}>TradingView webhooks</button>
@@ -93,7 +93,7 @@ export function PersonalStrategiesPage({ user }: { user?: AuthUser }) {
       ) : (
         <TradingViewStrategiesPage focusInstanceId={focusInstanceId} />
       )}
-    </>
+    </div>
   )
 }
 
