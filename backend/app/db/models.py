@@ -799,6 +799,50 @@ class PineConversionRequest(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class TradingViewCompileEvidence(Base):
+    """One terminal human-confirmed TradingView compile result for a C1 candidate.
+
+    The evidence is pinned to the complete frozen C1 hash tuple. A failed
+    compile is terminal for that conversion request; retry requires a newly
+    approved candidate/conversion.
+    """
+
+    __tablename__ = "tradingview_compile_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "pine_conversion_request_id",
+            name="uq_tv_compile_evidence_conversion",
+        ),
+        Index("ix_tv_compile_evidence_candidate", "candidate_version_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    pine_conversion_request_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("pine_conversion_requests.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    candidate_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    result: Mapped[str] = mapped_column(String(20), nullable=False)  # SUCCESS / FAILURE
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    strategy_layer_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    prompt_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    transport_version: Mapped[str] = mapped_column(String(30), nullable=False)
+    transport_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    compiler_error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    setup_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admin_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    compiled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class PinePromptVersion(Base):
     """Immutable manual conversion prompt metadata and qualification state."""
 
@@ -840,22 +884,52 @@ class TradingViewSetup(Base):
     __tablename__ = "tradingview_setups"
     __table_args__ = (
         UniqueConstraint("strategy_instance_id", name="uq_tradingview_setup_instance"),
+        UniqueConstraint(
+            "user_id",
+            "approved_version_id",
+            "pine_conversion_request_id",
+            name="uq_c2_installation_owner_candidate",
+        ),
         Index("ix_tradingview_setups_type_status", "setup_type", "status"),
         Index("ix_tradingview_setups_owner_updated", "user_id", "updated_at"),
+        Index("ix_tradingview_setups_conversion", "pine_conversion_request_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     strategy_instance_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=False)
     approved_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    # Non-null only for the C2 product path. Legacy manual TradingView setups
+    # retain their existing lifecycle and readiness rules.
+    pine_conversion_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("pine_conversion_requests.id", ondelete="RESTRICT"), nullable=True
+    )
+    compile_evidence_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("tradingview_compile_evidence.id", ondelete="RESTRICT"), nullable=True
+    )
+    approved_candidate_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_strategy_layer_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     setup_type: Mapped[str] = mapped_column(String(40), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="SETUP_PENDING")
     requested_timeframe: Mapped[str | None] = mapped_column(String(20), nullable=True)
     user_reported_compiled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     installation_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     installation_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    installed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    current_credential_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_instance_webhook_credentials.id", ondelete="SET NULL"), nullable=True
+    )
     hold_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     hold_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hold_credential_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_instance_webhook_credentials.id", ondelete="SET NULL"), nullable=True
+    )
+    hold_webhook_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("webhook_events.id", ondelete="SET NULL"), nullable=True
+    )
     paper_entry_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     paper_entry_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     paper_exit_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -864,6 +938,9 @@ class TradingViewSetup(Base):
     reversal_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     blocking_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     admin_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    paper_eligible_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    credential_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reset_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
@@ -937,6 +1014,9 @@ class StrategyInstance(Base):
     status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     # signal_only / paper_live_data / real_orders (live_engine.EXECUTION_MODES)
     execution_mode: Mapped[str] = mapped_column(String(30), default="signal_only", nullable=False)
+    # C2 installation provenance. Nullable for every pre-C2 instance.
+    approved_candidate_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    installation_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     current_lots: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     # Controlled paper-only verification: when true, the private webhook path
     # executes paper signals for this instance even though it is not ACTIVE, so

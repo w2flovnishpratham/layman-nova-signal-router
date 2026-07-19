@@ -231,13 +231,25 @@ def _audit_credential_failure(correlation_id: str | None) -> None:
     )
 
 
-def validate_instance_lifecycle(auth: dict[str, Any]) -> None:
+def validate_instance_lifecycle(auth: dict[str, Any], action: str | None = None) -> None:
     if auth["source_journey"] != "PERSONAL_TRADINGVIEW":
         raise PrivateWebhookError(
             "This strategy instance does not accept private webhooks.",
             status_code=409,
             reason="INACTIVE_INSTANCE",
         )
+    # C2 instances are born inert and accept only the one HOLD required for
+    # routing verification. They never enter verification_mode, so BUY/SELL
+    # alerts cannot create paper jobs before an engine is explicitly started.
+    from app.services import c2_tradingview_service as c2
+
+    try:
+        if c2.validate_webhook_hold(auth, action):
+            return
+    except c2.C2Error as exc:
+        raise PrivateWebhookError(
+            str(exc), status_code=exc.status_code, reason=exc.code or "INSTALLATION_INVALID"
+        ) from None
     in_verification = bool(auth.get("verification_mode"))
     if auth["instance_status"] not in {InstanceState.ACTIVE.value, InstanceState.PAUSED.value} and not in_verification:
         # A strategy in controlled verification is not yet ACTIVE but must accept
@@ -436,6 +448,14 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
     if status == "duplicate":
         existing = _existing_status_response(strategy_name, payload.signal_id)
         if existing is not None:
+            if action == "HOLD":
+                verification = _record_c2_hold(
+                    auth,
+                    signal_id=payload.signal_id,
+                    webhook_event_id=claim.get("webhook_event_id"),
+                )
+                if verification is not None:
+                    existing["c2_verification"] = verification
             return existing
         # The event claim committed but the signal/job commit crashed before
         # completing on the earlier delivery. The strategy_signals unique
@@ -448,6 +468,13 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
     _shadow_compare_canonical(auth, payload, action, received_at)
     if action == "HOLD":
         result = _persist_hold(auth, payload, strategy_name, received_at)
+        verification = _record_c2_hold(
+            auth,
+            signal_id=payload.signal_id,
+            webhook_event_id=claim.get("webhook_event_id"),
+        )
+        if verification is not None:
+            result["c2_verification"] = verification
         if status == "fresh":
             try:
                 hold_canonical_decision_evidence.persist_hold_decision_best_effort(
@@ -491,6 +518,27 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
     return result
 
 
+def _record_c2_hold(
+    auth: dict[str, Any],
+    *,
+    signal_id: str,
+    webhook_event_id: str | None,
+) -> dict[str, Any] | None:
+    """C2 readiness is fail-closed evidence layered after durable HOLD."""
+    from app.services import c2_tradingview_service as c2
+
+    try:
+        return c2.record_hold_from_webhook(
+            auth,
+            signal_id=signal_id,
+            webhook_event_id=webhook_event_id,
+        )
+    except Exception:
+        # The committed HOLD remains a valid no-op. C2 eligibility remains
+        # false and can be recovered idempotently by replaying the same HOLD.
+        return {"verified": False, "reason": "C2_VERIFICATION_UNAVAILABLE"}
+
+
 def test_connection(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
     """Owner-authenticated HOLD through the durable webhook ingestion path."""
     from app.services.strategy_instance_service import _active_credential, _owned_instance
@@ -519,6 +567,18 @@ def test_connection(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[st
                 "Generate a webhook credential first.",
                 status_code=409,
                 reason="INVALID_CREDENTIAL",
+            )
+        c2_setup = db.scalar(
+            select(models.TradingViewSetup).where(
+                models.TradingViewSetup.strategy_instance_id == instance.id,
+                models.TradingViewSetup.pine_conversion_request_id.is_not(None),
+            )
+        )
+        if c2_setup is not None:
+            raise PrivateWebhookError(
+                "C2 requires a real HOLD through the private webhook.",
+                status_code=409,
+                reason="REAL_TRADINGVIEW_HOLD_REQUIRED",
             )
         auth = {
             "credential_id": str(credential.id),

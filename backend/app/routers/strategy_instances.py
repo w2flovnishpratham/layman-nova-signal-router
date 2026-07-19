@@ -27,6 +27,13 @@ router = APIRouter(prefix="/api/strategy-instances", tags=["Strategy Instances"]
 
 
 def _error(exc: Exception) -> JSONResponse:
+    from app.services.c2_tradingview_service import C2Error
+
+    if isinstance(exc, C2Error):
+        content = {"ok": False, "error": str(exc)}
+        if exc.code:
+            content["reason"] = exc.code
+        return JSONResponse(status_code=exc.status_code, content=content)
     if isinstance(exc, instances.InstanceError):
         content = {"ok": False, "error": str(exc)}
         if exc.code:

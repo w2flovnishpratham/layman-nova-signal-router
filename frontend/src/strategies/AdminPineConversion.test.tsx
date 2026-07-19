@@ -17,6 +17,18 @@ vi.mock('../api', () => ({
   submitAdminPineManualResponse: api.manualResponse,
   approveAdminPineConversion: api.approve,
   rejectAdminPineConversion: api.reject,
+  getC2Config: vi.fn().mockResolvedValue({ enabled: false }),
+  getAdminC2Conversion: vi.fn(),
+  listAdminC2Installations: vi.fn().mockResolvedValue({ installations: [] }),
+  listAdminUsers: vi.fn().mockResolvedValue([]),
+  recordC2CompileSuccess: vi.fn(),
+  recordC2CompileFailure: vi.fn(),
+  downloadC2ApprovedPine: vi.fn(),
+  createC2Installation: vi.fn(),
+  generateAdminC2Credential: vi.fn(),
+  rotateAdminC2Credential: vi.fn(),
+  revokeAdminC2Credential: vi.fn(),
+  suspendAdminC2Installation: vi.fn(),
 }))
 
 const SOURCE = '//@version=6\nindicator("NIFTY source", overlay=true)\n'

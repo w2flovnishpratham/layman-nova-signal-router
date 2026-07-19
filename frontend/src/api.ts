@@ -854,6 +854,222 @@ export const rejectAdminPineConversion = async (id: string, reason: string) =>
     { reason },
   )).conversion
 
+export interface C2Config {
+  enabled: boolean
+  webhook_path: string
+  live_eligibility: false
+  browser_automation: false
+}
+
+export interface C2CompileEvidence {
+  id: string
+  conversion_id: string
+  candidate_version_id: string
+  result: 'SUCCESS' | 'FAILURE'
+  source_sha256: string
+  strategy_layer_sha256: string
+  candidate_sha256: string
+  prompt_version: string
+  prompt_sha256: string
+  transport_version: string
+  transport_sha256: string
+  compiler_error_summary: string | null
+  setup_notes: string | null
+  compiled_at: string
+}
+
+export interface C2SetupPackage {
+  strategy_name: string
+  instance_label: string | null
+  mode: 'MANAGED' | 'SELF'
+  approved_pine: string
+  candidate_sha256: string
+  webhook_url: string
+  alert_message: string
+  credential_display: 'one_time' | 'placeholder'
+  expected_hold_behavior: string
+  instructions: string
+}
+
+export interface C2Installation {
+  id: string
+  owner_user_id: string
+  conversion_id: string
+  compile_evidence_id: string
+  strategy_id: string
+  strategy_name: string
+  strategy_version_id: string
+  strategy_version: string
+  candidate_sha256: string
+  source_sha256: string
+  mode: 'MANAGED' | 'SELF'
+  status: string
+  strategy_instance_id: string
+  instance_label: string
+  instance_status: string
+  execution_mode: 'signal_only' | 'paper_live_data'
+  credential_status: 'ACTIVE' | 'REVOKED' | 'NOT_GENERATED'
+  credential: {
+    id: string
+    token_prefix: string
+    created_at: string
+    last_verified_at: string | null
+  } | null
+  hold_status: 'VERIFIED' | 'AWAITING_HOLD'
+  hold_verified_at: string | null
+  paper_eligible: boolean
+  paper_eligible_at: string | null
+  live_eligible: false
+  gates: Record<string, boolean>
+  blocking_reasons: string[]
+  suspended_at: string | null
+  created_at: string
+  updated_at: string
+  setup_package?: C2SetupPackage
+  compile?: C2CompileEvidence
+}
+
+export interface C2IssuedCredential {
+  id: string
+  strategy_instance_id: string
+  token_prefix: string
+  token: string
+  created_at: string
+  setup_package: C2SetupPackage
+}
+
+export interface AdminUserSummary {
+  id: string
+  email: string
+  name: string | null
+  is_admin: boolean
+}
+
+async function c2Call<T>(path: `/${string}`, method = 'GET', payload?: unknown): Promise<T> {
+  const response = await apiFetch(path, {
+    method,
+    cache: 'no-store',
+    headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as ({ ok?: boolean; error?: string } & T) | null
+  if (!response.ok || !body?.ok) throw new Error(body?.error || `C2 request failed: ${response.status}`)
+  return body
+}
+
+export const getC2Config = () =>
+  c2Call<C2Config>('/api/strategy-installations/config')
+
+export const getAdminC2Conversion = (conversionId: string) =>
+  c2Call<{
+    enabled: boolean
+    compile: C2CompileEvidence | null
+    candidate: {
+      conversion_id: string
+      strategy_name: string
+      candidate_version_id: string
+      version: string
+      pine: string
+      source_sha256: string
+      strategy_layer_sha256: string
+      candidate_sha256: string
+      prompt_version: string
+      prompt_sha256: string
+      transport_version: string
+      transport_sha256: string
+    }
+  }>(`/api/admin/pine-conversions/${conversionId}/c2` as `/${string}`)
+
+export const recordC2CompileSuccess = (conversionId: string, setupNotes?: string) =>
+  c2Call<{ compile: C2CompileEvidence }>(
+    `/api/admin/pine-conversions/${conversionId}/compile-success` as `/${string}`,
+    'POST',
+    { setup_notes: setupNotes?.trim() || null },
+  )
+
+export const recordC2CompileFailure = (conversionId: string, compilerErrorSummary: string) =>
+  c2Call<{ compile: C2CompileEvidence }>(
+    `/api/admin/pine-conversions/${conversionId}/compile-failure` as `/${string}`,
+    'POST',
+    { compiler_error_summary: compilerErrorSummary },
+  )
+
+export async function downloadC2ApprovedPine(conversionId: string) {
+  const response = await apiFetch(`/api/admin/pine-conversions/${conversionId}/approved-pine` as `/${string}`)
+  if (!response.ok) throw new Error(`Could not download approved Pine: ${response.status}`)
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? 'approved-candidate.pine'
+  return { blob: await response.blob(), filename }
+}
+
+export async function listAdminUsers(): Promise<AdminUserSummary[]> {
+  const response = await apiFetch('/api/admin/users', { cache: 'no-store' })
+  const body = await response.json().catch(() => null) as { users?: AdminUserSummary[]; error?: string } | null
+  if (!response.ok || !body?.users) throw new Error(body?.error || 'Could not load installation owners.')
+  return body.users
+}
+
+export const createC2Installation = (payload: {
+  conversion_id: string
+  owner_user_id: string
+  mode: 'MANAGED' | 'SELF'
+  instance_label: string
+}) => c2Call<{ installation: C2Installation }>('/api/admin/strategy-installations', 'POST', payload)
+
+export const listAdminC2Installations = () =>
+  c2Call<{ installations: C2Installation[] }>('/api/admin/strategy-installations')
+
+export const generateAdminC2Credential = (installationId: string) =>
+  c2Call<{ credential: C2IssuedCredential }>(
+    `/api/admin/strategy-installations/${installationId}/credential` as `/${string}`,
+    'POST',
+  )
+
+export const rotateAdminC2Credential = (installationId: string) =>
+  c2Call<{ credential: C2IssuedCredential }>(
+    `/api/admin/strategy-installations/${installationId}/credential/rotate` as `/${string}`,
+    'POST',
+  )
+
+export const revokeAdminC2Credential = (installationId: string) =>
+  c2Call<{ installation: C2Installation }>(
+    `/api/admin/strategy-installations/${installationId}/credential/revoke` as `/${string}`,
+    'POST',
+  )
+
+export const suspendAdminC2Installation = (installationId: string, reason: string) =>
+  c2Call<{ installation: C2Installation }>(
+    `/api/admin/strategy-installations/${installationId}/suspend` as `/${string}`,
+    'POST',
+    { reason },
+  )
+
+export const listMyC2Installations = async () =>
+  (await c2Call<{ installations: C2Installation[] }>('/api/strategies/my-installations')).installations
+
+export const getMyC2Installation = async (installationId: string) =>
+  (await c2Call<{ installation: C2Installation }>(
+    `/api/strategies/my-installations/${installationId}` as `/${string}`,
+  )).installation
+
+export const generateSelfC2Credential = async (installationId: string) =>
+  (await c2Call<{ credential: C2IssuedCredential }>(
+    `/api/strategies/my-installations/${installationId}/self-credential` as `/${string}`,
+    'POST',
+  )).credential
+
+export const rotateSelfC2Credential = async (installationId: string) =>
+  (await c2Call<{ credential: C2IssuedCredential }>(
+    `/api/strategies/my-installations/${installationId}/credential/rotate` as `/${string}`,
+    'POST',
+  )).credential
+
+export const revokeSelfC2Credential = async (installationId: string) =>
+  (await c2Call<{ installation: C2Installation }>(
+    `/api/strategies/my-installations/${installationId}/credential/revoke` as `/${string}`,
+    'POST',
+  )).installation
+
 export const getPineConversionConfig = () => pineCall<PineConversionConfig>('/api/pine-conversions/config')
 export const generatePineConversionPackage = (strategyId: string, versionId: string) =>
   pineCall<{ package: string; filename: string; package_sha256: string }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/conversion-package` as `/${string}`, 'POST')

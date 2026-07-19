@@ -28,6 +28,7 @@ import {
   activateStrategyInstance,
   createStrategyInstance,
   generateInstanceWebhookCredential,
+  getC2Config,
   getStrategyInstance,
   listInstanceWebhookExecutions,
   listStrategyInstances,
@@ -44,6 +45,7 @@ import {
 } from '../api'
 import { backendHttpUrl } from '../lib/backend'
 import { EngineStrategyPicker } from './EngineStrategyPicker'
+import { C2MyStrategies } from './C2MyStrategies'
 import { blockerText } from './strategyBlockers'
 import './personalStrategies.css'
 
@@ -64,19 +66,30 @@ const READINESS_LABELS: Record<string, string> = {
 
 
 export function PersonalStrategiesPage({ user }: { user?: AuthUser }) {
-  const [journey, setJourney] = useState<'engine' | 'webhook' | 'pine'>('webhook')
+  const [journey, setJourney] = useState<'engine' | 'webhook' | 'pine' | 'c2'>('webhook')
+  const [c2Enabled, setC2Enabled] = useState(false)
   const [focusInstanceId, setFocusInstanceId] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    getC2Config().then((value) => {
+      if (active) setC2Enabled(value.enabled)
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [])
   return (
     <>
       <nav className="ps-journey-tabs" aria-label="Personal strategy type">
         <button type="button" className={journey === 'engine' ? 'active' : ''} onClick={() => setJourney('engine')}>Engine picker</button>
         <button type="button" className={journey === 'webhook' ? 'active' : ''} onClick={() => setJourney('webhook')}>TradingView webhooks</button>
+        {c2Enabled ? <button type="button" className={journey === 'c2' ? 'active' : ''} onClick={() => setJourney('c2')}>My Strategies</button> : null}
         <button type="button" className={journey === 'pine' ? 'active' : ''} onClick={() => setJourney('pine')}>Imported Pine scripts</button>
       </nav>
       {journey === 'engine' ? (
         <EngineStrategyPicker onManage={(id) => { setFocusInstanceId(id); setJourney('webhook') }} />
       ) : journey === 'pine' ? (
         <ImportedPinePage isAdmin={Boolean(user?.is_admin)} />
+      ) : journey === 'c2' ? (
+        <C2MyStrategies />
       ) : (
         <TradingViewStrategiesPage focusInstanceId={focusInstanceId} />
       )}

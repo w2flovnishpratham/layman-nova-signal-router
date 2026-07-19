@@ -50,6 +50,14 @@ _BLOCKER_CODES = {
     "hold_verified": "HOLD_NOT_VERIFIED",
     "paper_entry_verified": "PAPER_ENTRY_NOT_VERIFIED",
     "paper_exit_verified": "PAPER_EXIT_NOT_VERIFIED",
+    "c1_approval": "C1_APPROVAL_INVALID",
+    "compile_success": "TRADINGVIEW_COMPILE_REQUIRED",
+    "strategy_instance": "TRADINGVIEW_NOT_INSTALLED",
+    "owner_bound": "INSTALLATION_OWNER_INVALID",
+    "credential_active": "CREDENTIAL_INACTIVE",
+    "candidate_integrity": "CANDIDATE_INTEGRITY_INVALID",
+    "installation_not_suspended": "INSTALLATION_SUSPENDED",
+    "paper_safe_mode": "PAPER_MODE_REQUIRED",
 }
 
 
@@ -144,7 +152,15 @@ def _decorate_personal_instance(db, row: models.StrategyInstance, payload: dict[
         )
     )
 
-    if is_personal_pine:
+    if is_personal_pine and setup is not None and setup.pine_conversion_request_id is not None:
+        from app.services import c2_tradingview_service as c2
+
+        c2_readiness = c2.readiness_for_setup(db, setup)
+        readiness = {
+            **c2_readiness["gates"],
+            "can_activate": bool(c2_readiness["paper_eligible"]),
+        }
+    elif is_personal_pine:
         version = db.get(models.StrategyVersion, row.strategy_version_id)
         readiness = {
             "paper_mode": paper_mode,
@@ -184,6 +200,9 @@ def _decorate_personal_instance(db, row: models.StrategyInstance, payload: dict[
             "blocking_code": blocking_code,
             "setup_type": setup.setup_type if setup else None,
             "requires_managed_setup": bool(setup and setup.setup_type == "NOVA_MANAGED_TRADINGVIEW"),
+            "paper_eligible": bool(readiness["can_activate"]),
+            "live_eligible": False,
+            "installation_status": setup.status if setup else None,
             "lot_size": lot_size,
             "estimated_quantity": row.current_lots * lot_size,
             "last_signal_time": latest.created_at.isoformat() if latest and latest.created_at else None,
@@ -673,12 +692,35 @@ def _reset_setup_connectivity(db, instance_id: uuid.UUID) -> None:
     if setup is not None:
         setup.hold_signal_id = None
         setup.hold_verified_at = None
-        setup.status = "ALERT_TEST_PENDING"
+        setup.hold_credential_id = None
+        setup.hold_webhook_event_id = None
+        setup.paper_eligible_at = None
+        setup.status = (
+            "AWAITING_HOLD"
+            if setup.pine_conversion_request_id is not None
+            else "ALERT_TEST_PENDING"
+        )
         setup.blocking_reason = "Webhook credential changed; send a new HOLD alert."
         setup.updated_at = _now()
 
 
+def _c2_installation_id(instance_id: uuid.UUID | str) -> uuid.UUID | None:
+    with session_scope() as db:
+        setup = db.scalar(
+            select(models.TradingViewSetup).where(
+                models.TradingViewSetup.strategy_instance_id == uuid.UUID(str(instance_id)),
+                models.TradingViewSetup.pine_conversion_request_id.is_not(None),
+            )
+        )
+        return setup.id if setup else None
+
+
 def generate_webhook_credential(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
+    c2_installation_id = _c2_installation_id(instance_id)
+    if c2_installation_id is not None:
+        from app.services import c2_tradingview_service as c2
+
+        return c2.generate_credential(user_id, c2_installation_id, admin=False)
     with session_scope() as db:
         row = _owned_instance(db, user_id, instance_id)
         if row.source_journey not in WEBHOOK_JOURNEYS:
@@ -695,6 +737,11 @@ def generate_webhook_credential(user_id: uuid.UUID, instance_id: uuid.UUID | str
 
 
 def rotate_webhook_credential(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
+    c2_installation_id = _c2_installation_id(instance_id)
+    if c2_installation_id is not None:
+        from app.services import c2_tradingview_service as c2
+
+        return c2.rotate_credential(user_id, c2_installation_id, admin=False)
     with session_scope() as db:
         row = _owned_instance(db, user_id, instance_id)
         current = _active_credential(db, row.id)
@@ -716,6 +763,11 @@ def rotate_webhook_credential(user_id: uuid.UUID, instance_id: uuid.UUID | str) 
 
 
 def revoke_webhook_credential(user_id: uuid.UUID, instance_id: uuid.UUID | str, *, reason: str = "user_request") -> dict[str, Any]:
+    c2_installation_id = _c2_installation_id(instance_id)
+    if c2_installation_id is not None:
+        from app.services import c2_tradingview_service as c2
+
+        return c2.revoke_credential(user_id, c2_installation_id, admin=False)
     with session_scope() as db:
         row = _owned_instance(db, user_id, instance_id)
         current = _active_credential(db, row.id)
@@ -737,6 +789,21 @@ def admin_generate_managed_credential(
     of the owning instance. The non-Premium user never handles this secret; the
     plaintext is returned exactly once to the authorized admin installer and is
     stored only as a hash. Rotation revokes the previous credential."""
+    with session_scope() as db:
+        c2_setup = db.scalar(
+            select(models.TradingViewSetup).where(
+                models.TradingViewSetup.id == uuid.UUID(str(setup_id)),
+                models.TradingViewSetup.pine_conversion_request_id.is_not(None),
+            )
+        )
+    if c2_setup is not None:
+        from app.services import c2_tradingview_service as c2
+
+        return (
+            c2.rotate_credential(admin_id, c2_setup.id, admin=True)
+            if rotate
+            else c2.generate_credential(admin_id, c2_setup.id, admin=True)
+        )
     with session_scope() as db:
         setup = db.scalar(
             select(models.TradingViewSetup)
@@ -886,6 +953,12 @@ def start_verification(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict
         ).with_for_update())
         if setup is None:
             raise InstanceError("Create a TradingView setup before verification.", status_code=409, code="TRADINGVIEW_NOT_INSTALLED")
+        if setup.pine_conversion_request_id is not None:
+            raise InstanceError(
+                "C2 verification accepts a real private-webhook HOLD while the instance remains inert.",
+                status_code=409,
+                code="REAL_TRADINGVIEW_HOLD_REQUIRED",
+            )
         if setup.setup_type == "NOVA_MANAGED_TRADINGVIEW":
             raise InstanceError("A NOVA administrator starts verification for managed setups.", status_code=409, code="ADMIN_ACTION_REQUIRED")
         return _enter_verification(db, instance, setup, user_id)
@@ -900,6 +973,12 @@ def admin_start_managed_verification(admin_id: uuid.UUID, setup_id: uuid.UUID | 
         ).with_for_update())
         if setup is None:
             raise InstanceError("TradingView setup not found.", status_code=404)
+        if setup.pine_conversion_request_id is not None:
+            raise InstanceError(
+                "C2 verification accepts a real private-webhook HOLD while the instance remains inert.",
+                status_code=409,
+                code="REAL_TRADINGVIEW_HOLD_REQUIRED",
+            )
         if setup.setup_type != "NOVA_MANAGED_TRADINGVIEW":
             raise InstanceError("This endpoint is for NOVA-managed setups.", status_code=409, code="NOT_MANAGED_SETUP")
         if setup.installation_confirmed_at is None:

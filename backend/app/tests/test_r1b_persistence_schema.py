@@ -49,10 +49,10 @@ def test_migration_metadata_is_exact():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(_alembic_config())
-    head = script.get_revision("0015_r1b_persistence")
-    assert script.get_heads() == ["0015_r1b_persistence"]
-    assert head.down_revision == "0014_verify_select"
-    assert len(head.revision) == 20 <= 32
+    r1b = script.get_revision("0015_r1b_persistence")
+    assert script.get_heads() == ["0016_c2_tv_installation"]
+    assert r1b.down_revision == "0014_verify_select"
+    assert len(r1b.revision) == 20 <= 32
 
 
 def test_migration_adds_no_column_no_backfill_and_cycles_on_sqlite(tmp_path, monkeypatch):
@@ -66,7 +66,9 @@ def test_migration_adds_no_column_no_backfill_and_cycles_on_sqlite(tmp_path, mon
     eng.reset_engine_for_tests()
     config = _alembic_config()
 
-    command.upgrade(config, "head")
+    # Exercise the R1B migration at its own revision, independent of newer
+    # product migrations that may extend the single Alembic head.
+    command.upgrade(config, "0015_r1b_persistence")
     engine = eng.get_engine()
 
     def _columns():
@@ -119,7 +121,7 @@ def test_migration_adds_no_column_no_backfill_and_cycles_on_sqlite(tmp_path, mon
         _existing_rows_readable(conn)
 
     # Upgrade again: real op.create_table DDL path (tables were dropped).
-    command.upgrade(config, "head")
+    command.upgrade(config, "0015_r1b_persistence")
     assert set(EVIDENCE_TABLES) <= _tables()
     assert _columns() == columns_at_head, "0015 must not add columns to existing tables"
     inspector = sa.inspect(engine)

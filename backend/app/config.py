@@ -163,6 +163,9 @@ class Settings(BaseSettings):
     CLAUDE_CONVERSION_MAX_OUTPUT_TOKENS: int = 16000
     CLAUDE_CONVERSION_DAILY_ADMIN_LIMIT: int = 10
     CLAUDE_CONVERSION_DAILY_GLOBAL_LIMIT: int = 50
+    # C2 product installation controls. Disabled by default; read-only C1 and
+    # the pre-existing private webhook behavior remain available independently.
+    C2_TRADINGVIEW_INSTALLATION_ENABLED: bool = False
 
     @field_validator(
         "CANONICAL_SIGNAL_SHADOW",

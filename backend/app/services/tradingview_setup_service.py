@@ -197,6 +197,8 @@ def reset_setup(user_id, instance_id, setup_type: str, timeframe: str | None, re
         row = db.scalar(select(models.TradingViewSetup).where(models.TradingViewSetup.strategy_instance_id == instance.id).with_for_update())
         if row is None:
             raise SetupError("TradingView setup not found.", 404, "NOT_FOUND")
+        if row.pine_conversion_request_id is not None:
+            raise SetupError("C2 installations use the C2 lifecycle.", 409, "C2_ROUTE_REQUIRED")
         if setup_type not in SETUP_TYPES:
             raise SetupError("Unsupported TradingView setup type.", 422, "INVALID_SETUP_TYPE")
         row.setup_type, row.status = setup_type, "SETUP_PENDING"
@@ -216,6 +218,8 @@ def report_compiled(user_id, instance_id) -> dict[str, Any]:
     with session_scope() as db:
         instance = _owned_instance(db, user_id, instance_id, for_update=True)
         row = _setup_for_instance(db, instance.id, lock=True)
+        if row.pine_conversion_request_id is not None:
+            raise SetupError("C2 compilation is admin-confirmed.", 409, "ADMIN_ACTION_REQUIRED")
         if row.setup_type != "USER_MANAGED_TRADINGVIEW":
             raise SetupError("Compilation reporting belongs to user-managed setup only.", 409, "ADMIN_MANAGED_SETUP")
         row.user_reported_compiled_at = _now()
@@ -243,6 +247,8 @@ def record_installation(admin_id, setup_id, data: dict[str, Any]) -> dict[str, A
         row = db.scalar(select(models.TradingViewSetup).where(models.TradingViewSetup.id == uuid.UUID(str(setup_id))).with_for_update())
         if row is None:
             raise SetupError("TradingView setup not found.", 404, "NOT_FOUND")
+        if row.pine_conversion_request_id is not None:
+            raise SetupError("C2 installations use the C2 lifecycle.", 409, "C2_ROUTE_REQUIRED")
         version = db.get(models.StrategyVersion, row.approved_version_id)
         if version is None or data["installed_version_hash"] != version.source_sha256:
             raise SetupError("Installed Pine hash must match the approved immutable version.", 409, "VERSION_HASH_MISMATCH")
@@ -261,6 +267,12 @@ def record_verification(actor_id, instance_id, kind: str, signal_id: str, *, adm
         if instance is None:
             raise SetupError("Strategy instance not found.", 404, "NOT_FOUND")
         row = _setup_for_instance(db, instance.id, lock=True)
+        if row.pine_conversion_request_id is not None:
+            raise SetupError(
+                "C2 HOLD evidence is recorded automatically by the private webhook.",
+                409,
+                "C2_WEBHOOK_EVIDENCE_AUTOMATIC",
+            )
         if not admin and row.user_id != actor_id:
             raise SetupError("TradingView setup not found.", 404, "NOT_FOUND")
         _validate_signal_evidence(db, row, instance, kind, signal_id)
@@ -371,6 +383,8 @@ def admin_set_state(admin_id, setup_id, status: str, reason: str | None, notes: 
     with session_scope() as db:
         row = db.scalar(select(models.TradingViewSetup).where(models.TradingViewSetup.id == uuid.UUID(str(setup_id))).with_for_update())
         if row is None: raise SetupError("TradingView setup not found.", 404, "NOT_FOUND")
+        if row.pine_conversion_request_id is not None:
+            raise SetupError("C2 installations use the C2 lifecycle.", 409, "C2_ROUTE_REQUIRED")
         row.status, row.blocking_reason, row.admin_notes = status, (reason or "").strip() or None, (notes or "").strip() or None
         row.updated_at = _now()
         crud.add_audit_log(db, user_id=admin_id, action="TRADINGVIEW_SETUP_STATE_CHANGED", metadata={"setup_id": str(row.id), "status": status, "reason": row.blocking_reason})

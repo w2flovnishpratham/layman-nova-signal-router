@@ -11,6 +11,7 @@ import {
   submitAdminPineManualResponse,
 } from '../api'
 import type { AdminPineConversion } from '../api'
+import { C2AdminPanel } from './C2AdminPanel'
 
 const EMPTY_SOURCE = '//@version=6\nindicator("NIFTY strategy", overlay=true)\n'
 
@@ -216,6 +217,7 @@ function ConversionDetail({
       <button className="ps-danger" type="button" disabled={!canReject || !reviewReason.trim() || !!busy} onClick={() => void onReject()}><X size={14} /> Reject Candidate</button>
     </div>
     {conversion.approval_integrity === false ? <div className="ps-message error">Approval binding no longer matches the candidate SHA.</div> : null}
+    <C2AdminPanel conversion={conversion} />
   </>
 }
 

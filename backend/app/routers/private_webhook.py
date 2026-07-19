@@ -75,7 +75,7 @@ async def private_instance_webhook(request: Request) -> JSONResponse:
         if _credential_rate_limited(service.hash_credential(credential.strip())):
             return _error(429, "Rate limit exceeded for this webhook.", "RATE_LIMITED")
         auth = service.authenticate_credential(credential, correlation_id=uuid.uuid4().hex)
-        service.validate_instance_lifecycle(auth)
+        service.validate_instance_lifecycle(auth, action=service.normalize_action(payload.action))
         result = service.ingest(auth, payload)
     except service.PrivateWebhookError as exc:
         return _error(exc.status_code, str(exc), exc.reason)

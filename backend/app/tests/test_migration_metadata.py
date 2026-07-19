@@ -32,11 +32,13 @@ def test_every_revision_id_fits_alembic_version_column():
     )
 
 
-def test_single_head_is_r1b_persistence_off_0014():
+def test_single_head_is_c2_installation_off_r1b_persistence():
     script = _script_directory()
-    assert script.get_heads() == ["0015_r1b_persistence"]
-    head = script.get_revision("0015_r1b_persistence")
-    assert head.down_revision == "0014_verify_select"
-    assert len(head.revision) == 20
+    assert script.get_heads() == ["0016_c2_tv_installation"]
+    head = script.get_revision("0016_c2_tv_installation")
+    assert head.down_revision == "0015_r1b_persistence"
+    assert len(head.revision) <= ALEMBIC_VERSION_NUM_MAXLEN
+    r1b = script.get_revision("0015_r1b_persistence")
+    assert r1b.down_revision == "0014_verify_select"
     previous = script.get_revision("0014_verify_select")
     assert previous.down_revision == "0013_manual_tradingview_flow"

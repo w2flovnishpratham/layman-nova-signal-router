@@ -41,6 +41,12 @@ vi.mock('../api', () => ({
   getTradingViewSetup: vi.fn(),
   listManagedTradingViewSetups: vi.fn().mockResolvedValue([]),
   recordManagedTradingViewInstallation: vi.fn(),
+  getC2Config: vi.fn().mockResolvedValue({ enabled: false }),
+  listMyC2Installations: vi.fn().mockResolvedValue([]),
+  getMyC2Installation: vi.fn(),
+  generateSelfC2Credential: vi.fn(),
+  rotateSelfC2Credential: vi.fn(),
+  revokeSelfC2Credential: vi.fn(),
 }))
 
 const TOKEN = 'nwk_SENTINEL_PHASE3B_BROWSER_CREDENTIAL_123456'
