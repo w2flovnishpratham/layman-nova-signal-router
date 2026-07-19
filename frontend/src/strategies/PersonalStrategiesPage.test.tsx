@@ -164,6 +164,40 @@ describe('PersonalStrategiesPage', () => {
     expect(screen.getByRole('button', { name: /newer/i })).toBeDisabled()
   })
 
+  it('rehydrates genuine C2 HOLD readiness and shows Connection test Passed', async () => {
+    const pending = instance({
+      label: 'b@S_again Paper',
+      readiness: {
+        feature_enabled: true, evaluation_available: true, c1_approval: true,
+        compile_success: true, installation_active: true, strategy_instance: true,
+        owner_bound: true, credential_active: true, current_credential_binding: true,
+        hold_verified: false, candidate_integrity: true, source_integrity: true,
+        strategy_layer_integrity: true, installation_not_suspended: true,
+        paper_safe_mode: true, can_activate: false,
+      },
+      blocking_code: 'HOLD_NOT_VERIFIED',
+    })
+    const ready = instance({
+      ...pending,
+      readiness: { ...pending.readiness!, hold_verified: true, can_activate: true },
+      blocking_code: null,
+    })
+    api.list.mockResolvedValueOnce([pending]).mockResolvedValue([ready])
+    api.get.mockResolvedValueOnce(pending).mockResolvedValue(ready)
+    api.history.mockResolvedValue({ executions: [hold], limit: 10, offset: 0 })
+
+    const user = userEvent.setup()
+    render(<PersonalStrategiesPage />)
+    await screen.findByRole('heading', { name: 'b@S_again Paper' })
+    expect(screen.getByText('Required')).toBeInTheDocument()
+    expect(screen.getByText(/Not ready/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /Refresh/i }))
+    await waitFor(() => expect(screen.getByText('Passed')).toBeInTheDocument())
+    expect(screen.queryByText(/Not ready/i)).not.toBeInTheDocument()
+    expect(api.get).toHaveBeenCalledTimes(2)
+  })
+
   it('activates only a ready strategy and exposes pause, stop, rotate, and revoke controls', async () => {
     const credential = { id: 'credential-a', strategy_instance_id: 'instance-a', token_prefix: 'nwk_safe', created_at: null, last_used_at: null, revoked_at: null }
     arrange(instance({

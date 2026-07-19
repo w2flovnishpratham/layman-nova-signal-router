@@ -35,6 +35,24 @@ describe('EngineStrategyPicker', () => {
     expect(await screen.findByText('Selected')).toBeInTheDocument()
   })
 
+  it('shows a verified stopped C2 strategy as selectable without Continue setup', async () => {
+    api.getEngineStrategies.mockResolvedValue(feed([
+      strategy({
+        display_name: 'b@S_again Paper',
+        instance_status: 'stopped',
+        selectable: true,
+        status: 'READY',
+        blocking_reason: null,
+      }),
+    ]))
+    render(<EngineStrategyPicker onManage={vi.fn()} />)
+    expect(await screen.findByText('b@S_again Paper')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /select strategy/i })).toBeInTheDocument()
+    expect(screen.queryByText('Not selectable')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Continue setup/i })).not.toBeInTheDocument()
+    expect(api.setEngineSelection).not.toHaveBeenCalled()
+  })
+
   it('keeps an unverified / in-verification strategy out of the selectable list with its blocker', async () => {
     api.getEngineStrategies.mockResolvedValue(feed([
       strategy({ instance_id: 'inst-2', display_name: 'Half-set up', selectable: false, verification_mode: true, status: 'VERIFICATION_IN_PROGRESS', blocking_reason: 'VERIFICATION_IN_PROGRESS' }),

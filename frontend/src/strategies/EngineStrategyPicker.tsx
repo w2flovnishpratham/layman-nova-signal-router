@@ -69,7 +69,7 @@ export function EngineStrategyPicker({ onManage }: { onManage: (instanceId: stri
         <div>
           <span className="ps-eyebrow"><ShieldCheck size={13} /> Verified strategies only</span>
           <h1>Engine strategy picker</h1>
-          <p>Only strategies that cleared genuine HOLD, paper entry and paper exit are selectable.</p>
+          <p>Only strategies that cleared genuine HOLD and the server's Paper-readiness checks are selectable.</p>
         </div>
       </div>
       {error ? <div className="ps-message error" role="alert">{error}</div> : null}

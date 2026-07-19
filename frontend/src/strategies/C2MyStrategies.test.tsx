@@ -115,4 +115,22 @@ describe('C2MyStrategies', () => {
     expect(screen.getByText('VERIFIED')).toBeInTheDocument()
     expect(screen.getByText('UNAVAILABLE')).toBeInTheDocument()
   })
+
+  it('refreshes from server state after a genuine HOLD', async () => {
+    const ready = {
+      ...installation, status: 'PAPER_ELIGIBLE', credential_status: 'ACTIVE' as const,
+      credential: { id: 'credential-1', token_prefix: 'nwk_once', created_at: 'now', last_verified_at: 'now' },
+      hold_status: 'VERIFIED' as const, hold_verified_at: '2026-07-19T10:10:00Z',
+      paper_eligible: true, paper_eligible_at: '2026-07-19T10:10:00Z', blocking_reasons: [],
+    }
+    api.list.mockResolvedValueOnce([installation]).mockResolvedValue([ready])
+    api.get.mockResolvedValueOnce(installation).mockResolvedValue(ready)
+    const user = userEvent.setup()
+    render(<C2MyStrategies />)
+    expect(await screen.findByText('NOT READY')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Refresh/i }))
+    await waitFor(() => expect(screen.getByText('READY')).toBeInTheDocument())
+    expect(screen.getByText('VERIFIED')).toBeInTheDocument()
+    expect(screen.getByText('UNAVAILABLE')).toBeInTheDocument()
+  })
 })

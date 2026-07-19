@@ -534,17 +534,31 @@ export interface StrategyInstance {
   webhook_credential?: InstanceWebhookCredential | null
   credential_status?: 'active' | 'revoked' | 'missing'
   readiness?: {
-    paper_mode: boolean
-    valid_lots: boolean
-    active_credential: boolean
+    paper_mode?: boolean
+    valid_lots?: boolean
+    active_credential?: boolean
     /** Lighter gate — only present for NOVA catalog personal-webhook instances. */
     connection_tested?: boolean
-    /** Full server-observed gates — present for approved personal-Pine instances. */
+    /** Server-observed gates for approved personal-Pine instances. */
+    feature_enabled?: boolean
+    evaluation_available?: boolean
+    c1_approval?: boolean
+    compile_success?: boolean
+    installation_active?: boolean
+    strategy_instance?: boolean
+    owner_bound?: boolean
+    credential_active?: boolean
+    current_credential_binding?: boolean
     approved_version?: boolean
     installation_confirmed?: boolean
     hold_verified?: boolean
     paper_entry_verified?: boolean
     paper_exit_verified?: boolean
+    candidate_integrity?: boolean
+    source_integrity?: boolean
+    strategy_layer_integrity?: boolean
+    installation_not_suspended?: boolean
+    paper_safe_mode?: boolean
     can_activate: boolean
   }
   /** Safe code for the first failing activation gate, e.g. PAPER_EXIT_NOT_VERIFIED. */
@@ -582,6 +596,7 @@ interface InstanceResponse {
 async function instanceCall(path: `/${string}`, method: string, payload?: unknown): Promise<StrategyInstance> {
   const response = await apiFetch(path, {
     method,
+    cache: method === 'GET' ? 'no-store' : undefined,
     headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: payload === undefined ? undefined : JSON.stringify(payload),
   })

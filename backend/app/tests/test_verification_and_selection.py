@@ -220,7 +220,7 @@ def test_select_eligible_instance_and_persist(mu_db, monkeypatch):
     assert next(s for s in listing["strategies"] if s["instance_id"] == instance_id)["selected"] is True
 
 
-def test_cannot_select_foreign_or_stopped_instance(mu_db, monkeypatch):
+def test_cannot_select_foreign_but_can_select_ready_stopped_personal_instance(mu_db, monkeypatch):
     from app.config import settings
     monkeypatch.setattr(settings, "PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED", True)
     owner = make_user("iso-owner@example.com")
@@ -232,11 +232,17 @@ def test_cannot_select_foreign_or_stopped_instance(mu_db, monkeypatch):
     # Foreign user gets a uniform 404 (no tenant probing).
     assert _full_client(stranger).put("/api/engine/selection", json={"strategy_instance_id": instance_id}).status_code == 404
 
-    # Stopped instance is not selectable.
+    # Selection only changes the owner's pointer. A stopped personal instance
+    # that still clears the activation-readiness gate remains selectable, and
+    # selecting it never starts or activates the instance.
     _full_client(owner).put("/api/engine/selection", json={"strategy_instance_id": instance_id})
     client.post(f"/api/strategy-instances/{instance_id}/activate")
     client.post(f"/api/strategy-instances/{instance_id}/stop", json={"reason": "done"})
-    assert _full_client(owner).put("/api/engine/selection", json={"strategy_instance_id": instance_id}).status_code == 409
+    selected = _full_client(owner).put(
+        "/api/engine/selection", json={"strategy_instance_id": instance_id}
+    )
+    assert selected.status_code == 200
+    assert _status(instance_id) == "stopped"
 
 
 def test_selection_never_reroutes_webhook_signals(client, per_user_runtime, deterministic_paper_market, worker_enabled):

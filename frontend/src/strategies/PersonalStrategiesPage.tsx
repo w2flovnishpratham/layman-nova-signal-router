@@ -466,6 +466,9 @@ function StrategyDetail(props: DetailProps) {
   }
 
   const setupText = setupInstructions(webhookUrl, copyTemplates)
+  const connectionPassed = Boolean(
+    detail.readiness?.connection_tested ?? detail.readiness?.hold_verified,
+  )
 
   return (
     <>
@@ -479,7 +482,7 @@ function StrategyDetail(props: DetailProps) {
           <Summary label="Lots" value={String(detail.current_lots)} />
           <Summary label="Estimated quantity" value={detail.estimated_quantity ? `${detail.estimated_quantity} contracts` : 'Calculated at entry'} />
           <Summary label="Credential" value={detail.webhook_credential ? 'Active' : 'Not generated'} />
-          <Summary label="Connection test" value={detail.readiness?.connection_tested ? 'Passed' : 'Required'} />
+          <Summary label="Connection test" value={connectionPassed ? 'Passed' : 'Required'} />
           <Summary label="Last signal" value={formatDate(detail.last_signal_time)} />
         </div>
         <div className="ps-readiness" aria-label="Activation readiness">

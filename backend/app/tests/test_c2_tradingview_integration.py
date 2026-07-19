@@ -368,6 +368,11 @@ def test_real_hold_makes_paper_eligible_without_execution_and_owner_only(c2_app)
     )
     assert local_test.status_code == 409
     assert local_test.json()["reason"] == "REAL_TRADINGVIEW_HOLD_REQUIRED"
+    before_hold = client.get(
+        f"/api/strategies/my-installations/{installation['id']}"
+    ).json()["installation"]
+    assert before_hold["hold_status"] == "AWAITING_HOLD"
+    assert before_hold["paper_eligible"] is False
 
     accepted = client.post("/api/webhooks/private", json=body)
     assert accepted.status_code == 202, accepted.text
@@ -384,6 +389,16 @@ def test_real_hold_makes_paper_eligible_without_execution_and_owner_only(c2_app)
     assert detail["live_eligible"] is False
     assert detail["hold_status"] == "VERIFIED"
 
+    activated = client.post(
+        f"/api/strategy-instances/{installation['strategy_instance_id']}/activate"
+    )
+    assert activated.status_code == 200, activated.text
+    stopped = client.post(
+        f"/api/strategy-instances/{installation['strategy_instance_id']}/stop",
+        json={"reason": "Engine remains explicitly stopped"},
+    )
+    assert stopped.status_code == 200, stopped.text
+
     picker = client.get("/api/engine/strategies").json()
     entry = next(
         item
@@ -391,6 +406,7 @@ def test_real_hold_makes_paper_eligible_without_execution_and_owner_only(c2_app)
         if item["instance_id"] == installation["strategy_instance_id"]
     )
     assert entry["selectable"] is True
+    assert entry["instance_status"] == "stopped"
     selected = client.put(
         "/api/engine/selection",
         json={"strategy_instance_id": installation["strategy_instance_id"]},
@@ -412,13 +428,69 @@ def test_real_hold_makes_paper_eligible_without_execution_and_owner_only(c2_app)
         instance = db.get(
             models.StrategyInstance, uuid.UUID(installation["strategy_instance_id"])
         )
-        assert instance.status == "ready"
+        assert instance.status == "stopped"
         assert instance.execution_mode == "signal_only"
         assert not instance.verification_mode
         assert db.query(models.StrategyExecutionJob).count() == 0
         assert db.query(models.LiveOrderIntent).count() == 0
         assert db.query(models.StrategyInstancePosition).count() == 0
         assert db.query(models.StrategySignal).count() == 1
+
+
+def test_existing_verified_hold_recomputes_persisted_readiness(c2_app):
+    client, current, _, owner, _ = c2_app
+    approved = _approved(client)
+    _compile(client, approved)
+    installation = _install(client, approved, owner.id)
+    current["user"] = owner
+    issued = _credential(client, installation["id"], admin=False)
+    assert client.post(
+        "/api/webhooks/private", json=_hold(issued["token"])
+    ).status_code == 202
+
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import c2_tradingview_service
+
+    with session_scope() as db:
+        setup = db.get(
+            models.TradingViewSetup, uuid.UUID(installation["id"])
+        )
+        instance = db.get(
+            models.StrategyInstance, uuid.UUID(installation["strategy_instance_id"])
+        )
+        setup.paper_eligible_at = None
+        setup.status = "HOLD_VERIFIED"
+        setup.blocking_reason = "stale projection"
+        instance.verification_mode = True
+        instance.verification_completed_at = None
+
+    result = c2_tradingview_service.recompute_verified_hold_readiness(
+        installation["id"]
+    )
+    assert result == {
+        "checked": 1,
+        "eligible": 1,
+        "repaired": 1,
+        "eligible_installation_ids": [installation["id"]],
+        "repaired_installation_ids": [installation["id"]],
+        "live_eligible": False,
+    }
+
+    detail = client.get(
+        f"/api/strategies/my-installations/{installation['id']}"
+    ).json()["installation"]
+    assert detail["hold_status"] == "VERIFIED"
+    assert detail["paper_eligible"] is True
+    assert detail["paper_eligible_at"] is not None
+    assert detail["blocking_reasons"] == []
+    entry = next(
+        item
+        for item in client.get("/api/engine/strategies").json()["strategies"]
+        if item["instance_id"] == installation["strategy_instance_id"]
+    )
+    assert entry["selectable"] is True
+    assert entry["verification_mode"] is False
 
 
 def test_non_hold_wrong_and_revoked_credentials_never_verify(c2_app):

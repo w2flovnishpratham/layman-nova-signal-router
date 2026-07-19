@@ -501,6 +501,95 @@ def readiness_for_setup(db, setup: models.TradingViewSetup) -> dict[str, Any]:
     return _readiness(db, setup)
 
 
+def _persist_authoritative_readiness(
+    db,
+    setup: models.TradingViewSetup,
+    *,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Persist the authoritative C2 verdict and finish stale verification state.
+
+    The computed gates remain the source of truth. Persisted timestamps/status
+    are projections for history and UI display, never separate eligibility
+    authorities.
+    """
+    readiness = _readiness(db, setup)
+    if not readiness["paper_eligible"]:
+        return readiness, False
+
+    now = now or _now()
+    changed = False
+    if setup.paper_eligible_at is None:
+        setup.paper_eligible_at = now
+        changed = True
+        crud.add_audit_log(
+            db,
+            user_id=setup.user_id,
+            action="STRATEGY_PAPER_ELIGIBLE",
+            metadata={
+                "owner_user_id": str(setup.user_id),
+                "installation_id": str(setup.id),
+                "instance_id": str(setup.strategy_instance_id),
+                "candidate_sha_ref": setup.approved_candidate_sha256[:12],
+                "live_eligible": False,
+                "new_status": "PAPER_ELIGIBLE",
+            },
+        )
+    if setup.status != "PAPER_ELIGIBLE" or setup.blocking_reason is not None:
+        setup.status = "PAPER_ELIGIBLE"
+        setup.blocking_reason = None
+        changed = True
+
+    instance = readiness["instance"]
+    if instance is not None:
+        from app.services import strategy_instance_service as instances
+
+        changed = instances.complete_verification_if_ready(db, instance) or changed
+
+    if changed:
+        setup.updated_at = now
+    return readiness, changed
+
+
+def recompute_verified_hold_readiness(
+    installation_id: uuid.UUID | str | None = None,
+) -> dict[str, Any]:
+    """Idempotently repair persisted projections for genuine verified C2 HOLDs."""
+    with session_scope() as db:
+        query = (
+            select(models.TradingViewSetup)
+            .where(
+                models.TradingViewSetup.pine_conversion_request_id.is_not(None),
+                models.TradingViewSetup.hold_verified_at.is_not(None),
+                models.TradingViewSetup.hold_signal_id.is_not(None),
+                models.TradingViewSetup.hold_credential_id.is_not(None),
+                models.TradingViewSetup.hold_webhook_event_id.is_not(None),
+            )
+            .with_for_update()
+        )
+        if installation_id is not None:
+            query = query.where(
+                models.TradingViewSetup.id == uuid.UUID(str(installation_id))
+            )
+        rows = db.scalars(query).all()
+        eligible_ids: list[str] = []
+        repaired_ids: list[str] = []
+        for setup in rows:
+            readiness, changed = _persist_authoritative_readiness(db, setup)
+            if readiness["paper_eligible"]:
+                eligible_ids.append(str(setup.id))
+            if changed:
+                repaired_ids.append(str(setup.id))
+        return {
+            "checked": len(rows),
+            "eligible": len(eligible_ids),
+            "repaired": len(repaired_ids),
+            "eligible_installation_ids": eligible_ids,
+            "repaired_installation_ids": repaired_ids,
+            "live_eligible": False,
+        }
+
+
 def _setup_package(
     setup: models.TradingViewSetup,
     context: dict[str, Any],
@@ -1117,8 +1206,13 @@ def record_hold_from_webhook(
             setup.hold_signal_id == signal_id
             and setup.hold_credential_id == uuid.UUID(auth["credential_id"])
         ):
-            readiness = _readiness(db, setup)
-            return {"verified": readiness["paper_eligible"], "duplicate": True}
+            readiness, _ = _persist_authoritative_readiness(db, setup)
+            return {
+                "verified": readiness["paper_eligible"],
+                "paper_eligible": readiness["paper_eligible"],
+                "live_eligible": False,
+                "duplicate": True,
+            }
 
         context = _approved_context(db, setup.pine_conversion_request_id, lock=True)
         evidence = db.get(models.TradingViewCompileEvidence, setup.compile_evidence_id)
@@ -1153,6 +1247,7 @@ def record_hold_from_webhook(
             or metadata.get("credential_id") != auth["credential_id"]
             or metadata.get("strategy_instance_id") != auth["instance_id"]
             or metadata.get("action") != "HOLD"
+            or metadata.get("source") != "PRIVATE_TRADINGVIEW_WEBHOOK"
         ):
             return {"verified": False, "reason": "WEBHOOK_EVIDENCE_INVALID"}
 
@@ -1178,24 +1273,7 @@ def record_hold_from_webhook(
                 "new_status": setup.status,
             },
         )
-        readiness = _readiness(db, setup)
-        if readiness["paper_eligible"]:
-            if setup.paper_eligible_at is None:
-                setup.paper_eligible_at = now
-                crud.add_audit_log(
-                    db,
-                    user_id=setup.user_id,
-                    action="STRATEGY_PAPER_ELIGIBLE",
-                    metadata={
-                        "owner_user_id": str(setup.user_id),
-                        "installation_id": str(setup.id),
-                        "instance_id": str(setup.strategy_instance_id),
-                        "candidate_sha_ref": setup.approved_candidate_sha256[:12],
-                        "live_eligible": False,
-                        "new_status": "PAPER_ELIGIBLE",
-                    },
-                )
-            setup.status = "PAPER_ELIGIBLE"
+        readiness, _ = _persist_authoritative_readiness(db, setup, now=now)
         return {
             "verified": readiness["paper_eligible"],
             "installation_id": str(setup.id),

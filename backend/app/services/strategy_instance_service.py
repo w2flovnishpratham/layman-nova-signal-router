@@ -855,15 +855,18 @@ def _engine_eligibility(db, row: models.StrategyInstance, catalog: models.Strate
     """Single source of truth for whether an instance is selectable in the
     engine picker. Returns (decorated_payload, selectable, blocking_reason)."""
     decorated = _decorate_personal_instance(db, row, _instance_public(row, strategy=catalog))
-    stopped = row.status in {InstanceState.STOPPED.value, InstanceState.ARCHIVED.value}
     if row.verification_mode:
         return decorated, False, "VERIFICATION_IN_PROGRESS"
-    if stopped:
-        return decorated, False, "STRATEGY_STOPPED"
     readiness = decorated.get("readiness")
-    if readiness is not None:  # PERSONAL_TRADINGVIEW: full server-observed gate
+    if readiness is not None:
+        # Selection stores only the owner's strategy pointer; it does not start
+        # the engine or activate a stopped instance. Personal strategy
+        # selectability therefore follows the same readiness gate used by
+        # activation, while runtime lifecycle remains independently stopped.
         selectable = bool(readiness["can_activate"])
         return decorated, selectable, (None if selectable else decorated.get("blocking_code"))
+    if row.status in {InstanceState.STOPPED.value, InstanceState.ARCHIVED.value}:
+        return decorated, False, "STRATEGY_STOPPED"
     return decorated, True, None  # NOVA_SHARED catalog strategy
 
 
