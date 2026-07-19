@@ -879,6 +879,56 @@ def _engine_entry(
 ) -> dict[str, Any]:
     version = db.get(models.StrategyVersion, row.strategy_version_id)
     paper_mode = row.execution_mode in {"signal_only", "paper_live_data"}
+    risk = row.risk_config if isinstance(row.risk_config, dict) else {}
+    saved_setup = risk.get("unified_setup")
+    pine_exit_behavior = None
+    if row.source_journey != "NOVA_SHARED":
+        artifact = db.scalar(
+            select(models.StrategySourceArtifact)
+            .where(
+                models.StrategySourceArtifact.strategy_version_id == row.strategy_version_id,
+                models.StrategySourceArtifact.artifact_type == "pine_script",
+            )
+            .order_by(models.StrategySourceArtifact.created_at.desc())
+        )
+        analysis = (
+            db.scalar(
+                select(models.PineSemanticAnalysis)
+                .where(models.PineSemanticAnalysis.source_artifact_id == artifact.id)
+                .order_by(models.PineSemanticAnalysis.created_at.desc())
+            )
+            if artifact
+            else None
+        )
+        capabilities = (
+            set(analysis.analysis_payload.get("matched_capabilities") or [])
+            if analysis and isinstance(analysis.analysis_payload, dict)
+            else set()
+        )
+        explicit_exit = bool(
+            capabilities
+            & {
+                "STRATEGY_EXIT_ORDER_SEMANTICS",
+                "EXPLICIT_FULL_FLATTEN",
+                "BACKEND_MANAGED_BRACKET",
+            }
+        )
+        pine_exit_behavior = {
+            "status": (
+                "PINE_EXITS_PRESENT"
+                if explicit_exit
+                else "NO_EXPLICIT_PINE_EXIT_DETECTED"
+                if analysis
+                else "UNKNOWN"
+            ),
+            "message": (
+                "Pine-defined exits remain active; backend SL/TP is independent safety."
+                if explicit_exit
+                else "No explicit Pine exit was detected; exits use opposite-signal reversal, backend SL/TP, or manual square-off."
+                if analysis
+                else "Pine logic remains unchanged; backend SL/TP is independent safety."
+            ),
+        }
     return {
         "instance_id": str(row.id),
         "display_name": row.label,
@@ -900,6 +950,8 @@ def _engine_entry(
         "selectable": selectable,
         "blocking_reason": blocking,
         "owner": "self",
+        "saved_setup": saved_setup if isinstance(saved_setup, dict) else {},
+        "pine_exit_behavior": pine_exit_behavior,
     }
 
 

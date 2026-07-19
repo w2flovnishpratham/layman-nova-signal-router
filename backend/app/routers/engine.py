@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.db.engine import database_configured
 from app.routers.setup import setup_readiness, setup_status_payload
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import dhan_token_age_metadata
@@ -13,7 +14,7 @@ from app.services.dhan_debugger import get_outgoing_ip
 from app.services.paper_portfolio import get_paper_portfolio
 from app.services.state_store import get_app_state, get_engine_mode, set_engine_mode, update_app_state
 from app.services.execution_context import current_execution_user
-from app.services import runtime_reliability, strategy_instance_service
+from app.services import runtime_reliability, strategy_catalog_service, strategy_fanout, strategy_instance_service
 
 
 router = APIRouter()
@@ -48,10 +49,38 @@ def _execution_user():
 
 def _hydrated_runtime_status() -> dict[str, Any]:
     user = _execution_user()
-    return {
-        **runtime_reliability.runtime_status(user),
-        **strategy_instance_service.trading_selection_state(user.id),
-    }
+    runtime = runtime_reliability.runtime_status(user)
+    selection = strategy_instance_service.trading_selection_state(user.id)
+    selected = selection.get("selected_strategy")
+    if selected:
+        saved = selected.get("saved_setup")
+        if isinstance(saved, dict):
+            for mode in ("paper", "live"):
+                if isinstance(saved.get(mode), dict):
+                    configured = saved[mode]
+                    runtime["config"][mode] = {
+                        **runtime["config"][mode],
+                        **configured,
+                        "configured_lots": configured.get("lots"),
+                        "option_sl_percent": configured.get("stop_loss_percent"),
+                        "option_tp_percent": configured.get("take_profit_percent"),
+                        "allowed_option_side": configured.get("direction"),
+                    }
+            active_mode = runtime["engine"].get("mode") or "paper"
+            runtime["config"]["active"] = runtime["config"][active_mode]
+    catalog = strategy_catalog_service.get_catalog(
+        user.id,
+        runtime_state=runtime["engine"]["state"],
+    )
+    return {**runtime, **selection, "strategy_catalog": catalog}
+
+
+def _deactivate_selected_builtin(user) -> None:
+    if not database_configured():
+        return
+    selected = strategy_instance_service.get_engine_selection(user.id).get("selected")
+    if selected and selected.get("source_type") == "NOVA_SHARED" and selected.get("strategy_code") == "supertrend":
+        strategy_fanout.set_subscription_active(user.id, "supertrend", False)
 
 
 def _build_engine_readiness_checks(
@@ -334,7 +363,9 @@ def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
 
 @router.post("/engine/stop")
 def stop_engine() -> dict[str, Any]:
-    status = runtime_reliability.stop_engine(_execution_user())
+    user = _execution_user()
+    status = runtime_reliability.stop_engine(user)
+    _deactivate_selected_builtin(user)
     return {
         "success": True,
         "engine_started": False,
@@ -347,6 +378,7 @@ def stop_engine() -> dict[str, Any]:
 def prepare_reconfigure() -> dict[str, Any]:
     user = _execution_user()
     status = runtime_reliability.stop_engine(user, reason="reconfigure")
+    _deactivate_selected_builtin(user)
     position_open = bool(status["position"]["has_open_position"])
     if not position_open:
         set_engine_mode(None)
@@ -388,7 +420,8 @@ def hydrated_runtime_status() -> dict[str, Any]:
 def runtime_start_selected() -> dict[str, Any]:
     user = _execution_user()
     try:
-        strategy_instance_service.require_selected_engine_strategy(user.id)
+        selected = strategy_instance_service.require_selected_engine_strategy(user.id)
+        saved_setup = strategy_catalog_service.apply_selected_setup(user.id, selected)
     except strategy_instance_service.InstanceError as exc:
         raise HTTPException(
             status_code=exc.status_code,
@@ -402,13 +435,39 @@ def runtime_start_selected() -> dict[str, Any]:
             status_code=409,
             detail="A tracked position is open. Confirm it is flat before starting the selected strategy.",
         )
-    start_engine(StartEngineRequest(engine_mode="paper"))
+    try:
+        runtime_reliability.configure_mode(
+            user,
+            mode="paper",
+            lots=int(saved_setup["lots"]),
+            stop_loss_percent=float(saved_setup["stop_loss_percent"]),
+            target_profit_percent=float(saved_setup["take_profit_percent"]),
+            direction=str(saved_setup["direction"]),
+        )
+        if selected.get("source_type") in {"NOVA_HOSTED_PERSONAL", "PERSONAL_TRADINGVIEW"}:
+            strategy_fanout.set_subscription_active(user.id, "supertrend", False)
+        start_engine(StartEngineRequest(engine_mode="paper"))
+        if selected.get("source_type") == "NOVA_SHARED":
+            if selected.get("strategy_code") != "supertrend":
+                raise ValueError("The selected built-in strategy has no supported execution adapter.")
+            strategy_fanout.subscribe_user(
+                user.id,
+                "supertrend",
+                lots=int(saved_setup["lots"]),
+                execution_mode="paper_live_data",
+            )
+    except Exception:
+        runtime_reliability.stop_engine(user, reason="selected_strategy_start_failed")
+        raise
     return _hydrated_runtime_status()
 
 
 @router.post("/runtime/stop")
 def runtime_stop() -> dict[str, Any]:
-    return runtime_reliability.stop_engine(_execution_user())
+    user = _execution_user()
+    runtime_reliability.stop_engine(user)
+    _deactivate_selected_builtin(user)
+    return _hydrated_runtime_status()
 
 
 @router.post("/runtime/square-off")

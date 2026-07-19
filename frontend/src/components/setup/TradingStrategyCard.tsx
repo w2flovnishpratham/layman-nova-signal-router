@@ -17,6 +17,8 @@ interface Props {
   ) => Promise<void>
   onSelect: (instanceId: string) => Promise<void>
   onStart: (instanceId: string) => Promise<void>
+  onConfigureRequested?: () => void
+  onChangeStrategy?: () => void
 }
 
 function numberSetting(settings: Record<string, unknown>, key: string, fallback: number): number {
@@ -31,6 +33,10 @@ function credentialLabel(strategy: EngineStrategy): string {
   return 'Credential missing'
 }
 
+function sourceLabel(strategy: EngineStrategy): string {
+  return strategy.source_type === 'NOVA_SHARED' ? 'NOVA built-in' : 'Imported'
+}
+
 export function TradingStrategyCard({
   runtime,
   loading,
@@ -39,6 +45,8 @@ export function TradingStrategyCard({
   onConfigure,
   onSelect,
   onStart,
+  onConfigureRequested,
+  onChangeStrategy,
 }: Props) {
   const selected = runtime?.selected_strategy ?? null
   const paper = runtime?.config.paper ?? {}
@@ -149,7 +157,7 @@ export function TradingStrategyCard({
           <h3>{selected.display_name}</h3>
           <p>
             {selected.strategy_version ? `Version ${selected.strategy_version} · ` : ''}
-            {selected.mode === 'paper' ? 'Paper' : 'Live'}
+            {sourceLabel(selected)} · {selected.mode === 'paper' ? 'Paper' : 'Live'}
           </p>
         </div>
         <span className={`trading-readiness ${ready ? 'ready' : 'blocked'}`}>
@@ -193,7 +201,13 @@ export function TradingStrategyCard({
 
       <div className="trading-strategy-actions">
         <button type="button" onClick={() => onManage(selected.instance_id)}><Settings2 size={14} /> Manage Strategy</button>
-        <button type="button" disabled={switchingBlocked} onClick={() => setShowConfig((visible) => !visible)}>Configure Paper Settings</button>
+        <button
+          type="button"
+          disabled={switchingBlocked}
+          onClick={() => onConfigureRequested ? onConfigureRequested() : setShowConfig((visible) => !visible)}
+        >
+          Configure Paper Settings
+        </button>
         <button
           type="button"
           className="strategy-start"
@@ -205,14 +219,14 @@ export function TradingStrategyCard({
         </button>
         <button
           type="button"
-          disabled={switchingBlocked || alternatives.length === 0}
-          onClick={() => setShowChoices((visible) => !visible)}
+          disabled={switchingBlocked || (!onChangeStrategy && alternatives.length === 0)}
+          onClick={() => onChangeStrategy ? onChangeStrategy() : setShowChoices((visible) => !visible)}
         >
           Change Strategy <ChevronDown size={14} />
         </button>
       </div>
 
-      {showChoices ? (
+      {showChoices && !onChangeStrategy ? (
         <StrategyChoices
           strategies={alternatives}
           blocked={switchingBlocked}

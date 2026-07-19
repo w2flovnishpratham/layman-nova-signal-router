@@ -300,6 +300,7 @@ def configure_mode(
     lots: int,
     stop_loss_percent: float,
     target_profit_percent: float,
+    direction: str = "BOTH",
 ) -> dict[str, Any]:
     normalized = str(mode).strip().lower()
     if normalized not in {"paper", "live"}:
@@ -310,6 +311,9 @@ def configure_mode(
         raise ValueError("stop_loss_percent must be between 0 and 100.")
     if not 0 <= float(target_profit_percent) <= 1000:
         raise ValueError("target_profit_percent must be between 0 and 1000.")
+    normalized_direction = str(direction).strip().upper()
+    if normalized_direction not in {"CE", "PE", "BOTH"}:
+        raise ValueError("direction must be CE, PE, or BOTH.")
     with _owner_lock(user):
         if get_app_state().get("webhook_trading_enabled"):
             raise ValueError("Stop the engine before changing configuration.")
@@ -324,6 +328,7 @@ def configure_mode(
             option_sl_percent=float(stop_loss_percent),
             option_tp_percent=float(target_profit_percent),
             option_disable_sl=float(stop_loss_percent) <= 0,
+            allowed_option_side=normalized_direction,
         )
         set_runtime_settings(data)
         log_audit_event(
@@ -334,6 +339,7 @@ def configure_mode(
                 "lots": int(lots),
                 "stop_loss_percent": float(stop_loss_percent),
                 "target_profit_percent": float(target_profit_percent),
+                "direction": normalized_direction,
             },
         )
         return runtime_status(user)

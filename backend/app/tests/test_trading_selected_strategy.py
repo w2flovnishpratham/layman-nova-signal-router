@@ -22,7 +22,9 @@ def test_selected_paper_engine_starts_only_after_explicit_endpoint_call(monkeypa
         "instance_id": "selected-owner-instance",
         "selectable": True,
         "paper_eligible": True,
+        "source_type": "PERSONAL_TRADINGVIEW",
     }
+    deactivated = []
     hydrated = {
         "ok": True,
         "selected_strategy": selected,
@@ -34,7 +36,23 @@ def test_selected_paper_engine_starts_only_after_explicit_endpoint_call(monkeypa
         "require_selected_engine_strategy",
         lambda user_id: selected,
     )
+    monkeypatch.setattr(
+        engine.strategy_catalog_service,
+        "apply_selected_setup",
+        lambda user_id, current: {
+            "direction": "BOTH",
+            "lots": 1,
+            "stop_loss_percent": 10,
+            "take_profit_percent": 20,
+        },
+    )
     monkeypatch.setattr(engine.runtime_reliability, "runtime_status", lambda current: _runtime())
+    monkeypatch.setattr(engine.runtime_reliability, "configure_mode", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        engine.strategy_fanout,
+        "set_subscription_active",
+        lambda user_id, code, active: deactivated.append((code, active)),
+    )
     monkeypatch.setattr(engine, "start_engine", lambda body: started.append(body))
     monkeypatch.setattr(engine, "_hydrated_runtime_status", lambda: hydrated)
 
@@ -47,6 +65,7 @@ def test_selected_paper_engine_starts_only_after_explicit_endpoint_call(monkeypa
     assert len(started) == 1
     assert started[0].engine_mode == "paper"
     assert started[0].confirm_live_orders is False
+    assert deactivated == [("supertrend", False)]
 
 
 def test_selected_engine_start_fails_closed_when_selection_is_not_ready(monkeypatch):
@@ -82,6 +101,16 @@ def test_selected_engine_start_obeys_runtime_switch_guards(monkeypatch, state, p
         strategy_instance_service,
         "require_selected_engine_strategy",
         lambda user_id: {"instance_id": "selected", "paper_eligible": True, "selectable": True},
+    )
+    monkeypatch.setattr(
+        engine.strategy_catalog_service,
+        "apply_selected_setup",
+        lambda user_id, current: {
+            "direction": "BOTH",
+            "lots": 1,
+            "stop_loss_percent": 10,
+            "take_profit_percent": 20,
+        },
     )
     monkeypatch.setattr(
         engine.runtime_reliability,

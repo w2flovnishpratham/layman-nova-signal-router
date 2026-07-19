@@ -16,7 +16,9 @@ from pydantic import BaseModel, Field
 from app.auth.dependencies import get_current_user, require_admin
 from app.config import settings
 from app.db.engine import database_configured
-from app.services import entitlements, live_engine, strategy_fanout
+from app.services import entitlements, live_engine, runtime_reliability, strategy_fanout
+from app.services import strategy_catalog_service, strategy_instance_service
+from app.services.execution_context import bind_user_execution_context
 from app.services import webhook_replay_store
 from app.services import strategy_risk
 from app.services.signal_parser import PayloadParseError, parse_webhook_payload
@@ -158,6 +160,115 @@ class RiskControlPatch(BaseModel):
         data.pop("max_notional_per_trade", None)
         data.pop("max_loss_per_day", None)
         return data
+
+
+class CatalogSelectionPayload(BaseModel):
+    strategy_key: str = Field(min_length=1, max_length=120)
+
+
+class CatalogSetupPayload(BaseModel):
+    strategy_key: str = Field(min_length=1, max_length=120)
+    mode: str = Field(min_length=4, max_length=5)
+    values: dict[str, Any]
+
+
+def _catalog_error(exc: Exception) -> JSONResponse:
+    if isinstance(exc, strategy_instance_service.InstanceError):
+        content: dict[str, Any] = {"ok": False, "error": str(exc)}
+        if exc.code:
+            content["reason"] = exc.code
+        return JSONResponse(status_code=exc.status_code, content=content)
+    if isinstance(exc, ValueError):
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    raise exc
+
+
+def _owner_runtime(user: CurrentUser) -> dict[str, Any]:
+    with bind_user_execution_context(user):
+        return runtime_reliability.runtime_status(user)
+
+
+@router.get("/api/strategies/catalog")
+def unified_strategy_catalog(user: CurrentUser = Depends(get_current_user)) -> dict:
+    runtime = _owner_runtime(user)
+    return {
+        "ok": True,
+        **strategy_catalog_service.get_catalog(
+            user.id,
+            runtime_state=runtime["engine"]["state"],
+        ),
+    }
+
+
+@router.get("/api/strategies/catalog/{strategy_key}/setup-schema")
+def strategy_setup_schema(
+    strategy_key: str,
+    user: CurrentUser = Depends(get_current_user),
+):
+    catalog = strategy_catalog_service.get_catalog(user.id)
+    strategy = next(
+        (item for item in catalog["strategies"] if item["strategy_key"] == strategy_key),
+        None,
+    )
+    if strategy is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Strategy not found."})
+    return {"ok": True, "strategy_key": strategy_key, "setup_schema": strategy["setup_schema"]}
+
+
+@router.put("/api/strategies/catalog/selection")
+def select_catalog_strategy(
+    payload: CatalogSelectionPayload,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        current = strategy_catalog_service.get_catalog(user.id)
+        changing = current["selected_strategy_key"] != payload.strategy_key
+        if changing:
+            runtime = _owner_runtime(user)
+            if runtime["engine"]["state"] != "STOPPED" or runtime["position"]["has_open_position"]:
+                raise strategy_instance_service.InstanceError(
+                    "Stop the engine and confirm the tracked position is flat before changing strategy.",
+                    status_code=409,
+                    code="RECONFIGURE_REQUIRED",
+                )
+        return {
+            "ok": True,
+            **strategy_catalog_service.select_strategy(user.id, payload.strategy_key),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return _catalog_error(exc)
+
+
+@router.put("/api/strategies/catalog/setup")
+def save_catalog_setup(
+    payload: CatalogSetupPayload,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        runtime = _owner_runtime(user)
+        if runtime["engine"]["state"] != "STOPPED":
+            raise strategy_instance_service.InstanceError(
+                "Stop the engine before changing configuration.",
+                status_code=409,
+                code="RECONFIGURE_REQUIRED",
+            )
+        if runtime["position"]["has_open_position"]:
+            raise strategy_instance_service.InstanceError(
+                "Configuration cannot change while a tracked position is open.",
+                status_code=409,
+                code="OPEN_POSITION",
+            )
+        return {
+            "ok": True,
+            **strategy_catalog_service.save_setup(
+                user.id,
+                strategy_key=payload.strategy_key,
+                mode=payload.mode,
+                values=payload.values,
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return _catalog_error(exc)
 
 
 @router.get("/api/strategies/subscriptions")

@@ -24,8 +24,9 @@ import {
   prepareReconfigure,
   refreshRuntimeAccount,
   resetPaperRuntime,
+  saveCatalogStrategySetup,
   saveRuntimeConfig,
-  setEngineSelection,
+  selectCatalogStrategy,
   squareOffRuntime,
   startSelectedPaperEngine,
   startSession,
@@ -263,22 +264,17 @@ function App() {
     }
   }
 
-  async function selectTradingStrategy(instanceId: string) {
-    await setEngineSelection(instanceId)
+  async function selectTradingStrategy(strategyKey: string) {
+    await selectCatalogStrategy(strategyKey)
     setRuntimeStatus(await getRuntimeStatus())
     setRuntimeError('')
   }
 
-  async function configureTradingStrategy(
-    instanceId: string,
-    lots: number,
-    stopLoss: number,
-    takeProfit: number,
-  ) {
-    if (runtimeStatus?.selected_strategy?.instance_id !== instanceId) {
+  async function configureTradingStrategy(strategyKey: string, values: Record<string, string | number>) {
+    if (runtimeStatus?.strategy_catalog?.selected_strategy_key !== strategyKey) {
       throw new Error('The selected strategy changed. Refresh before saving settings.')
     }
-    await saveRuntimeConfig('paper', lots, stopLoss, takeProfit)
+    await saveCatalogStrategySetup(strategyKey, 'paper', values)
     setRuntimeStatus(await getRuntimeStatus())
     setRuntimeError('')
   }

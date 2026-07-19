@@ -161,6 +161,7 @@ export interface RuntimeStatus {
   selected_strategy: EngineStrategy | null
   eligible_strategies: EngineStrategy[]
   selection_issue: string | null
+  strategy_catalog?: StrategyCatalog
 }
 
 async function runtimeCall(path: `/${string}`, method = 'GET', payload?: unknown): Promise<RuntimeStatus> {
@@ -203,6 +204,89 @@ export const resetPaperRuntime = (startingBalance?: number) =>
   runtimeCall('/api/runtime/paper/reset', 'POST', {
     starting_balance: startingBalance ?? null,
   })
+
+export type StrategySetupField =
+  | {
+      key: string
+      type: 'choice'
+      label: string
+      options: string[]
+      required: boolean
+      default?: string
+    }
+  | {
+      key: string
+      type: 'integer' | 'decimal'
+      label: string
+      minimum: number
+      maximum: number
+      required: boolean
+      default?: number
+    }
+
+export interface CatalogStrategy {
+  strategy_key: string
+  strategy_instance_id: string | null
+  source_type: 'BUILT_IN' | 'IMPORTED'
+  name: string
+  version: string | null
+  description: string
+  availability: 'READY' | 'COMING_SOON' | 'DISABLED' | 'UNAVAILABLE'
+  disabled_reason: string | null
+  paper_eligible: boolean
+  live_eligible: boolean
+  selected: boolean
+  runtime_state: string
+  setup_schema: { fields: StrategySetupField[] }
+  saved_setup: Record<string, Record<string, unknown>>
+  readiness?: Record<string, boolean> | null
+  pine_exit_behavior?: { status: string; message: string } | null
+}
+
+export interface StrategyCatalog {
+  strategies: CatalogStrategy[]
+  selected_strategy_key: string | null
+  selected_strategy_instance_id: string | null
+  setup_progress: {
+    strategy_key: string | null
+    mode: 'paper' | 'live' | null
+    stage: 'CHOOSE_STRATEGY' | 'CONFIGURE' | 'REVIEW'
+    complete: boolean
+  }
+}
+
+async function catalogCall<T>(path: `/${string}`, method = 'GET', payload?: unknown): Promise<T> {
+  const response = await apiFetch(path, {
+    method,
+    cache: 'no-store',
+    headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as (T & { error?: string }) | null
+  if (!response.ok || !body) throw new Error(body?.error || `Strategy catalog request failed: ${response.status}`)
+  return body
+}
+
+export const getStrategyCatalog = () =>
+  catalogCall<StrategyCatalog & { ok: true }>('/api/strategies/catalog')
+
+export const selectCatalogStrategy = (strategyKey: string) =>
+  catalogCall<{ ok: true; selected_instance_id: string; selected_strategy_key: string }>(
+    '/api/strategies/catalog/selection',
+    'PUT',
+    { strategy_key: strategyKey },
+  )
+
+export const saveCatalogStrategySetup = (
+  strategyKey: string,
+  mode: 'paper' | 'live',
+  values: Record<string, string | number>,
+) =>
+  catalogCall<{ ok: true; strategy_instance_id: string; values: Record<string, unknown> }>(
+    '/api/strategies/catalog/setup',
+    'PUT',
+    { strategy_key: strategyKey, mode, values },
+  )
 
 export async function refreshRuntimeAccount(): Promise<Record<string, unknown>> {
   const response = await apiFetch('/api/runtime/account/refresh', { method: 'POST' })

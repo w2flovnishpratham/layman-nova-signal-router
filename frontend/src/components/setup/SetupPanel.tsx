@@ -8,7 +8,7 @@ import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
 import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
-import { TradingStrategyCard } from './TradingStrategyCard'
+import { UnifiedStrategySetup } from './UnifiedStrategySetup'
 
 const DISABLED_STOP_LOSS_PCT = 99.9
 const DEFAULT_CUSTOM_STOP_LOSS_PCT = 10
@@ -26,8 +26,8 @@ interface Props {
   runtimeLoading: boolean
   runtimeError: string
   onManageStrategy: (instanceId: string) => void
-  onConfigureStrategy: (instanceId: string, lots: number, stopLoss: number, takeProfit: number) => Promise<void>
-  onSelectStrategy: (instanceId: string) => Promise<void>
+  onConfigureStrategy: (strategyKey: string, values: Record<string, string | number>) => Promise<void>
+  onSelectStrategy: (strategyKey: string) => Promise<void>
   onStartStrategy: (instanceId: string) => Promise<void>
   onSend: (command: ClientCommand) => void
   onUserReply: (text: string) => void
@@ -57,7 +57,7 @@ export function SetupPanel({
   onStep,
 }: Props) {
   if (state === 'LIVE' || state === 'PAUSED' || state === 'ENDED' || flowStep === 'complete') return null
-  if (flowStep === 'mode') return <ModeStep draft={draft} onSelect={(engineMode, paperStartingBalance) => {
+  if (flowStep === 'mode') return <ModeStep draft={draft} liveAvailable={Boolean(runtime?.safety.live_orders_enabled && runtime.safety.dhan_mode === 'REAL')} onSelect={(engineMode, paperStartingBalance) => {
     onDraft({ engineMode, paperStartingBalance })
     onUserReply(engineMode === 'paper' ? `Paper mode with ${formatCurrency(paperStartingBalance)} virtual balance` : 'Live mode - real money routing')
     onSend({ type: 'setup.mode', data: { engineMode, paperStartingBalance } })
@@ -67,14 +67,15 @@ export function SetupPanel({
     onStep('strategy')
   }} />
   if (flowStep === 'strategy') return (
-    <TradingStrategyCard
+    <UnifiedStrategySetup
       runtime={runtime}
       loading={runtimeLoading}
       error={runtimeError}
       onManage={onManageStrategy}
-      onConfigure={onConfigureStrategy}
+      onSave={onConfigureStrategy}
       onSelect={onSelectStrategy}
       onStart={onStartStrategy}
+      onUserReply={onUserReply}
     />
   )
   if (flowStep === 'broker' && draft.engineMode === 'paper' && sharedMarketData) {
@@ -130,7 +131,7 @@ export function SetupPanel({
   return null
 }
 
-function ModeStep({ draft, onSelect }: { draft: SetupDraft; onSelect: (mode: EngineMode, balance: number) => void }) {
+function ModeStep({ draft, liveAvailable, onSelect }: { draft: SetupDraft; liveAvailable: boolean; onSelect: (mode: EngineMode, balance: number) => void }) {
   const [paperBalance, setPaperBalance] = useState(draft.paperStartingBalance)
   return (
     <article className="setup-card mode-step">
@@ -153,8 +154,10 @@ function ModeStep({ draft, onSelect }: { draft: SetupDraft; onSelect: (mode: Eng
         </section>
         <section className="mode-choice live-choice">
           <div><Zap size={18} /><strong>Live</strong></div>
-          <p>Routes real orders to Dhan. Real money is at risk and static IP is required.</p>
-          <button type="button" onClick={() => onSelect('live', paperBalance)}>Configure Live</button>
+          <p>{liveAvailable ? 'Routes real orders to Dhan. Real money is at risk and static IP is required.' : 'Live unavailable. Live access and execution gates are not enabled on this environment.'}</p>
+          <button type="button" disabled={!liveAvailable} onClick={() => onSelect('live', paperBalance)}>
+            {liveAvailable ? 'Configure Live' : 'Live unavailable'}
+          </button>
         </section>
       </div>
     </article>
