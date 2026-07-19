@@ -2,12 +2,13 @@ import { FlaskConical, Loader2, Zap } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createRazorpaySubscription, getPaymentEntitlementStatus } from '../../api'
-import type { PaymentEntitlementStatus } from '../../api'
+import type { PaymentEntitlementStatus, RuntimeStatus } from '../../api'
 import { SetupInfoCard } from '../messages/SetupInfoCard'
 import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
 import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
+import { TradingStrategyCard } from './TradingStrategyCard'
 
 const DISABLED_STOP_LOSS_PCT = 99.9
 const DEFAULT_CUSTOM_STOP_LOSS_PCT = 10
@@ -21,6 +22,13 @@ interface Props {
   commandPending: boolean
   lotSize: number
   sharedMarketData?: boolean
+  runtime: RuntimeStatus | null
+  runtimeLoading: boolean
+  runtimeError: string
+  onManageStrategy: (instanceId: string) => void
+  onConfigureStrategy: (instanceId: string, lots: number, stopLoss: number, takeProfit: number) => Promise<void>
+  onSelectStrategy: (instanceId: string) => Promise<void>
+  onStartStrategy: (instanceId: string) => Promise<void>
   onSend: (command: ClientCommand) => void
   onUserReply: (text: string) => void
   onDraft: (patch: Partial<SetupDraft>) => void
@@ -36,6 +44,13 @@ export function SetupPanel({
   commandPending,
   lotSize,
   sharedMarketData = false,
+  runtime,
+  runtimeLoading,
+  runtimeError,
+  onManageStrategy,
+  onConfigureStrategy,
+  onSelectStrategy,
+  onStartStrategy,
   onSend,
   onUserReply,
   onDraft,
@@ -51,10 +66,17 @@ export function SetupPanel({
     onUserReply('Nova Static IP entitlement and proxy verification confirmed')
     onStep('strategy')
   }} />
-  if (flowStep === 'strategy') return <StrategyStep onSelect={() => {
-    onUserReply('Supertrend Strategy (NSE Options)')
-    onSend({ type: 'setup.select_strategy', data: { strategy: 'supertrend' } })
-  }} />
+  if (flowStep === 'strategy') return (
+    <TradingStrategyCard
+      runtime={runtime}
+      loading={runtimeLoading}
+      error={runtimeError}
+      onManage={onManageStrategy}
+      onConfigure={onConfigureStrategy}
+      onSelect={onSelectStrategy}
+      onStart={onStartStrategy}
+    />
+  )
   if (flowStep === 'broker' && draft.engineMode === 'paper' && sharedMarketData) {
     return <SharedDataStep onContinue={() => {
       onUserReply('Use shared live market data (no Dhan account needed)')
@@ -101,7 +123,7 @@ export function SetupPanel({
       },
     })
   }} />
-  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} pending={commandPending} onDeploy={() => {
+  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} strategyLabel={runtime?.selected_strategy?.display_name ?? null} pending={commandPending} onDeploy={() => {
     onUserReply(draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Deploy Live Strategy & Start Listening')
     onSend({ type: 'setup.confirm_live', data: {} })
   }} />
@@ -134,20 +156,6 @@ function ModeStep({ draft, onSelect }: { draft: SetupDraft; onSelect: (mode: Eng
           <p>Routes real orders to Dhan. Real money is at risk and static IP is required.</p>
           <button type="button" onClick={() => onSelect('live', paperBalance)}>Configure Live</button>
         </section>
-      </div>
-    </article>
-  )
-}
-
-function StrategyStep({ onSelect }: { onSelect: () => void }) {
-  return (
-    <article className="setup-card strategy-panel">
-      <div className="strategy-chip-row" aria-label="Strategy choices">
-        <button type="button" onClick={onSelect}>Supertrend</button>
-        <button type="button" className="disabled-option" disabled>ORB</button>
-        <button type="button" className="disabled-option" disabled>VWAP</button>
-        <button type="button" className="disabled-option" disabled>RSI</button>
-        <button type="button" className="disabled-option" disabled>Scalper</button>
       </div>
     </article>
   )
@@ -498,7 +506,7 @@ function limitsReply(maxTrades: number, maxLoss: number): string {
   return `Daily limits: ${trades} / ${loss}`
 }
 
-function DeploymentSummary({ draft, lotSize, pending, onDeploy }: { draft: SetupDraft; lotSize: number; pending: boolean; onDeploy: () => void }) {
+function DeploymentSummary({ draft, lotSize, strategyLabel, pending, onDeploy }: { draft: SetupDraft; lotSize: number; strategyLabel: string | null; pending: boolean; onDeploy: () => void }) {
   return (
     <article className="setup-card deployment-summary">
       <h3>Deployment Configuration Summary</h3>
@@ -513,7 +521,7 @@ function DeploymentSummary({ draft, lotSize, pending, onDeploy }: { draft: Setup
         </div>
         <div>
           <span>Strategy Route</span>
-          <strong>Supertrend Options</strong>
+          <strong>{strategyLabel ?? 'No strategy selected'}</strong>
         </div>
         <div>
           <span>Trade Volume</span>

@@ -1625,6 +1625,288 @@ code {
   box-shadow: none;
 }
 
+.trading-strategy-card {
+  gap: 14px;
+  min-width: 0;
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-paper) 28%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-1) 94%, var(--accent-paper) 6%);
+  padding: 16px;
+}
+
+.trading-strategy-state {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.trading-strategy-state > div {
+  display: grid;
+  gap: 3px;
+}
+
+.trading-strategy-state span,
+.trading-strategy-empty span {
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.strategy-card-spin {
+  animation: spin 0.9s linear infinite;
+}
+
+.trading-strategy-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trading-strategy-head > div {
+  min-width: 0;
+}
+
+.trading-strategy-head h3 {
+  overflow-wrap: anywhere;
+  margin: 4px 0 2px;
+  color: var(--text-1);
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.trading-strategy-head p {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.trading-strategy-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent-paper);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.trading-readiness {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.trading-readiness.ready {
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  color: var(--success);
+}
+
+.trading-readiness.blocked {
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  color: var(--warning);
+}
+
+.trading-strategy-facts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+}
+
+.trading-strategy-facts > div {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.018);
+  padding: 9px;
+}
+
+.trading-strategy-facts dt {
+  color: var(--text-3);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.trading-strategy-facts dd {
+  overflow-wrap: anywhere;
+  margin: 4px 0 0;
+  color: var(--text-1);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.trading-strategy-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.trading-strategy-actions button,
+.trading-strategy-config button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-2);
+  padding: 7px 9px;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.trading-strategy-actions .strategy-start,
+.trading-strategy-config button {
+  border-color: color-mix(in srgb, var(--accent-paper) 38%, transparent);
+  background: color-mix(in srgb, var(--accent-paper) 10%, transparent);
+  color: var(--accent-paper);
+}
+
+.trading-strategy-actions button:disabled,
+.trading-strategy-config button:disabled,
+.trading-strategy-choices button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.trading-strategy-warning,
+.trading-strategy-error,
+.trading-strategy-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-radius: 7px;
+  padding: 9px 10px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.trading-strategy-warning {
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  color: var(--warning);
+}
+
+.trading-strategy-error {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--danger);
+}
+
+.trading-strategy-empty {
+  border: 1px dashed var(--border);
+  color: var(--text-2);
+}
+
+.trading-strategy-empty > div {
+  display: grid;
+  gap: 4px;
+}
+
+.trading-strategy-config {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(118px, 1.3fr);
+  gap: 7px;
+}
+
+.trading-strategy-config label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-3);
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.trading-strategy-config input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  padding: 0 8px;
+}
+
+.trading-strategy-config button {
+  align-self: end;
+}
+
+.trading-strategy-choices {
+  display: grid;
+  gap: 6px;
+}
+
+.trading-strategy-choices > button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-2);
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.trading-strategy-choices > button > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.trading-strategy-choices strong {
+  overflow-wrap: anywhere;
+  color: var(--text-1);
+  font-size: 10px;
+}
+
+.trading-strategy-choices small {
+  color: var(--text-3);
+  font-size: 9px;
+}
+
+@media (max-width: 980px) {
+  .trading-strategy-facts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .trading-strategy-head,
+  .trading-strategy-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .trading-strategy-head {
+    display: grid;
+  }
+
+  .trading-readiness {
+    justify-self: start;
+  }
+
+  .trading-strategy-facts,
+  .trading-strategy-config {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .setup-card > button,
 .form-card button[type="submit"],
 .live-confirm {

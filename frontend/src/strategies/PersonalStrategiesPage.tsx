@@ -65,10 +65,10 @@ const READINESS_LABELS: Record<string, string> = {
 }
 
 
-export function PersonalStrategiesPage({ user }: { user?: AuthUser }) {
+export function PersonalStrategiesPage({ user, focusInstanceId: requestedFocusId }: { user?: AuthUser; focusInstanceId?: string | null }) {
   const [journey, setJourney] = useState<'engine' | 'webhook' | 'pine' | 'c2'>('webhook')
   const [c2Enabled, setC2Enabled] = useState(false)
-  const [focusInstanceId, setFocusInstanceId] = useState<string | null>(null)
+  const [focusInstanceId, setFocusInstanceId] = useState<string | null>(requestedFocusId ?? null)
   useEffect(() => {
     let active = true
     getC2Config().then((value) => {

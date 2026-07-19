@@ -264,3 +264,112 @@ def test_selection_never_reroutes_webhook_signals(client, per_user_runtime, dete
     assert _run_worker() == 1
     assert _job_rows(a) and _job_rows(a)[0]["status"] == "completed"  # executed as A
     assert _job_rows(b) == []  # never rerouted to B
+
+
+def test_trading_runtime_hydrates_only_the_owner_selected_strategy(mu_db, monkeypatch, per_user_runtime):
+    from app.config import settings
+    from app.routers import engine
+    from app.services.execution_context import bind_user_execution_context
+    from app.services.user_context import current_user_from_model
+
+    monkeypatch.setattr(settings, "PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED", True)
+    owner = make_user("trading-runtime-owner@example.com")
+    admin = make_user("trading-runtime-admin@example.com", is_admin=True)
+    stranger = make_user("trading-runtime-stranger@example.com")
+    client, _, instance_id, _ = _approved_personal_instance(owner, admin)
+    _drive_to_ready(client, owner, instance_id)
+    assert _full_client(owner).put(
+        "/api/engine/selection", json={"strategy_instance_id": instance_id}
+    ).status_code == 200
+
+    current = current_user_from_model(owner)
+    with bind_user_execution_context(current):
+        first = engine.hydrated_runtime_status()
+        refreshed = engine.hydrated_runtime_status()
+
+    selected = first["selected_strategy"]
+    assert selected["instance_id"] == instance_id
+    assert selected["display_name"]
+    assert selected["strategy_version"]
+    assert selected["mode"] == "paper"
+    assert selected["paper_eligible"] is True
+    assert selected["live_eligible"] is False
+    assert selected["instance_status"] in {"ready", "stopped"}
+    assert refreshed["selected_strategy"]["instance_id"] == instance_id
+    assert first["engine"]["state"] == "STOPPED"
+    assert first["position"]["has_open_position"] is False
+    serialized = str(selected).lower()
+    for forbidden in ("token_hash", "pine_source", "access_token", "totp", "encrypted"):
+        assert forbidden not in serialized
+
+    stranger_current = current_user_from_model(stranger)
+    with bind_user_execution_context(stranger_current):
+        isolated = engine.hydrated_runtime_status()
+    assert isolated["selected_strategy"] is None
+    assert all(item["instance_id"] != instance_id for item in isolated["eligible_strategies"])
+
+
+def test_selection_creates_no_runtime_order_or_position(mu_db, per_user_runtime):
+    from sqlalchemy import func, select
+
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import runtime_reliability
+    from app.services.execution_context import bind_user_execution_context
+    from app.services.user_context import current_user_from_model
+
+    owner = make_user("selection-no-side-effect@example.com")
+    instance_id = _make_instance(owner, source_journey="NOVA_SHARED", status="active")
+    with session_scope() as db:
+        before_jobs = db.scalar(select(func.count()).select_from(models.StrategyExecutionJob))
+        before_positions = db.scalar(select(func.count()).select_from(models.StrategyInstancePosition))
+
+    selected = _full_client(owner).put(
+        "/api/engine/selection", json={"strategy_instance_id": instance_id}
+    )
+    assert selected.status_code == 200, selected.text
+
+    with bind_user_execution_context(current_user_from_model(owner)):
+        runtime = runtime_reliability.runtime_status(current_user_from_model(owner))
+    with session_scope() as db:
+        after_jobs = db.scalar(select(func.count()).select_from(models.StrategyExecutionJob))
+        after_positions = db.scalar(select(func.count()).select_from(models.StrategyInstancePosition))
+    assert runtime["engine"]["state"] == "STOPPED"
+    assert runtime["position"]["has_open_position"] is False
+    assert (after_jobs, after_positions) == (before_jobs, before_positions)
+
+
+def test_running_engine_and_open_position_block_strategy_switch(mu_db, per_user_runtime):
+    from app.services import runtime_reliability, state_store
+    from app.services.execution_context import bind_user_execution_context
+    from app.services.user_context import current_user_from_model
+
+    owner = make_user("selection-switch-guard@example.com")
+    first = _make_instance(owner, label="First", source_journey="NOVA_SHARED", status="active")
+    second = _make_instance(owner, label="Second", source_journey="NOVA_SHARED", status="active")
+    picker = _full_client(owner)
+    assert picker.put("/api/engine/selection", json={"strategy_instance_id": first}).status_code == 200
+
+    current = current_user_from_model(owner)
+    with bind_user_execution_context(current):
+        state_store.init_runtime_files()
+        state_store.set_engine_mode("paper")
+        runtime_reliability.mark_running()
+    running = picker.put("/api/engine/selection", json={"strategy_instance_id": second})
+    assert running.status_code == 409
+    assert running.json()["reason"] == "RECONFIGURE_REQUIRED"
+
+    with bind_user_execution_context(current):
+        runtime_reliability.mark_start_failed()
+        state_store.set_paper_position({
+            "has_open_position": True,
+            "security_id": "123",
+            "trading_symbol": "NIFTY TEST CE",
+            "option_side": "CE",
+            "qty": 65,
+            "entry_price": 100.0,
+        })
+    positioned = picker.put("/api/engine/selection", json={"strategy_instance_id": second})
+    assert positioned.status_code == 409
+    assert positioned.json()["reason"] == "RECONFIGURE_REQUIRED"
+    assert picker.get("/api/engine/selection").json()["selected_instance_id"] == first

@@ -25,7 +25,9 @@ import {
   refreshRuntimeAccount,
   resetPaperRuntime,
   saveRuntimeConfig,
+  setEngineSelection,
   squareOffRuntime,
+  startSelectedPaperEngine,
   startSession,
   stopRuntimeEngine,
   switchRuntimeMode,
@@ -47,6 +49,9 @@ function App() {
   const [marketSnapshot, setMarketSnapshot] = useState<MarketSnapshot | null>(null)
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
+  const [runtimeLoading, setRuntimeLoading] = useState(true)
+  const [runtimeError, setRuntimeError] = useState('')
+  const [managedStrategyId, setManagedStrategyId] = useState<string | null>(null)
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false)
   const [rightDrawerOpen, setRightDrawerOpen] = useState(false)
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false)
@@ -159,7 +164,13 @@ function App() {
         if (!mounted) return
         if (market.status === 'fulfilled') setMarketSnapshot(market.value)
         if (health.status === 'fulfilled') setSystemHealth(health.value)
-        if (runtime.status === 'fulfilled') setRuntimeStatus(runtime.value)
+        if (runtime.status === 'fulfilled') {
+          setRuntimeStatus(runtime.value)
+          setRuntimeError('')
+        } else {
+          setRuntimeError(runtime.reason instanceof Error ? runtime.reason.message : 'Could not load strategy state.')
+        }
+        setRuntimeLoading(false)
       })
       timer = window.setTimeout(poll, 15000)
     }
@@ -211,6 +222,7 @@ function App() {
       await prepareReconfigure()
       const status = await getRuntimeStatus()
       setRuntimeStatus(status)
+      setRuntimeError('')
       if (status.position.has_open_position) {
         setBootError('Engine stopped. Configuration changes remain blocked until the tracked position is flat.')
         return
@@ -232,6 +244,8 @@ function App() {
       resetSession()
       setSnapshotLoaded(false)
       setRuntimeStatus(null)
+      setRuntimeLoading(true)
+      setRuntimeError('')
       setAuthUser(null)
     } catch (error) {
       setBootError(error instanceof Error ? error.message : 'Could not log out')
@@ -241,10 +255,40 @@ function App() {
   async function updateRuntime(action: () => Promise<RuntimeStatus>) {
     setBootError('')
     try {
-      setRuntimeStatus(await action())
+      await action()
+      setRuntimeStatus(await getRuntimeStatus())
+      setRuntimeError('')
     } catch (error) {
       setBootError(error instanceof Error ? error.message : 'Runtime action failed')
     }
+  }
+
+  async function selectTradingStrategy(instanceId: string) {
+    await setEngineSelection(instanceId)
+    setRuntimeStatus(await getRuntimeStatus())
+    setRuntimeError('')
+  }
+
+  async function configureTradingStrategy(
+    instanceId: string,
+    lots: number,
+    stopLoss: number,
+    takeProfit: number,
+  ) {
+    if (runtimeStatus?.selected_strategy?.instance_id !== instanceId) {
+      throw new Error('The selected strategy changed. Refresh before saving settings.')
+    }
+    await saveRuntimeConfig('paper', lots, stopLoss, takeProfit)
+    setRuntimeStatus(await getRuntimeStatus())
+    setRuntimeError('')
+  }
+
+  async function startTradingStrategy(instanceId: string) {
+    if (runtimeStatus?.selected_strategy?.instance_id !== instanceId) {
+      throw new Error('The selected strategy changed. Refresh before starting.')
+    }
+    setRuntimeStatus(await startSelectedPaperEngine())
+    setRuntimeError('')
   }
 
   if (authLoading || !authUser) {
@@ -309,6 +353,16 @@ function App() {
       commandPending={typing}
       lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
       sharedMarketData={session?.sharedMarketData ?? false}
+      runtime={runtimeStatus}
+      runtimeLoading={runtimeLoading}
+      runtimeError={runtimeError}
+      onManageStrategy={(instanceId) => {
+        setManagedStrategyId(instanceId)
+        setView('strategies')
+      }}
+      onConfigureStrategy={configureTradingStrategy}
+      onSelectStrategy={selectTradingStrategy}
+      onStartStrategy={startTradingStrategy}
       onSend={send}
       onUserReply={addUserMessage}
       onDraft={updateSetupDraft}
@@ -365,7 +419,7 @@ function App() {
       {view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (
-        <PersonalStrategiesPage user={authUser} />
+        <PersonalStrategiesPage user={authUser} focusInstanceId={managedStrategyId} />
       ) : (
         <motion.section
           layout

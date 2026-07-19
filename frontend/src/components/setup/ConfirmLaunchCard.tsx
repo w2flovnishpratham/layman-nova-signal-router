@@ -4,10 +4,11 @@ import { contractsForLots, DEFAULT_NIFTY_LOT_SIZE } from '../../lib/trading'
 
 interface Props {
   config: TradeConfig
+  strategyLabel?: string
   onSend: (command: ClientCommand) => void
 }
 
-export function ConfirmLaunchCard({ config, onSend }: Props) {
+export function ConfirmLaunchCard({ config, strategyLabel = 'Selected owner strategy', onSend }: Props) {
   const lots = config.risk?.lots ?? 1
   const quantity = contractsForLots(lots, DEFAULT_NIFTY_LOT_SIZE)
   const sampleStrike = 'NIFTY 23500 CE / weekly 4 Jun'
@@ -19,7 +20,7 @@ export function ConfirmLaunchCard({ config, onSend }: Props) {
       <span className="eyebrow">Confirm</span>
       <h2>Review live-money launch</h2>
       <dl>
-        <div><dt>Strategy</dt><dd>Supertrend ATM Reversal</dd></div>
+        <div><dt>Strategy</dt><dd>{strategyLabel}</dd></div>
         <div><dt>Client</dt><dd>{config.broker?.clientId ?? 'pending'}</dd></div>
         <div><dt>Lots</dt><dd>{lots} lot / {quantity} qty</dd></div>
         <div><dt>Side</dt><dd>{sideLabel(config.risk?.side)}</dd></div>

@@ -158,6 +158,9 @@ export interface RuntimeStatus {
     dhan_mode: string
     live_orders_enabled: boolean
   }
+  selected_strategy: EngineStrategy | null
+  eligible_strategies: EngineStrategy[]
+  selection_issue: string | null
 }
 
 async function runtimeCall(path: `/${string}`, method = 'GET', payload?: unknown): Promise<RuntimeStatus> {
@@ -180,6 +183,7 @@ async function runtimeCall(path: `/${string}`, method = 'GET', payload?: unknown
 }
 
 export const getRuntimeStatus = () => runtimeCall('/api/runtime/status')
+export const startSelectedPaperEngine = () => runtimeCall('/api/runtime/start-selected', 'POST')
 export const stopRuntimeEngine = () => runtimeCall('/api/runtime/stop', 'POST')
 export const squareOffRuntime = () => runtimeCall('/api/runtime/square-off', 'POST')
 export const switchRuntimeMode = (mode: 'paper' | 'live') =>
@@ -1275,10 +1279,20 @@ export const generateManagedTradingViewCredential = (setupId: string, rotate = f
 export interface EngineStrategy {
   instance_id: string
   display_name: string
+  strategy_code: string | null
+  strategy_version: string | null
   source_type: 'NOVA_SHARED' | 'NOVA_HOSTED_PERSONAL' | 'PERSONAL_TRADINGVIEW'
   setup_type: TradingViewSetupType | null
   status: string
   instance_status: string
+  mode: 'paper' | 'live'
+  execution_mode: string
+  paper_eligible: boolean
+  live_eligible: false
+  readiness: Record<string, boolean> | null
+  lots: number
+  credential_status: 'active' | 'revoked' | 'missing' | 'not_required'
+  installation_status: string | null
   verification_mode?: boolean
   selectable: boolean
   selected?: boolean

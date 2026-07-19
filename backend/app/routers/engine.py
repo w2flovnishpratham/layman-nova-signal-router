@@ -13,7 +13,7 @@ from app.services.dhan_debugger import get_outgoing_ip
 from app.services.paper_portfolio import get_paper_portfolio
 from app.services.state_store import get_app_state, get_engine_mode, set_engine_mode, update_app_state
 from app.services.execution_context import current_execution_user
-from app.services import runtime_reliability
+from app.services import runtime_reliability, strategy_instance_service
 
 
 router = APIRouter()
@@ -44,6 +44,14 @@ def _execution_user():
     if user is None:
         raise HTTPException(status_code=401, detail="Authenticated execution context required.")
     return user
+
+
+def _hydrated_runtime_status() -> dict[str, Any]:
+    user = _execution_user()
+    return {
+        **runtime_reliability.runtime_status(user),
+        **strategy_instance_service.trading_selection_state(user.id),
+    }
 
 
 def _build_engine_readiness_checks(
@@ -373,7 +381,29 @@ def engine_status() -> dict[str, Any]:
 
 @router.get("/runtime/status")
 def hydrated_runtime_status() -> dict[str, Any]:
-    return runtime_reliability.runtime_status(_execution_user())
+    return _hydrated_runtime_status()
+
+
+@router.post("/runtime/start-selected")
+def runtime_start_selected() -> dict[str, Any]:
+    user = _execution_user()
+    try:
+        strategy_instance_service.require_selected_engine_strategy(user.id)
+    except strategy_instance_service.InstanceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"message": str(exc), "reason": exc.code},
+        ) from exc
+    status = runtime_reliability.runtime_status(user)
+    if status["engine"]["state"] != "STOPPED":
+        raise HTTPException(status_code=409, detail="The engine is already running or changing state.")
+    if status["position"]["has_open_position"]:
+        raise HTTPException(
+            status_code=409,
+            detail="A tracked position is open. Confirm it is flat before starting the selected strategy.",
+        )
+    start_engine(StartEngineRequest(engine_mode="paper"))
+    return _hydrated_runtime_status()
 
 
 @router.post("/runtime/stop")

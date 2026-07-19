@@ -10,7 +10,10 @@ vi.mock('../api', () => ({ getEngineStrategies: api.getEngineStrategies, setEngi
 function strategy(overrides: Partial<EngineStrategy> = {}): EngineStrategy {
   return {
     instance_id: 'inst-1', display_name: 'Bollinger + RSI', source_type: 'PERSONAL_TRADINGVIEW',
+    strategy_code: 'bollinger-rsi', strategy_version: '1.0.0',
     setup_type: 'NOVA_MANAGED_TRADINGVIEW', status: 'READY', instance_status: 'ready',
+    mode: 'paper', execution_mode: 'paper_live_data', paper_eligible: true, live_eligible: false,
+    readiness: { can_activate: true }, lots: 1, credential_status: 'active', installation_status: 'PAPER_READY',
     verification_mode: false, selectable: true, selected: false, blocking_reason: null, owner: 'self', ...overrides,
   }
 }

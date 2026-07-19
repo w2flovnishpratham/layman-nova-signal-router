@@ -21,6 +21,8 @@ from app.schemas.strategy import (
 )
 from app.services import strategy_instance_service as instances
 from app.services.entitlements import EntitlementError
+from app.services.execution_context import bind_user_execution_context
+from app.services import runtime_reliability
 from app.services.user_context import CurrentUser
 
 router = APIRouter(prefix="/api/strategy-instances", tags=["Strategy Instances"])
@@ -239,6 +241,17 @@ def get_engine_selection(user: CurrentUser = Depends(get_current_user)) -> dict:
 def set_engine_selection(payload: SelectStrategyPayload, user: CurrentUser = Depends(get_current_user)):
     """Persist the selected strategy instance (owner-scoped, eligible only)."""
     try:
+        current = instances.get_engine_selection(user.id)
+        changing = current["selected_instance_id"] != str(payload.strategy_instance_id)
+        if changing:
+            with bind_user_execution_context(user):
+                runtime = runtime_reliability.runtime_status(user)
+            if runtime["engine"]["state"] != "STOPPED" or runtime["position"]["has_open_position"]:
+                raise instances.InstanceError(
+                    "Stop the engine and confirm the tracked position is flat before changing strategy.",
+                    status_code=409,
+                    code="RECONFIGURE_REQUIRED",
+                )
         return {"ok": True, **instances.set_engine_selection(user.id, payload.strategy_instance_id)}
     except Exception as exc:  # noqa: BLE001
         return _error(exc)

@@ -55,6 +55,9 @@ function runtime(overrides: Partial<RuntimeStatus> = {}): RuntimeStatus {
       token_estimated_expiry_at: null,
     },
     safety: { dhan_mode: 'MOCK', live_orders_enabled: false },
+    selected_strategy: null,
+    eligible_strategies: [],
+    selection_issue: null,
   }
   return {
     ...base,

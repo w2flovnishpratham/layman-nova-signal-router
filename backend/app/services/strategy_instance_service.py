@@ -870,14 +870,32 @@ def _engine_eligibility(db, row: models.StrategyInstance, catalog: models.Strate
     return decorated, True, None  # NOVA_SHARED catalog strategy
 
 
-def _engine_entry(row: models.StrategyInstance, decorated: dict[str, Any], selectable: bool, blocking: str | None) -> dict[str, Any]:
+def _engine_entry(
+    db,
+    row: models.StrategyInstance,
+    decorated: dict[str, Any],
+    selectable: bool,
+    blocking: str | None,
+) -> dict[str, Any]:
+    version = db.get(models.StrategyVersion, row.strategy_version_id)
+    paper_mode = row.execution_mode in {"signal_only", "paper_live_data"}
     return {
         "instance_id": str(row.id),
         "display_name": row.label,
+        "strategy_code": decorated.get("strategy_code"),
+        "strategy_version": version.version if version else None,
         "source_type": row.source_journey,
         "setup_type": decorated.get("setup_type"),
         "status": "READY" if selectable else (blocking or row.status.upper()),
         "instance_status": row.status,
+        "mode": "paper" if paper_mode else "live",
+        "execution_mode": row.execution_mode,
+        "paper_eligible": selectable and paper_mode,
+        "live_eligible": False,
+        "readiness": decorated.get("readiness"),
+        "lots": row.current_lots,
+        "credential_status": decorated.get("credential_status") or "not_required",
+        "installation_status": decorated.get("installation_status"),
         "verification_mode": bool(row.verification_mode),
         "selectable": selectable,
         "blocking_reason": blocking,
@@ -909,7 +927,7 @@ def list_engine_strategies(user_id: uuid.UUID) -> dict[str, Any]:
         strategies = []
         for row, catalog in db.execute(query).all():
             decorated, selectable, blocking = _engine_eligibility(db, row, catalog)
-            entry = _engine_entry(row, decorated, selectable, blocking)
+            entry = _engine_entry(db, row, decorated, selectable, blocking)
             entry["selected"] = selection is not None and str(row.id) == str(selection)
             strategies.append(entry)
         return {"strategies": strategies, "selected_instance_id": str(selection) if selection else None}
@@ -1038,7 +1056,68 @@ def get_engine_selection(user_id: uuid.UUID) -> dict[str, Any]:
             return {"selected_instance_id": None, "selected": None}
         catalog = db.get(models.StrategyCatalog, row.strategy_id)
         decorated, selectable, blocking = _engine_eligibility(db, row, catalog)
-        return {"selected_instance_id": str(row.id), "selected": _engine_entry(row, decorated, selectable, blocking)}
+        return {
+            "selected_instance_id": str(row.id),
+            "selected": _engine_entry(db, row, decorated, selectable, blocking),
+        }
+
+
+def trading_selection_state(user_id: uuid.UUID) -> dict[str, Any]:
+    """Safe Trading-page projection of the persisted owner selection.
+
+    The selected row remains visible if it later loses readiness so the UI can
+    explain the blocker. Alternatives include only currently selectable rows.
+    """
+    with session_scope() as db:
+        selected_id = _current_selection_id(db, user_id)
+        rows = db.execute(
+            select(models.StrategyInstance, models.StrategyCatalog)
+            .join(models.StrategyCatalog, models.StrategyCatalog.id == models.StrategyInstance.strategy_id)
+            .where(
+                models.StrategyInstance.user_id == user_id,
+                models.StrategyInstance.status != InstanceState.ARCHIVED.value,
+            )
+            .order_by(models.StrategyInstance.created_at.desc())
+        ).all()
+        selected: dict[str, Any] | None = None
+        eligible: list[dict[str, Any]] = []
+        for row, catalog in rows:
+            decorated, selectable, blocking = _engine_eligibility(db, row, catalog)
+            entry = _engine_entry(db, row, decorated, selectable, blocking)
+            entry["selected"] = selected_id is not None and row.id == selected_id
+            if selectable:
+                eligible.append(entry)
+            if entry["selected"]:
+                selected = entry
+
+        selection_issue = None
+        if selected_id is not None and selected is None:
+            selection_issue = "SELECTED_STRATEGY_UNAVAILABLE"
+        elif selected is not None and not selected["selectable"]:
+            selection_issue = selected["blocking_reason"] or "STRATEGY_NOT_READY"
+        return {
+            "selected_strategy": selected,
+            "eligible_strategies": eligible,
+            "selection_issue": selection_issue,
+        }
+
+
+def require_selected_engine_strategy(user_id: uuid.UUID) -> dict[str, Any]:
+    state = trading_selection_state(user_id)
+    selected = state["selected_strategy"]
+    if selected is None:
+        raise InstanceError(
+            "Select a Paper-ready strategy before starting the engine.",
+            status_code=409,
+            code=state["selection_issue"] or "STRATEGY_NOT_SELECTED",
+        )
+    if not selected["selectable"] or not selected["paper_eligible"]:
+        raise InstanceError(
+            "The selected strategy is no longer Paper-ready.",
+            status_code=409,
+            code=selected["blocking_reason"] or "STRATEGY_NOT_READY",
+        )
+    return selected
 
 
 def set_engine_selection(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
@@ -1065,7 +1144,10 @@ def set_engine_selection(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> di
             config.updated_at = _now()
         _audit(db, user_id, "ENGINE_STRATEGY_SELECTED", {"instance_id": str(instance.id)})
         db.flush()
-        return {"selected_instance_id": str(instance.id), "selected": _engine_entry(instance, decorated, selectable, blocking)}
+        return {
+            "selected_instance_id": str(instance.id),
+            "selected": _engine_entry(db, instance, decorated, selectable, blocking),
+        }
 
 
 # ---------------------------------------------------------------------------
