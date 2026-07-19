@@ -285,6 +285,7 @@ def test_api_prompt_states_logic_preservation_contract_and_v31_is_unchanged():
     assert "behavior_preservation.logic_changed=false" in prompt
     assert "status must be MANUAL_REVIEW_REQUIRED" in prompt
     assert "invalid and will be rejected" in prompt
+    assert "alert() or alertcondition() call" in prompt
     # Prompt V3.1 and Transport V2 files stay hash-pinned (ownership unchanged).
     pine_conversion_service._read_canonical(
         pine_conversion_service.prompt_path("v3.1"), pine_conversion_service.PROMPT_V31_SHA256
@@ -339,6 +340,39 @@ def test_logic_changed_with_manual_review_required_is_terminal_not_repaired(mu_d
     assert detail["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
     assert detail["candidate_version_id"] is None
     assert fake.repair_calls == 0  # logic_changed=true + MANUAL_REVIEW_REQUIRED stays terminal
+
+
+# alert(...) -> STRATEGY_LAYER_ALERT_FORBIDDEN (layer level); alertcondition(...) ->
+# NONCANONICAL_ALERT (after transport assembly). Both are strategy-layer alerts.
+@pytest.mark.parametrize(
+    "alert_line",
+    ['alert("BUY_CE")', 'alertcondition(novaBuyCeSignal, "BUY_CE")'],
+)
+def test_strategy_layer_alert_is_repaired_into_a_valid_candidate(mu_db, monkeypatch, alert_line):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-alert-repair-admin@example.com", is_admin=True))
+    conversion = _submit(client)
+    dirty = _output(conversion, layer=LAYER + "\n" + alert_line + "\n")  # strategy-layer alert
+    clean = _output(conversion)                                          # canonical booleans only
+    fake = pine_conversion_provider.FakePineConversionProvider(dirty, repair_output=clean)
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
+    detail = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
+    assert detail["conversion_status"] == "READY_FOR_ADMIN_REVIEW"
+    assert detail["candidate_version_id"] is not None
+    assert fake.repair_calls == 1
+
+
+def test_strategy_layer_alert_fails_closed_when_repair_keeps_alert(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-alert-badrepair-admin@example.com", is_admin=True))
+    conversion = _submit(client)
+    dirty = _output(conversion, layer=LAYER + '\nalertcondition(novaBuyCeSignal, "BUY_CE")\n')
+    fake = pine_conversion_provider.FakePineConversionProvider(dirty, repair_output=dirty)
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
+    detail = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
+    assert detail["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
+    assert detail["candidate_version_id"] is None
+    assert fake.repair_calls == 1
 
 
 def test_exact_cache_hit_and_model_change_miss(mu_db, monkeypatch):
