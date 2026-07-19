@@ -262,6 +262,85 @@ def test_model_transport_source_sha_and_logic_change_are_rejected(mu_db, monkeyp
         assert result["candidate_version_id"] is None
 
 
+def _logic_changed(conversion, *, status="CONVERTED"):
+    return _output(
+        conversion,
+        status=status,
+        behavior_preservation={"logic_changed": True, "change_summary": ["normalized reversal"]},
+    )
+
+
+def test_api_prompt_states_logic_preservation_contract_and_v31_is_unchanged():
+    from types import SimpleNamespace
+
+    row = SimpleNamespace(
+        input_source_sha256="a" * 64,
+        usage_summary={"analysis": {"matched_capabilities": []}},
+        options={},
+        model="claude-test-model",
+    )
+    prompt = admin_pine_conversion_service._build_request(
+        row, '//@version=6\nindicator("x")\nplot(close)\n'
+    ).prompt
+    assert "behavior_preservation.logic_changed=false" in prompt
+    assert "status must be MANUAL_REVIEW_REQUIRED" in prompt
+    assert "invalid and will be rejected" in prompt
+    # Prompt V3.1 and Transport V2 files stay hash-pinned (ownership unchanged).
+    pine_conversion_service._read_canonical(
+        pine_conversion_service.prompt_path("v3.1"), pine_conversion_service.PROMPT_V31_SHA256
+    )
+    pine_conversion_service._read_canonical(
+        pine_conversion_service.TRANSPORT_V2_PATH, pine_conversion_service.TRANSPORT_V2_SHA256
+    )
+
+
+def test_logic_changed_converted_is_repaired_into_a_valid_candidate(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-logic-repair-admin@example.com", is_admin=True))
+    conversion = _submit(client)
+    inconsistent = _logic_changed(conversion)   # logic_changed=true + CONVERTED (invalid pairing)
+    corrected = _output(conversion)             # logic_changed=false + CONVERTED
+    fake = pine_conversion_provider.FakePineConversionProvider(inconsistent, repair_output=corrected)
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
+    detail = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
+    assert detail["conversion_status"] == "READY_FOR_ADMIN_REVIEW"
+    assert detail["validation"]["eligible_for_review"] is True
+    assert detail["candidate_version_id"] is not None
+    assert fake.convert_calls == 1 and fake.repair_calls == 1
+
+
+def test_logic_changed_converted_fails_closed_when_repair_stays_inconsistent(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-logic-badrepair-admin@example.com", is_admin=True))
+    conversion = _submit(client)
+    inconsistent = _logic_changed(conversion)
+    fake = pine_conversion_provider.FakePineConversionProvider(inconsistent, repair_output=inconsistent)
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
+    detail = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
+    assert detail["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
+    assert detail["candidate_version_id"] is None
+    assert fake.repair_calls == 1
+    from app.db import models
+    from app.db.engine import session_scope
+
+    with session_scope() as db:
+        row = db.get(models.PineConversionRequest, uuid.UUID(conversion["id"]))
+        assert row.safe_error_code == "LOGIC_CHANGED_STATUS_INVALID"
+
+
+def test_logic_changed_with_manual_review_required_is_terminal_not_repaired(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-logic-manual-admin@example.com", is_admin=True))
+    conversion = _submit(client)
+    manual = _logic_changed(conversion, status="MANUAL_REVIEW_REQUIRED")
+    fake = pine_conversion_provider.FakePineConversionProvider(manual)  # no repair_output
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
+    detail = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
+    assert detail["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
+    assert detail["candidate_version_id"] is None
+    assert fake.repair_calls == 0  # logic_changed=true + MANUAL_REVIEW_REQUIRED stays terminal
+
+
 def test_exact_cache_hit_and_model_change_miss(mu_db, monkeypatch):
     _enable(monkeypatch)
     client = _client(make_user("c1-cache-admin@example.com", is_admin=True))
