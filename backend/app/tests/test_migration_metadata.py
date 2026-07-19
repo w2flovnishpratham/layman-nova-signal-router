@@ -32,12 +32,14 @@ def test_every_revision_id_fits_alembic_version_column():
     )
 
 
-def test_single_head_is_c2_installation_off_r1b_persistence():
+def test_single_head_is_admin_review_width_off_c2_installation():
     script = _script_directory()
-    assert script.get_heads() == ["0016_c2_tv_installation"]
-    head = script.get_revision("0016_c2_tv_installation")
-    assert head.down_revision == "0015_r1b_persistence"
+    assert script.get_heads() == ["0017_expand_admin_review_status"]
+    head = script.get_revision("0017_expand_admin_review_status")
+    assert head.down_revision == "0016_c2_tv_installation"
     assert len(head.revision) <= ALEMBIC_VERSION_NUM_MAXLEN
+    c2 = script.get_revision("0016_c2_tv_installation")
+    assert c2.down_revision == "0015_r1b_persistence"
     r1b = script.get_revision("0015_r1b_persistence")
     assert r1b.down_revision == "0014_verify_select"
     previous = script.get_revision("0014_verify_select")

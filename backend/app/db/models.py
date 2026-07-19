@@ -749,8 +749,8 @@ class StrategyAdminReview(Base):
     validation_report_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("strategy_validation_reports.id", ondelete="SET NULL"), nullable=True
     )
-    previous_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    new_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    previous_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    new_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 

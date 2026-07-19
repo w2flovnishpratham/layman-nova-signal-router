@@ -177,6 +177,12 @@ continue through the legacy lifecycle. The migration does not change R1B
 decision tables, broker tables, orders, positions, risk controls, or strategy
 execution semantics.
 
+Alembic head is now `0017_expand_admin_review_status` (off
+`0016_c2_tv_installation`). It widens `strategy_admin_reviews.previous_status`
+and `new_status` from `VARCHAR(20)` to `VARCHAR(64)` so the C1 approval status
+values (`ready_for_admin_review`, `approved_for_tv_compile`) persist on
+PostgreSQL without truncation. See `NOVA_C2_POSTGRES_STATUS_WIDTH_FIX.md`.
+
 ## UI
 
 The admin C1 conversion detail shows C2 only when the feature flag is enabled
