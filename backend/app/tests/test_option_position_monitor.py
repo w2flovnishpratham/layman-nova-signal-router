@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from app.config import settings
 from app.services import audit_logger, option_position_monitor, state_store
 from app.services.credential_vault import DhanCredentials
@@ -11,6 +13,7 @@ def setup_runtime(tmp_path, monkeypatch):
     log_dir = tmp_path / "runtime_logs"
     monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
     monkeypatch.setattr(state_store, "OPEN_POSITION_FILE", state_dir / "open_position.json")
+    monkeypatch.setattr(state_store, "PAPER_POSITION_FILE", state_dir / "paper_position.json")
     monkeypatch.setattr(state_store, "SEEN_SIGNALS_FILE", state_dir / "seen_signals.json")
     monkeypatch.setattr(state_store, "SETTINGS_FILE", state_dir / "settings.json")
     log_files = {
@@ -46,24 +49,26 @@ class ConfirmingClient(FakeClient):
         )
 
 
+def _quote(ltp, *, source="DHAN_WEBSOCKET", error=None):
+    return SimpleNamespace(
+        success=ltp is not None,
+        message="ok" if ltp is not None else "waiting",
+        ltp=ltp,
+        source=source,
+        status="FRESH" if ltp is not None else "WAITING_FOR_WEBSOCKET",
+        error=error,
+        received_at=None,
+        age_seconds=0.1 if ltp is not None else None,
+    )
+
+
 def test_monitor_triggers_tp_exit_from_option_ltp(tmp_path, monkeypatch):
     setup_runtime(tmp_path, monkeypatch)
     monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
     monkeypatch.setattr(option_position_monitor, "_client", lambda: ConfirmingClient(121.5))
-    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **kwargs: None)
-    monkeypatch.setattr(
-        option_position_monitor,
-        "get_marketfeed_ltp",
-        lambda **kwargs: MarketFeedLtpResult(
-            success=True,
-            message="ok",
-            ltp=121.0,
-            exchange_segment=kwargs["exchange_segment"],
-            security_id=kwargs["security_id"],
-            source="dhan_marketfeed_ws",
-        ),
-    )
+    values = iter([_quote(121.0, source="DHAN_WEBSOCKET"), _quote(121.5, source="DHAN_REST")])
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", lambda **_kwargs: next(values))
     monkeypatch.setattr(
         option_position_monitor,
         "get_dhan_credentials",
@@ -121,7 +126,7 @@ def test_monitor_triggers_tp_exit_from_option_ltp(tmp_path, monkeypatch):
     assert position["live_pnl"]["ltp"] == 121.5
     assert position["live_pnl"]["source"] == "dhan_ltp_exit_confirmation"
     assert position["live_pnl"]["trigger_ltp"] == 121.0
-    assert position["live_pnl"]["trigger_source"] == "dhan_marketfeed_ws"
+    assert position["live_pnl"]["trigger_source"] == "DHAN_WEBSOCKET"
     assert position["live_pnl"]["tp_price"] == 120.0
     assert position["server_exit"]["reason"] == "TP"
 
@@ -131,19 +136,8 @@ def test_monitor_rejects_unconfirmed_tp_spike(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
     monkeypatch.setattr(option_position_monitor, "_client", lambda: ConfirmingClient(105.0))
-    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **kwargs: None)
-    monkeypatch.setattr(
-        option_position_monitor,
-        "get_marketfeed_ltp",
-        lambda **kwargs: MarketFeedLtpResult(
-            success=True,
-            message="bad spike",
-            ltp=141.0,
-            exchange_segment=kwargs["exchange_segment"],
-            security_id=kwargs["security_id"],
-            source="dhan_marketfeed_ws",
-        ),
-    )
+    values = iter([_quote(141.0, source="DHAN_WEBSOCKET"), _quote(105.0, source="DHAN_REST")])
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", lambda **_kwargs: next(values))
     monkeypatch.setattr(
         option_position_monitor,
         "get_dhan_credentials",
@@ -203,19 +197,7 @@ def test_monitor_display_only_for_dhan_super_order_exit_levels(tmp_path, monkeyp
     monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
     monkeypatch.setattr(option_position_monitor, "_client", lambda: FakeClient())
-    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **kwargs: None)
-    monkeypatch.setattr(
-        option_position_monitor,
-        "get_marketfeed_ltp",
-        lambda **kwargs: MarketFeedLtpResult(
-            success=True,
-            message="ok",
-            ltp=121.0,
-            exchange_segment=kwargs["exchange_segment"],
-            security_id=kwargs["security_id"],
-            source="dhan_marketfeed_ws",
-        ),
-    )
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", lambda **_kwargs: _quote(121.0))
     monkeypatch.setattr(
         option_position_monitor,
         "get_dhan_credentials",
@@ -275,20 +257,8 @@ def test_monitor_waits_for_websocket_tick_without_rest_fallback(tmp_path, monkey
     monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
     monkeypatch.setattr(option_position_monitor, "_client", lambda: FakeClient())
-    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **kwargs: None)
     monkeypatch.setattr(option_position_monitor, "marketfeed_ws_status", lambda: {"connected": True})
-    monkeypatch.setattr(
-        option_position_monitor,
-        "get_marketfeed_ltp",
-        lambda **kwargs: MarketFeedLtpResult(
-            success=False,
-            message="waiting",
-            ltp=None,
-            exchange_segment=kwargs["exchange_segment"],
-            security_id=kwargs["security_id"],
-            error="ws_tick_missing",
-        ),
-    )
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", lambda **_kwargs: _quote(None, error="ws_tick_missing"))
     monkeypatch.setattr(
         option_position_monitor,
         "get_dhan_credentials",
@@ -321,7 +291,7 @@ def test_monitor_waits_for_websocket_tick_without_rest_fallback(tmp_path, monkey
     option_position_monitor.monitor_once()
 
     position = state_store.get_open_position()
-    assert position["live_pnl"]["status"] == "ws_waiting"
+    assert position["live_pnl"]["status"] == "ltp_error"
     assert position["live_pnl"]["error"] == "ws_tick_missing"
 
 
@@ -353,19 +323,7 @@ def test_monitor_syncs_entry_price_from_positions_when_order_status_is_empty(tmp
             )
 
     monkeypatch.setattr(option_position_monitor, "_client", lambda: FillFallbackClient())
-    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **kwargs: None)
-    monkeypatch.setattr(
-        option_position_monitor,
-        "get_marketfeed_ltp",
-        lambda **kwargs: MarketFeedLtpResult(
-            success=True,
-            message="ok",
-            ltp=105.0,
-            exchange_segment=kwargs["exchange_segment"],
-            security_id=kwargs["security_id"],
-            source="dhan_marketfeed_ws",
-        ),
-    )
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", lambda **_kwargs: _quote(105.0))
     monkeypatch.setattr(
         option_position_monitor,
         "get_dhan_credentials",
@@ -444,18 +402,10 @@ def test_live_monitor_uses_shared_data_credentials_for_rest_fallback(tmp_path, m
     monkeypatch.setattr(option_position_monitor, "RealDhanClient", SharedRestClient)
     monkeypatch.setattr(option_position_monitor, "shared_market_data_configured", lambda: True)
     monkeypatch.setattr(option_position_monitor, "market_data_credentials", lambda: shared_creds)
-    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **kwargs: None)
     monkeypatch.setattr(
         option_position_monitor,
-        "get_marketfeed_ltp",
-        lambda **kwargs: MarketFeedLtpResult(
-            success=False,
-            message="stale",
-            ltp=None,
-            exchange_segment=kwargs["exchange_segment"],
-            security_id=kwargs["security_id"],
-            error="ws_tick_stale",
-        ),
+        "_authoritative_quote",
+        lambda **kwargs: calls.append(("quote_service", kwargs)) or _quote(105.0, source="DHAN_REST"),
     )
     monkeypatch.setattr(
         option_position_monitor,
@@ -496,10 +446,8 @@ def test_live_monitor_uses_shared_data_credentials_for_rest_fallback(tmp_path, m
 
     option_position_monitor.monitor_once()
 
-    assert calls[0] == ("init", {"proxy_url": ""})
-    assert calls[1][0] == "get_ltp"
-    assert calls[1][1]["client_id"] == "shared-client"
-    assert calls[1][1]["access_token"] == "shared-token"
+    assert calls[-1][0] == "quote_service"
+    assert calls[-1][1]["security_id"] == "57049"
     position = state_store.get_open_position()
     assert position["live_pnl"]["ltp"] == 105.0
     assert position["live_pnl"]["ltp_history"] == [105.0]

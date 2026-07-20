@@ -107,7 +107,11 @@ def deterministic_paper_market(monkeypatch):
 
     monkeypatch.setattr(paper_broker, "RealDhanClient", _QuoteClient)
     fake_creds = DhanCredentials("shared-client", "shared-token", "shared_market_data")
-    monkeypatch.setattr(paper_broker, "get_shared_market_credentials", lambda: fake_creds)
+    monkeypatch.setattr(
+        paper_broker,
+        "get_quote_snapshot",
+        lambda **_kwargs: {"ltp": 100.0, "source": "DHAN_WEBSOCKET", "status": "FRESH", "stale": False},
+    )
     monkeypatch.setattr(shared_market_data, "get_shared_market_credentials", lambda: fake_creds)
     monkeypatch.setattr(shared_market_data, "shared_market_data_configured", lambda: True)
 

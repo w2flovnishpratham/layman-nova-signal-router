@@ -455,7 +455,7 @@ class StrategyExecutionJob(Base):
 
 
 class LiveOrderIntent(Base):
-    """Durable idempotency gate for live Dhan write intents."""
+    """Durable idempotency gate for broker and paper-order intents."""
 
     __tablename__ = "live_order_intents"
     __table_args__ = (

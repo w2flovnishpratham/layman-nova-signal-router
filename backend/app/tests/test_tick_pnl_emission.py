@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 from app.domain.state_machine import SetupState
@@ -101,19 +102,19 @@ def _run_monitor_tick(
     )
 
     monkeypatch.setattr(option_position_monitor, "_client", lambda: _FakeClient())
-    monkeypatch.setattr(option_position_monitor, "build_nifty_snapshot", lambda **_kwargs: dict(MARKET_SNAPSHOT))
     monkeypatch.setattr(option_position_monitor, "get_shared_nifty_snapshot", lambda **_kwargs: dict(MARKET_SNAPSHOT))
-    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **_kwargs: None)
     monkeypatch.setattr(
         option_position_monitor,
-        "get_marketfeed_ltp",
-        lambda **kwargs: MarketFeedLtpResult(
+        "_authoritative_quote",
+        lambda **_kwargs: SimpleNamespace(
             success=True,
             message="ok",
             ltp=ltp,
-            exchange_segment=kwargs["exchange_segment"],
-            security_id=kwargs["security_id"],
             source="test_marketfeed",
+            status="FRESH",
+            error=None,
+            received_at=None,
+            age_seconds=0.1,
         ),
     )
     monkeypatch.setattr(
@@ -234,17 +235,18 @@ def test_accepted_sr_levels_trigger_paper_exit_when_global_server_exit_disabled(
     exits: list[tuple[str, dict[str, Any]]] = []
 
     monkeypatch.setattr(option_position_monitor, "_client", lambda: _FakeClient(111.0))
-    monkeypatch.setattr(option_position_monitor, "ensure_marketfeed_subscription", lambda **_kwargs: None)
     monkeypatch.setattr(
         option_position_monitor,
-        "get_marketfeed_ltp",
-        lambda **kwargs: MarketFeedLtpResult(
+        "_authoritative_quote",
+        lambda **_kwargs: SimpleNamespace(
             success=True,
             message="ok",
             ltp=111.0,
-            exchange_segment=kwargs["exchange_segment"],
-            security_id=kwargs["security_id"],
             source="test_marketfeed",
+            status="FRESH",
+            error=None,
+            received_at=None,
+            age_seconds=0.1,
         ),
     )
     monkeypatch.setattr(

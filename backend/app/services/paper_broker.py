@@ -16,10 +16,9 @@ from app.services.dhan_client import (
     RealDhanClient,
 )
 from app.services.paper_portfolio import apply_paper_entry, apply_paper_exit, paper_wallet_snapshot
+from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import (
-    get_shared_market_credentials,
-    refresh_shared_token_after_auth_failure,
     shared_market_data_configured,
 )
 from app.services.state_store import (
@@ -66,35 +65,27 @@ def _shared_market_ltp(*, exchange_segment: str, security_id: str) -> DhanLtpRes
             exchange_segment=exchange_segment, security_id=security_id,
             raw_response={"mode": "paper", "source": "test_market_data"},
         )
-    creds = get_shared_market_credentials()
-    if creds is None:
-        return _shared_market_data_unavailable_result(exchange_segment=exchange_segment, security_id=security_id)
-
-    # Shared paper-data reads use the VPS/global Dhan data account, not a per-user
-    # execution-node proxy. Passing an explicit empty proxy skips user-context proxy binding.
-    result = RealDhanClient(proxy_url="").get_ltp(
-        client_id=creds.client_id,
-        access_token=creds.access_token,
+    quote = get_quote_snapshot(
         exchange_segment=exchange_segment,
         security_id=security_id,
+        max_age_seconds=2.0,
+        allow_rest_fallback=True,
     )
-    if (
-        not result.success
-        and refresh_shared_token_after_auth_failure(
-            status_code=result.status_code,
-            message=result.message or result.error,
-            raw_response=result.raw_response,
-        )
-    ):
-        refreshed = get_shared_market_credentials()
-        if refreshed is not None:
-            result = RealDhanClient(proxy_url="").get_ltp(
-                client_id=refreshed.client_id,
-                access_token=refreshed.access_token,
-                exchange_segment=exchange_segment,
-                security_id=security_id,
-            )
-    return result
+    return DhanLtpResult(
+        success=quote.get("ltp") is not None and not bool(quote.get("stale")),
+        message=str(quote.get("message") or "Quote unavailable."),
+        ltp=quote.get("ltp"),
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        status_code=429 if quote.get("status") == "RATE_LIMITED" else None,
+        raw_response={
+            "source": quote.get("source"),
+            "status": quote.get("status"),
+            "received_at": quote.get("received_at"),
+            "age_seconds": quote.get("age_seconds"),
+        },
+        error=quote.get("error"),
+    )
 
 
 def _simulated_charges(qty: int, price: float, transaction_type: str) -> float:

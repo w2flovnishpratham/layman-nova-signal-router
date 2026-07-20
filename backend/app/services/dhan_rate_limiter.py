@@ -65,6 +65,20 @@ class DhanApiRateLimiter:
             self._blocked_until = max(self._blocked_until, time.monotonic() + retry_after)
             self._lock.notify_all()
 
+    def cooldown_remaining(self) -> float:
+        """Return the active provider-directed cooldown without waiting."""
+        with self._lock:
+            return max(self._blocked_until - time.monotonic(), 0.0)
+
+    def snapshot(self) -> dict[str, float | int]:
+        """Expose safe limiter state for structured quote metrics."""
+        with self._lock:
+            now = time.monotonic()
+            return {
+                "queued_requests": len(self._requests),
+                "cooldown_seconds": round(max(self._blocked_until - now, 0.0), 3),
+            }
+
     @staticmethod
     def _retry_after_seconds(headers: Any) -> float:
         raw = str(headers.get("Retry-After") or "").strip()

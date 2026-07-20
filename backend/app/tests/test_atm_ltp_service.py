@@ -1,4 +1,4 @@
-from app.services import atm_ltp_service
+from app.services import atm_ltp_service, quote_service
 from app.services.credential_vault import DhanCredentials
 from app.services.dhan_client import DhanLtpResult
 from app.services.dhan_marketfeed_ws import MarketFeedLtpResult
@@ -40,6 +40,21 @@ def test_atm_snapshot_rounds_spot_to_nearest_strike(monkeypatch):
         )
 
     monkeypatch.setattr(atm_ltp_service, "_ltp_with_prefer_ws", fake_ltp)
+    monkeypatch.setattr(
+        quote_service,
+        "get_quote_snapshots",
+        lambda requests, **_kwargs: {
+            (item.exchange_segment, item.security_id): {
+                "status": "FRESH",
+                "source": "DHAN_WEBSOCKET",
+                "ltp": fake_ltp(item.exchange_segment, item.security_id)["ltp"],
+                "received_at": "2026-06-17T09:10:00Z",
+                "age_seconds": 0.1,
+                "stale": False,
+            }
+            for item in requests
+        },
+    )
     monkeypatch.setattr(atm_ltp_service, "_market_is_open", lambda: True)
     monkeypatch.setattr(atm_ltp_service, "suggest_option_contract", fake_suggest)
     monkeypatch.setattr(atm_ltp_service, "marketfeed_ws_status", lambda: {"connected": True})
@@ -113,16 +128,16 @@ def test_ltp_cache_reuses_recent_websocket_tick(monkeypatch):
             error="ws_waiting",
         )
 
-    monkeypatch.setattr(atm_ltp_service, "ensure_marketfeed_subscription", lambda **_kwargs: None)
-    monkeypatch.setattr(atm_ltp_service, "_market_is_open", lambda: True)
-    monkeypatch.setattr(atm_ltp_service, "get_marketfeed_ltp", fake_marketfeed_ltp)
+    monkeypatch.setattr(quote_service, "ensure_marketfeed_subscription", lambda **_kwargs: None)
+    monkeypatch.setattr(quote_service, "_market_is_open", lambda: True)
+    monkeypatch.setattr(quote_service, "get_marketfeed_ltp", fake_marketfeed_ltp)
     monkeypatch.setattr(
-        atm_ltp_service,
+        quote_service,
         "get_runtime_settings",
         lambda: {"marketfeed_ws_enabled": True, "option_ltp_source": "AUTO", "option_ltp_cache_seconds": 15},
     )
     monkeypatch.setattr(
-        atm_ltp_service,
+        quote_service,
         "market_data_credentials",
         lambda: (_ for _ in ()).throw(AssertionError("REST fallback should not be used when cache is fresh")),
     )
@@ -146,7 +161,10 @@ def test_ltp_cache_reuses_recent_websocket_tick(monkeypatch):
 
 
 def test_rest_ltp_refreshes_shared_token_after_auth_failure(monkeypatch):
-    atm_ltp_service._LTP_CACHE.clear()
+    quote_service.reset_quote_state_for_tests()
+    with quote_service.dhan_quote_rate_limiter._lock:
+        quote_service.dhan_quote_rate_limiter._blocked_until = 0.0
+        quote_service.dhan_quote_rate_limiter._requests.clear()
     tokens_used = []
     refresh_calls = []
     old_creds = DhanCredentials("shared-client", "old-shared-token", "shared_market_data")
@@ -162,28 +180,29 @@ def test_rest_ltp_refreshes_shared_token_after_auth_failure(monkeypatch):
         def __init__(self, *_args, **_kwargs):
             pass
 
-        def get_ltp(self, **kwargs):
+        def get_ltp_batch(self, **kwargs):
             token = kwargs["access_token"]
             tokens_used.append(token)
+            key = tuple(kwargs["instruments"][0])
             if token == "old-shared-token":
-                return DhanLtpResult(
+                return {key: DhanLtpResult(
                     success=False,
                     message="Dhan LTP request failed: Unauthorized",
                     ltp=None,
                     status_code=401,
                     error="Unauthorized",
-                )
-            return DhanLtpResult(success=True, message="quote", ltp=101.25)
+                )}
+            return {key: DhanLtpResult(success=True, message="quote", ltp=101.25)}
 
     def fake_refresh(**kwargs):
         refresh_calls.append(kwargs)
         return True
 
-    monkeypatch.setattr(atm_ltp_service, "_market_is_open", lambda: True)
-    monkeypatch.setattr(atm_ltp_service, "get_runtime_settings", lambda: {"marketfeed_ws_enabled": False})
-    monkeypatch.setattr(atm_ltp_service, "market_data_credentials", fake_market_data_credentials)
-    monkeypatch.setattr(atm_ltp_service, "RealDhanClient", RetryClient)
-    monkeypatch.setattr(atm_ltp_service, "refresh_shared_token_after_auth_failure", fake_refresh)
+    monkeypatch.setattr(quote_service, "_market_is_open", lambda: True)
+    monkeypatch.setattr(quote_service, "get_runtime_settings", lambda: {"marketfeed_ws_enabled": False})
+    monkeypatch.setattr(quote_service, "market_data_credentials", fake_market_data_credentials)
+    monkeypatch.setattr(quote_service, "RealDhanClient", RetryClient)
+    monkeypatch.setattr(quote_service, "refresh_shared_token_after_auth_failure", fake_refresh)
 
     result = atm_ltp_service._ltp_with_prefer_ws(
         exchange_segment="NSE_FNO",

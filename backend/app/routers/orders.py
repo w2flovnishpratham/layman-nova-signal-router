@@ -12,13 +12,13 @@ from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_PRODUCT_TYPE, DEFAULT_O
 from app.routers.setup import current_nifty_lot_size
 from app.schemas.signal import NormalizedSignal
 from app.services.atm_ltp_service import get_atm_option_snapshot
-from app.services.credential_vault import get_dhan_credentials, get_webhook_secret
-from app.services.dhan_client import get_broker_client
-from app.services import entitlements
+from app.services.credential_vault import get_webhook_secret
+from app.services import entitlements, order_idempotency
 from app.services.execution_context import current_execution_user
 from app.services.execution_router import route_signal
 from app.services.normalized_errors import classify_failure
-from app.services.paper_portfolio import resize_paper_open_trade_quantity
+from app.services.paper_portfolio import paper_wallet_snapshot, resize_paper_open_trade_quantity
+from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.security_id_resolver import resolve_security_id, suggest_option_contract
 from app.services.state_store import get_app_state, get_engine_mode, get_open_position, set_open_position, utc_now
@@ -108,6 +108,14 @@ def orders(limit: int = Query(default=100, ge=1, le=1000)) -> list[dict]:
 
 @router.post("/orders/manual-entry")
 def manual_entry(request: Request, body: ManualEntryRequest) -> Any:
+    if get_open_position().get("has_open_position"):
+        return {
+            "ok": False,
+            "operationState": "REJECTED_EXISTING_POSITION",
+            "message": "Order not placed: exit the current position before opening another.",
+            "position": get_open_position(),
+            "portfolio": paper_wallet_snapshot() if get_engine_mode(legacy_fallback=False) == "paper" else None,
+        }
     signal = _manual_entry_signal(
         option_side=body.side,
         lots=body.lots,
@@ -130,8 +138,12 @@ def manual_entry(request: Request, body: ManualEntryRequest) -> Any:
     blocked = _manual_live_entitlement_or_block(signal)
     if blocked is not None:
         return blocked
-    execution_result = route_signal(signal)
-    return _manual_response(execution_result)
+    return _run_manual_operation(
+        request=request,
+        operation="ENTRY",
+        payload=body.model_dump(),
+        execute=lambda: _route_manual_entry(signal),
+    )
 
 
 @router.post("/orders/manual-exit")
@@ -179,8 +191,12 @@ def manual_exit(request: Request, body: ManualExitRequest) -> Any:
     blocked = _manual_live_entitlement_or_block(signal)
     if blocked is not None:
         return blocked
-    execution_result = route_signal(signal)
-    return _manual_response(execution_result)
+    return _run_manual_operation(
+        request=request,
+        operation="EXIT",
+        payload=body.model_dump(),
+        execute=lambda: _manual_response(route_signal(signal), operation="EXIT"),
+    )
 
 
 @router.post("/orders/manual-reverse")
@@ -220,8 +236,12 @@ def manual_reverse(request: Request, body: ManualReverseRequest) -> Any:
     blocked = _manual_live_entitlement_or_block(signal)
     if blocked is not None:
         return blocked
-    execution_result = route_signal(signal)
-    return _manual_response(execution_result)
+    return _run_manual_operation(
+        request=request,
+        operation="REVERSE",
+        payload=body.model_dump(),
+        execute=lambda: _manual_response(route_signal(signal), operation="REVERSE"),
+    )
 
 
 @router.patch("/orders/active-position/quantity")
@@ -378,47 +398,7 @@ def order_quote(
 
     if not security_id and not trading_symbol and strike is None and not expiry:
         atm = get_atm_option_snapshot(option_side=side, lots=lots, allow_rest_fallback=True)
-        option = atm.get("options", {}).get(side) if isinstance(atm.get("options"), dict) else None
-        option_data = option if isinstance(option, dict) else {}
-        premium = _number(option_data.get("ltp"))
-        base = {
-            "ok": premium is not None,
-            "mode": get_engine_mode(legacy_fallback=False) or get_engine_mode(),
-            "side": side,
-            "lots": lots,
-            "qty": option_data.get("qty") or current_nifty_lot_size() * lots,
-            "securityId": option_data.get("securityId"),
-            "tradingSymbol": option_data.get("tradingSymbol"),
-            "estimatedPremium": premium,
-            "estimatedCost": option_data.get("estimatedCost"),
-            "estimatedMargin": option_data.get("estimatedCost"),
-            "resolution": {
-                "ok": bool(option_data.get("securityId")),
-                "security_id": option_data.get("securityId"),
-                "method": "ATM_AUTO",
-                "reason": "Auto-selected ATM option contract from Dhan market data."
-                if option_data.get("securityId")
-                else "Waiting for NIFTY spot before calculating ATM contract.",
-                "trading_symbol": option_data.get("tradingSymbol"),
-                "lot_size": option_data.get("lotSize"),
-                "source_path": (option_data.get("autoContract") or {}).get("sourcePath")
-                if isinstance(option_data.get("autoContract"), dict)
-                else None,
-            },
-            "atm": atm,
-            "lastUpdatedAt": atm.get("computedAt") or utc_now(),
-        }
-        if premium is not None:
-            return {**base, "ok": True, "message": "ATM quote fetched."}
-        error = classify_failure(
-            option_data.get("message") or atm.get("message") or "ATM option LTP is not available yet.",
-            source="DHAN",
-            mode=base["mode"],
-            order_sent_to_broker=False,
-            money_at_risk=False,
-            debug_pack={"atm": atm, "side": side},
-        )
-        return {**base, "ok": False, "message": error["userMessage"], "normalizedError": error}
+        return _order_quote_from_atm(side=side, lots=lots, atm=atm)
 
     signal = _manual_entry_signal(
         option_side=side,
@@ -455,52 +435,34 @@ def order_quote(
         )
         return {**base, "ok": False, "message": error["userMessage"], "normalizedError": error}
 
-    mode = base["mode"]
-    if mode == "paper":
-        from app.services.shared_market_data import get_shared_market_credentials, shared_market_data_configured
-
-        creds = get_shared_market_credentials()
-        missing_reason = (
-            "Shared market-data token is unavailable; paper quote cannot fetch Dhan LTP."
-            if shared_market_data_configured()
-            else "Shared market-data credentials are not configured; set DHAN_SHARED_CLIENT_ID, DHAN_SHARED_PIN, and DHAN_SHARED_TOTP_SECRET for free paper mode."
-        )
-    else:
-        creds = get_dhan_credentials()
-        missing_reason = "Dhan Client ID or Access Token missing."
-
-    if not creds:
-        error = classify_failure(
-            missing_reason,
-            source="DHAN",
-            signal=signal,
-            mode=mode,
-            order_sent_to_broker=False,
-            money_at_risk=False,
-        )
-        return {**base, "ok": False, "message": error["userMessage"], "normalizedError": error}
-
-    client = get_broker_client(get_engine_mode())
-    quote = client.get_ltp(
-        client_id=creds.client_id,
-        access_token=creds.access_token,
+    quote = get_quote_snapshot(
         exchange_segment=signal.exchange_segment or DEFAULT_EXCHANGE_SEGMENT,
         security_id=str(resolution.security_id),
+        symbol=resolution.trading_symbol or signal.trading_symbol,
+        max_age_seconds=2.0,
+        allow_rest_fallback=True,
     )
-    if not quote.success or quote.ltp is None:
+    if quote.get("ltp") is None or quote.get("stale"):
         error = classify_failure(
-            quote.message or quote.error or "Dhan LTP request failed.",
+            str(quote.get("message") or quote.get("error") or "Fresh LTP unavailable."),
             source="DHAN",
             signal=signal,
             mode=base["mode"],
-            status_code=quote.status_code,
-            raw_response=quote.raw_response,
+            status_code=429 if quote.get("status") == "RATE_LIMITED" else None,
             order_sent_to_broker=False,
             money_at_risk=False,
         )
-        return {**base, "ok": False, "message": error["userMessage"], "normalizedError": error}
+        return {
+            **base,
+            "ok": False,
+            "message": error["userMessage"],
+            "quoteStatus": quote.get("status"),
+            "quoteSource": quote.get("source"),
+            "retryAfterSeconds": quote.get("retry_after_seconds"),
+            "normalizedError": error,
+        }
 
-    premium = float(quote.ltp)
+    premium = float(quote["ltp"])
     cost = premium * qty
     return {
         **base,
@@ -509,8 +471,79 @@ def order_quote(
         "estimatedPremium": premium,
         "estimatedCost": round(cost, 2),
         "estimatedMargin": round(cost, 2),
+        "quoteStatus": quote.get("status"),
+        "quoteSource": quote.get("source"),
         "lastUpdatedAt": utc_now(),
     }
+
+
+@router.get("/orders/quotes")
+def order_quotes(lots: int = Query(default=1, ge=1, le=20)) -> dict[str, Any]:
+    """Return both ATM sides from one backend snapshot and one polling loop."""
+    atm = get_atm_option_snapshot(
+        option_side="BOTH",
+        lots=lots,
+        allow_rest_fallback=_market_is_open(),
+    )
+    return {
+        "ok": bool(atm.get("ok")),
+        "lots": lots,
+        "quotes": {
+            side: _order_quote_from_atm(side=side, lots=lots, atm=atm)
+            for side in ("CE", "PE")
+        },
+        "quoteMetrics": {
+            "source": "authoritative_quote_service",
+            "computedAt": atm.get("computedAt"),
+        },
+    }
+
+
+def _order_quote_from_atm(*, side: str, lots: int, atm: dict[str, Any]) -> dict[str, Any]:
+    option = atm.get("options", {}).get(side) if isinstance(atm.get("options"), dict) else None
+    option_data = option if isinstance(option, dict) else {}
+    premium = _number(option_data.get("ltp"))
+    base = {
+        "ok": premium is not None and not bool(option_data.get("stale")),
+        "mode": get_engine_mode(legacy_fallback=False) or get_engine_mode(),
+        "side": side,
+        "lots": lots,
+        "qty": option_data.get("qty") or current_nifty_lot_size() * lots,
+        "securityId": option_data.get("securityId"),
+        "tradingSymbol": option_data.get("tradingSymbol"),
+        "estimatedPremium": premium,
+        "estimatedCost": option_data.get("estimatedCost"),
+        "estimatedMargin": option_data.get("estimatedCost"),
+        "quoteStatus": option_data.get("ltpStatus"),
+        "quoteSource": option_data.get("ltpSource"),
+        "resolution": {
+            "ok": bool(option_data.get("securityId")),
+            "security_id": option_data.get("securityId"),
+            "method": "ATM_AUTO",
+            "reason": "Auto-selected ATM option contract from Dhan market data."
+            if option_data.get("securityId")
+            else "Waiting for NIFTY spot before calculating ATM contract.",
+            "trading_symbol": option_data.get("tradingSymbol"),
+            "lot_size": option_data.get("lotSize"),
+            "source_path": (option_data.get("autoContract") or {}).get("sourcePath")
+            if isinstance(option_data.get("autoContract"), dict)
+            else None,
+        },
+        "atm": atm,
+        "lastUpdatedAt": atm.get("computedAt") or utc_now(),
+    }
+    if base["ok"]:
+        return {**base, "message": "ATM quote fetched."}
+    error = classify_failure(
+        option_data.get("message") or atm.get("message") or "ATM option LTP is not available yet.",
+        source="DHAN",
+        mode=base["mode"],
+        status=str(option_data.get("ltpStatus") or ""),
+        order_sent_to_broker=False,
+        money_at_risk=False,
+        debug_pack={"atm": atm, "side": side},
+    )
+    return {**base, "ok": False, "message": error["userMessage"], "normalizedError": error}
 
 
 def _manual_entry_signal(
@@ -735,21 +768,184 @@ def _latest_nifty_reference_price() -> float | None:
     return None
 
 
-def _manual_response(execution_result: dict[str, Any]) -> dict[str, Any]:
+def _route_manual_entry(signal: NormalizedSignal) -> dict[str, Any]:
+    try:
+        return _manual_response(route_signal(signal), operation="ENTRY")
+    except Exception:
+        return _manual_reconciliation_response(
+            "Paper order state is uncertain because position persistence did not complete."
+        )
+
+
+def _run_manual_operation(
+    *,
+    request: Request,
+    operation: str,
+    payload: dict[str, Any],
+    execute,
+) -> Any:
+    """Durably deduplicate manual requests by owner and operation key."""
+    idempotency_key = str(request.headers.get("Idempotency-Key") or "").strip()
+    if not idempotency_key:
+        return execute()
+    user = current_execution_user()
+    if user is None:
+        return _manual_reconciliation_response(
+            "Manual order idempotency requires authenticated owner context."
+        )
+    mode = get_engine_mode(legacy_fallback=False) or get_engine_mode() or "unknown"
+    scope = f"manual_{str(mode).lower()}_operation"
+    payload_hash = order_idempotency.stable_payload_hash(
+        {"operation": operation, "mode": mode, "payload": payload}
+    )
+    try:
+        claim = order_idempotency.claim_live_order_intent(
+            user_id=user.id,
+            scope=scope,
+            idempotency_key=idempotency_key,
+            payload_hash=payload_hash,
+            action=operation,
+            metadata={"mode": mode, "manual_order": True},
+        )
+    except (order_idempotency.OrderIdempotencyUnavailable, ValueError):
+        return _manual_reconciliation_response(
+            "Manual order idempotency is unavailable; no new order was submitted."
+        )
+
+    if claim.status == "conflict":
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "operationState": "REJECTED",
+                "message": "Idempotency key was already used for a different manual order.",
+            },
+        )
+    if claim.status == "replay":
+        return {**(claim.result_summary or {}), "idempotentReplay": True}
+    if not claim.fresh:
+        return {
+            "ok": False,
+            "operationState": "RECONCILIATION_REQUIRED",
+            "message": "The original manual order is still being reconciled.",
+            "idempotentReplay": True,
+        }
+
+    try:
+        result = execute()
+    except Exception:
+        result = _manual_reconciliation_response(
+            "Manual order state is uncertain because authoritative persistence did not complete."
+        )
+    if isinstance(result, JSONResponse):
+        return result
+    try:
+        order_idempotency.complete_order_intent(
+            claim.intent_id or "",
+            result_summary=dict(result),
+        )
+    except Exception:
+        return _manual_reconciliation_response(
+            "Manual order completed but its durable replay record could not be finalized."
+        )
+    return result
+
+
+def _manual_response(execution_result: dict[str, Any], *, operation: str | None = None) -> dict[str, Any]:
     blocked = bool(execution_result.get("blocked"))
-    ok = not blocked and execution_result.get("success") is not False
-    return {
-        "ok": ok,
-        "message": (
+    position = get_open_position()
+    operation_name = str(operation or execution_result.get("normalized_action") or "").upper()
+    provider_status = str(execution_result.get("status") or "").upper()
+    successful_request = not blocked and execution_result.get("success") is not False
+    operation_state = "FAILED"
+    ok = False
+
+    if blocked:
+        block_code = str(execution_result.get("block_code") or "")
+        operation_state = {
+            "MARKET_DATA_UNAVAILABLE": "REJECTED_NO_FRESH_QUOTE",
+            "CONTRACT_NOT_SUPPLIED": "REJECTED_INVALID_CONTRACT",
+            "ENTRY_REQUEST_BLOCKED": "REJECTED_ENGINE_STATE",
+        }.get(block_code, "REJECTED")
+    elif operation_name in {"ENTRY", "REVERSE"}:
+        proof = _open_position_proof(position)
+        if successful_request and proof["valid"]:
+            ok = True
+            operation_state = "POSITION_OPEN"
+        elif successful_request and provider_status in {"PENDING_CONFIRMATION", "PAPER_ORDER_ACCEPTED"}:
+            operation_state = "PAPER_ORDER_ACCEPTED"
+        elif successful_request:
+            operation_state = "RECONCILIATION_REQUIRED"
+    elif operation_name == "EXIT":
+        if successful_request and not position.get("has_open_position"):
+            ok = True
+            operation_state = "POSITION_CLOSED"
+        elif successful_request:
+            operation_state = "RECONCILIATION_REQUIRED"
+    elif successful_request:
+        # Non-order callers of this helper retain a truthful request result,
+        # but never receive POSITION_OPEN without persisted position proof.
+        operation_state = "REQUEST_COMPLETED"
+        ok = True
+
+    message = (
+        "Position opened."
+        if operation_state == "POSITION_OPEN"
+        else "Position closed."
+        if operation_state == "POSITION_CLOSED"
+        else "Order status uncertain. New entries are blocked while NOVA reconciles the position."
+        if operation_state == "RECONCILIATION_REQUIRED"
+        else (
             execution_result.get("reason")
             or execution_result.get("error")
             or execution_result.get("message")
             or execution_result.get("status")
             or "Manual order flow completed."
-        ),
+        )
+    )
+    portfolio = paper_wallet_snapshot() if get_engine_mode(legacy_fallback=False) == "paper" else None
+    return {
+        "ok": ok,
+        "operationState": operation_state,
+        "message": message,
+        "position": position if position.get("has_open_position") else None,
+        "portfolio": portfolio,
         "executionResult": execution_result,
         "normalizedError": execution_result.get("normalizedError") if isinstance(execution_result.get("normalizedError"), dict) else None,
         "orderJourney": execution_result.get("orderJourney"),
+    }
+
+
+def _open_position_proof(position: dict[str, Any]) -> dict[str, Any]:
+    required = {
+        "position_id": position.get("entry_order_id"),
+        "entry_price": _number(position.get("entry_price")),
+        "qty": int(position.get("qty") or 0),
+        "contract": position.get("security_id") or position.get("trading_symbol"),
+    }
+    return {
+        **required,
+        "valid": bool(
+            position.get("has_open_position")
+            and required["position_id"]
+            and required["entry_price"] is not None
+            and required["entry_price"] > 0
+            and required["qty"] > 0
+            and required["contract"]
+        ),
+    }
+
+
+def _manual_reconciliation_response(message: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "operationState": "RECONCILIATION_REQUIRED",
+        "message": message,
+        "position": get_open_position() or None,
+        "portfolio": paper_wallet_snapshot() if get_engine_mode(legacy_fallback=False) == "paper" else None,
+        "executionResult": {"success": False, "status": "RECONCILIATION_REQUIRED"},
+        "normalizedError": None,
+        "orderJourney": None,
     }
 
 

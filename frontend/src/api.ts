@@ -309,6 +309,26 @@ export interface ManualEntryPayload {
 export interface ManualOrderResponse {
   ok: boolean
   message: string
+  operationState?: 'POSITION_OPEN' | 'POSITION_CLOSED' | 'PAPER_ORDER_ACCEPTED' | 'RECONCILIATION_REQUIRED' | 'REJECTED_NO_FRESH_QUOTE' | 'REJECTED' | 'FAILED' | string
+  position?: {
+    has_open_position?: boolean
+    entry_order_id?: string | null
+    entry_price?: number | null
+    qty?: number
+    security_id?: string | null
+    trading_symbol?: string | null
+    option_side?: string | null
+    strike?: number | null
+    expiry?: string | null
+    broker_sl_price?: number | null
+    broker_tp_price?: number | null
+  } | null
+  portfolio?: {
+    available_balance?: number | null
+    utilized_amount?: number | null
+    session_pnl?: number | null
+  } | null
+  idempotentReplay?: boolean
   executionResult?: Record<string, unknown>
   normalizedError?: Record<string, unknown> | null
   orderJourney?: Array<Record<string, unknown>>
@@ -352,6 +372,9 @@ export interface OrderQuote {
   estimatedMargin?: number | null
   normalizedError?: Record<string, unknown> | null
   atm?: AtmLtpSnapshot | null
+  quoteStatus?: string | null
+  quoteSource?: string | null
+  retryAfterSeconds?: number | null
 }
 
 export interface NiftyCandle {
@@ -384,6 +407,7 @@ export interface NiftyCandleSeries {
 }
 
 export interface NiftyTradeMarker {
+  id?: string
   time: number
   side: 'BUY' | 'SELL'
   option_side?: 'CE' | 'PE' | null
@@ -392,10 +416,14 @@ export interface NiftyTradeMarker {
   approximate?: boolean
   mode?: string | null
   source?: string
+  contract?: string | null
+  execution_price?: number | null
+  pnl?: number | null
+  exit_kind?: 'SL' | 'TARGET' | 'REVERSAL' | 'EOD' | 'EXIT' | string | null
 }
 
-export async function getNiftyCandles(): Promise<NiftyCandleSeries> {
-  const response = await apiFetch('/api/market/nifty/candles?interval=5m', { cache: 'no-store' })
+export async function getNiftyCandles(signal?: AbortSignal): Promise<NiftyCandleSeries> {
+  const response = await apiFetch('/api/market/nifty/candles?interval=5m', { cache: 'no-store', signal })
   if (!response.ok) {
     throw new Error(`Could not load NIFTY candles: ${response.status}`)
   }
@@ -409,9 +437,9 @@ export interface NiftyMarkerResponse {
   markers: NiftyTradeMarker[]
 }
 
-export async function getNiftyMarkers(mode?: 'paper' | 'live'): Promise<NiftyMarkerResponse> {
+export async function getNiftyMarkers(mode?: 'paper' | 'live', signal?: AbortSignal): Promise<NiftyMarkerResponse> {
   const path: `/${string}` = mode ? `/api/market/nifty/markers?mode=${mode}` : '/api/market/nifty/markers'
-  const response = await apiFetch(path, { cache: 'no-store' })
+  const response = await apiFetch(path, { cache: 'no-store', signal })
   if (!response.ok) {
     throw new Error(`Could not load chart markers: ${response.status}`)
   }
@@ -527,25 +555,26 @@ export async function getSystemHealth(): Promise<SystemHealth> {
   return response.json() as Promise<SystemHealth>
 }
 
-export async function getOrderQuote(side: 'CE' | 'PE', lots: number): Promise<OrderQuote> {
-  const params = new URLSearchParams({ side, lots: String(lots) })
-  const response = await apiFetch(`/api/orders/quote?${params.toString()}` as `/${string}`, { cache: 'no-store' })
-  if (!response.ok) {
-    throw new Error(`Could not load quote: ${response.status}`)
+export async function getOrderQuotes(lots: number): Promise<{ CE: OrderQuote; PE: OrderQuote }> {
+  const params = new URLSearchParams({ lots: String(lots) })
+  const response = await apiFetch(`/api/orders/quotes?${params.toString()}` as `/${string}`, { cache: 'no-store' })
+  const body = await response.json().catch(() => null) as { quotes?: { CE?: OrderQuote; PE?: OrderQuote } } | null
+  if (!response.ok || !body?.quotes?.CE || !body.quotes.PE) {
+    throw new Error(`Could not load quotes: ${response.status}`)
   }
-  return response.json() as Promise<OrderQuote>
+  return { CE: body.quotes.CE, PE: body.quotes.PE }
 }
 
-export async function postManualEntry(payload: ManualEntryPayload): Promise<ManualOrderResponse> {
-  return postManualOrder('/api/orders/manual-entry', payload)
+export async function postManualEntry(payload: ManualEntryPayload, operationId = newIdempotencyKey()): Promise<ManualOrderResponse> {
+  return postManualOrder('/api/orders/manual-entry', payload, operationId)
 }
 
-export async function postManualExit(): Promise<ManualOrderResponse> {
-  return postManualOrder('/api/orders/manual-exit', { reason: 'manual_panel' })
+export async function postManualExit(operationId = newIdempotencyKey()): Promise<ManualOrderResponse> {
+  return postManualOrder('/api/orders/manual-exit', { reason: 'manual_panel' }, operationId)
 }
 
-export async function postManualReverse(lots: number): Promise<ManualOrderResponse> {
-  return postManualOrder('/api/orders/manual-reverse', { lots })
+export async function postManualReverse(lots: number, operationId = newIdempotencyKey()): Promise<ManualOrderResponse> {
+  return postManualOrder('/api/orders/manual-reverse', { lots }, operationId)
 }
 
 export async function patchActiveExitLevels(payload: ExitLevelsPayload): Promise<ExitLevelsResponse> {
@@ -585,12 +614,12 @@ function newIdempotencyKey(): string {
   return `nova-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-async function postManualOrder(path: `/${string}`, payload: unknown): Promise<ManualOrderResponse> {
+async function postManualOrder(path: `/${string}`, payload: unknown, operationId: string): Promise<ManualOrderResponse> {
   // Live manual orders require a unique Idempotency-Key so the backend can
   // dedupe a retried request instead of placing a second real order.
   const response = await apiFetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationId },
     body: JSON.stringify(payload),
   })
   const body = await response.json().catch(() => null) as ManualOrderResponse | null

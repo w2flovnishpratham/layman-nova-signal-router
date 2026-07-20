@@ -1,4 +1,4 @@
-"""Durable idempotency helpers for live Dhan order writes."""
+"""Durable idempotency helpers for broker and paper-order writes."""
 from __future__ import annotations
 
 import hashlib
@@ -15,7 +15,7 @@ from app.db.engine import database_configured, session_scope
 
 
 class OrderIdempotencyUnavailable(RuntimeError):
-    """Raised when live order idempotency cannot use durable storage."""
+    """Raised when order idempotency cannot use durable storage."""
 
 
 @dataclass(frozen=True)
@@ -182,7 +182,7 @@ def complete_order_intent(
     if not intent_id or not database_configured():
         return
     intent_uuid = uuid.UUID(str(intent_id))
-    success = bool(result_summary.get("success"))
+    success = bool(result_summary.get("success", result_summary.get("ok")))
     status = str(result_summary.get("status") or "").upper()
     if success and status not in {"ORDER_STATE_UNKNOWN"}:
         intent_status = "completed"

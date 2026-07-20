@@ -15,6 +15,7 @@ import type {
   TradeConfig,
   WsStatus,
 } from '../types'
+import type { ManualOrderResponse } from '../api'
 
 interface SessionStore {
   session: SessionBootstrap | null
@@ -185,6 +186,45 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 export function initializePreferences(): void {
   document.documentElement.dataset.theme = initialTheme
   document.documentElement.dataset.motion = initialMotion
+}
+
+/** Apply the same authoritative manual-order response to every trading panel. */
+export function applyManualOrderHydration(response: ManualOrderResponse): void {
+  const position = response.position
+  if (response.operationState === 'POSITION_CLOSED') {
+    useSessionStore.setState({
+      activeTrade: null,
+      wallet: optionalNumber(response.portfolio?.available_balance, useSessionStore.getState().wallet),
+      paperBalance: optionalNumber(response.portfolio?.available_balance, useSessionStore.getState().paperBalance),
+      marginUtilized: optionalNumber(response.portfolio?.utilized_amount, 0),
+      sessionPnl: optionalNumber(response.portfolio?.session_pnl, useSessionStore.getState().sessionPnl) ?? 0,
+    })
+    return
+  }
+  if (response.operationState !== 'POSITION_OPEN' || !position?.has_open_position) return
+  const current = useSessionStore.getState()
+  const entryPrice = Number(position.entry_price ?? 0)
+  const qty = Number(position.qty ?? 0)
+  const symbol = position.trading_symbol || position.security_id || 'NIFTY option'
+  useSessionStore.setState({
+    activeTrade: normalizeTrade({
+      symbol,
+      strike: Number(position.strike ?? 0),
+      optType: position.option_side === 'PE' ? 'PE' : 'CE',
+      qty,
+      avgPrice: entryPrice,
+      ltp: entryPrice,
+      pnl: 0,
+      securityId: position.security_id ?? undefined,
+      orderId: position.entry_order_id ?? undefined,
+      expiry: position.expiry ?? undefined,
+      status: 'OPEN',
+    }, current.config, current.session?.lotSize),
+    wallet: optionalNumber(response.portfolio?.available_balance, current.wallet),
+    paperBalance: optionalNumber(response.portfolio?.available_balance, current.paperBalance),
+    marginUtilized: optionalNumber(response.portfolio?.utilized_amount, current.marginUtilized),
+    sessionPnl: optionalNumber(response.portfolio?.session_pnl, current.sessionPnl) ?? current.sessionPnl,
+  })
 }
 
 export function motionConfigMode(): 'always' | 'never' | 'user' {

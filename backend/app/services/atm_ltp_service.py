@@ -5,16 +5,9 @@ import threading
 from typing import Any
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT
-from app.services.dhan_client import RealDhanClient, get_broker_client
-from app.services.shared_market_data import (
-    market_data_credentials,
-    refresh_shared_token_after_auth_failure,
-    shared_market_data_configured,
-)
+from app.services import quote_service
 from app.services.dhan_marketfeed_ws import (
     clear_marketfeed_subscription,
-    ensure_marketfeed_subscription,
-    get_marketfeed_ltp,
     marketfeed_ws_status,
 )
 from app.services.risk_manager import _market_is_open
@@ -27,7 +20,7 @@ NIFTY_INDEX_SECURITY_ID = "13"
 NIFTY_ATM_STEP = 50
 DEFAULT_LTP_CACHE_SECONDS = 1.0
 _LTP_CACHE_LOCK = threading.RLock()
-_LTP_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+_LTP_CACHE = quote_service._QUOTE_CACHE
 
 
 def get_atm_option_snapshot(
@@ -56,15 +49,31 @@ def get_atm_option_snapshot(
     spot_source = spot_quote.get("source") if spot_quote.get("ltp") is not None else "latest_signal" if nifty_spot is not None else None
     atm_strike = _round_atm_strike(nifty_spot) if nifty_spot is not None else None
 
+    suggestions = {item: _suggest_contract(item, nifty_spot, atm_strike) for item in sides}
+    quote_requests = [
+        quote_service.QuoteRequest(DEFAULT_EXCHANGE_SEGMENT, suggestion.security_id, suggestion.trading_symbol)
+        for suggestion in suggestions.values()
+        if suggestion is not None
+    ]
+    option_quotes = quote_service.get_quote_snapshots(
+        quote_requests,
+        max_age_seconds=max_age_seconds,
+        allow_rest_fallback=rest_fallback,
+    ) if quote_requests else {}
+
     options: dict[str, Any] = {}
     for item in sides:
-        suggestion = _suggest_contract(item, nifty_spot, atm_strike)
+        suggestion = suggestions[item]
+        quote = option_quotes.get(
+            (DEFAULT_EXCHANGE_SEGMENT.upper(), suggestion.security_id)
+        ) if suggestion is not None else None
         options[item] = _option_snapshot(
             option_side=item,
             suggestion=suggestion,
             lots=lots,
             max_age_seconds=max_age_seconds,
             allow_rest_fallback=rest_fallback,
+            quote_override=_legacy_quote(quote) if quote is not None else None,
         )
 
     ok = nifty_spot is not None and any(option.get("ltp") is not None for option in options.values())
@@ -127,6 +136,7 @@ def _option_snapshot(
     lots: int,
     max_age_seconds: float,
     allow_rest_fallback: bool,
+    quote_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if suggestion is None:
         return {
@@ -137,7 +147,7 @@ def _option_snapshot(
             "message": "Could not resolve an ATM option contract from the local Dhan scrip master.",
         }
 
-    quote = _ltp_with_prefer_ws(
+    quote = quote_override or _ltp_with_prefer_ws(
         exchange_segment=DEFAULT_EXCHANGE_SEGMENT,
         security_id=suggestion.security_id,
         max_age_seconds=max_age_seconds,
@@ -161,10 +171,33 @@ def _option_snapshot(
         "ltpStatus": quote.get("status"),
         "ltpReceivedAt": quote.get("receivedAt"),
         "ltpAgeSeconds": quote.get("ageSeconds"),
+        "stale": bool(quote.get("stale")),
+        "retryAfterSeconds": quote.get("retryAfterSeconds"),
         "estimatedCost": cost,
         "autoContract": suggestion.model_dump(),
         "message": quote.get("message"),
         "error": quote.get("error"),
+    }
+
+
+def _legacy_quote(quote: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "websocket"
+        if quote.get("source") == "DHAN_WEBSOCKET"
+        else "rest"
+        if quote.get("source") == "DHAN_REST"
+        else str(quote.get("status") or "unavailable").lower(),
+        "source": {
+            "DHAN_WEBSOCKET": "dhan_marketfeed_ws",
+            "DHAN_REST": "dhan_rest_ltp",
+        }.get(str(quote.get("source")), str(quote.get("source") or "none").lower()),
+        "message": quote.get("message"),
+        "ltp": quote.get("ltp"),
+        "receivedAt": quote.get("received_at"),
+        "ageSeconds": quote.get("age_seconds"),
+        "stale": quote.get("stale"),
+        "error": quote.get("error"),
+        "retryAfterSeconds": quote.get("retry_after_seconds"),
     }
 
 
@@ -175,136 +208,34 @@ def _ltp_with_prefer_ws(
     max_age_seconds: float,
     allow_rest_fallback: bool,
 ) -> dict[str, Any]:
-    runtime = get_runtime_settings()
-    if not _market_is_open():
-        clear_marketfeed_subscription()
-        return {
-            "status": "market_closed",
-            "source": "market_closed",
-            "message": "Market is closed; Dhan WebSocket and REST LTP fetching are disabled.",
-            "ltp": None,
-            "receivedAt": None,
-            "ageSeconds": None,
-            "error": "market_closed",
-        }
-    ltp_source = str(runtime.get("option_ltp_source") or "AUTO").upper()
-    ws_enabled = bool(runtime.get("marketfeed_ws_enabled", True))
-    cache_seconds = _positive_float(runtime.get("option_ltp_cache_seconds"), DEFAULT_LTP_CACHE_SECONDS)
-    if ws_enabled and ltp_source in {"AUTO", "WEBSOCKET"}:
-        ensure_marketfeed_subscription(exchange_segment=exchange_segment, security_id=security_id)
-        quote = get_marketfeed_ltp(
-            exchange_segment=exchange_segment,
-            security_id=security_id,
-            max_age_seconds=max_age_seconds,
-        )
-        if quote.success and quote.ltp is not None:
-            result = {
-                "status": "websocket",
-                "source": quote.source,
-                "message": quote.message,
-                "ltp": quote.ltp,
-                "receivedAt": quote.received_at,
-                "ageSeconds": quote.age_seconds,
-                "error": None,
-            }
-            _remember_ltp(exchange_segment, security_id, result)
-            return result
-        cached = _cached_ltp(exchange_segment, security_id, max_age_seconds=cache_seconds)
-        if cached is not None:
-            return cached
-        if ltp_source == "WEBSOCKET" or not allow_rest_fallback:
-            return {
-                "status": quote.error or "ws_waiting",
-                "source": quote.source,
-                "message": quote.message,
-                "ltp": quote.ltp,
-                "receivedAt": quote.received_at,
-                "ageSeconds": quote.age_seconds,
-                "error": quote.error,
-            }
-
-    if not allow_rest_fallback:
-        cached = _cached_ltp(exchange_segment, security_id, max_age_seconds=cache_seconds)
-        if cached is not None:
-            return cached
-        return {
-            "status": "rest_disabled",
-            "source": "none",
-            "message": "REST fallback is disabled.",
-            "ltp": None,
-            "error": "rest_disabled",
-        }
-
-    creds = market_data_credentials()
-    if not creds:
-        shared_configured = shared_market_data_configured()
-        return {
-            "status": "shared_market_data_unavailable" if shared_configured else "credentials_missing",
-            "source": "none",
-            "message": (
-                "Shared market-data token is unavailable."
-                if shared_configured
-                else "Dhan credentials are missing."
-            ),
-            "ltp": None,
-            "error": "shared_market_data_unavailable" if shared_configured else "credentials_missing",
-        }
-
-    try:
-        # Shared data token reads market data directly (no per-user egress proxy);
-        # per-user creds keep the existing broker-client routing.
-        client = RealDhanClient(proxy_url="") if creds.source == "shared_market_data" else get_broker_client(get_engine_mode())
-        quote = client.get_ltp(
-            client_id=creds.client_id,
-            access_token=creds.access_token,
-            exchange_segment=exchange_segment,
-            security_id=security_id,
-        )
-        if (
-            creds.source == "shared_market_data"
-            and not quote.success
-            and refresh_shared_token_after_auth_failure(
-                status_code=quote.status_code,
-                message=quote.message or quote.error,
-                raw_response=quote.raw_response,
-            )
-        ):
-            refreshed = market_data_credentials()
-            if refreshed is not None:
-                quote = RealDhanClient(proxy_url="").get_ltp(
-                    client_id=refreshed.client_id,
-                    access_token=refreshed.access_token,
-                    exchange_segment=exchange_segment,
-                    security_id=security_id,
-                )
-    except Exception as exc:
-        cached = _cached_ltp(exchange_segment, security_id, max_age_seconds=cache_seconds)
-        if cached is not None:
-            return cached
-        return {
-            "status": "rest_error",
-            "source": "dhan_rest_ltp",
-            "message": str(exc),
-            "ltp": None,
-            "error": str(exc),
-        }
-
-    result = {
-        "status": "rest" if quote.success and quote.ltp is not None else quote.error or "rest_error",
-        "source": "dhan_rest_ltp",
-        "message": quote.message,
-        "ltp": quote.ltp,
-        "receivedAt": utc_now() if quote.success and quote.ltp is not None else None,
-        "ageSeconds": 0.0 if quote.success and quote.ltp is not None else None,
-        "error": quote.error,
+    quote = quote_service.get_quote_snapshot(
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        max_age_seconds=max_age_seconds,
+        allow_rest_fallback=allow_rest_fallback,
+    )
+    status_map = {
+        "FRESH": "websocket" if quote.get("source") == "DHAN_WEBSOCKET" else "rest",
+        "CACHED": "cache:websocket" if quote.get("source") == "DHAN_WEBSOCKET" else "cache:rest",
+        "MARKET_CLOSED": "market_closed",
+        "RATE_LIMITED": "rate_limited",
+        "WAITING_FOR_WEBSOCKET": "ws_waiting",
+        "REST_DISABLED": "rest_disabled",
     }
-    if quote.success and quote.ltp is not None:
-        _remember_ltp(exchange_segment, security_id, result)
-    else:
-        cached = _cached_ltp(exchange_segment, security_id, max_age_seconds=cache_seconds)
-        if cached is not None:
-            return cached
-    return result
+    return {
+        "status": status_map.get(str(quote.get("status")), str(quote.get("status") or "unavailable").lower()),
+        "source": {
+            "DHAN_WEBSOCKET": "dhan_marketfeed_ws",
+            "DHAN_REST": "dhan_rest_ltp",
+        }.get(str(quote.get("source")), str(quote.get("source") or "none").lower()),
+        "message": quote.get("message"),
+        "ltp": quote.get("ltp"),
+        "receivedAt": quote.get("received_at"),
+        "ageSeconds": quote.get("age_seconds"),
+        "stale": quote.get("stale"),
+        "error": quote.get("error"),
+        "retryAfterSeconds": quote.get("retry_after_seconds"),
+    }
 
 
 def _cache_key(exchange_segment: str, security_id: str) -> tuple[str, str]:

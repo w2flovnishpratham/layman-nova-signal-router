@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE, DISABLED_OPTION_SL_PRICE_FRACTION
@@ -18,12 +19,11 @@ from app.services.credential_vault import get_dhan_credentials, get_webhook_secr
 from app.services.dhan_client import RealDhanClient, get_broker_client
 from app.services.dhan_marketfeed_ws import (
     clear_marketfeed_subscription,
-    ensure_marketfeed_subscription,
-    get_marketfeed_ltp,
     marketfeed_ws_status,
     stop_marketfeed_ws,
 )
-from app.services.market_snapshot import build_nifty_snapshot, get_shared_nifty_snapshot
+from app.services.market_snapshot import get_shared_nifty_snapshot
+from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import market_data_credentials, shared_market_data_configured
 from app.services import position_operations
@@ -49,6 +49,25 @@ def _as_float(value: Any, default: float | None = None) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _authoritative_quote(*, exchange_segment: str, security_id: str, allow_rest_fallback: bool = True):
+    snapshot = get_quote_snapshot(
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        max_age_seconds=2.0,
+        allow_rest_fallback=allow_rest_fallback,
+    )
+    return SimpleNamespace(
+        success=snapshot.get("ltp") is not None and not bool(snapshot.get("stale")),
+        ltp=snapshot.get("ltp"),
+        source=snapshot.get("source"),
+        status=snapshot.get("status"),
+        message=snapshot.get("message"),
+        error=snapshot.get("error"),
+        received_at=snapshot.get("received_at"),
+        age_seconds=snapshot.get("age_seconds"),
+    )
 
 
 def _as_positive_float(value: Any, default: float) -> float:
@@ -260,9 +279,7 @@ def _confirm_exit_trigger(
     trigger_reason: str,
     trigger_snapshot: dict[str, Any],
 ) -> tuple[str | None, dict[str, Any] | None]:
-    quote = client.get_ltp(
-        client_id=creds.client_id,
-        access_token=creds.access_token,
+    quote = _authoritative_quote(
         exchange_segment=exchange_segment,
         security_id=security_id,
     )
@@ -660,34 +677,11 @@ def monitor_once(*, force_rest: bool = False) -> None:
     if entry_price_before_sync is None:
         publish_active_trade_from_sync(position, get_engine_mode())
 
-    source = "REST" if force_rest else _ltp_source(runtime)
-    quote: Any = None
-    if source in {"WEBSOCKET", "AUTO"} and _runtime_bool(runtime, "marketfeed_ws_enabled", True):
-        ensure_marketfeed_subscription(exchange_segment=exchange_segment, security_id=security_id)
-        quote = get_marketfeed_ltp(
-            exchange_segment=exchange_segment,
-            security_id=security_id,
-            max_age_seconds=_ws_stale_seconds(runtime),
-        )
-
-    if quote is None or not quote.success:
-        if _rest_fallback_allowed(runtime, exchange_segment, security_id):
-            quote = market_client.get_ltp(
-                client_id=market_creds.client_id,
-                access_token=market_creds.access_token,
-                exchange_segment=exchange_segment,
-                security_id=security_id,
-            )
-        else:
-            current = dict(get_open_position())
-            if current.get("has_open_position"):
-                current["live_pnl"] = _ltp_error_snapshot(
-                    quote=quote,
-                    status="ws_waiting" if quote is None or quote.error == "ws_tick_missing" else "ws_stale",
-                    ws_status=marketfeed_ws_status(),
-                )
-                set_open_position(current)
-            return
+    quote = _authoritative_quote(
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        allow_rest_fallback=force_rest or _rest_fallback_allowed(runtime, exchange_segment, security_id),
+    )
 
     if not quote.success or quote.ltp is None:
         current = dict(get_open_position())

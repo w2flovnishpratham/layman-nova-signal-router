@@ -91,11 +91,6 @@ def test_option_monitor_marks_market_closed_without_ws_or_rest(monkeypatch):
         "get_dhan_credentials",
         lambda: (_ for _ in ()).throw(AssertionError("credentials should not be read")),
     )
-    monkeypatch.setattr(
-        option_position_monitor,
-        "ensure_marketfeed_subscription",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("websocket should not be subscribed")),
-    )
 
     option_position_monitor.monitor_once()
 

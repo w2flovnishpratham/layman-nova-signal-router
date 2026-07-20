@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  getOrderQuote,
+  getOrderQuotes,
   postManualEntry,
   postManualExit,
   postManualReverse,
@@ -11,15 +11,17 @@ import {
   type OrderQuote,
 } from '../api'
 import { formatCurrency } from '../lib/format'
+import { applyManualOrderHydration } from '../state/sessionStore'
 import { MotionProgressFill, softEase, useAppReducedMotion } from './MotionPrimitives'
 import type { ActiveTrade, EngineMode } from '../types'
+import { getContractForSide, hasOpenPositionProof } from './ManualOrderPanel.helpers'
 
 interface Props {
   engineMode: EngineMode | null
   activeTrade: ActiveTrade | null
 }
 
-type Stage = 'idle' | 'Checking LTP' | 'Checking funds' | 'Validating risk' | 'Placing order' | 'Verifying fill' | 'Done' | 'Failed'
+type Stage = 'idle' | 'Submitting order' | 'Waiting for fresh LTP' | 'Paper order accepted' | 'Confirming fill' | 'Opening position' | 'Position opened' | 'Position closed' | 'Reconciliation required' | 'Order not placed'
 
 export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const [lots, setLots] = useState(1)
@@ -31,6 +33,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   // Synchronous single-flight guard: blocks a rapid second click BEFORE the
   // `pending` state re-render disables the buttons (state updates are async).
   const inFlightRef = useRef(false)
+  const retryOperationRef = useRef<{ key: string; id: string } | null>(null)
   const [activeAction, setActiveAction] = useState<'entry-CE' | 'entry-PE' | 'exit' | 'reverse' | null>(null)
   const [quotePending, setQuotePending] = useState(false)
   // Two-sided quote cache: Buy CE / Buy PE each resolve their own contract,
@@ -39,6 +42,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const [quoteStatus, setQuoteStatus] = useState<'loading' | 'ready' | 'stale' | 'error'>('loading')
   const [lastQuoteError, setLastQuoteError] = useState<string | null>(null)
   const [message, setMessage] = useState('')
+  const [confirmed, setConfirmed] = useState<ManualOrderResponse | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const advancedToggleRef = useRef<HTMLButtonElement | null>(null)
   const advancedRegionRef = useRef<HTMLDivElement | null>(null)
@@ -62,25 +66,18 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
       if (inFlight) return
       inFlight = true
       setQuotePending(true)
-      const [ceResult, peResult] = await Promise.allSettled([
-        getOrderQuote('CE', lots),
-        getOrderQuote('PE', lots),
-      ])
+      const result = await Promise.allSettled([getOrderQuotes(lots)])
       if (cancelled) {
         inFlight = false
         return
       }
-      const anySuccess = ceResult.status === 'fulfilled' || peResult.status === 'fulfilled'
-      setQuotes((prev) => ({
-        // Keep the last usable quote visible while a failed poll recovers.
-        CE: ceResult.status === 'fulfilled' ? ceResult.value : prev.CE,
-        PE: peResult.status === 'fulfilled' ? peResult.value : prev.PE,
-      }))
-      if (anySuccess) {
+      const quoteResult = result[0]
+      if (quoteResult.status === 'fulfilled') {
+        setQuotes(quoteResult.value)
         setQuoteStatus('ready')
         setLastQuoteError(null)
       } else {
-        const failure = ceResult.status === 'rejected' ? ceResult.reason : peResult.status === 'rejected' ? peResult.reason : null
+        const failure = quoteResult.reason
         // Sanitized: only the error message, never headers/tokens/payloads.
         setLastQuoteError(failure instanceof Error ? failure.message : 'Quote request failed.')
         setQuoteStatus((prev) => (prev === 'ready' || prev === 'stale' ? 'stale' : 'error'))
@@ -90,7 +87,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
     }
 
     void loadQuotes()
-    const interval = window.setInterval(() => void loadQuotes(), 4000)
+    const interval = window.setInterval(() => void loadQuotes(), 8000)
     return () => {
       cancelled = true
       window.clearInterval(interval)
@@ -128,7 +125,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
     // Never submit an entry without a fully resolved contract for the CLICKED
     // side. The backend live guard would block it anyway; catch it here first.
     if (action === 'entry' && !getContractForSide(quotes[entrySide], entrySide)) {
-      setStage('Failed')
+      setStage('Order not placed')
       setMessage(`Quote not ready for ${entrySide}. Please wait for ATM ${entrySide} contract to resolve.`)
       return
     }
@@ -136,12 +133,36 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
     setActiveAction(action === 'entry' ? (entrySide === 'CE' ? 'entry-CE' : 'entry-PE') : action)
     setPending(true)
     setMessage('')
+    setConfirmed(null)
+    const operationKey = `${action}:${entrySide}`
+    const operationId = retryOperationRef.current?.key === operationKey
+      ? retryOperationRef.current.id
+      : newManualOperationId()
+    retryOperationRef.current = { key: operationKey, id: operationId }
     try {
-      const response = await withProgress(action, entrySide)
-      setStage(response.ok ? 'Done' : 'Failed')
+      const response = await withProgress(action, entrySide, operationId)
+      const operationState = response.operationState
+      if (operationState === 'POSITION_OPEN' && response.ok && hasOpenPositionProof(response)) {
+        setStage('Position opened')
+        setConfirmed(response)
+        applyManualOrderHydration(response)
+      } else if (operationState === 'POSITION_CLOSED' && response.ok) {
+        setStage('Position closed')
+        setConfirmed(response)
+        applyManualOrderHydration(response)
+      } else if (operationState === 'RECONCILIATION_REQUIRED') {
+        setStage('Reconciliation required')
+      } else if (operationState === 'PAPER_ORDER_ACCEPTED') {
+        setStage('Paper order accepted')
+      } else {
+        setStage('Order not placed')
+      }
+      if (operationState !== 'PAPER_ORDER_ACCEPTED' && operationState !== 'RECONCILIATION_REQUIRED') {
+        retryOperationRef.current = null
+      }
       setMessage(response.message)
     } catch (error) {
-      setStage('Failed')
+      setStage('Order not placed')
       setMessage(error instanceof Error ? error.message : 'Manual order failed.')
     } finally {
       inFlightRef.current = false
@@ -150,23 +171,23 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
     }
   }
 
-  async function withProgress(action: 'entry' | 'exit' | 'reverse', entrySide: 'CE' | 'PE'): Promise<ManualOrderResponse> {
-    setStage('Checking LTP')
+  async function withProgress(action: 'entry' | 'exit' | 'reverse', entrySide: 'CE' | 'PE', operationId: string): Promise<ManualOrderResponse> {
+    setStage('Submitting order')
     await pause(120)
-    setStage('Checking funds')
+    setStage('Waiting for fresh LTP')
     await pause(120)
-    setStage('Validating risk')
+    setStage('Paper order accepted')
     await pause(120)
-    setStage('Placing order')
+    setStage('Confirming fill')
     // Resolve the contract for the CLICKED side from that side's own quote —
     // not from whichever side the panel happened to be polling for.
     const quotedContract = getContractForSide(quotes[entrySide], entrySide) ?? {}
     const response = action === 'entry'
-      ? await postManualEntry({ side: entrySide, lots, targetProfitPct, stopLossPct, ...quotedContract })
+      ? await postManualEntry({ side: entrySide, lots, targetProfitPct, stopLossPct, ...quotedContract }, operationId)
       : action === 'exit'
-        ? await postManualExit()
-        : await postManualReverse(lots)
-    setStage('Verifying fill')
+        ? await postManualExit(operationId)
+        : await postManualReverse(lots, operationId)
+    setStage('Opening position')
     await pause(120)
     return response
   }
@@ -325,11 +346,20 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
 
       {/* Progress and status message */}
       {stage !== 'idle' && (
-        <div className={`manual-progress mt-4 stage-${stage === 'Failed' ? 'failed' : stage === 'Done' ? 'done' : 'active'}`}>
+        <div className={`manual-progress mt-4 stage-${stage === 'Order not placed' || stage === 'Reconciliation required' ? 'failed' : stage === 'Position opened' || stage === 'Position closed' ? 'done' : 'active'}`}>
           <span>{stage}</span>
         </div>
       )}
       {message ? <p className="manual-status-message mt-2">{message}</p> : null}
+      {confirmed?.operationState === 'POSITION_OPEN' && confirmed.position ? (
+        <div className="manual-position-proof mt-3" aria-label="Confirmed open position">
+          <strong>Position opened</strong>
+          <span>{confirmed.position.trading_symbol || confirmed.position.security_id}</span>
+          <span>Entry {formatCurrency(confirmed.position.entry_price ?? 0, { decimals: 2 })} · Qty {confirmed.position.qty}</span>
+          <span>Margin {formatCurrency(confirmed.portfolio?.utilized_amount ?? 0, { decimals: 2 })}</span>
+          <span>SL {confirmed.position.broker_sl_price ?? 'Server'} · TP {confirmed.position.broker_tp_price ?? 'Server'}</span>
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -420,6 +450,12 @@ function pause(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
+function newManualOperationId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `manual-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 function quoteSourceLabel(quote: OrderQuote | null): string {
   const option = quote?.atm?.options?.[quote.side]
   const source = option?.ltpSource || option?.ltpStatus
@@ -430,13 +466,6 @@ function quoteSourceLabel(quote: OrderQuote | null): string {
   return source.replace(/_/g, ' ')
 }
 
-export interface SideContract {
-  securityId: string
-  tradingSymbol: string | null
-  strike: number
-  expiry: string
-}
-
 /** Resolve the tradeable ATM contract for a given side from that side's quote.
  *
  * Returns null unless securityId, strike, AND expiry are all present — a
@@ -444,13 +473,3 @@ export interface SideContract {
  * Does NOT require `quote.side === side`: if the quote payload carries the
  * requested side in `atm.options`, that contract is used directly.
  */
-export function getContractForSide(quote: OrderQuote | null, side: 'CE' | 'PE'): SideContract | null {
-  if (!quote) return null
-  const option = quote.atm?.options?.[side]
-  const securityId = (quote.side === side ? quote.securityId : null) ?? option?.securityId ?? null
-  const tradingSymbol = (quote.side === side ? quote.tradingSymbol : null) ?? option?.tradingSymbol ?? null
-  const strike = option?.strike ?? quote.atm?.atmStrike ?? null
-  const expiry = option?.expiry ?? null
-  if (!securityId || strike === null || strike === undefined || !expiry) return null
-  return { securityId, tradingSymbol: tradingSymbol ?? null, strike, expiry }
-}

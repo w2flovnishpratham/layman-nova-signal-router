@@ -28,6 +28,7 @@ Endpoints not yet implemented (phase 2 TODOs):
 from __future__ import annotations
 
 import logging
+import random
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -1029,158 +1030,155 @@ class RealDhanClient:
         Dhan's Market Quote API accepts a body like {"NSE_FNO": [49081]}
         and returns last_price under data.<segment>.<securityId>.
         """
-        segment = str(exchange_segment or "").upper()
-        sid = str(security_id or "").strip()
-        if not _market_is_open():
-            return DhanLtpResult(
+        key = (str(exchange_segment or "").upper(), str(security_id or "").strip())
+        return self.get_ltp_batch(
+            client_id=client_id,
+            access_token=access_token,
+            instruments=[key],
+        ).get(
+            key,
+            DhanLtpResult(
                 success=False,
-                message="Market is closed; Dhan REST LTP fetching is disabled.",
+                message="Dhan LTP batch did not return the requested instrument.",
                 ltp=None,
-                exchange_segment=segment or None,
-                security_id=sid or None,
-                error="market_closed",
-                raw_response={"market_closed": True},
-            )
-        if not segment or not sid:
-            return DhanLtpResult(
-                success=False,
-                message="Dhan LTP request missing exchange segment or security id.",
-                ltp=None,
-                exchange_segment=segment or None,
-                security_id=sid or None,
-                error="missing_exchange_segment_or_security_id",
-            )
+                exchange_segment=key[0] or None,
+                security_id=key[1] or None,
+                error="missing_batch_quote",
+            ),
+        )
 
-        request_security_id: int | str = int(sid) if sid.isdigit() else sid
-        request_body = {segment: [request_security_id]}
+    def get_ltp_batch(
+        self,
+        *,
+        client_id: str,
+        access_token: str,
+        instruments: list[tuple[str, str]],
+    ) -> dict[tuple[str, str], DhanLtpResult]:
+        """Fetch up to 1000 instruments in one Market Quote request.
+
+        Timeouts and provider 5xx responses receive one bounded retry with
+        exponential backoff and jitter. A 429 is never retried immediately;
+        the shared limiter records Dhan's Retry-After cooldown.
+        """
+        normalized = list(dict.fromkeys(
+            (str(segment or "").upper(), str(security_id or "").strip())
+            for segment, security_id in instruments
+            if str(segment or "").strip() and str(security_id or "").strip()
+        ))
+        if not normalized:
+            return {}
+        if len(normalized) > 1000:
+            normalized = normalized[:1000]
+        if not _market_is_open():
+            return {
+                key: DhanLtpResult(
+                    success=False,
+                    message="Market is closed; Dhan REST LTP fetching is disabled.",
+                    ltp=None,
+                    exchange_segment=key[0],
+                    security_id=key[1],
+                    error="market_closed",
+                    raw_response={"market_closed": True},
+                )
+                for key in normalized
+            }
+
+        request_body: dict[str, list[int | str]] = {}
+        for segment, sid in normalized:
+            request_body.setdefault(segment, []).append(int(sid) if sid.isdigit() else sid)
         url = f"{DHAN_BASE_URL}/marketfeed/ltp"
 
-        try:
-            # Serialize LTP/quote calls to Dhan's 1 req/sec cap so concurrent
-            # reads (e.g. SL/TP exit confirmation colliding with the monitor
-            # loop) QUEUE instead of failing with HTTP 429.
-            dhan_quote_rate_limiter.wait()
-            with self._client(timeout=5.0) as client:
-                response = client.post(url, json=request_body, headers=self._headers(client_id, access_token))
-            dhan_quote_rate_limiter.observe_response(response)
-            parsed = self._parse_response(response)
-            raw_response = parsed if isinstance(parsed, (dict, list)) else None
+        response: httpx.Response | None = None
+        parsed: dict[str, Any] | list[Any] | str = {}
+        timeout_error = False
+        for attempt in range(2):
+            try:
+                dhan_quote_rate_limiter.wait()
+                with self._client(timeout=5.0) as client:
+                    response = client.post(url, json=request_body, headers=self._headers(client_id, access_token))
+                dhan_quote_rate_limiter.observe_response(response)
+                parsed = self._parse_response(response)
+                if response.status_code == 429 or response.status_code < 500 or attempt == 1:
+                    break
+            except httpx.TimeoutException:
+                timeout_error = True
+                if attempt == 1:
+                    break
+            time.sleep((0.25 * (2 ** attempt)) + random.uniform(0.0, 0.1))
 
-            if not (200 <= response.status_code <= 299):
-                reason = self._error_message(parsed, f"Dhan LTP request failed ({response.status_code}).")
-                return DhanLtpResult(
-                    success=False,
-                    message=f"Dhan LTP request failed: {reason}",
-                    ltp=None,
-                    exchange_segment=segment,
-                    security_id=sid,
-                    status_code=response.status_code,
-                    raw_response=raw_response,
-                    error=reason,
+        if response is None:
+            message = "Dhan LTP request timed out." if timeout_error else "Dhan LTP request failed."
+            error = "timeout" if timeout_error else "request_failed"
+            return {
+                key: DhanLtpResult(False, message, None, key[0], key[1], error=error)
+                for key in normalized
+            }
+
+        raw_response = parsed if isinstance(parsed, (dict, list)) else None
+        if not (200 <= response.status_code <= 299):
+            reason = self._error_message(parsed, f"Dhan LTP request failed ({response.status_code}).")
+            return {
+                key: DhanLtpResult(
+                    False,
+                    f"Dhan LTP request failed: {reason}",
+                    None,
+                    key[0],
+                    key[1],
+                    response.status_code,
+                    raw_response,
+                    reason,
                 )
-
-            if not isinstance(parsed, dict):
-                return DhanLtpResult(
-                    success=False,
-                    message="Dhan LTP response was not a JSON object.",
-                    ltp=None,
-                    exchange_segment=segment,
-                    security_id=sid,
-                    status_code=response.status_code,
-                    raw_response=raw_response,
-                    error="invalid_ltp_response",
+                for key in normalized
+            }
+        data = parsed.get("data") if isinstance(parsed, dict) else None
+        if not isinstance(data, dict):
+            return {
+                key: DhanLtpResult(
+                    False,
+                    "Dhan LTP response did not include data.",
+                    None,
+                    key[0],
+                    key[1],
+                    response.status_code,
+                    raw_response,
+                    "missing_data",
                 )
+                for key in normalized
+            }
 
-            data = parsed.get("data")
-            if not isinstance(data, dict):
-                return DhanLtpResult(
-                    success=False,
-                    message="Dhan LTP response did not include data.",
-                    ltp=None,
-                    exchange_segment=segment,
-                    security_id=sid,
-                    status_code=response.status_code,
-                    raw_response=raw_response,
-                    error="missing_data",
-                )
-
-            segment_data = data.get(segment)
-            if segment_data is None:
-                for key, value in data.items():
-                    if str(key).upper() == segment:
-                        segment_data = value
-                        break
-            if not isinstance(segment_data, dict):
-                return DhanLtpResult(
-                    success=False,
-                    message=f"Dhan LTP response did not include segment {segment}.",
-                    ltp=None,
-                    exchange_segment=segment,
-                    security_id=sid,
-                    status_code=response.status_code,
-                    raw_response=raw_response,
-                    error="missing_segment",
-                )
-
-            quote = segment_data.get(sid) or segment_data.get(str(request_security_id))
-            if quote is None:
-                for key, value in segment_data.items():
-                    if str(key) == sid:
-                        quote = value
-                        break
-            if not isinstance(quote, dict):
-                return DhanLtpResult(
-                    success=False,
-                    message=f"Dhan LTP response did not include security id {sid}.",
-                    ltp=None,
-                    exchange_segment=segment,
-                    security_id=sid,
-                    status_code=response.status_code,
-                    raw_response=raw_response,
-                    error="missing_security_id",
-                )
-
-            ltp = self._optional_float(quote, "last_price", "lastPrice", "ltp", "LTP")
+        results: dict[tuple[str, str], DhanLtpResult] = {}
+        for key in normalized:
+            segment, sid = key
+            segment_data = next(
+                (value for candidate, value in data.items() if str(candidate).upper() == segment),
+                None,
+            )
+            quote = None
+            if isinstance(segment_data, dict):
+                quote = next((value for candidate, value in segment_data.items() if str(candidate) == sid), None)
+            ltp = self._optional_float(quote, "last_price", "lastPrice", "ltp", "LTP") if isinstance(quote, dict) else None
             if ltp is None:
-                return DhanLtpResult(
-                    success=False,
-                    message=f"Dhan LTP response had no last_price for security id {sid}.",
-                    ltp=None,
-                    exchange_segment=segment,
-                    security_id=sid,
-                    status_code=response.status_code,
-                    raw_response=raw_response,
-                    error="missing_last_price",
+                results[key] = DhanLtpResult(
+                    False,
+                    f"Dhan LTP response had no last_price for security id {sid}.",
+                    None,
+                    segment,
+                    sid,
+                    response.status_code,
+                    raw_response,
+                    "missing_last_price",
                 )
-
-            return DhanLtpResult(
-                success=True,
-                message="Dhan LTP fetched.",
-                ltp=ltp,
-                exchange_segment=segment,
-                security_id=sid,
-                status_code=response.status_code,
-                raw_response=raw_response,
-            )
-        except httpx.TimeoutException:
-            return DhanLtpResult(
-                success=False,
-                message="Dhan LTP request timed out.",
-                ltp=None,
-                exchange_segment=segment,
-                security_id=sid,
-                error="timeout",
-            )
-        except Exception as exc:
-            logger.exception("Dhan LTP request error")
-            return DhanLtpResult(
-                success=False,
-                message="Dhan LTP request failed.",
-                ltp=None,
-                exchange_segment=segment,
-                security_id=sid,
-                error=str(exc),
-            )
+            else:
+                results[key] = DhanLtpResult(
+                    True,
+                    "Dhan LTP fetched.",
+                    ltp,
+                    segment,
+                    sid,
+                    response.status_code,
+                    raw_response,
+                )
+        return results
 
     def get_intraday_candles(
         self,

@@ -17,12 +17,14 @@ from app.services.credential_vault import dhan_token_age_metadata, get_dhan_cred
 from app.services.dhan_client import (
     DHAN_OPEN_ORDER_STATUSES,
     DHAN_TERMINAL_STATUSES,
+    DhanLtpResult,
     RealDhanClient,
     get_broker_client,
 )
 from app.services.execution_context import LiveEgressGuardError, current_execution_user, require_verified_live_egress
 from app.services import order_idempotency
 from app.services.normalized_errors import classify_failure, order_journey
+from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import (
     RiskDecision,
     _market_is_open,
@@ -64,6 +66,25 @@ def _public_order_request(payload: dict[str, Any]) -> dict[str, Any]:
     sanitized = dict(payload)
     sanitized.pop("access_token", None)
     return sanitized
+
+
+def _authoritative_ltp_result(*, exchange_segment: str, security_id: str) -> DhanLtpResult:
+    quote = get_quote_snapshot(
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        max_age_seconds=2.0,
+        allow_rest_fallback=True,
+    )
+    return DhanLtpResult(
+        success=quote.get("ltp") is not None and not bool(quote.get("stale")),
+        message=str(quote.get("message") or "Quote unavailable."),
+        ltp=quote.get("ltp"),
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        status_code=429 if quote.get("status") == "RATE_LIMITED" else None,
+        raw_response={"source": quote.get("source"), "status": quote.get("status")},
+        error=quote.get("error"),
+    )
 
 
 def _normalized_log_fields(signal: NormalizedSignal) -> dict[str, Any]:
@@ -1392,9 +1413,7 @@ def _place_order(
     order_request_payload = request_payload
     place_method = "orders"
     if use_super_order:
-        ltp_result = client.get_ltp(
-            client_id=client_id,
-            access_token=access_token,
+        ltp_result = _authoritative_ltp_result(
             exchange_segment=str(request_payload.get("exchangeSegment") or ""),
             security_id=str(request_payload.get("securityId") or ""),
         )
@@ -1489,9 +1508,7 @@ def _place_order(
         # invalidate the levels in transit. That rejection is transient:
         # refetch LTP, recompute the legs, and retry exactly once.
         if not result.success and _is_super_order_level_rejection(result):
-            retry_ltp = client.get_ltp(
-                client_id=client_id,
-                access_token=access_token,
+            retry_ltp = _authoritative_ltp_result(
                 exchange_segment=str(request_payload.get("exchangeSegment") or ""),
                 security_id=str(request_payload.get("securityId") or ""),
             )

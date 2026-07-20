@@ -294,7 +294,8 @@ def test_manual_paper_route_remains_compatible_without_idempotency_key(monkeypat
     )
 
     assert response.status_code == 200
-    assert response.json()["ok"] is True
+    assert response.json()["ok"] is False
+    assert response.json()["operationState"] == "RECONCILIATION_REQUIRED"
     assert len(routed) == 1
 
 
@@ -413,7 +414,8 @@ def test_manual_live_route_allows_entitled_server_user_to_reach_router(mu_db, mo
     with bind_execution_context(current_user_from_model(user)):
         response = orders_router.manual_entry(request, body)
 
-    assert response["ok"] is True
+    assert response["ok"] is False
+    assert response["operationState"] == "RECONCILIATION_REQUIRED"
     assert routed
 
 

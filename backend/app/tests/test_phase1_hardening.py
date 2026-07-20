@@ -237,7 +237,11 @@ def test_paper_order_path_never_calls_real_dhan_order_api(tmp_path, monkeypatch)
             raise AssertionError("paper mode must not call Dhan place_super_order")
 
     monkeypatch.setattr(paper_broker, "RealDhanClient", MarketDataOnlyDhanClient)
-    monkeypatch.setattr(paper_broker, "get_shared_market_credentials", lambda: shared_creds)
+    monkeypatch.setattr(
+        paper_broker,
+        "get_quote_snapshot",
+        lambda **_kwargs: {"ltp": 100.0, "source": "DHAN_WEBSOCKET", "status": "FRESH", "stale": False},
+    )
     monkeypatch.setattr("app.services.shared_market_data.get_shared_market_credentials", lambda: shared_creds)
     monkeypatch.setattr("app.services.shared_market_data.shared_market_data_configured", lambda: True)
     monkeypatch.setattr(
