@@ -168,8 +168,10 @@ describe('UnifiedStrategySetup', () => {
     render(<UnifiedStrategySetup runtime={runtime()} loading={false} error="" {...actions} />)
     await user.click(screen.getByRole('button', { name: /b@S_again Paper/i }))
     expect(actions.onSelect).toHaveBeenCalledWith('cf4799a2-e45d-4548-992c-69b2a1649cc1')
+    expect(screen.getByText('Use b@S_again Paper')).toBeInTheDocument()
     expect(screen.getByText('Which signals should NOVA trade?')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /continue/i }))
+    expect(screen.getByText('BOTH')).toBeInTheDocument()
     expect(screen.getByText('How many lots should be used?')).toBeInTheDocument()
     await user.clear(screen.getByLabelText('How many lots should be used?'))
     await user.type(screen.getByLabelText('How many lots should be used?'), '2')
@@ -180,8 +182,25 @@ describe('UnifiedStrategySetup', () => {
       'cf4799a2-e45d-4548-992c-69b2a1649cc1',
       expect.objectContaining({ direction: 'BOTH', lots: '2', stop_loss_percent: 10, take_profit_percent: 20 }),
     ))
+    expect(screen.getByText(/your paper setup is ready/i)).toBeInTheDocument()
     expect(await screen.findByText('b@S_again Paper')).toBeInTheDocument()
     expect(actions.onStart).not.toHaveBeenCalled()
+  })
+
+  it('keeps completed answers visible and clears later turns when an earlier answer is edited', async () => {
+    const actions = callbacks()
+    const user = userEvent.setup()
+    render(<UnifiedStrategySetup runtime={runtime()} loading={false} error="" {...actions} />)
+    await user.click(screen.getByRole('button', { name: /b@S_again Paper/i }))
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.clear(screen.getByLabelText('How many lots should be used?'))
+    await user.type(screen.getByLabelText('How many lots should be used?'), '2')
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+    expect(screen.getByText('2 lots')).toBeInTheDocument()
+    const editButtons = screen.getAllByRole('button', { name: /edit/i })
+    await user.click(editButtons[0])
+    expect(screen.getByText('Which signals should NOVA trade?')).toBeInTheDocument()
+    expect(screen.queryByText('2 lots')).not.toBeInTheDocument()
   })
 
   it('shows controlled client validation and does not save an invalid lot count', async () => {
@@ -202,6 +221,10 @@ describe('UnifiedStrategySetup', () => {
     render(<UnifiedStrategySetup runtime={runtime(true)} loading={false} error="" {...actions} />)
     expect(screen.getByText('Selected strategy')).toBeInTheDocument()
     expect(screen.getByText('b@S_again Paper')).toBeInTheDocument()
+    expect(screen.getByText('BOTH')).toBeInTheDocument()
+    expect(screen.getAllByText('8%').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('16%').length).toBeGreaterThan(0)
+    expect(screen.getByText(/your paper setup is ready/i)).toBeInTheDocument()
     expect(screen.queryByText('NOVA Strategies')).not.toBeInTheDocument()
   })
 

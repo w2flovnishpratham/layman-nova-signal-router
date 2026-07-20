@@ -491,9 +491,9 @@ function App() {
                 messages={messages}
                 typing={typing}
                 panelKey={`${effectiveSetupState}-${setupFlowStep}-${engineLive ? 'engine' : 'setup'}`}
-                inlinePanel={setupFlowStep === 'mode' || setupFlowStep === 'strategy' ? setupPanel : null}
+                inlinePanel={setupFlowStep === 'mode' ? setupPanel : null}
               >
-                {setupFlowStep === 'mode' || setupFlowStep === 'strategy' ? null : setupPanel}
+                {setupFlowStep === 'mode' ? null : setupPanel}
               </ChatLog>
               {engineLive ? (
                 <div className="live-engine-stack">

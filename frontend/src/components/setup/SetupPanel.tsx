@@ -76,6 +76,7 @@ export function SetupPanel({
       onSelect={onSelectStrategy}
       onStart={onStartStrategy}
       onUserReply={onUserReply}
+      strategyPromptPresent
     />
   )
   if (flowStep === 'broker' && draft.engineMode === 'paper' && sharedMarketData) {

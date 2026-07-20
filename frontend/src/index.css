@@ -1832,6 +1832,235 @@ code {
   gap: 0.3rem;
 }
 
+.unified-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(100%, 720px);
+  min-width: 0;
+}
+
+.unified-conversation > .bot-row,
+.unified-conversation > .user-row,
+.conversation-turn > .bot-row,
+.conversation-answer-row > .user-row {
+  min-width: 0;
+}
+
+.unified-conversation .bot-message {
+  max-width: min(640px, 100%);
+}
+
+.conversation-strategy-picker {
+  display: grid;
+  gap: 15px;
+  width: min(100%, 684px);
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  padding-top: 13px;
+}
+
+.conversation-strategy-group {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conversation-strategy-group h4 {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.conversation-strategy-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conversation-strategy-option {
+  display: grid;
+  gap: 4px;
+  min-width: 104px;
+  max-width: 180px;
+}
+
+.conversation-strategy-option > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 104px;
+  min-height: 36px;
+  border: 1px solid rgba(157, 91, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(32, 25, 44, 0.82);
+  color: var(--text-1);
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.conversation-strategy-option > button:not(:disabled):hover,
+.conversation-strategy-option > button.selected {
+  border-color: rgba(56, 189, 248, 0.58);
+  background: rgba(14, 116, 144, 0.14);
+  color: #7dd3fc;
+}
+
+.conversation-strategy-option > button:disabled {
+  cursor: not-allowed;
+  border-color: rgba(255, 255, 255, 0.06);
+  background: rgba(22, 21, 29, 0.58);
+  color: var(--text-3);
+  opacity: 0.72;
+}
+
+.conversation-strategy-option small {
+  max-width: 168px;
+  color: var(--text-3);
+  font-size: 9px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.conversation-strategy-option small.ready {
+  color: var(--success);
+}
+
+.conversation-strategy-option small.disabled {
+  color: var(--warning);
+}
+
+.live-unavailable-message {
+  color: var(--warning) !important;
+  font-weight: 500 !important;
+}
+
+.conversation-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.conversation-answer-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.conversation-answer-row .user-row {
+  width: auto;
+  max-width: calc(100% - 58px);
+}
+
+.conversation-edit,
+.conversation-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  padding: 5px;
+  font-size: 10px;
+}
+
+.conversation-edit:hover,
+.conversation-link:hover {
+  color: var(--accent);
+}
+
+.conversation-question {
+  display: grid;
+  gap: 11px;
+  min-width: min(520px, calc(100vw - 80px));
+}
+
+.conversation-question > p {
+  font-size: 12px;
+}
+
+.conversation-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.conversation-choice-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 70px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(26, 24, 34, 0.9);
+  color: var(--text-2);
+  padding: 7px 11px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.conversation-choice-row button.selected {
+  border-color: #38bdf8;
+  background: rgba(14, 116, 144, 0.15);
+  color: #7dd3fc;
+}
+
+.conversation-number-answer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: min(100%, 250px);
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.conversation-number-answer input {
+  width: 120px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  padding: 0 9px;
+}
+
+.conversation-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.conversation-continue {
+  min-height: 36px;
+  border: 0;
+  border-radius: 7px;
+  background: linear-gradient(90deg, #a529e7, #850fd3);
+  color: white;
+  padding: 0 14px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.conversation-review {
+  width: min(100%, 684px);
+}
+
+.conversation-review .trading-strategy-card {
+  margin-top: 0;
+}
+
 .trading-strategy-state {
   display: flex;
   flex-direction: row;
@@ -3764,6 +3993,42 @@ code {
 
   .strategy-chip-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .unified-conversation {
+    width: 100%;
+  }
+
+  .conversation-strategy-option {
+    flex: 1 1 104px;
+    max-width: none;
+  }
+
+  .conversation-strategy-option > button {
+    width: 100%;
+  }
+
+  .conversation-question {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .conversation-choice-row button {
+    flex: 1 1 72px;
+    min-height: 42px;
+  }
+
+  .conversation-controls {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .conversation-continue {
+    min-height: 42px;
+  }
+
+  .conversation-answer-row .user-row {
+    max-width: calc(100% - 54px);
   }
 }
 
