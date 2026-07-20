@@ -139,6 +139,7 @@ export interface AtmLtpSnapshot {
   niftySpot: number | null
   niftySpotSource?: string | null
   niftySpotStatus?: string | null
+  niftySpotReceivedAt?: string | null
   atmStrike: number | null
   strikeStep: number
   lots: number
