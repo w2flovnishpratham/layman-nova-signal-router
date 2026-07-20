@@ -108,14 +108,6 @@ def orders(limit: int = Query(default=100, ge=1, le=1000)) -> list[dict]:
 
 @router.post("/orders/manual-entry")
 def manual_entry(request: Request, body: ManualEntryRequest) -> Any:
-    if get_open_position().get("has_open_position"):
-        return {
-            "ok": False,
-            "operationState": "REJECTED_EXISTING_POSITION",
-            "message": "Order not placed: exit the current position before opening another.",
-            "position": get_open_position(),
-            "portfolio": paper_wallet_snapshot() if get_engine_mode(legacy_fallback=False) == "paper" else None,
-        }
     signal = _manual_entry_signal(
         option_side=body.side,
         lots=body.lots,
@@ -769,6 +761,15 @@ def _latest_nifty_reference_price() -> float | None:
 
 
 def _route_manual_entry(signal: NormalizedSignal) -> dict[str, Any]:
+    position = get_open_position()
+    if position.get("has_open_position"):
+        return {
+            "ok": False,
+            "operationState": "REJECTED_EXISTING_POSITION",
+            "message": "Order not placed: exit the current position before opening another.",
+            "position": position,
+            "portfolio": paper_wallet_snapshot() if get_engine_mode(legacy_fallback=False) == "paper" else None,
+        }
     try:
         return _manual_response(route_signal(signal), operation="ENTRY")
     except Exception:

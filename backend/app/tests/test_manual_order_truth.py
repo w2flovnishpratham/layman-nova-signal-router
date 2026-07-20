@@ -37,6 +37,23 @@ def test_confirmed_fill_and_persisted_position_returns_position_open(monkeypatch
     assert response["position"]["entry_order_id"] == "PAPER-1"
 
 
+def test_existing_position_blocks_before_routing(monkeypatch):
+    position = {"has_open_position": True, "entry_order_id": "PAPER-OPEN"}
+    monkeypatch.setattr(orders, "get_open_position", lambda: position)
+    monkeypatch.setattr(orders, "get_engine_mode", lambda **_kwargs: "paper")
+    monkeypatch.setattr(
+        orders,
+        "route_signal",
+        lambda _signal: (_ for _ in ()).throw(AssertionError("existing position must not route")),
+    )
+
+    response = orders._route_manual_entry(object())
+
+    assert response["ok"] is False
+    assert response["operationState"] == "REJECTED_EXISTING_POSITION"
+    assert response["position"] == position
+
+
 def test_duplicate_manual_operation_replays_one_durable_server_result(mu_db_fixture):  # noqa: F811
     calls = 0
     user = make_user("paper-idempotency@example.com")
