@@ -8,7 +8,7 @@ import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
 import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
-import { UnifiedStrategySetup } from './UnifiedStrategySetup'
+import { ConversationController } from '../conversation/ConversationController'
 
 const DISABLED_STOP_LOSS_PCT = 99.9
 const DEFAULT_CUSTOM_STOP_LOSS_PCT = 10
@@ -67,7 +67,7 @@ export function SetupPanel({
     onStep('strategy')
   }} />
   if (flowStep === 'strategy') return (
-    <UnifiedStrategySetup
+    <ConversationController
       runtime={runtime}
       loading={runtimeLoading}
       error={runtimeError}
