@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeStatus } from '../../api'
 import { ConversationController } from './ConversationController'
@@ -34,6 +34,41 @@ function props(over: Partial<Parameters<typeof ConversationController>[0]> = {})
 
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers(); cleanup() })
+
+function runtimeNoMode(): RuntimeStatus {
+  const r = runtimeWith({}) as unknown as { strategy_catalog: { selected_strategy_key: string | null; selected_strategy_instance_id: string | null; setup_progress: { mode: string | null } } }
+  r.strategy_catalog.selected_strategy_key = null
+  r.strategy_catalog.selected_strategy_instance_id = null
+  r.strategy_catalog.setup_progress.mode = null
+  return r as unknown as RuntimeStatus
+}
+
+describe('ConversationController — mode selection in the machine', () => {
+  it('renders Paper/Live mode selection when the backend has no mode yet', () => {
+    render(<ConversationController {...props({ runtime: runtimeNoMode() })} />)
+    expect(screen.getByText('How should NOVA trade for you?')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /start in paper/i })).toBeInTheDocument()
+  })
+
+  it('selecting Paper syncs the backend and advances into strategy selection', () => {
+    const onModeSelect = vi.fn()
+    render(<ConversationController {...props({ runtime: runtimeNoMode(), onModeSelect })} />)
+    fireEvent.click(screen.getByRole('button', { name: /start in paper/i }))
+    expect(onModeSelect).toHaveBeenCalledWith('paper', 100000)
+    expect(screen.queryByText('How should NOVA trade for you?')).toBeNull() // advanced past mode
+    expect(screen.getByText('Which strategy should NOVA run?')).toBeInTheDocument()
+  })
+
+  it('Live is disabled and cannot advance when unavailable', () => {
+    const onModeSelect = vi.fn()
+    render(<ConversationController {...props({ runtime: runtimeNoMode(), onModeSelect, liveAvailable: false })} />)
+    const live = screen.getByRole('button', { name: /live unavailable/i })
+    expect(live).toBeDisabled()
+    fireEvent.click(live)
+    expect(onModeSelect).not.toHaveBeenCalled()
+    expect(screen.getByText('How should NOVA trade for you?')).toBeInTheDocument() // did not advance
+  })
+})
 
 describe('ConversationController — saved setup decision', () => {
   it('shows the saved-setup decision with Resume / Review / Start New, not answer bubbles', () => {

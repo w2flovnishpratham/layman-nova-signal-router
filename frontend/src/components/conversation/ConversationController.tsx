@@ -18,6 +18,10 @@ interface Props {
   onSave: (strategyKey: string, values: Record<string, string | number>) => Promise<void>
   onStart: (instanceId: string) => Promise<void>
   onUserReply: (text: string) => void
+  /** Sync the backend when the machine picks a mode (setup.mode command + draft). */
+  onModeSelect?: (mode: EngineMode, paperStartingBalance: number) => void
+  liveAvailable?: boolean
+  paperStartingBalance?: number
   strategyPromptPresent?: boolean
 }
 
@@ -116,13 +120,16 @@ function StrategyGroup({ title, strategies, onPick }: { title: string; strategie
   )
 }
 
-export function ConversationController({ runtime, loading, error, onSelect, onSave, onStart }: Props) {
+export function ConversationController({
+  runtime, loading, error, onSelect, onSave, onStart,
+  onModeSelect, liveAvailable = false, paperStartingBalance = 100000,
+}: Props) {
   const reducedMotion = useAppReducedMotion()
   const conv = useConversation({ reducedMotion })
   const { state } = conv
 
   const catalog = runtime?.strategy_catalog
-  const mode: EngineMode = (catalog?.setup_progress.mode ?? 'paper') as EngineMode
+  const mode: EngineMode = state.mode ?? (catalog?.setup_progress.mode ?? 'paper') as EngineMode
   const strategies = useMemo(() => catalog?.strategies ?? [], [catalog])
   const selectedStrategy = useMemo(
     () => strategies.find((s) => s.strategy_key === state.strategyKey) ?? null,
@@ -132,19 +139,37 @@ export function ConversationController({ runtime, loading, error, onSelect, onSa
   const [pending, setPending] = useState<'idle' | 'saving' | 'starting'>('idle')
   const [saveError, setSaveError] = useState('')
   const [saved, setSaved] = useState(false)
+  const [paperBalance, setPaperBalance] = useState(paperStartingBalance)
 
-  // One-time deterministic initialization from the backend-selected strategy.
+  // Deterministic hydration: if the backend already established a mode (resume /
+  // refresh), reflect it in the machine once. Otherwise the machine stays at mode
+  // selection so the user picks it here (one controller owns mode + strategy).
+  const backendMode = catalog?.setup_progress.mode ?? null
+  const initedMode = useRef(false)
+  useEffect(() => {
+    if (!backendMode || state.mode || initedMode.current) return
+    initedMode.current = true
+    conv.selectMode(backendMode)
+  }, [backendMode, state.mode, conv])
+
+  // One-time deterministic initialization from the backend-selected strategy,
+  // once a mode is known (mode determines which saved_setup applies).
   const initedFor = useRef<string | null>(null)
   useEffect(() => {
-    if (!catalog) return
+    if (!catalog || !state.mode) return
     const key = catalog.selected_strategy_key
     if (!key || initedFor.current === key) return
     const strat = strategies.find((s) => s.strategy_key === key)
     if (!strat) return
     initedFor.current = key
-    conv.selectMode(mode)
-    conv.selectStrategy(strat.strategy_key, strat.setup_schema.fields, strat.saved_setup?.[mode] ?? {})
-  }, [catalog, strategies, mode, conv])
+    conv.selectStrategy(strat.strategy_key, strat.setup_schema.fields, strat.saved_setup?.[state.mode] ?? {})
+  }, [catalog, strategies, state.mode, conv])
+
+  function pickMode(m: EngineMode) {
+    if (m === 'live' && !liveAvailable) return // never advance when Live is blocked
+    conv.selectMode(m)
+    onModeSelect?.(m, paperBalance)
+  }
 
   if (loading) {
     return <article className="setup-card catalog-state" role="status"><Loader2 className="strategy-card-spin" size={18} /> Loading strategy catalog…</article>
@@ -203,7 +228,33 @@ export function ConversationController({ runtime, loading, error, onSelect, onSa
 
   return (
     <div className="conv-canvas" aria-live="polite">
-      {state.phase === 'STRATEGY_SELECTION' || (!state.strategyKey) ? (
+      {!state.mode ? (
+        <>
+          <BotBubble>How should NOVA trade for you?</BotBubble>
+          <div className="conv-mode-grid">
+            <section className="conv-mode-card">
+              <div className="conv-mode-head"><strong>Paper</strong><span className="conv-mode-badge">Recommended</span></div>
+              <p>Real market data, simulated fills, virtual balance. No real orders.</p>
+              <label className="conv-mode-balance">Virtual starting balance
+                <input
+                  type="number" min={10000} max={1000000} step={10000} value={paperBalance}
+                  onChange={(e) => setPaperBalance(Math.min(1000000, Math.max(10000, Number(e.target.value) || 10000)))}
+                />
+              </label>
+              <button type="button" className="conv-pill conv-pill--primary" onClick={() => pickMode('paper')}>Start in Paper</button>
+            </section>
+            <section className="conv-mode-card">
+              <div className="conv-mode-head"><strong>Live</strong></div>
+              <p>{liveAvailable ? 'Routes real orders to Dhan. Real money is at risk; static IP required.' : 'Live is unavailable — execution gates are not enabled on this environment.'}</p>
+              <button type="button" className="conv-pill" disabled={!liveAvailable} aria-disabled={!liveAvailable} onClick={() => pickMode('live')}>
+                {liveAvailable ? 'Configure Live' : 'Live unavailable'}
+              </button>
+            </section>
+          </div>
+        </>
+      ) : null}
+
+      {state.mode && (state.phase === 'STRATEGY_SELECTION' || !state.strategyKey) ? (
         <>
           <BotBubble>Which strategy should NOVA run?</BotBubble>
           <StrategyGroup title="NOVA Strategies" strategies={strategies.filter((s) => s.source_type === 'BUILT_IN')} onPick={pickStrategy} />

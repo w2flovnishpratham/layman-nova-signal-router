@@ -28,6 +28,36 @@ function finishTyping(s: ConversationState): ConversationState {
   return conversationReducer(s, { type: 'TYPING_DONE', generation: s.generation })
 }
 
+describe('conversation machine — mode selection', () => {
+  it('selecting Paper mode advances to strategy selection', () => {
+    const s = conversationReducer(initialConversationState, { type: 'SELECT_MODE', mode: 'paper' })
+    expect(s.mode).toBe('paper')
+    expect(s.phase).toBe('STRATEGY_SELECTION')
+  })
+
+  it('changing mode resets the strategy context and bumps the generation', () => {
+    // Build a full paper conversation, then switch mode.
+    let s = selectStrategy(COMPLETE_SAVED) // paper + supertrend + saved
+    s = conversationReducer(s, { type: 'RESUME' }) // SETUP_REVIEW, draft populated
+    const genBefore = s.generation
+    s = conversationReducer(s, { type: 'SELECT_MODE', mode: 'live' })
+    expect(s.mode).toBe('live')
+    expect(s.phase).toBe('STRATEGY_SELECTION')
+    expect(s.strategyKey).toBeNull()
+    expect(s.draft).toEqual({}) // stale draft cleared
+    expect(s.fields).toEqual([])
+    expect(s.generation).toBeGreaterThan(genBefore) // stale timers/async invalidated
+  })
+
+  it('mode change does not mutate any saved setup (saved lives on the catalog)', () => {
+    const savedRef = { ...COMPLETE_SAVED }
+    const initial = selectStrategy(COMPLETE_SAVED)
+    const switched = conversationReducer(initial, { type: 'SELECT_MODE', mode: 'live' })
+    expect(switched.mode).toBe('live')
+    expect(COMPLETE_SAVED).toEqual(savedRef) // untouched
+  })
+})
+
 describe('conversation machine — saved setup decision', () => {
   it('a complete saved setup shows the SAVED_SETUP_FOUND decision, not review', () => {
     const s = selectStrategy(COMPLETE_SAVED)

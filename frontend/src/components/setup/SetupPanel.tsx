@@ -57,16 +57,13 @@ export function SetupPanel({
   onStep,
 }: Props) {
   if (state === 'LIVE' || state === 'PAUSED' || state === 'ENDED' || flowStep === 'complete') return null
-  if (flowStep === 'mode') return <ModeStep draft={draft} liveAvailable={Boolean(runtime?.safety.live_orders_enabled && runtime.safety.dhan_mode === 'REAL')} onSelect={(engineMode, paperStartingBalance) => {
-    onDraft({ engineMode, paperStartingBalance })
-    onUserReply(engineMode === 'paper' ? `Paper mode with ${formatCurrency(paperStartingBalance)} virtual balance` : 'Live mode - real money routing')
-    onSend({ type: 'setup.mode', data: { engineMode, paperStartingBalance } })
-  }} />
   if (flowStep === 'live_access') return <LiveAccessStep onContinue={() => {
     onUserReply('Nova Static IP entitlement and proxy verification confirmed')
     onStep('strategy')
   }} />
-  if (flowStep === 'strategy') return (
+  // The conversation machine owns mode selection AND strategy setup — one
+  // controller across both flow steps (ModeStep retired).
+  if (flowStep === 'mode' || flowStep === 'strategy') return (
     <ConversationController
       runtime={runtime}
       loading={runtimeLoading}
@@ -76,6 +73,13 @@ export function SetupPanel({
       onSelect={onSelectStrategy}
       onStart={onStartStrategy}
       onUserReply={onUserReply}
+      liveAvailable={Boolean(runtime?.safety.live_orders_enabled && runtime.safety.dhan_mode === 'REAL')}
+      paperStartingBalance={draft.paperStartingBalance}
+      onModeSelect={(engineMode, paperStartingBalance) => {
+        onDraft({ engineMode, paperStartingBalance })
+        onUserReply(engineMode === 'paper' ? `Paper mode with ${formatCurrency(paperStartingBalance)} virtual balance` : 'Live mode - real money routing')
+        onSend({ type: 'setup.mode', data: { engineMode, paperStartingBalance } })
+      }}
       strategyPromptPresent
     />
   )
@@ -132,38 +136,6 @@ export function SetupPanel({
   return null
 }
 
-function ModeStep({ draft, liveAvailable, onSelect }: { draft: SetupDraft; liveAvailable: boolean; onSelect: (mode: EngineMode, balance: number) => void }) {
-  const [paperBalance, setPaperBalance] = useState(draft.paperStartingBalance)
-  return (
-    <article className="setup-card mode-step">
-      <div className="mode-choice-grid">
-        <section className="mode-choice paper-choice">
-          <div><FlaskConical size={18} /><strong>Paper</strong><span>Recommended</span></div>
-          <p>Real Dhan market data and simulated fills. No real orders.</p>
-          <label>
-            Virtual starting balance
-            <input
-              type="number"
-              min={10000}
-              max={1000000}
-              step={10000}
-              value={paperBalance}
-              onChange={(event) => setPaperBalance(Math.min(1000000, Math.max(10000, Number(event.target.value) || 10000)))}
-            />
-          </label>
-          <button type="button" onClick={() => onSelect('paper', paperBalance)}>Start in Paper</button>
-        </section>
-        <section className="mode-choice live-choice">
-          <div><Zap size={18} /><strong>Live</strong></div>
-          <p>{liveAvailable ? 'Routes real orders to Dhan. Real money is at risk and static IP is required.' : 'Live unavailable. Live access and execution gates are not enabled on this environment.'}</p>
-          <button type="button" disabled={!liveAvailable} onClick={() => onSelect('live', paperBalance)}>
-            {liveAvailable ? 'Configure Live' : 'Live unavailable'}
-          </button>
-        </section>
-      </div>
-    </article>
-  )
-}
 
 function SharedDataStep({ onContinue }: { onContinue: () => void }) {
   return (

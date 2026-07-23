@@ -136,7 +136,23 @@ function beginQuestioning(state: ConversationState, draft: SetupValues, origin: 
 export function conversationReducer(state: ConversationState, action: ConversationAction): ConversationState {
   switch (action.type) {
     case 'SELECT_MODE':
-      return { ...state, mode: action.mode, phase: 'STRATEGY_SELECTION' }
+      // Mode controls which saved setup, eligibility and schema apply, so a
+      // (re)selection resets the strategy context and bumps the generation —
+      // cancelling any pending typing/async from the previous mode. Saved setups
+      // live on the catalog per mode and are re-supplied on the next
+      // SELECT_STRATEGY, so nothing authoritative is mutated here.
+      return {
+        ...state,
+        mode: action.mode,
+        phase: 'STRATEGY_SELECTION',
+        strategyKey: null,
+        fields: [],
+        saved: {},
+        draft: {},
+        activeQuestionKey: null,
+        origin: null,
+        generation: state.generation + 1,
+      }
 
     case 'SELECT_STRATEGY': {
       const saved = action.saved ?? {}
