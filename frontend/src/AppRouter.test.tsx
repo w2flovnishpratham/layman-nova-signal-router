@@ -50,6 +50,20 @@ describe('AppRouter route boundary', () => {
     expect(screen.getByTestId('app-view')).toBeInTheDocument()
   })
 
+  it('returns to the correct view on simulated Back/Forward without duplicating', () => {
+    setPath('/')
+    render(<AppRouter />)
+    act(() => navigate('/app'))
+    expect(screen.getAllByTestId('app-view')).toHaveLength(1)
+    // Back: browser restores the previous path and fires popstate.
+    act(() => { window.history.pushState({}, '', '/'); window.dispatchEvent(new PopStateEvent('popstate')) })
+    expect(screen.getAllByTestId('landing-view')).toHaveLength(1)
+    expect(screen.queryByTestId('app-view')).toBeNull()
+    // Forward again — still exactly one app view, no duplicate transcript/view.
+    act(() => { window.history.pushState({}, '', '/app'); window.dispatchEvent(new PopStateEvent('popstate')) })
+    expect(screen.getAllByTestId('app-view')).toHaveLength(1)
+  })
+
   it('navigate() updates history and re-renders via popstate', () => {
     setPath('/')
     render(<AppRouter />)

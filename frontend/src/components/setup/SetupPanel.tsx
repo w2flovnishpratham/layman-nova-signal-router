@@ -162,6 +162,11 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
   const [refreshKey, setRefreshKey] = useState(0)
   const autoContinuedRef = useRef(false)
 
+  // Derived, not effect-set: entitlement gates readiness, so losing entitlement
+  // makes the step not-ready without a synchronous setState in an effect.
+  const staticIpEntitled = Boolean(entitlement?.valid && entitlement.static_ip_enabled)
+  const effectiveStaticIpReady = staticIpReady && staticIpEntitled
+
   const refreshEntitlement = useCallback(async (): Promise<PaymentEntitlementStatus | null> => {
     try {
       const nextEntitlement = await getPaymentEntitlementStatus()
@@ -177,17 +182,20 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
   }, [])
 
   useEffect(() => {
+    // fetch on mount: refreshEntitlement is async and only setState()s after its
+    // await, so no synchronous state update happens during this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refreshEntitlement()
   }, [refreshEntitlement])
 
   useEffect(() => {
-    if (!paymentPolling || staticIpReady || entitlement?.static_ip_enabled) return
+    if (!paymentPolling || effectiveStaticIpReady || entitlement?.static_ip_enabled) return
     const interval = window.setInterval(() => {
       void refreshEntitlement()
       setRefreshKey((current) => current + 1)
     }, 2500)
     return () => window.clearInterval(interval)
-  }, [entitlement?.static_ip_enabled, paymentPolling, refreshEntitlement, staticIpReady])
+  }, [entitlement?.static_ip_enabled, paymentPolling, refreshEntitlement, effectiveStaticIpReady])
 
   useEffect(() => {
     if (!paymentPolling) return
@@ -207,20 +215,13 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
     }
   }, [paymentPolling, refreshEntitlement])
 
-  const staticIpEntitled = Boolean(entitlement?.valid && entitlement.static_ip_enabled)
   useEffect(() => {
-    if (!staticIpEntitled) {
-      setStaticIpReady(false)
-    }
-  }, [staticIpEntitled])
-
-  useEffect(() => {
-    if (!staticIpReady || !staticIpEntitled || autoContinuedRef.current) return
+    if (!effectiveStaticIpReady || autoContinuedRef.current) return
     autoContinuedRef.current = true
     window.setTimeout(() => {
       onContinue()
     }, 600)
-  }, [onContinue, staticIpEntitled, staticIpReady])
+  }, [onContinue, effectiveStaticIpReady])
 
   return (
     <article className="setup-card live-access-step">

@@ -8,6 +8,7 @@ import { TypingDots } from '../TypingDots'
 import { useAppReducedMotion } from '../MotionPrimitives'
 import { useConversation } from '../../state/useConversation'
 import { applicableFields, type SetupValues } from '../../state/conversationMachine'
+import { projectTranscript } from '../../state/conversationTranscript'
 
 interface Props {
   runtime: RuntimeStatus | null
@@ -222,9 +223,10 @@ export function ConversationController({
     }
   }
 
-  // --- Transcript projection (deterministic from machine state) -------------
-  // Answered questions (before the active one) render as NOVA-question + user-answer pairs.
-  const answered = applicableFields(fields).filter((f) => f.key in state.draft && f.key !== state.activeQuestionKey)
+  // Formal transcript projection: a deterministic, stable-ID view of the machine
+  // state. The answered history (NOVA-question + user-answer pairs) is rendered
+  // from it; interactive parts (decision, active question, review) are current UI.
+  const transcript = projectTranscript(state)
 
   return (
     <div className="conv-canvas" aria-live="polite">
@@ -278,10 +280,10 @@ export function ConversationController({
         </>
       ) : null}
 
-      {answered.map((f) => (
-        <div key={f.key}>
-          <BotBubble>{f.label}?</BotBubble>
-          <UserBubble text={`${f.label}: ${String(state.draft[f.key])}`} />
+      {transcript.filter((e) => e.type === 'user_answer').map((e) => (
+        <div key={e.id}>
+          <BotBubble>{String(e.payload.label)}?</BotBubble>
+          <UserBubble text={`${String(e.payload.label)}: ${String(e.payload.value)}`} />
         </div>
       ))}
 
