@@ -190,7 +190,9 @@ describe('conversation machine — editing & explicit engine start', () => {
     s = conversationReducer(s, { type: 'RESUME' }) // SETUP_REVIEW, draft = complete
     s = conversationReducer(s, { type: 'EDIT_ANSWER', key: 'lots' })
     expect(s.activeQuestionKey).toBe('lots')
-    expect(s.draft).toEqual({ direction: 'CE' }) // direction kept; lots + later cleared
+    // direction + the edited lots value are kept (lots prefills the question);
+    // strictly-later fields (stop_loss, take_profit) are invalidated.
+    expect(s.draft).toEqual({ direction: 'CE', lots: 2 })
   })
 
   it('engine start is explicit and requires a complete review', () => {

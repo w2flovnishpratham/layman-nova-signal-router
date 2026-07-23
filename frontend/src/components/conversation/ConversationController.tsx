@@ -22,6 +22,8 @@ interface Props {
   onUserReply: (text: string) => void
   /** Sync the backend when the machine picks a mode (setup.mode command + draft). */
   onModeSelect?: (mode: EngineMode, paperStartingBalance: number) => void
+  /** Re-fetch the catalog/runtime after a load failure. */
+  onRetry?: () => void
   liveAvailable?: boolean
   paperStartingBalance?: number
   strategyPromptPresent?: boolean
@@ -39,9 +41,11 @@ function toSaveValues(draft: SetupValues): Record<string, string | number> {
   return out
 }
 
-/** One interactive question rendered generically from the schema field. */
-function ActiveQuestion({ field, onCommit }: { field: StrategySetupField; onCommit: (value: string | number) => void }) {
-  const [value, setValue] = useState<string>(field.default !== undefined ? String(field.default) : '')
+/** One interactive question rendered generically from the schema field. When
+    editing, the current draft value is prefilled (keyed remount re-initialises). */
+function ActiveQuestion({ field, currentValue, onCommit }: { field: StrategySetupField; currentValue?: unknown; onCommit: (value: string | number) => void }) {
+  const prefill = currentValue !== undefined && currentValue !== null && currentValue !== '' ? String(currentValue) : ''
+  const [value, setValue] = useState<string>(prefill || (field.default !== undefined ? String(field.default) : ''))
   const [err, setErr] = useState('')
 
   if (field.type === 'choice') {
@@ -49,7 +53,7 @@ function ActiveQuestion({ field, onCommit }: { field: StrategySetupField; onComm
       <div className="conv-question" role="group" aria-label={field.label}>
         <div className="conv-choices">
           {field.options.map((opt) => (
-            <button key={opt} type="button" className="conv-pill" onClick={() => onCommit(opt)}>
+            <button key={opt} type="button" className={`conv-pill${prefill === opt ? ' conv-pill--current' : ''}`} aria-pressed={prefill === opt} onClick={() => onCommit(opt)}>
               {opt}
             </button>
           ))}
@@ -124,7 +128,7 @@ function StrategyGroup({ title, strategies, onPick }: { title: string; strategie
 
 export function ConversationController({
   runtime, loading, error, onSelect, onSave, onStart,
-  onModeSelect, liveAvailable = false, paperStartingBalance = 100000,
+  onModeSelect, onRetry, liveAvailable = false, paperStartingBalance = 100000,
 }: Props) {
   const reducedMotion = useAppReducedMotion()
   const conv = useConversation({ reducedMotion })
@@ -145,6 +149,15 @@ export function ConversationController({
   // Synchronous guard so two rapid clicks (before the disabled state re-renders)
   // cannot fire a second save/start network request.
   const inFlightRef = useRef(false)
+  // Generation + strategy at render time; a save/start captures these and ignores
+  // its own resolution if the conversation moved on (mode/strategy change, edit,
+  // reset) — a stale response can never mark saved, expose start, or set running.
+  const genRef = useRef(state.generation)
+  const strategyRef = useRef(state.strategyKey)
+  useEffect(() => {
+    genRef.current = state.generation
+    strategyRef.current = state.strategyKey
+  }, [state.generation, state.strategyKey])
 
   // Deterministic hydration: if the backend already established a mode (resume /
   // refresh), reflect it in the machine once. Otherwise the machine stays at mode
@@ -185,10 +198,20 @@ export function ConversationController({
     return <article className="setup-card catalog-state" role="status"><Loader2 className="strategy-card-spin" size={18} /> Loading strategy catalog…</article>
   }
   if (error) {
-    return <article className="setup-card catalog-state" role="alert"><AlertTriangle size={18} /> <span>{error}</span></article>
+    return (
+      <article className="setup-card catalog-state" role="alert">
+        <AlertTriangle size={18} /> <span>{error}</span>
+        {onRetry ? <button type="button" className="conv-pill" onClick={onRetry}>Retry</button> : null}
+      </article>
+    )
   }
 
   const fields = selectedStrategy?.setup_schema.fields ?? state.fields
+  // A selected strategy that lost readiness, or that exposes no setup schema,
+  // must halt progression — no review, save or start — with a truthful reason.
+  const strategyUnavailable = !!selectedStrategy && !(selectedStrategy.availability === 'READY' && selectedStrategy.paper_eligible)
+  const schemaMissing = !!state.strategyKey && applicableFields(fields).length === 0
+  const setupBlocked = !!state.strategyKey && (strategyUnavailable || schemaMissing)
 
   async function pickStrategy(s: CatalogStrategy) {
     conv.selectStrategy(s.strategy_key, s.setup_schema.fields, s.saved_setup?.[mode] ?? {})
@@ -205,14 +228,22 @@ export function ConversationController({
     conv.commitAnswer(state.activeQuestionKey, value)
   }
 
+  function isStale(gen: number, strategyKey: string | null): boolean {
+    return genRef.current !== gen || strategyRef.current !== strategyKey
+  }
+
   async function saveSetup() {
     if (!selectedStrategy || inFlightRef.current) return
+    const gen = state.generation
+    const strategyKey = state.strategyKey
     inFlightRef.current = true
     setPending('saving'); setSaveError('')
     try {
       await onSave(selectedStrategy.strategy_key, toSaveValues(state.draft))
+      if (isStale(gen, strategyKey)) return // conversation moved on — ignore result
       setSaved(true)
     } catch (e) {
+      if (isStale(gen, strategyKey)) return
       setSaved(false)
       setSaveError(e instanceof Error ? e.message : 'Setup could not be saved. Your previous configuration is unchanged.')
     } finally {
@@ -223,12 +254,16 @@ export function ConversationController({
 
   async function startEngine() {
     if (!selectedStrategy?.strategy_instance_id || !saved || inFlightRef.current) return
+    const gen = state.generation
+    const strategyKey = state.strategyKey
     inFlightRef.current = true
     setPending('starting')
     try {
       await onStart(selectedStrategy.strategy_instance_id)
+      if (isStale(gen, strategyKey)) return // stale start cannot fabricate running state
       conv.startEngine()
     } catch (e) {
+      if (isStale(gen, strategyKey)) return
       setSaveError(e instanceof Error ? e.message : 'Engine start failed.')
     } finally {
       inFlightRef.current = false
@@ -287,7 +322,20 @@ export function ConversationController({
         </>
       ) : null}
 
-      {state.phase === 'SAVED_SETUP_FOUND' ? (
+      {setupBlocked ? (
+        <div role="alert">
+          <BotBubble tone="normal">
+            {schemaMissing
+              ? `${selectedStrategy?.name ?? 'This strategy'} can't be configured right now — it has no setup questions.`
+              : (selectedStrategy?.disabled_reason ?? 'This strategy is currently unavailable, so setup is paused.')}
+          </BotBubble>
+          <div className="conv-actions">
+            <button type="button" className="conv-pill" onClick={() => conv.selectMode(mode)}>Choose another strategy</button>
+          </div>
+        </div>
+      ) : null}
+
+      {!setupBlocked && state.phase === 'SAVED_SETUP_FOUND' ? (
         <>
           <BotBubble>I found your previous {mode === 'paper' ? 'Paper' : 'Live'} configuration.</BotBubble>
           <div className="conv-saved-summary" role="group" aria-label="Saved setup summary">
@@ -312,18 +360,19 @@ export function ConversationController({
 
       {state.phase === 'ASSISTANT_TYPING' ? <TypingDots /> : null}
 
-      {state.phase === 'QUESTION_ACTIVE' && state.activeQuestionKey ? (
+      {!setupBlocked && state.phase === 'QUESTION_ACTIVE' && state.activeQuestionKey ? (
         <>
           <BotBubble>{labelFor(fields, state.activeQuestionKey)}?</BotBubble>
           <ActiveQuestion
             key={`${state.activeQuestionKey}-${state.generation}`}
             field={fields.find((f) => f.key === state.activeQuestionKey)!}
+            currentValue={state.draft[state.activeQuestionKey]}
             onCommit={commit}
           />
         </>
       ) : null}
 
-      {state.phase === 'SETUP_REVIEW' || state.phase === 'ENGINE_READY' ? (
+      {!setupBlocked && (state.phase === 'SETUP_REVIEW' || state.phase === 'ENGINE_READY') ? (
         <div className="conv-review" role="group" aria-label="Setup review">
           <BotBubble>Here is your {selectedStrategy?.name ?? 'strategy'} configuration. Review, then save and start.</BotBubble>
           <div className="conv-saved-summary">

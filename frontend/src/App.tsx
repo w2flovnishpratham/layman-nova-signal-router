@@ -217,6 +217,16 @@ function App() {
     send(command)
   }
 
+  async function retryRuntime() {
+    try {
+      const status = await getRuntimeStatus()
+      setRuntimeStatus(status)
+      setRuntimeError('')
+    } catch (err) {
+      setRuntimeError(err instanceof Error ? err.message : 'Could not load strategy state.')
+    }
+  }
+
   async function reconfigure() {
     setBootError('')
     try {
@@ -363,6 +373,7 @@ function App() {
       onConfigureStrategy={configureTradingStrategy}
       onSelectStrategy={selectTradingStrategy}
       onStartStrategy={startTradingStrategy}
+      onRetryRuntime={retryRuntime}
       onSend={send}
       onUserReply={addUserMessage}
       onDraft={updateSetupDraft}

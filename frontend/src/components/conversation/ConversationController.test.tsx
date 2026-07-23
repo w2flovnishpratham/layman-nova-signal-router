@@ -70,6 +70,63 @@ describe('ConversationController — mode selection in the machine', () => {
   })
 })
 
+describe('ConversationController — error recovery', () => {
+  it('shows a catalog error with a working Retry and no strategies', () => {
+    const onRetry = vi.fn()
+    render(<ConversationController {...props({ error: 'Catalog failed to load.', onRetry })} />)
+    expect(screen.getByRole('alert')).toHaveTextContent('Catalog failed to load.')
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it('blocks setup (no Save/Start) when the selected strategy has no schema', () => {
+    const r = runtimeWith({}) as unknown as { strategy_catalog: { strategies: Array<{ setup_schema: { fields: unknown[] } }> } }
+    r.strategy_catalog.strategies[0].setup_schema = { fields: [] } // missing schema
+    render(<ConversationController {...props({ runtime: r as unknown as RuntimeStatus })} />)
+    expect(screen.getByText(/can't be configured right now/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /save setup/i })).toBeNull()
+  })
+
+  it('halts an unavailable strategy with its reason and no Save', () => {
+    const r = runtimeWith({ direction: 'CE', lots: 2 }) as unknown as { strategy_catalog: { strategies: Array<{ availability: string; paper_eligible: boolean; disabled_reason: string }> } }
+    r.strategy_catalog.strategies[0].availability = 'DISABLED'
+    r.strategy_catalog.strategies[0].paper_eligible = false
+    r.strategy_catalog.strategies[0].disabled_reason = 'Strategy paused by admin.'
+    render(<ConversationController {...props({ runtime: r as unknown as RuntimeStatus })} />)
+    expect(screen.getByText('Strategy paused by admin.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /save setup/i })).toBeNull()
+  })
+})
+
+describe('ConversationController — edit answer & async safety', () => {
+  it('editing a field prefills its current value and hides Start until re-save', async () => {
+    render(<ConversationController {...props()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
+    act(() => vi.advanceTimersByTime(700)) // review
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
+    expect(screen.getByRole('button', { name: /start engine/i })).toBeInTheDocument()
+    // Edit the direction field.
+    fireEvent.click(screen.getByRole('button', { name: /edit direction/i }))
+    act(() => vi.advanceTimersByTime(700))
+    // Its current value is prefilled (CE pressed) and Start engine is gone.
+    expect(screen.getByRole('button', { name: 'CE' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull()
+  })
+
+  it('ignores a save that resolves after the user edited (no stale saved state)', async () => {
+    let resolveSave: (() => void) | undefined
+    const onSave = vi.fn(() => new Promise<void>((res) => { resolveSave = res }))
+    render(<ConversationController {...props({ onSave })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
+    act(() => vi.advanceTimersByTime(700))
+    fireEvent.click(screen.getByRole('button', { name: /save setup/i })) // save in flight
+    fireEvent.click(screen.getByRole('button', { name: /edit direction/i })) // generation bumps
+    await act(async () => { resolveSave?.() }) // stale resolution
+    act(() => vi.advanceTimersByTime(700))
+    expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull() // not exposed by stale save
+  })
+})
+
 describe('ConversationController — saved setup decision', () => {
   it('shows the saved-setup decision with Resume / Review / Start New, not answer bubbles', () => {
     const p = props()

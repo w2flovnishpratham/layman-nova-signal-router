@@ -4209,3 +4209,4 @@ code {
 .conv-mode-card p { font-size: 12.5px; opacity: .75; margin: 0; }
 .conv-mode-balance { display: flex; flex-direction: column; gap: 4px; font-size: 12px; opacity: .85; }
 .conv-mode-balance input { padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.04); color: inherit; }
+.conv-pill--current { border-color: rgba(200,255,90,0.7); background: rgba(200,255,90,0.18); }

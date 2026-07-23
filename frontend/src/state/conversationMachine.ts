@@ -212,11 +212,13 @@ export function conversationReducer(state: ConversationState, action: Conversati
     case 'EDIT_ANSWER': {
       const idx = state.fields.findIndex((f) => f.key === action.key)
       if (idx < 0) return state
-      // Smallest safe invalidation: clear the edited field and every later field
-      // (dependencies aren't encoded in the schema, so later answers may depend on
-      // this one). Earlier independent answers are preserved.
+      // Smallest safe invalidation: keep the edited field's current value (so the
+      // UI can prefill it) plus all earlier independent answers, and clear every
+      // LATER field — dependencies aren't encoded in the schema, so later answers
+      // may depend on this one. The edited field becomes the active question and
+      // is overwritten when the user re-commits it.
       const draft: SetupValues = {}
-      state.fields.slice(0, idx).forEach((f) => {
+      state.fields.slice(0, idx + 1).forEach((f) => {
         if (f.key in state.draft) draft[f.key] = state.draft[f.key]
       })
       return { ...state, draft, activeQuestionKey: action.key, phase: 'ASSISTANT_TYPING', generation: state.generation + 1 }

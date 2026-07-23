@@ -29,6 +29,7 @@ interface Props {
   onConfigureStrategy: (strategyKey: string, values: Record<string, string | number>) => Promise<void>
   onSelectStrategy: (strategyKey: string) => Promise<void>
   onStartStrategy: (instanceId: string) => Promise<void>
+  onRetryRuntime: () => void
   onSend: (command: ClientCommand) => void
   onUserReply: (text: string) => void
   onDraft: (patch: Partial<SetupDraft>) => void
@@ -51,6 +52,7 @@ export function SetupPanel({
   onConfigureStrategy,
   onSelectStrategy,
   onStartStrategy,
+  onRetryRuntime,
   onSend,
   onUserReply,
   onDraft,
@@ -73,6 +75,7 @@ export function SetupPanel({
       onSelect={onSelectStrategy}
       onStart={onStartStrategy}
       onUserReply={onUserReply}
+      onRetry={onRetryRuntime}
       liveAvailable={Boolean(runtime?.safety.live_orders_enabled && runtime.safety.dhan_mode === 'REAL')}
       paperStartingBalance={draft.paperStartingBalance}
       onModeSelect={(engineMode, paperStartingBalance) => {
