@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 from app.config import settings
 from app.schemas.signal import NormalizedSignal
-from app.services import audit_logger, execution_router, option_position_monitor, state_store
+from app.services import audit_logger, execution_router, option_position_monitor, runtime_reliability, state_store
 from app.services.credential_vault import DhanCredentials
 
 
@@ -229,3 +229,131 @@ def test_monitor_retains_last_valid_ltp_across_quote_error_and_market_close(tmp_
     assert closed_market["status"] == "market_closed"
     assert closed_market["ltp"] == 140.0
     assert closed_market["unrealized_pnl"] == valid["unrealized_pnl"]
+
+
+# --- Root cause #5: last-valid quote preservation ---------------------------
+
+def _stale_quote(*, source="DHAN_WEBSOCKET"):
+    return SimpleNamespace(
+        success=False, message="temporary feed gap", ltp=None, source=source,
+        status="STALE", error="stale_quote", received_at=None, age_seconds=4.0,
+    )
+
+
+def _run_valid_then(monkeypatch, first_ltp, *followers, source="DHAN_WEBSOCKET"):
+    """Feed one healthy quote, then the given follow-up quotes, one monitor
+    iteration each. Returns the live_pnl after the last iteration."""
+    seq = iter([_quote(first_ltp, source=source), *followers])
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", lambda **_k: next(seq))
+    for _ in range(1 + len(followers)):
+        option_position_monitor.monitor_once()
+    return state_store.get_open_position()["live_pnl"]
+
+
+def test_first_valid_quote_marks_ready_and_records_last_valid(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    _base_runtime(monkeypatch)
+    _open_identified_position()
+    live = _run_valid_then(monkeypatch, 140.0, source="DHAN_REST")
+    assert live["quote_status"] == "ready"
+    assert live["ltp"] == 140.0
+    assert live["last_valid_ltp"] == 140.0
+    assert live["last_valid_quote_source"] == "DHAN_REST"
+    assert live["last_valid_quote_at"]
+
+
+def test_fresh_to_stale_transition_when_quote_itself_is_old(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    _base_runtime(monkeypatch)
+    _open_identified_position()
+    aged = SimpleNamespace(
+        success=True, message="ok", ltp=141.0, source="DHAN_WEBSOCKET",
+        status="STALE", error=None, received_at=None, age_seconds=25.0,
+    )
+    live = _run_valid_then(monkeypatch, 140.0, aged)
+    assert live["quote_status"] == "stale"
+    assert live["ltp"] == 141.0  # a real, if aged, quote still updates the value
+
+
+def test_temporary_failure_retains_ltp_pnl_as_stale(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    _base_runtime(monkeypatch)
+    _open_identified_position()
+    live = _run_valid_then(monkeypatch, 140.0, _stale_quote())
+    assert live["quote_status"] == "stale"
+    assert live["ltp"] == 140.0
+    assert live["unrealized_pnl"] is not None
+    assert live["status"] == "ltp_error"  # raw reason preserved for observability
+
+
+def test_rest_fallback_updates_the_retained_value(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    _base_runtime(monkeypatch)
+    _open_identified_position()
+    rest = _quote(145.0, source="DHAN_REST")
+    live = _run_valid_then(monkeypatch, 140.0, _stale_quote(), rest)
+    assert live["quote_status"] == "ready"
+    assert live["ltp"] == 145.0
+    assert live["last_valid_quote_source"] == "DHAN_REST"
+
+
+def test_unavailable_before_any_valid_quote(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    _base_runtime(monkeypatch)
+    _open_identified_position()
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", lambda **_k: _stale_quote())
+    option_position_monitor.monitor_once()
+    live = state_store.get_open_position()["live_pnl"]
+    assert live["quote_status"] == "unavailable"
+    assert live["ltp"] is None
+    # And the runtime display surface reports it truthfully.
+    status = runtime_reliability._position_status(
+        state_store.get_open_position(), state_store.get_runtime_settings()
+    )
+    assert status["ltp"]["value"] is None
+    assert status["ltp"]["status"] == "unavailable"
+
+
+def test_unavailable_after_retention_expiry(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    _base_runtime(monkeypatch)
+    _open_identified_position()
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", lambda **_k: _quote(140.0))
+    option_position_monitor.monitor_once()
+    # The last valid quote has now aged beyond the retention window.
+    monkeypatch.setattr(
+        option_position_monitor, "_seconds_since",
+        lambda _ts: option_position_monitor.LTP_RETENTION_SECONDS + 30.0,
+    )
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", lambda **_k: _stale_quote())
+    option_position_monitor.monitor_once()
+    live = state_store.get_open_position()["live_pnl"]
+    assert live["quote_status"] == "unavailable"
+    assert live["ltp"] is None
+
+
+def test_flat_position_has_no_active_quote(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    _base_runtime(monkeypatch)
+    opened = _open_identified_position()
+    state_store.close_open_position_cas(
+        position_id=opened["position_id"], position_version=opened["position_version"]
+    )
+    status = runtime_reliability._position_status(
+        state_store.get_open_position(), state_store.get_runtime_settings()
+    )
+    assert status["ltp"]["value"] is None
+    assert status["ltp"]["status"] == "not_applicable"
+    assert status["ltp"]["message"] == "Flat — no active option position."
+
+
+def test_retained_value_never_claims_a_false_websocket_source(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    _base_runtime(monkeypatch)
+    _open_identified_position()
+    # Last valid quote came from REST; a WS-attributed failed fetch must not
+    # relabel the retained value as a fresh DHAN_WEBSOCKET tick.
+    live = _run_valid_then(monkeypatch, 140.0, _stale_quote(source="DHAN_WEBSOCKET"), source="DHAN_REST")
+    assert live["ltp"] == 140.0
+    assert live["quote_status"] == "stale"
+    assert live["source"] == "DHAN_REST"

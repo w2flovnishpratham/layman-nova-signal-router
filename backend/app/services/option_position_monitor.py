@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -47,6 +48,26 @@ _THREAD_LOCK = threading.RLock()
 EXIT_COOLDOWN_SECONDS = 15.0
 _LAST_REST_FALLBACK_AT: dict[tuple[str, str], float] = {}
 LTP_HISTORY_LIMIT = 24
+
+# Quote freshness/retention thresholds (seconds). LTP_STALE_AFTER_SECONDS mirrors
+# the existing display staleness boundary in runtime_reliability: once the last
+# valid quote is older than this, the retained value is shown as STALE. Beyond
+# LTP_RETENTION_SECONDS (a bounded 4x the stale boundary) we stop trusting the
+# retained value and report UNAVAILABLE rather than showing a minutes-old price.
+LTP_STALE_AFTER_SECONDS = 15.0
+LTP_RETENTION_SECONDS = 60.0
+
+
+def _seconds_since(iso_ts: Any) -> float | None:
+    if not iso_ts:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(iso_ts).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, round((datetime.now(timezone.utc) - parsed).total_seconds(), 2))
 
 
 def _as_float(value: Any, default: float | None = None) -> float | None:
@@ -196,9 +217,14 @@ def _pnl_snapshot(
     qty = _as_int(position.get("qty"), 0)
     unrealized_pnl = round((ltp - entry_price) * qty, 2)
     pnl_percent = round(((ltp - entry_price) / entry_price) * 100, 2) if entry_price > 0 else None
+    checked_at = utc_now()
+    # A real quote just resolved: it is the new last-valid observation. Mark it
+    # STALE only if the quote itself is already older than the display boundary.
+    quote_status = "stale" if (quote_age_seconds is not None and quote_age_seconds > LTP_STALE_AFTER_SECONDS) else "ready"
     return {
         "source": source,
         "status": status,
+        "quote_status": quote_status,
         "exit_management": str(position.get("exit_management") or "SERVER").upper(),
         "entry_price": entry_price,
         "ltp": ltp,
@@ -210,7 +236,14 @@ def _pnl_snapshot(
         "ltp_history": _ltp_history(position, ltp),
         "exit_reason": exit_reason,
         "quote_age_seconds": quote_age_seconds,
-        "last_checked_at": utc_now(),
+        "last_checked_at": checked_at,
+        # Last-valid observation, carried forward across transient failures so a
+        # temporary feed gap never erases the truthful price/P&L (root cause #5).
+        "last_valid_ltp": ltp,
+        "last_valid_unrealized_pnl": unrealized_pnl,
+        "last_valid_pnl_percent": pnl_percent,
+        "last_valid_quote_at": checked_at,
+        "last_valid_quote_source": source,
     }
 
 
@@ -271,6 +304,38 @@ def _retained_live_pnl(position: dict[str, Any], **changes: Any) -> dict[str, An
     previous = position.get("live_pnl")
     retained = dict(previous) if isinstance(previous, dict) else {}
     retained.update(changes)
+    return retained
+
+
+def _stale_or_unavailable_live_pnl(position: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """Quote resolution failed. Preserve the last valid LTP/P&L and mark it STALE
+    while it is still within the retention window; only report UNAVAILABLE once no
+    valid quote has ever been seen or the retained value has aged past retention.
+
+    Never claims a fresh source (e.g. DHAN_WEBSOCKET) for a retained value — it
+    keeps the source of the last valid observation (root cause #5)."""
+    previous = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
+    retained = dict(previous)
+    retained.update(changes)
+
+    last_valid_ltp = previous.get("last_valid_ltp")
+    age = _seconds_since(previous.get("last_valid_quote_at"))
+    within_retention = (
+        last_valid_ltp is not None and age is not None and age <= LTP_RETENTION_SECONDS
+    )
+    retained["quote_age_seconds"] = age
+    # Source must reflect the retained observation, not the failed fetch.
+    retained["source"] = previous.get("last_valid_quote_source") or previous.get("source")
+    if within_retention:
+        retained["quote_status"] = "stale"
+        retained["ltp"] = last_valid_ltp
+        retained["unrealized_pnl"] = previous.get("last_valid_unrealized_pnl")
+        retained["pnl_percent"] = previous.get("last_valid_pnl_percent")
+    else:
+        retained["quote_status"] = "unavailable"
+        retained["ltp"] = None
+        retained["unrealized_pnl"] = None
+        retained["pnl_percent"] = None
     return retained
 
 
@@ -771,9 +836,8 @@ def monitor_once(*, force_rest: bool = False) -> None:
         _patch_monitor_fields(
             position,
             {
-                "live_pnl": _retained_live_pnl(
+                "live_pnl": _stale_or_unavailable_live_pnl(
                     position,
-                    source=getattr(quote, "source", "dhan_marketfeed_ltp"),
                     status="ltp_error",
                     message=quote.message,
                     error=quote.error,

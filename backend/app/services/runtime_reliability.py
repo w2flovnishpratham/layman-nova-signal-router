@@ -95,19 +95,31 @@ def _position_status(position: dict[str, Any], runtime: dict[str, Any]) -> dict[
                 2,
             ),
         )
-    ltp = live_pnl.get("ltp") if has_open_position else None
-    quote_status = (
-        "not_applicable"
-        if not has_open_position
-        else str(live_pnl.get("status") or ("ready" if ltp is not None else "unavailable"))
-    )
-    stale = bool(
-        has_open_position
-        and ltp is not None
-        and (age_seconds is None or age_seconds > LTP_STALE_AFTER_SECONDS)
-    )
-    if stale:
-        quote_status = "stale"
+    # The option monitor is the authoritative quote writer: when it has stamped a
+    # quote_status (ready/stale/unavailable) plus a truthful age computed from the
+    # last valid observation, trust those instead of re-deriving from the last
+    # monitor-write time (which would make a retained value look perpetually fresh).
+    monitor_quote_status = live_pnl.get("quote_status") if has_open_position else None
+    if monitor_quote_status:
+        quote_status = str(monitor_quote_status)
+        ltp = live_pnl.get("ltp") if quote_status != "unavailable" else None
+        stale = quote_status == "stale"
+        if live_pnl.get("quote_age_seconds") is not None:
+            age_seconds = live_pnl.get("quote_age_seconds")
+    else:
+        ltp = live_pnl.get("ltp") if has_open_position else None
+        quote_status = (
+            "not_applicable"
+            if not has_open_position
+            else str(live_pnl.get("status") or ("ready" if ltp is not None else "unavailable"))
+        )
+        stale = bool(
+            has_open_position
+            and ltp is not None
+            and (age_seconds is None or age_seconds > LTP_STALE_AFTER_SECONDS)
+        )
+        if stale:
+            quote_status = "stale"
 
     entry_price = position.get("entry_price")
     sl_percent = float(runtime.get("option_sl_percent") or 0)
