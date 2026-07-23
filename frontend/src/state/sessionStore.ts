@@ -385,7 +385,11 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
 
   if (event.type === 'tick.pnl') {
     const patch = event.data as Partial<ActiveTrade>
-    const baseTrade = state.activeTrade ?? seedTradeFromTick(patch, state.config, state.session?.lotSize)
+    // A tick is a P&L update for an EXISTING position, never a position creator.
+    // After confirmed flat (activeTrade === null) a delayed tick must not
+    // resurrect the closed trade; a genuinely new position arrives via
+    // order.filled / the position snapshot, which are the authoritative sources.
+    const baseTrade = state.activeTrade
     if (!baseTrade) return {}
     const previousLtp = baseTrade.ltp
     const nextLtp = Number(patch.ltp ?? previousLtp)
@@ -578,48 +582,6 @@ function normalizeActiveExitLevels(value: unknown): ActiveTrade['activeExitLevel
 function appendMessage(messages: RenderableMessage[], message: RenderableMessage): RenderableMessage[] {
   if (message.type === 'setup.info') return messages
   return [...messages, message].slice(-250)
-}
-
-function seedTradeFromTick(data: Partial<ActiveTrade>, config: TradeConfig, lotSize = DEFAULT_NIFTY_LOT_SIZE): ActiveTrade | null {
-  const ltp = optionalNumber(data.ltp, null)
-  if (ltp === null) return null
-  const symbol = typeof data.symbol === 'string' && data.symbol.trim() ? data.symbol : 'NIFTY option'
-  const qty = optionalNumber(data.qty, null) ?? contractsForLots(config.risk?.lots ?? 1, lotSize)
-  const pnl = optionalNumber(data.pnl, 0) ?? 0
-  return {
-    symbol,
-    strike: optionalNumber(data.strike, null) ?? inferStrike(symbol),
-    optType: data.optType ?? inferOptionType(symbol),
-    qty,
-    avgPrice: optionalNumber(data.avgPrice, null) ?? ltp,
-    ltp,
-    pnl,
-    pnlPct: optionalNumber(data.pnlPct, null) ?? calculatePnlPct(pnl, ltp, qty),
-    expiry: data.expiry,
-    exitOn: data.exitOn ?? exitModeLabel(config.exits?.mode),
-    securityId: data.securityId,
-    verifyUrl: data.verifyUrl ?? 'https://web.dhan.co/',
-    ltpDirection: 'flat',
-    orderId: data.orderId ?? 'pending',
-    exchOrderId: data.exchOrderId,
-    sourceLtp: optionalNumber(data.sourceLtp, null) ?? undefined,
-    simulatedCharges: optionalNumber(data.simulatedCharges, null) ?? undefined,
-    slippagePercent: optionalNumber(data.slippagePercent, null) ?? undefined,
-    srSuggestion: normalizeSrSuggestion(data.srSuggestion),
-    activeExitLevels: normalizeActiveExitLevels(data.activeExitLevels),
-    correlationId: data.correlationId ?? '',
-    status: data.status ?? 'OPEN',
-  }
-}
-
-function inferOptionType(symbol: string): ActiveTrade['optType'] {
-  const normalized = symbol.toUpperCase()
-  return normalized.includes(' PE') || normalized.includes('PUT') || normalized.endsWith('PE') ? 'PE' : 'CE'
-}
-
-function inferStrike(symbol: string): number {
-  const match = symbol.toUpperCase().match(/\b(\d{4,5})\b(?=\s*(CE|PE|CALL|PUT)\b)/)
-  return match ? Number(match[1]) : 0
 }
 
 function appendMessages(messages: RenderableMessage[], nextMessages: RenderableMessage[]): RenderableMessage[] {

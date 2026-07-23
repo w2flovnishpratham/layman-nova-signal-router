@@ -81,6 +81,35 @@ describe('runtime REST hydration failover', () => {
     expect(useSessionStore.getState().realizedPnl).toBe(-182.82)
   })
 
+  it('does not let a delayed tick resurrect a confirmed-flat position', () => {
+    applyRuntimeHydration(runtime(), 100)
+    expect(useSessionStore.getState().activeTrade).not.toBeNull()
+    // Exit confirms flat.
+    useSessionStore.getState().applyServerEvent({
+      id: 'exit-1', type: 'trade.exit', ts: '2026-07-21T08:05:00Z', data: { message: 'Exited' },
+    } as unknown as ServerEvent)
+    expect(useSessionStore.getState().activeTrade).toBeNull()
+    // A tick that was in flight before the exit arrives late; it must NOT recreate the trade.
+    useSessionStore.getState().applyServerEvent({
+      id: 'tick-late', type: 'tick.pnl', ts: '2026-07-21T08:04:59Z',
+      data: { ltp: 134.8, pnl: 25, symbol: 'NIFTY TEST CE', qty: 65 },
+    } as unknown as ServerEvent)
+    expect(useSessionStore.getState().activeTrade).toBeNull()
+  })
+
+  it('still accepts a genuinely new position after flat via order.filled', () => {
+    applyRuntimeHydration(runtime(), 100)
+    useSessionStore.getState().applyServerEvent({
+      id: 'exit-2', type: 'trade.exit', ts: '2026-07-21T08:05:00Z', data: { message: 'Exited' },
+    } as unknown as ServerEvent)
+    expect(useSessionStore.getState().activeTrade).toBeNull()
+    useSessionStore.getState().applyServerEvent({
+      id: 'fill-new', type: 'order.filled', ts: '2026-07-21T08:06:00Z',
+      data: { symbol: 'NIFTY TEST PE', avgPrice: 100, ltp: 100, qty: 65, optType: 'PE' },
+    } as unknown as ServerEvent)
+    expect(useSessionStore.getState().activeTrade).toMatchObject({ symbol: 'NIFTY TEST PE', avgPrice: 100 })
+  })
+
   it('uses REST market data unless a newer push snapshot won the request race', () => {
     const rest = { niftySpot: 24100 } as MarketSnapshot
     const push = { niftySpot: 24200 } as MarketSnapshot
