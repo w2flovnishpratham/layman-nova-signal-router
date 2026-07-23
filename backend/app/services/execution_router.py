@@ -36,11 +36,16 @@ from app.services.risk_manager import (
 from app.services.security_id_resolver import resolve_security_id
 from app.services import position_operations
 from app.services.state_store import (
+    claim_exit_operation,
     clear_open_position,
+    complete_exit_operation,
+    ensure_open_position_identity,
     get_engine_mode,
     get_open_position,
     get_runtime_settings,
+    patch_open_position_cas,
     record_entry_trade,
+    release_exit_operation,
     set_open_position,
     stamp_new_open_position,
     update_app_state,
@@ -1852,7 +1857,13 @@ def _apply_partial_exit_fill(position: dict[str, Any], order_result: dict[str, A
         return None
 
     remaining_qty = original_qty - filled_qty
-    updated = dict(position)
+    current = get_open_position()
+    if (
+        not current.get("has_open_position")
+        or current.get("position_id") != position.get("position_id")
+    ):
+        return None
+    updated = dict(current)
     updated["qty"] = remaining_qty
     updated["partial_exit"] = {
         "signal_id": signal.signal_id,
@@ -1873,7 +1884,17 @@ def _apply_partial_exit_fill(position: dict[str, Any], order_result: dict[str, A
         }
     )
     updated["live_pnl"] = live_pnl
-    set_open_position(updated)
+    applied, updated = patch_open_position_cas(
+        position_id=str(current["position_id"]),
+        position_version=int(current.get("position_version") or 0),
+        patch={
+            "qty": remaining_qty,
+            "partial_exit": updated["partial_exit"],
+            "live_pnl": live_pnl,
+        },
+    )
+    if not applied:
+        return None
     position_operations.on_partial_exit(signal, order_result, updated)
     log_audit_event(
         "PARTIAL_EXIT_FILL",
@@ -2291,7 +2312,7 @@ def route_exit_signal(
     if not decision.allowed:
         return _blocked("BLOCKED", decision.reason, signal)
 
-    open_position = get_open_position()
+    open_position = ensure_open_position_identity()
     raw_payload = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
     exit_signal = _exit_signal_from_position(
         open_position,
@@ -2301,12 +2322,57 @@ def route_exit_signal(
         exit_reason=raw_payload.get("exit_reason"),
     )
     qty = decision.final_qty
+    paper_exit_operation_id: str | None = None
+    if get_engine_mode() == "paper":
+        paper_exit_operation_id = (
+            f"PAPER_EXIT:{open_position['position_id']}:{signal.signal_id}"
+        )
+        claim_status, claimed_position = claim_exit_operation(
+            position_id=str(open_position["position_id"]),
+            position_version=int(open_position.get("position_version") or 0),
+            operation_id=paper_exit_operation_id,
+            signal_id=signal.signal_id,
+            source=signal.source,
+        )
+        if claim_status != "CLAIMED":
+            return {
+                "success": claim_status in {"ALREADY_FLAT", "ALREADY_COMPLETED"},
+                "blocked": claim_status not in {"ALREADY_FLAT", "ALREADY_COMPLETED"},
+                "status": claim_status,
+                "reason": (
+                    "Paper exit is already owned by another durable operation."
+                    if claim_status in {"EXIT_IN_PROGRESS", "ALREADY_CLAIMED"}
+                    else "Tracked Paper position changed before exit ownership was acquired."
+                ),
+                "exit_operation_id": paper_exit_operation_id,
+                "idempotent": True,
+            }
+        open_position = claimed_position
+        exit_signal = _exit_signal_from_position(
+            open_position,
+            signal,
+            signal_id=signal.signal_id,
+            source=signal.source or "tracked_position_exit",
+            exit_reason=raw_payload.get("exit_reason"),
+        )
     update_app_state(state="EXIT_ORDER_SENDING", last_message="Exit risk checks passed. Sending exit order to Dhan.")
     order_result = _place_order(exit_signal, qty, "EXIT", runtime=runtime)
     if order_result.get("blocked"):
+        if paper_exit_operation_id:
+            release_exit_operation(
+                position_id=str(open_position["position_id"]),
+                operation_id=paper_exit_operation_id,
+                result=order_result,
+            )
         return order_result
 
     if order_result.get("success"):
+        if order_result.get("partial_fill") and paper_exit_operation_id:
+            release_exit_operation(
+                position_id=str(open_position["position_id"]),
+                operation_id=paper_exit_operation_id,
+                result={**order_result, "status": "PARTIAL_EXIT_FILLED"},
+            )
         partial_position = _apply_partial_exit_fill(open_position, order_result, exit_signal)
         if partial_position is not None:
             refresh_wallet_snapshot(force=True, log_event=True)
@@ -2324,7 +2390,37 @@ def route_exit_signal(
             }
 
         super_order_leg_cancellations = _cancel_super_order_exit_legs(open_position)
-        clear_open_position()
+        if paper_exit_operation_id:
+            close_status, _flat = complete_exit_operation(
+                position_id=str(open_position["position_id"]),
+                operation_id=paper_exit_operation_id,
+                order_id=order_result.get("order_id"),
+            )
+            if close_status not in {"COMPLETED", "ALREADY_COMPLETED"}:
+                reason = (
+                    "Paper SELL filled, but confirmed-flat state could not be "
+                    "bound to its durable exit operation; reconciliation is required."
+                )
+                log_error_event(
+                    "PAPER_EXIT_CLOSE_CONFLICT",
+                    reason,
+                    metadata={
+                        "signal_id": signal.signal_id,
+                        "order_id": order_result.get("order_id"),
+                        "exit_operation_id": paper_exit_operation_id,
+                        "close_status": close_status,
+                    },
+                )
+                update_app_state(state="ERROR", last_message=reason)
+                return {
+                    **order_result,
+                    "success": False,
+                    "status": "RECONCILIATION_REQUIRED",
+                    "reason": reason,
+                    "exit_operation_id": paper_exit_operation_id,
+                }
+        else:
+            clear_open_position()
         position_operations.on_position_closed(signal, order_result)
         refresh_wallet_snapshot(force=True, log_event=True)
         update_app_state(
@@ -2342,9 +2438,20 @@ def route_exit_signal(
                 "payload_format": signal.payload_format,
             },
         )
-        return {**order_result, "status": "ORDER_PLACED", "super_order_leg_cancellations": super_order_leg_cancellations}
+        return {
+            **order_result,
+            "status": "ORDER_PLACED",
+            "super_order_leg_cancellations": super_order_leg_cancellations,
+            "exit_operation_id": paper_exit_operation_id,
+        }
 
     reason = order_result.get("error") or "Dhan exit order request failed"
+    if paper_exit_operation_id:
+        release_exit_operation(
+            position_id=str(open_position["position_id"]),
+            operation_id=paper_exit_operation_id,
+            result=order_result,
+        )
     log_error_event("EXIT_ORDER_FAILED", reason, metadata={"signal_id": signal.signal_id})
     update_app_state(state="ERROR", last_message=reason)
     return {**order_result, "blocked": False, "status": _failed_order_status(order_result), "reason": reason}

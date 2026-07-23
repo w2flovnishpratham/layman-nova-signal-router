@@ -8,10 +8,12 @@ closed position is never resurrected.
 """
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 
 from app.config import settings
-from app.services import audit_logger, option_position_monitor, state_store
+from app.schemas.signal import NormalizedSignal
+from app.services import audit_logger, execution_router, option_position_monitor, state_store
 from app.services.credential_vault import DhanCredentials
 
 
@@ -68,6 +70,8 @@ def _base_runtime(monkeypatch):
     monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
     monkeypatch.setattr(option_position_monitor, "_client", lambda: SimpleNamespace())
+    monkeypatch.setattr(option_position_monitor, "_market_is_open", lambda: True)
+    monkeypatch.setattr(option_position_monitor, "_publish_market_snapshot_from_monitor", lambda: False)
     monkeypatch.setattr(
         option_position_monitor,
         "get_dhan_credentials",
@@ -87,32 +91,82 @@ def _base_runtime(monkeypatch):
     )
 
 
-def test_real_monitor_iteration_cannot_resurrect_a_position_exited_mid_quote(tmp_path, monkeypatch):
+def _exit_signal(signal_id: str = "MANUAL-EXIT") -> NormalizedSignal:
+    return NormalizedSignal(
+        payload_format="NOVA",
+        secret="test-secret",
+        signal_id=signal_id,
+        strategy_code="TRADINGVIEW_NIFTY_V1",
+        action="EXIT",
+        side="SELL",
+        symbol="NIFTY",
+        instrument_type="OPTIDX",
+        exchange_segment="NSE_FNO",
+        security_id="49081",
+        trading_symbol="NIFTY 21 JUL 24250 CE",
+        option_side="CE",
+        strike=24250.0,
+        expiry="2026-07-21",
+        qty=65,
+        order_type="MARKET",
+        product_type="INTRADAY",
+        source="manual_exit",
+        raw_payload={},
+    )
+
+
+def test_real_monitor_thread_cannot_resurrect_position_closed_by_exit_router(tmp_path, monkeypatch):
     setup_runtime(tmp_path, monkeypatch)
     _base_runtime(monkeypatch)
+    state_store.update_app_state(engine_mode="paper")
     opened = _open_identified_position()
-    pid, ver = opened["position_id"], opened["position_version"]
+    quote_started = threading.Event()
+    exit_finished = threading.Event()
+    results: list[dict] = []
 
-    # The monitor has already read the open position (P/V). The exit completes
-    # DURING quote resolution: clear the authoritative position to confirmed-flat
-    # at a higher version, then hand the monitor a healthy quote so it proceeds to
-    # its snapshot write with the now-stale in-memory position.
-    def exit_then_quote(**_kwargs):
-        closed, flat = state_store.close_open_position_cas(
-            position_id=pid, position_version=ver
-        )
-        assert closed is True and flat["has_open_position"] is False
+    def blocked_quote(**_kwargs):
+        quote_started.set()
+        assert exit_finished.wait(timeout=5), "exit thread did not finish"
         return _quote(133.35)
 
-    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", exit_then_quote)
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", blocked_quote)
+    monkeypatch.setattr(
+        execution_router,
+        "_place_order",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "status": "TRADED",
+            "order_id": "PAPER-EXIT-1",
+            "avg_price": 133.35,
+        },
+    )
+    monkeypatch.setattr(execution_router, "_cancel_super_order_exit_legs", lambda _p: [])
+    monkeypatch.setattr(execution_router, "refresh_wallet_snapshot", lambda **_k: {})
+    monkeypatch.setattr(execution_router.position_operations, "on_position_closed", lambda *_a, **_k: None)
+    monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
 
-    option_position_monitor.monitor_once()
+    monitor_thread = threading.Thread(target=option_position_monitor.monitor_once)
 
-    # The real monitor iteration must NOT have resurrected the closed position.
+    def exit_position() -> None:
+        assert quote_started.wait(timeout=5), "monitor never entered quote resolution"
+        try:
+            results.append(execution_router.route_exit_signal(_exit_signal()))
+        finally:
+            exit_finished.set()
+
+    exit_thread = threading.Thread(target=exit_position)
+    monitor_thread.start()
+    exit_thread.start()
+    monitor_thread.join(timeout=10)
+    exit_thread.join(timeout=10)
+
+    assert not monitor_thread.is_alive()
+    assert not exit_thread.is_alive()
+    assert results[0]["success"] is True
     final = state_store.get_open_position()
     assert final["has_open_position"] is False
-    assert final["last_closed_position_id"] == pid
-    # And no stale live_pnl leaked back onto a flat position.
+    assert final["last_closed_position_id"] == opened["position_id"]
+    assert final["last_exit_operation"]["status"] == "COMPLETED"
     assert final.get("live_pnl") in (None, {})
 
 
@@ -133,3 +187,45 @@ def test_real_monitor_iteration_patches_when_position_unchanged(tmp_path, monkey
     assert final["position_id"] == opened["position_id"]
     assert final["position_version"] == opened["position_version"] + 1
     assert final["live_pnl"]["ltp"] == 140.0
+
+
+def test_monitor_retains_last_valid_ltp_across_quote_error_and_market_close(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    _base_runtime(monkeypatch)
+    _open_identified_position()
+
+    market_open = {"value": True}
+    monkeypatch.setattr(option_position_monitor, "_market_is_open", lambda: market_open["value"])
+    quotes = iter(
+        [
+            _quote(140.0),
+            SimpleNamespace(
+                success=False,
+                message="temporary feed gap",
+                ltp=None,
+                source="DHAN_WEBSOCKET",
+                status="STALE",
+                error="stale_quote",
+                received_at=None,
+                age_seconds=4.0,
+            ),
+        ]
+    )
+    monkeypatch.setattr(option_position_monitor, "_authoritative_quote", lambda **_k: next(quotes))
+
+    option_position_monitor.monitor_once()
+    valid = state_store.get_open_position()["live_pnl"]
+    assert valid["ltp"] == 140.0
+
+    option_position_monitor.monitor_once()
+    errored = state_store.get_open_position()["live_pnl"]
+    assert errored["status"] == "ltp_error"
+    assert errored["ltp"] == 140.0
+    assert errored["unrealized_pnl"] == valid["unrealized_pnl"]
+
+    market_open["value"] = False
+    option_position_monitor.monitor_once()
+    closed_market = state_store.get_open_position()["live_pnl"]
+    assert closed_market["status"] == "market_closed"
+    assert closed_market["ltp"] == 140.0
+    assert closed_market["unrealized_pnl"] == valid["unrealized_pnl"]

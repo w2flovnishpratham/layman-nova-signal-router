@@ -31,9 +31,8 @@ from app.services.state_store import (
     get_engine_mode,
     get_open_position,
     get_runtime_settings,
+    ensure_open_position_identity,
     patch_open_position_cas,
-    set_open_position,
-    stamp_new_open_position,
     utc_now,
 )
 from app.store.redis_session import session_store
@@ -220,21 +219,16 @@ def _ensure_position_identity(position: dict[str, Any]) -> dict[str, Any]:
     the monitor's compare-and-set writes have an identity to check against."""
     if not position.get("has_open_position") or position.get("position_id"):
         return position
-    from app.services import state_store
-
-    with state_store._LOCK:
-        current = get_open_position()
-        if current.get("has_open_position") and not current.get("position_id"):
-            normalized = set_open_position(stamp_new_open_position(current))
-            log_order_event(
-                {
-                    "event": "LEGACY_POSITION_IDENTITY_NORMALIZED",
-                    "position_id": normalized.get("position_id"),
-                    "security_id": normalized.get("security_id"),
-                }
-            )
-            return normalized
-        return current
+    normalized = ensure_open_position_identity()
+    if normalized.get("position_id") and normalized.get("position_id") != position.get("position_id"):
+        log_order_event(
+            {
+                "event": "LEGACY_POSITION_IDENTITY_NORMALIZED",
+                "position_id": normalized.get("position_id"),
+                "security_id": normalized.get("security_id"),
+            }
+        )
+    return normalized
 
 
 def _patch_monitor_fields(
@@ -252,6 +246,7 @@ def _patch_monitor_fields(
         position_id=str(position_id),
         position_version=int(position_version or 0),
         patch=patch,
+        reject_when_exit_pending=True,
     )
     if not applied:
         log_order_event(
@@ -269,6 +264,14 @@ def _patch_monitor_fields(
 
 def _with_live_pnl(position: dict[str, Any], snapshot: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     return _patch_monitor_fields(position, {"live_pnl": snapshot})
+
+
+def _retained_live_pnl(position: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """Overlay quote status without erasing the last confirmed price/P&L."""
+    previous = position.get("live_pnl")
+    retained = dict(previous) if isinstance(previous, dict) else {}
+    retained.update(changes)
+    return retained
 
 
 def _client() -> Any:
@@ -494,17 +497,22 @@ def _sync_entry_fill_if_needed(position: dict[str, Any], client: Any, client_id:
             source_status = fallback_status or source_status
 
     if avg_price is None:
-        updated = dict(position)
-        updated["live_pnl"] = {
-            "source": "dhan_order_status",
-            "status": "waiting_entry_fill",
-            "message": "Waiting for Dhan to confirm entry fill price.",
-            "entry_order_id": order_id,
-            "last_checked_at": utc_now(),
-            "order_status": poll.order_status,
-            "error": poll.error,
-        }
-        return set_open_position(updated)
+        _applied, current = _patch_monitor_fields(
+            position,
+            {
+                "live_pnl": _retained_live_pnl(
+                    position,
+                    source="dhan_order_status",
+                    status="waiting_entry_fill",
+                    message="Waiting for Dhan to confirm entry fill price.",
+                    entry_order_id=order_id,
+                    last_checked_at=utc_now(),
+                    order_status=poll.order_status,
+                    error=poll.error,
+                )
+            },
+        )
+        return current
 
     updated = dict(position)
     updated["entry_price"] = avg_price
@@ -547,10 +555,18 @@ def _sync_entry_fill_if_needed(position: dict[str, Any], client: Any, client_id:
             "security_id": position.get("security_id"),
         }
     )
-    result = set_open_position(updated)
+    patch = {
+        key: value
+        for key, value in updated.items()
+        if key not in {"has_open_position", "position_id", "position_version"}
+        and value != position.get(key)
+    }
+    applied, result = _patch_monitor_fields(position, patch)
+    if not applied:
+        return result
     # Ordering: authoritative JSON write first, typed DB operation second.
     position_operations.on_entry_fill_synced(
-        updated, order_id=str(order_id), fill_price=avg_price
+        result, order_id=str(order_id), fill_price=avg_price
     )
     return result
 
@@ -565,21 +581,28 @@ def _exit_cooldown_active(position: dict[str, Any]) -> bool:
     return (time.time() - last_attempt_at) < EXIT_COOLDOWN_SECONDS
 
 
-def _mark_exit_attempt(position: dict[str, Any], reason: str, snapshot: dict[str, Any]) -> dict[str, Any]:
-    updated = dict(position)
-    updated["live_pnl"] = snapshot
-    updated["server_exit"] = {
-        "exit_in_progress": True,
-        "last_attempt_at": utc_now(),
-        "last_attempt_epoch": time.time(),
-        "reason": reason,
-    }
-    return set_open_position(updated)
+def _mark_exit_attempt(position: dict[str, Any], reason: str, snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    applied, updated = _patch_monitor_fields(
+        position,
+        {
+            "live_pnl": snapshot,
+            "server_exit": {
+                "exit_in_progress": True,
+                "last_attempt_at": utc_now(),
+                "last_attempt_epoch": time.time(),
+                "reason": reason,
+            },
+        },
+    )
+    return updated if applied else None
 
 
 def _unlock_exit_attempt(position: dict[str, Any], result: dict[str, Any]) -> None:
     current = get_open_position()
-    if not current.get("has_open_position"):
+    if (
+        not current.get("has_open_position")
+        or current.get("position_id") != position.get("position_id")
+    ):
         return
     server_exit = current.get("server_exit")
     if not isinstance(server_exit, dict):
@@ -596,9 +619,7 @@ def _unlock_exit_attempt(position: dict[str, Any], result: dict[str, Any]) -> No
             },
         }
     )
-    updated = dict(current)
-    updated["server_exit"] = server_exit
-    set_open_position(updated)
+    _patch_monitor_fields(current, {"server_exit": server_exit})
 
 
 def _exit_signal(position: dict[str, Any], reason: str, snapshot: dict[str, Any]) -> NormalizedSignal:
@@ -634,6 +655,8 @@ def _route_server_exit(position: dict[str, Any], reason: str, snapshot: dict[str
         return
 
     marked = _mark_exit_attempt(position, reason, snapshot)
+    if marked is None:
+        return
     log_audit_event(
         "SERVER_SIDE_OPTION_EXIT_TRIGGERED",
         f"Server-side option {reason} triggered from Dhan LTP.",
@@ -694,14 +717,19 @@ def monitor_once(*, force_rest: bool = False) -> None:
         if not force_rest:
             clear_marketfeed_subscription()
         if position.get("has_open_position"):
-            _patch_monitor_fields(position, {"live_pnl": {
-                "source": "market_closed",
-                "status": "market_closed",
-                "message": "Market is closed; Dhan WebSocket and REST LTP fetching are disabled.",
-                "ltp": None,
-                "last_checked_at": utc_now(),
-                "ws_status": marketfeed_ws_status(),
-            }})
+            _patch_monitor_fields(
+                position,
+                {
+                    "live_pnl": _retained_live_pnl(
+                        position,
+                        source="market_closed",
+                        status="market_closed",
+                        message="Market is closed; Dhan WebSocket and REST LTP fetching are disabled.",
+                        last_checked_at=utc_now(),
+                        ws_status=marketfeed_ws_status(),
+                    )
+                },
+            )
         return
 
     snapshot_published = _publish_market_snapshot_from_monitor()
@@ -740,14 +768,20 @@ def monitor_once(*, force_rest: bool = False) -> None:
     )
 
     if not quote.success or quote.ltp is None:
-        _patch_monitor_fields(position, {"live_pnl": {
-            "source": getattr(quote, "source", "dhan_marketfeed_ltp"),
-            "status": "ltp_error",
-            "message": quote.message,
-            "error": quote.error,
-            "last_checked_at": utc_now(),
-            "ws_status": marketfeed_ws_status(),
-        }})
+        _patch_monitor_fields(
+            position,
+            {
+                "live_pnl": _retained_live_pnl(
+                    position,
+                    source=getattr(quote, "source", "dhan_marketfeed_ltp"),
+                    status="ltp_error",
+                    message=quote.message,
+                    error=quote.error,
+                    last_checked_at=utc_now(),
+                    ws_status=marketfeed_ws_status(),
+                )
+            },
+        )
         log_order_event(
             {
                 "event": "OPTION_LTP_FETCH_FAILED",

@@ -123,8 +123,10 @@ def default_open_position() -> dict[str, Any]:
         # a flat position.
         "position_id": None,
         "position_version": 0,
+        "exit_operation": None,
         "last_closed_position_id": None,
         "last_closed_position_version": 0,
+        "last_exit_operation": None,
     }
 
 
@@ -450,7 +452,17 @@ def stamp_new_open_position(data: dict[str, Any]) -> dict[str, Any]:
     stamped["has_open_position"] = True
     stamped["position_id"] = str(data.get("position_id") or uuid.uuid4().hex)
     stamped["position_version"] = 1
+    stamped["exit_operation"] = None
     return stamped
+
+
+def ensure_open_position_identity() -> dict[str, Any]:
+    """Give a legacy open position an identity exactly once."""
+    with _LOCK:
+        current = get_open_position()
+        if current.get("has_open_position") and not current.get("position_id"):
+            return set_open_position(stamp_new_open_position(current))
+        return current
 
 
 def _cas_matches(current: dict[str, Any], position_id: str, position_version: int) -> bool:
@@ -462,13 +474,24 @@ def _cas_matches(current: dict[str, Any], position_id: str, position_version: in
 
 
 def patch_open_position_cas(
-    *, position_id: str, position_version: int, patch: dict[str, Any]
+    *,
+    position_id: str,
+    position_version: int,
+    patch: dict[str, Any],
+    reject_when_exit_pending: bool = False,
 ) -> tuple[bool, dict[str, Any]]:
     """Merge a field-level patch onto the open position only if identity+version
     still match. Bumps position_version on success. Returns (applied, position)."""
     with _LOCK:
         current = get_open_position()
         if not _cas_matches(current, position_id, position_version):
+            return False, current
+        exit_operation = current.get("exit_operation")
+        if (
+            reject_when_exit_pending
+            and isinstance(exit_operation, dict)
+            and exit_operation.get("status") == "PENDING"
+        ):
             return False, current
         merged = {**current, **patch}
         merged["has_open_position"] = True
@@ -492,6 +515,129 @@ def close_open_position_cas(
         flat["last_closed_position_id"] = position_id
         flat["last_closed_position_version"] = int(position_version)
         return True, set_open_position(flat)
+
+
+def claim_exit_operation(
+    *,
+    position_id: str,
+    position_version: int,
+    operation_id: str,
+    signal_id: str,
+    source: str | None,
+) -> tuple[str, dict[str, Any]]:
+    """Persist exclusive ownership of an exit before any Paper SELL is sent.
+
+    The claim is stored with the position, so it survives request/thread
+    boundaries and a process restart. Only the matching operation may complete
+    the position to confirmed-flat.
+    """
+    with _LOCK:
+        current = get_open_position()
+        if not current.get("has_open_position"):
+            if current.get("last_closed_position_id") == position_id:
+                return "ALREADY_FLAT", current
+            return "POSITION_CHANGED", current
+        if current.get("position_id") != position_id:
+            return "POSITION_CHANGED", current
+
+        active = current.get("exit_operation")
+        if isinstance(active, dict) and active.get("status") == "PENDING":
+            if active.get("operation_id") == operation_id:
+                return "ALREADY_CLAIMED", current
+            return "EXIT_IN_PROGRESS", current
+        if int(current.get("position_version") or 0) != int(position_version):
+            return "POSITION_CHANGED", current
+
+        claimed = {
+            **current,
+            "exit_operation": {
+                "operation_id": operation_id,
+                "status": "PENDING",
+                "signal_id": signal_id,
+                "source": source,
+                "claimed_at": utc_now(),
+            },
+            "position_version": int(position_version) + 1,
+        }
+        return "CLAIMED", set_open_position(claimed)
+
+
+def release_exit_operation(
+    *,
+    position_id: str,
+    operation_id: str,
+    result: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    """Release a claim after a definitively failed Paper order attempt."""
+    with _LOCK:
+        current = get_open_position()
+        active = current.get("exit_operation")
+        if (
+            not current.get("has_open_position")
+            or current.get("position_id") != position_id
+            or not isinstance(active, dict)
+            or active.get("operation_id") != operation_id
+            or active.get("status") != "PENDING"
+        ):
+            return False, current
+        failed = {
+            **active,
+            "status": "FAILED",
+            "completed_at": utc_now(),
+            "result": {
+                "status": result.get("status"),
+                "error": result.get("error") or result.get("reason"),
+            },
+        }
+        updated = {
+            **current,
+            "exit_operation": None,
+            "last_exit_operation": failed,
+            "position_version": int(current.get("position_version") or 0) + 1,
+        }
+        return True, set_open_position(updated)
+
+
+def complete_exit_operation(
+    *,
+    position_id: str,
+    operation_id: str,
+    order_id: str | None,
+) -> tuple[str, dict[str, Any]]:
+    """Atomically persist confirmed-flat for the operation that owns the exit."""
+    with _LOCK:
+        current = get_open_position()
+        if not current.get("has_open_position"):
+            last = current.get("last_exit_operation")
+            if (
+                current.get("last_closed_position_id") == position_id
+                and isinstance(last, dict)
+                and last.get("operation_id") == operation_id
+                and last.get("status") == "COMPLETED"
+            ):
+                return "ALREADY_COMPLETED", current
+            return "POSITION_CHANGED", current
+        active = current.get("exit_operation")
+        if (
+            current.get("position_id") != position_id
+            or not isinstance(active, dict)
+            or active.get("operation_id") != operation_id
+            or active.get("status") != "PENDING"
+        ):
+            return "POSITION_CHANGED", current
+
+        closed_version = int(current.get("position_version") or 0) + 1
+        completed = {
+            **active,
+            "status": "COMPLETED",
+            "order_id": order_id,
+            "completed_at": utc_now(),
+        }
+        flat = default_open_position()
+        flat["last_closed_position_id"] = position_id
+        flat["last_closed_position_version"] = closed_version
+        flat["last_exit_operation"] = completed
+        return "COMPLETED", set_open_position(flat)
 
 
 def get_engine_mode(*, legacy_fallback: bool = True) -> str | None:

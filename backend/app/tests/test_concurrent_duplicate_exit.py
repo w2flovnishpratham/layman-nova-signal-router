@@ -15,7 +15,16 @@ from __future__ import annotations
 
 import threading
 
-from app.services import audit_logger, credential_vault, paper_broker, paper_portfolio, state_store
+from app.config import settings
+from app.schemas.signal import NormalizedSignal
+from app.services import (
+    audit_logger,
+    credential_vault,
+    execution_router,
+    paper_broker,
+    paper_portfolio,
+    state_store,
+)
 from app.services.paper_broker import PaperBroker
 
 
@@ -51,6 +60,30 @@ def _sell_payload(source: str) -> dict:
         "exchangeSegment": "NSE_FNO",
         "exitSource": source,  # stands in for the distinct upstream exit entry point
     }
+
+
+def _exit_signal(signal_id: str, source: str) -> NormalizedSignal:
+    return NormalizedSignal(
+        payload_format="NOVA",
+        secret="test",
+        signal_id=signal_id,
+        strategy_code="supertrend",
+        action="EXIT",
+        side="SELL",
+        symbol="NIFTY",
+        instrument_type="OPTIDX",
+        exchange_segment="NSE_FNO",
+        security_id="123",
+        trading_symbol="NIFTY TEST CE",
+        option_side="CE",
+        strike=24200,
+        expiry="2026-07-21",
+        qty=10,
+        order_type="MARKET",
+        product_type="INTRADAY",
+        source=source,
+        raw_payload={},
+    )
 
 
 def _seed_open_paper_trade(monkeypatch, *, ltp: float = 100.0) -> None:
@@ -157,3 +190,79 @@ def test_apply_paper_exit_atomic_under_concurrency_stress(tmp_path, monkeypatch)
         portfolio = paper_portfolio.get_paper_portfolio()
         assert len(portfolio.closed_trades) == 1
         assert portfolio.realized_pnl == portfolio.closed_trades[0]["realized_pnl"]
+
+
+def test_concurrent_exit_routes_persist_one_owner_and_send_one_order(tmp_path, monkeypatch):
+    """Only the durable claim owner may cross the order-placement boundary."""
+    _isolate_paper_runtime(tmp_path, monkeypatch)
+    state_store.init_runtime_files()
+    state_store.set_engine_mode("paper")
+    state_store.update_runtime_settings(allow_exit=True)
+    opened = state_store.set_open_position(
+        state_store.stamp_new_open_position(
+            {
+                "strategy_code": "supertrend",
+                "symbol": "NIFTY",
+                "instrument_type": "OPTIDX",
+                "exchange_segment": "NSE_FNO",
+                "security_id": "123",
+                "trading_symbol": "NIFTY TEST CE",
+                "option_side": "CE",
+                "qty": 10,
+                "entry_price": 100.0,
+                "order_type": "MARKET",
+                "product_type": "INTRADAY",
+            }
+        )
+    )
+    monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
+    monkeypatch.setattr(execution_router, "_cancel_super_order_exit_legs", lambda _p: [])
+    monkeypatch.setattr(execution_router, "refresh_wallet_snapshot", lambda **_k: {})
+    monkeypatch.setattr(execution_router.position_operations, "on_position_closed", lambda *_a, **_k: None)
+
+    order_started = threading.Event()
+    release_order = threading.Event()
+    call_count = {"value": 0}
+    call_lock = threading.Lock()
+
+    def place_once(*_args, **_kwargs):
+        with call_lock:
+            call_count["value"] += 1
+        order_started.set()
+        assert release_order.wait(timeout=5), "test did not release claimed order"
+        return {
+            "success": True,
+            "status": "TRADED",
+            "order_id": "PAPER-ONLY-EXIT",
+            "avg_price": 110.0,
+        }
+
+    monkeypatch.setattr(execution_router, "_place_order", place_once)
+    results: list[dict] = []
+    results_lock = threading.Lock()
+
+    def fire(signal_id: str, source: str) -> None:
+        result = execution_router.route_exit_signal(_exit_signal(signal_id, source))
+        with results_lock:
+            results.append(result)
+
+    owner = threading.Thread(target=fire, args=("EXIT-OWNER", "session_exit_open"))
+    duplicate = threading.Thread(target=fire, args=("EXIT-DUPLICATE", "manual_square_off"))
+    owner.start()
+    assert order_started.wait(timeout=5), "owner never reached order boundary"
+    duplicate.start()
+    duplicate.join(timeout=5)
+    release_order.set()
+    owner.join(timeout=5)
+
+    assert not owner.is_alive()
+    assert not duplicate.is_alive()
+    assert call_count["value"] == 1
+    assert sum(result.get("status") == "ORDER_PLACED" for result in results) == 1
+    assert sum(result.get("status") == "EXIT_IN_PROGRESS" for result in results) == 1
+
+    flat = state_store.get_open_position()
+    assert flat["has_open_position"] is False
+    assert flat["last_closed_position_id"] == opened["position_id"]
+    assert flat["last_exit_operation"]["status"] == "COMPLETED"
+    assert flat["last_exit_operation"]["order_id"] == "PAPER-ONLY-EXIT"

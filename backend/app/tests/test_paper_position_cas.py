@@ -96,6 +96,49 @@ def test_duplicate_close_is_idempotent_no_second_clear(tmp_path, monkeypatch):
     assert current["has_open_position"] is False
 
 
+def test_durable_exit_claim_is_exclusive_and_only_owner_can_confirm_flat(tmp_path, monkeypatch):
+    setup_runtime(tmp_path, monkeypatch)
+    opened = _open_position()
+    pid = opened["position_id"]
+
+    status, claimed = state_store.claim_exit_operation(
+        position_id=pid,
+        position_version=opened["position_version"],
+        operation_id="EXIT-1",
+        signal_id="SIGNAL-1",
+        source="manual",
+    )
+    assert status == "CLAIMED"
+    assert claimed["exit_operation"]["status"] == "PENDING"
+
+    duplicate_status, _ = state_store.claim_exit_operation(
+        position_id=pid,
+        position_version=opened["position_version"],
+        operation_id="EXIT-2",
+        signal_id="SIGNAL-2",
+        source="monitor",
+    )
+    assert duplicate_status == "EXIT_IN_PROGRESS"
+
+    wrong_owner_status, still_open = state_store.complete_exit_operation(
+        position_id=pid,
+        operation_id="EXIT-2",
+        order_id="PAPER-WRONG",
+    )
+    assert wrong_owner_status == "POSITION_CHANGED"
+    assert still_open["has_open_position"] is True
+
+    completed_status, flat = state_store.complete_exit_operation(
+        position_id=pid,
+        operation_id="EXIT-1",
+        order_id="PAPER-EXIT-1",
+    )
+    assert completed_status == "COMPLETED"
+    assert flat["has_open_position"] is False
+    assert flat["last_exit_operation"]["operation_id"] == "EXIT-1"
+    assert flat["last_exit_operation"]["status"] == "COMPLETED"
+
+
 def test_patch_applies_on_match_then_rejects_stale_version(tmp_path, monkeypatch):
     setup_runtime(tmp_path, monkeypatch)
     opened = _open_position()
