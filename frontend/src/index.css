@@ -3040,10 +3040,10 @@ code {
   min-height: 0;
 }
 
-.engine-live-layout .nifty-chart-svg {
+.engine-live-layout .nifty-chart-canvas,
+.engine-live-layout .nova-live-chart {
   flex: 1 1 auto;
-  height: auto;
-  min-height: 0;
+  min-height: 280px;
 }
 
 .engine-live-layout .nifty-chart-empty {
@@ -3149,16 +3149,116 @@ code {
   font-size: 11px;
 }
 
-.nifty-chart-svg {
+.nifty-chart-canvas,
+.nova-live-chart {
   width: 100%;
-  height: clamp(360px, 52vh, 560px);
+  height: clamp(300px, 42vh, 420px);
+  min-height: 280px;
+  position: relative;
+  overflow: hidden;
   display: block;
 }
 
 @media (max-width: 900px) {
-  .nifty-chart-svg {
-    height: 340px;
+  .nifty-chart-canvas,
+  .nova-live-chart {
+    height: 280px;
+    min-height: 240px;
   }
+}
+
+.manual-exit-primary,
+.manual-exit-confirm {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  border-radius: 10px;
+  background: rgba(127, 29, 29, 0.12);
+}
+
+.manual-exit-primary > div,
+.manual-exit-confirm {
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.manual-exit-primary > div {
+  display: grid;
+  gap: 3px;
+}
+
+.manual-exit-primary span,
+.manual-exit-confirm span {
+  color: var(--text-3);
+}
+
+.manual-exit-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid rgba(248, 113, 113, 0.42);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.25);
+  color: #fca5a5;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.manual-exit-confirm > div {
+  display: flex;
+  gap: 8px;
+}
+
+.strategy-start-confirm {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid rgba(167, 139, 250, 0.32);
+  border-radius: 12px;
+  background: rgba(76, 29, 149, 0.12);
+}
+
+.strategy-start-confirm > div:first-child,
+.strategy-start-confirm dl {
+  display: grid;
+  gap: 4px;
+}
+
+.strategy-start-confirm dl {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.strategy-start-confirm dl div {
+  display: grid;
+  gap: 2px;
+}
+
+.strategy-start-confirm dt,
+.strategy-start-confirm small,
+.strategy-start-confirm span {
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.strategy-start-confirm dd {
+  margin: 0;
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.strategy-start-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 /* Router banner slot: full-width strip directly under the app header */

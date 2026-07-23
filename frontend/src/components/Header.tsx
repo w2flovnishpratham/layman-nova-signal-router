@@ -220,10 +220,23 @@ export function Header({
                       <span className="text-amber-200">
                         {runtime.position.trading_symbol || runtime.position.option_side || 'Position'} · Qty {runtime.position.qty}
                       </span>
-                    ) : null}
-                    <span className={runtime.position.ltp.stale ? 'text-amber-300' : 'text-white/45'}>
-                      LTP {runtime.position.ltp.value ?? 'Unavailable'} · {runtime.position.ltp.status}
-                    </span>
+                    ) : <span className="text-emerald-200">Flat — no active option position</span>}
+                    {runtime.position.has_open_position ? (
+                      <>
+                        <span className={runtime.position.ltp.stale || runtime.position.ltp.value == null ? 'text-amber-300' : 'text-white/45'}>
+                          {runtime.position.ltp.value == null
+                            ? 'Live option quote unavailable'
+                            : `LTP ${runtime.position.ltp.value} · ${runtime.position.ltp.status}`}
+                        </span>
+                        {(runtime.position.ltp.stale || runtime.position.ltp.value == null) ? (
+                          <span className="text-white/40">
+                            {runtime.position.ltp.source || 'source unknown'}
+                            {runtime.position.ltp.received_at ? ` · ${new Date(runtime.position.ltp.received_at).toLocaleTimeString()}` : ''}
+                            {runtime.position.ltp.age_seconds != null ? ` · ${Math.round(runtime.position.ltp.age_seconds)}s old` : ''}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : <span className="text-white/45">No active LTP</span>}
                   </div>
                 ) : null}
 

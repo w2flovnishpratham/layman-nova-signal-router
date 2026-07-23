@@ -40,11 +40,23 @@ class PaperResetRequest(BaseModel):
     starting_balance: float | None = Field(default=None, ge=10_000, le=10_000_000)
 
 
+class StartSelectedRequest(BaseModel):
+    strategy_instance_id: str = Field(min_length=1, max_length=64)
+
+
 def _execution_user():
     user = current_execution_user()
     if user is None:
         raise HTTPException(status_code=401, detail="Authenticated execution context required.")
     return user
+
+
+def _sync_runtime_sessions(user, runtime: dict[str, Any] | None = None) -> dict[str, Any]:
+    from app.services.chat_event_publisher import synchronize_runtime_sessions_from_sync
+
+    status = runtime or runtime_reliability.runtime_status(user)
+    synchronize_runtime_sessions_from_sync(status, user_id=user.id_str)
+    return status
 
 
 def _hydrated_runtime_status() -> dict[str, Any]:
@@ -349,6 +361,9 @@ def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
         },
     )
     runtime_reliability.mark_running()
+    user = current_execution_user()
+    if user is not None:
+        _sync_runtime_sessions(user)
     return {
         "success": True,
         "engine_started": True,
@@ -366,6 +381,7 @@ def stop_engine() -> dict[str, Any]:
     user = _execution_user()
     status = runtime_reliability.stop_engine(user)
     _deactivate_selected_builtin(user)
+    _sync_runtime_sessions(user, status)
     return {
         "success": True,
         "engine_started": False,
@@ -379,6 +395,7 @@ def prepare_reconfigure() -> dict[str, Any]:
     user = _execution_user()
     status = runtime_reliability.stop_engine(user, reason="reconfigure")
     _deactivate_selected_builtin(user)
+    _sync_runtime_sessions(user, status)
     position_open = bool(status["position"]["has_open_position"])
     if not position_open:
         set_engine_mode(None)
@@ -417,7 +434,7 @@ def hydrated_runtime_status() -> dict[str, Any]:
 
 
 @router.post("/runtime/start-selected")
-def runtime_start_selected() -> dict[str, Any]:
+def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
     user = _execution_user()
     try:
         selected = strategy_instance_service.require_selected_engine_strategy(user.id)
@@ -427,6 +444,14 @@ def runtime_start_selected() -> dict[str, Any]:
             status_code=exc.status_code,
             detail={"message": str(exc), "reason": exc.code},
         ) from exc
+    if str(selected.get("instance_id")) != body.strategy_instance_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "The selected strategy changed. Review and confirm the current strategy before starting.",
+                "reason": "STRATEGY_CONFIRMATION_MISMATCH",
+            },
+        )
     status = runtime_reliability.runtime_status(user)
     if status["engine"]["state"] != "STOPPED":
         raise HTTPException(status_code=409, detail="The engine is already running or changing state.")
@@ -457,22 +482,29 @@ def runtime_start_selected() -> dict[str, Any]:
                 execution_mode="paper_live_data",
             )
     except Exception:
-        runtime_reliability.stop_engine(user, reason="selected_strategy_start_failed")
+        failed = runtime_reliability.stop_engine(user, reason="selected_strategy_start_failed")
+        _sync_runtime_sessions(user, failed)
         raise
-    return _hydrated_runtime_status()
+    result = _hydrated_runtime_status()
+    _sync_runtime_sessions(user, result)
+    return result
 
 
 @router.post("/runtime/stop")
 def runtime_stop() -> dict[str, Any]:
     user = _execution_user()
-    runtime_reliability.stop_engine(user)
+    status = runtime_reliability.stop_engine(user)
     _deactivate_selected_builtin(user)
+    _sync_runtime_sessions(user, status)
     return _hydrated_runtime_status()
 
 
 @router.post("/runtime/square-off")
 def runtime_square_off() -> dict[str, Any]:
-    return runtime_reliability.square_off(_execution_user())
+    user = _execution_user()
+    result = runtime_reliability.square_off(user)
+    _sync_runtime_sessions(user, result)
+    return result
 
 
 @router.put("/runtime/mode")

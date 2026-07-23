@@ -16,6 +16,7 @@ import type {
   WsStatus,
 } from '../types'
 import type { ManualOrderResponse } from '../api'
+import type { RuntimeStatus } from '../api'
 
 interface SessionStore {
   session: SessionBootstrap | null
@@ -27,6 +28,9 @@ interface SessionStore {
   messages: RenderableMessage[]
   activeTrade: ActiveTrade | null
   marketSnapshot: MarketSnapshot | null
+  marketSnapshotSource: 'push' | 'rest' | null
+  lastTradePushAt: number
+  lastMarketPushAt: number
   wallet: number | null
   paperBalance: number | null
   marginUtilized: number | null
@@ -83,6 +87,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   messages: [],
   activeTrade: null,
   marketSnapshot: null,
+  marketSnapshotSource: null,
+  lastTradePushAt: 0,
+  lastMarketPushAt: 0,
   wallet: null,
   paperBalance: null,
   marginUtilized: null,
@@ -121,6 +128,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       messages: [],
       activeTrade: null,
       marketSnapshot: null,
+      marketSnapshotSource: null,
+      lastTradePushAt: 0,
+      lastMarketPushAt: 0,
       wallet: null,
       paperBalance: null,
       marginUtilized: null,
@@ -227,6 +237,74 @@ export function applyManualOrderHydration(response: ManualOrderResponse): void {
   })
 }
 
+/** Merge the owner-scoped runtime poll without overwriting a newer push. */
+export function applyRuntimeHydration(status: RuntimeStatus, requestStartedAt = Date.now()): void {
+  const current = useSessionStore.getState()
+  const engineMode = status.engine.mode
+  const setupState: SetupState = status.engine.state === 'RUNNING'
+    ? (status.engine.accepting_signals ? 'LIVE' : 'PAUSED')
+    : status.engine.state === 'STOPPING'
+      ? 'PAUSED'
+      : 'IDLE'
+  const base = {
+    setupState,
+    engineMode,
+    wallet: optionalNumber(status.pnl.available_balance, current.wallet),
+    paperBalance: engineMode === 'paper'
+      ? optionalNumber(status.pnl.available_balance, current.paperBalance)
+      : current.paperBalance,
+    marginUtilized: optionalNumber(status.pnl.utilized_amount, current.marginUtilized),
+    sessionPnl: optionalNumber(status.pnl.session, current.sessionPnl) ?? current.sessionPnl,
+    realizedPnl: optionalNumber(status.pnl.realized, current.realizedPnl) ?? current.realizedPnl,
+    unrealizedPnl: optionalNumber(status.pnl.unrealized, 0) ?? 0,
+  }
+  if (requestStartedAt < current.lastTradePushAt) {
+    useSessionStore.setState(base)
+    return
+  }
+  const position = status.position
+  const risk = position.risk
+  const activeTrade = position.has_open_position
+    ? normalizeTrade({
+      mode: engineMode ?? undefined,
+      symbol: position.trading_symbol || 'NIFTY option',
+      strike: Number(position.strike ?? 0),
+      optType: position.option_side === 'PE' ? 'PE' : 'CE',
+      qty: Number(position.qty ?? 0),
+      avgPrice: Number(position.entry_price ?? 0),
+      ltp: Number(position.ltp.value ?? position.entry_price ?? 0),
+      pnl: Number(position.unrealized_pnl ?? 0),
+      expiry: position.expiry ?? undefined,
+      securityId: position.security_id ?? undefined,
+      orderId: position.entry_order_id ?? 'paper-position',
+      activeExitLevels: risk && (risk.stop_price != null || risk.target_price != null)
+        ? {
+          source: risk.source ?? (risk.server_managed ? 'server_monitor' : undefined),
+          stopLossPrice: risk.stop_price ?? undefined,
+          targetPrice: risk.target_price ?? undefined,
+        }
+        : null,
+      riskArmed: risk?.armed,
+      riskSource: risk?.source,
+      quoteSource: position.ltp.source,
+      quoteReceivedAt: position.ltp.received_at,
+      quoteStale: position.ltp.stale,
+      quoteStatus: position.ltp.status,
+      quoteAgeSeconds: position.ltp.age_seconds,
+      correlationId: '',
+      status: 'OPEN',
+    }, current.config, current.session?.lotSize)
+    : null
+  useSessionStore.setState({ ...base, activeTrade })
+}
+
+/** Use the existing market poll as recovery when no newer push won the race. */
+export function applyRestMarketSnapshot(snapshot: MarketSnapshot, requestStartedAt = Date.now()): void {
+  const current = useSessionStore.getState()
+  if (requestStartedAt < current.lastMarketPushAt) return
+  useSessionStore.setState({ marketSnapshot: snapshot, marketSnapshotSource: 'rest' })
+}
+
 export function motionConfigMode(): 'always' | 'never' | 'user' {
   if (initialMotion === 'reduced') return 'always'
   if (initialMotion === 'system') return 'user'
@@ -293,12 +371,15 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       activeTrade: trade,
       tradesToday: state.tradesToday + 1,
       messages: appendMessage(state.messages, event),
+      lastTradePushAt: Date.now(),
     }
   }
 
   if (event.type === 'market.snapshot') {
     return {
       marketSnapshot: event.data as unknown as MarketSnapshot,
+      marketSnapshotSource: 'push',
+      lastMarketPushAt: Date.now(),
     }
   }
 
@@ -323,6 +404,7 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       activeTrade,
       sessionPnl: nextPnl,
       unrealizedPnl: nextPnl,
+      lastTradePushAt: Date.now(),
     }
   }
 
@@ -365,6 +447,7 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       activeTrade: null,
       typing: false,
       messages: appendMessage(state.messages, event),
+      lastTradePushAt: Date.now(),
     }
   }
 
@@ -408,6 +491,13 @@ function normalizeTrade(data: Partial<ActiveTrade>, config: TradeConfig, lotSize
     slippagePercent: optionalNumber(data.slippagePercent, null) ?? undefined,
     srSuggestion: normalizeSrSuggestion(data.srSuggestion),
     activeExitLevels: normalizeActiveExitLevels(data.activeExitLevels),
+    riskArmed: data.riskArmed,
+    riskSource: data.riskSource,
+    quoteSource: data.quoteSource,
+    quoteReceivedAt: data.quoteReceivedAt,
+    quoteStale: data.quoteStale,
+    quoteStatus: data.quoteStatus,
+    quoteAgeSeconds: data.quoteAgeSeconds,
     correlationId: data.correlationId ?? '',
     status: data.status ?? 'OPEN',
   }

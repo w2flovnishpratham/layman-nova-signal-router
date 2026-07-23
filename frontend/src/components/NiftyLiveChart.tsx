@@ -53,6 +53,7 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
   const tradingDateRef = useRef<string | null>(null)
 
   const snapshot = useSessionStore((state) => state.marketSnapshot)
+  const snapshotSource = useSessionStore((state) => state.marketSnapshotSource)
   const wsStatus = useSessionStore((state) => state.wsStatus)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -60,6 +61,7 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const lastTickEpochRef = useRef<number | null>(null)
   const candlesRef = useRef<NiftyCandle[]>([])
+  const [containerReady, setContainerReady] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -120,8 +122,31 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
 
   useEffect(() => {
     const container = containerRef.current
-    if (!container || !hasCandles || chartRef.current) return
+    if (!container || !hasCandles) {
+      setContainerReady(false)
+      return
+    }
+    const observeSize = () => {
+      const rect = container.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0) setContainerReady(true)
+      if (chartRef.current && rect.width > 0 && rect.height > 0) {
+        chartRef.current.resize(Math.floor(rect.width), Math.floor(rect.height))
+      }
+    }
+    observeSize()
+    const observer = new ResizeObserver(observeSize)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [hasCandles])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !hasCandles || !containerReady || chartRef.current) return
+    const bounds = container.getBoundingClientRect()
+    if (bounds.width <= 0 || bounds.height <= 0) return
     const chart = createChart(container, {
+      width: Math.floor(bounds.width),
+      height: Math.floor(bounds.height),
       layout: { background: { color: 'transparent' }, textColor: 'rgba(148, 155, 175, 0.9)', fontSize: 10 },
       grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(255, 255, 255, 0.06)' } },
       rightPriceScale: { borderVisible: false },
@@ -172,7 +197,7 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
       lastTickEpochRef.current = null
       chart.remove()
     }
-  }, [hasCandles])
+  }, [containerReady, hasCandles])
 
   useEffect(() => {
     const candleSeries = seriesRef.current
@@ -196,7 +221,7 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
     candleSeries.setData(merged.map(toBar))
     if (previous.length === 0) chartRef.current?.timeScale().fitContent()
     else if (merged[merged.length - 1].time > previous[previous.length - 1].time) chartRef.current?.timeScale().scrollToRealTime()
-  }, [candles, hasCandles, snapshot?.atm?.marketfeed?.connected, snapshot?.marketStatus, wsStatus])
+  }, [candles, containerReady, hasCandles, snapshot?.atm?.marketfeed?.connected, snapshot?.marketStatus, wsStatus])
 
   useEffect(() => {
     const candleSeries = seriesRef.current
@@ -234,7 +259,7 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
       .filter((marker): marker is SeriesMarker<Time> => marker !== null)
       .sort((left, right) => (left.time as number) - (right.time as number))
     plugin.setMarkers(placed)
-  }, [markers, candles, hasCandles])
+  }, [markers, candles, containerReady, hasCandles])
 
   const tickReceivedAt = snapshot?.atm?.niftySpotReceivedAt
   const lastPrice = (tickReceivedAt ? snapshot?.niftySpot : null) ?? (hasCandles ? candles[candles.length - 1].close : null)
@@ -246,9 +271,10 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
     stale: Boolean(series?.stale),
     wsStatus,
     feedConnected: snapshot?.atm?.marketfeed?.connected,
+    snapshotSource,
     updatedAt: lastStampIso,
   })
-  const connectionClass = connectionLabel.toLowerCase().replace(' ', '-')
+  const connectionClass = connectionLabel.toLowerCase().replaceAll(' ', '-')
   const header = (
     <div className="nifty-chart-header">
       <span className="nifty-chart-title"><Activity size={14} />NIFTY 50 · 5m</span>

@@ -65,6 +65,7 @@ describe('TradingView chart helpers', () => {
     expect(chartConnectionLabel({ ...base, now: Date.parse(updatedAt) + 1_000 })).toBe('Live')
     expect(chartConnectionLabel({ ...base, now: Date.parse(updatedAt) + 46_000 })).toBe('Delayed')
     expect(chartConnectionLabel({ ...base, wsStatus: 'degraded' })).toBe('Reconnecting')
+    expect(chartConnectionLabel({ ...base, wsStatus: 'degraded', snapshotSource: 'rest' })).toBe('REST fallback')
     expect(chartConnectionLabel({ ...base, marketClosed: true })).toBe('Market closed')
     expect(chartConnectionLabel({ ...base, unavailable: true })).toBe('Unavailable')
   })

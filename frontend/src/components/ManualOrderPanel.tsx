@@ -19,11 +19,12 @@ import { getContractForSide, hasOpenPositionProof } from './ManualOrderPanel.hel
 interface Props {
   engineMode: EngineMode | null
   activeTrade: ActiveTrade | null
+  runtimePositionOpen?: boolean
 }
 
 type Stage = 'idle' | 'Submitting order' | 'Waiting for fresh LTP' | 'Paper order accepted' | 'Confirming fill' | 'Opening position' | 'Position opened' | 'Position closed' | 'Reconciliation required' | 'Order not placed'
 
-export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
+export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen = false }: Props) {
   const [lots, setLots] = useState(1)
   const [side, setSide] = useState<'CE' | 'PE'>('CE')
   const [targetProfitPct, setTargetProfitPct] = useState(20)
@@ -44,6 +45,8 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const [message, setMessage] = useState('')
   const [confirmed, setConfirmed] = useState<ManualOrderResponse | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
+  const [closedPositionKey, setClosedPositionKey] = useState<string | null>(null)
   const advancedToggleRef = useRef<HTMLButtonElement | null>(null)
   const advancedRegionRef = useRef<HTMLDivElement | null>(null)
   const advancedScrollTimerRef = useRef<number | null>(null)
@@ -55,6 +58,8 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
   const marketClosed = quote?.atm?.marketOpen === false
   const ceContract = getContractForSide(quotes.CE, 'CE')
   const peContract = getContractForSide(quotes.PE, 'PE')
+  const currentPositionKey = activeTrade?.orderId ?? activeTrade?.symbol ?? 'runtime-position'
+  const hasExposure = (runtimePositionOpen || Boolean(activeTrade)) && closedPositionKey !== currentPositionKey
   const advancedTransition = reduceMotion ? { duration: 0 } : { duration: 0.26, ease: softEase }
 
   useEffect(() => {
@@ -146,10 +151,13 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
         setStage('Position opened')
         setConfirmed(response)
         applyManualOrderHydration(response)
+        setClosedPositionKey(null)
       } else if (operationState === 'POSITION_CLOSED' && response.ok) {
         setStage('Position closed')
         setConfirmed(response)
         applyManualOrderHydration(response)
+        setClosedPositionKey(currentPositionKey)
+        setExitConfirmOpen(false)
       } else if (operationState === 'RECONCILIATION_REQUIRED') {
         setStage('Reconciliation required')
       } else if (operationState === 'PAPER_ORDER_ACCEPTED') {
@@ -235,6 +243,37 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
         </p>
       ) : null}
 
+      {hasExposure ? (
+        <div className="manual-exit-primary" role="region" aria-label="Open position controls">
+          <div>
+            <strong>Position open</strong>
+            <span>{activeTrade?.symbol ?? 'Backend-tracked Paper position'} · Qty {activeTrade?.qty ?? 'confirmed by server'}</span>
+          </div>
+          <button
+            type="button"
+            className="manual-exit-button"
+            disabled={pending}
+            onClick={() => setExitConfirmOpen(true)}
+          >
+            <LogOut size={13} /> Exit Position
+          </button>
+        </div>
+      ) : null}
+
+      {exitConfirmOpen && hasExposure ? (
+        <div className="manual-exit-confirm" role="dialog" aria-modal="true" aria-label="Confirm Paper position exit">
+          <strong>Exit the tracked position?</strong>
+          <span>NOVA will submit one idempotent exit and confirm the position is flat.</span>
+          <div>
+            <button type="button" className="manual-exit-button" disabled={pending} onClick={() => void runOrder('exit')}>
+              {activeAction === 'exit' ? <Loader2 size={13} className="animate-spin" /> : <LogOut size={13} />}
+              {activeAction === 'exit' ? 'Exit pending…' : 'Confirm Exit'}
+            </button>
+            <button type="button" className="secondary-button" disabled={pending} onClick={() => setExitConfirmOpen(false)}>Cancel</button>
+          </div>
+        </div>
+      ) : null}
+
       {/* Lots Stepper Stepper Component */}
       <div className="flex flex-col gap-1.5 mt-4 select-none">
         <span className="text-xs text-white/50 font-medium">Lots</span>
@@ -318,18 +357,7 @@ export function ManualOrderPanel({ engineMode, activeTrade }: Props) {
               <div className="flex gap-2">
                 <ActionButton
                   live={live}
-                  disabled={pending || marketClosed || !activeTrade}
-                  onConfirm={() => void runOrder('exit')}
-                  loading={activeAction === 'exit'}
-                  ariaLabel="Exit current position"
-                  className="flex-1 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  <LogOut size={12} />
-                  Exit Position
-                </ActionButton>
-                <ActionButton
-                  live={live}
-                  disabled={pending || marketClosed || !activeTrade}
+                  disabled={pending || marketClosed || !hasExposure}
                   onConfirm={() => void runOrder('reverse')}
                   loading={activeAction === 'reverse'}
                   ariaLabel="Reverse position"

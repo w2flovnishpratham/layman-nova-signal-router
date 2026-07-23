@@ -222,7 +222,7 @@ describe('PersonalStrategiesPage', () => {
     await user.click(screen.getByRole('button', { name: /^pause$/i }))
     await waitFor(() => expect(api.pause).toHaveBeenCalled())
     await user.click(screen.getByRole('button', { name: /^stop$/i }))
-    await user.click(screen.getByRole('button', { name: /^rotate$/i }))
+    await user.click(screen.getByRole('button', { name: /Replace TradingView credential/i }))
     await user.click(screen.getByRole('button', { name: /^revoke$/i }))
     await waitFor(() => {
       expect(api.stop).toHaveBeenCalled()
@@ -239,6 +239,25 @@ describe('PersonalStrategiesPage', () => {
     await screen.findByRole('heading', { name: 'My private strategy' })
     await user.click(screen.getByRole('button', { name: /generate credential/i }))
     expect(await screen.findByRole('alert')).toHaveTextContent('feature disabled')
+    expect(document.body.textContent).not.toContain(TOKEN)
+  })
+
+  it('shows owner-safe webhook authentication guidance without rendering a credential value', async () => {
+    arrange(instance({
+      webhook_credential: {
+        id: 'credential-a', strategy_instance_id: 'instance-a', token_prefix: 'nwk_safe',
+        created_at: '2026-07-21T08:00:00Z', last_used_at: '2026-07-21T08:05:00Z', revoked_at: null,
+      },
+      credential_status: 'active',
+      installation_status: 'READY',
+      webhook_auth_status: {
+        last_failed_at: '2026-07-21T08:10:00Z', reason: 'REVOKED_OR_ROTATED_CREDENTIAL',
+      },
+      readiness: { paper_mode: true, valid_lots: true, active_credential: true, connection_tested: true, can_activate: true },
+    }))
+    render(<PersonalStrategiesPage />)
+    expect(await screen.findByText(/TradingView alert authentication failed/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Replace TradingView credential/i })).toBeInTheDocument()
     expect(document.body.textContent).not.toContain(TOKEN)
   })
 

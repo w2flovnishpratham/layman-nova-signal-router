@@ -60,7 +60,7 @@ def test_inactive_non_verification_instance_is_rejected(client, per_user_runtime
     _start_paper_engine(user)
 
     rejected = _post(client, token, _payload(action="BUY_CE"))
-    assert rejected.status_code == 409 and rejected.json()["reason"] == "INACTIVE_INSTANCE"
+    assert rejected.status_code == 409 and rejected.json()["reason"] == "STRATEGY_INSTANCE_INACTIVE"
     assert _position_for(user)["has_open_position"] is False
 
 

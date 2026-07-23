@@ -298,6 +298,19 @@ def get_instance(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, 
         payload = _decorate_personal_instance(db, row, payload)
         if row.source_journey == "PERSONAL_TRADINGVIEW":
             payload["has_open_position"] = _position_is_open(user_id, row.execution_mode)
+            payload["selected_for_engine"] = _current_selection_id(db, user_id) == row.id
+            from app.services.execution_context import current_execution_user
+            from app.services.runtime_reliability import runtime_status
+
+            current_user = current_execution_user()
+            payload["engine_running"] = bool(
+                current_user is not None
+                and current_user.id == user_id
+                and runtime_status(current_user)["engine"]["running"]
+            )
+            from app.services.private_webhook_service import webhook_auth_status
+
+            payload["webhook_auth_status"] = webhook_auth_status(row.id, user_id)
         return payload
 
 

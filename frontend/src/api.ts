@@ -120,11 +120,24 @@ export interface RuntimeStatus {
     security_id: string | null
     trading_symbol: string | null
     option_side: string | null
+    strike?: number | null
+    expiry?: string | null
+    entry_order_id?: string | null
     qty: number
     lots: number
     entry_price: number | null
     opened_at: string | null
     unrealized_pnl: number | null
+    risk?: {
+      armed: boolean
+      status: 'armed' | 'unarmed' | 'not_applicable' | string
+      source: string | null
+      server_managed: boolean
+      stop_price: number | null
+      target_price: number | null
+      stop_loss_percent: number
+      take_profit_percent: number
+    }
     ltp: {
       value: number | null
       source: string | null
@@ -140,6 +153,7 @@ export interface RuntimeStatus {
     unrealized: number | null
     session: number | null
     available_balance: number | null
+    utilized_amount?: number | null
   }
   config: {
     active: Record<string, unknown>
@@ -184,7 +198,8 @@ async function runtimeCall(path: `/${string}`, method = 'GET', payload?: unknown
 }
 
 export const getRuntimeStatus = () => runtimeCall('/api/runtime/status')
-export const startSelectedPaperEngine = () => runtimeCall('/api/runtime/start-selected', 'POST')
+export const startSelectedPaperEngine = (strategyInstanceId: string) =>
+  runtimeCall('/api/runtime/start-selected', 'POST', { strategy_instance_id: strategyInstanceId })
 export const stopRuntimeEngine = () => runtimeCall('/api/runtime/stop', 'POST')
 export const squareOffRuntime = () => runtimeCall('/api/runtime/square-off', 'POST')
 export const switchRuntimeMode = (mode: 'paper' | 'live') =>
@@ -682,6 +697,7 @@ export interface StrategyInstance {
   blocking_code?: string | null
   setup_type?: TradingViewSetupType | null
   requires_managed_setup?: boolean
+  installation_status?: string | null
   /** Controlled paper-only verification is running (produces entry/exit evidence). */
   verification_mode?: boolean
   verification_started_at?: string | null
@@ -690,7 +706,13 @@ export interface StrategyInstance {
   estimated_quantity?: number
   last_signal_time?: string | null
   last_execution_status?: string | null
+  webhook_auth_status?: {
+    last_failed_at: string | null
+    reason: string | null
+  }
   has_open_position?: boolean
+  selected_for_engine?: boolean
+  engine_running?: boolean
 }
 
 export interface InstanceWebhookCredential {

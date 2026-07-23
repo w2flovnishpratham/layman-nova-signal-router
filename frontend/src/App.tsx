@@ -35,9 +35,9 @@ import {
 } from './api'
 import type { AuthUser, LogoutEngineAction, RuntimeStatus } from './api'
 import { DEFAULT_NIFTY_LOT_SIZE } from './lib/trading'
-import { useSessionStore } from './state/sessionStore'
+import { applyRestMarketSnapshot, applyRuntimeHydration, useSessionStore } from './state/sessionStore'
 import { SessionWS } from './ws'
-import type { ClientCommand, MarketSnapshot, SystemHealth } from './types'
+import type { ClientCommand, SystemHealth } from './types'
 
 function App() {
   const wsRef = useRef<SessionWS | null>(null)
@@ -47,7 +47,6 @@ function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState('')
-  const [marketSnapshot, setMarketSnapshot] = useState<MarketSnapshot | null>(null)
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [runtimeLoading, setRuntimeLoading] = useState(true)
@@ -122,7 +121,6 @@ function App() {
     let mounted = true
 
     resetSession()
-    setSnapshotLoaded(false)
     startSession()
       .then(async (bootstrap) => {
         if (!mounted) return
@@ -161,12 +159,14 @@ function App() {
     let timer: number | null = null
 
     const poll = () => {
+      const requestStartedAt = Date.now()
       Promise.allSettled([getMarketSnapshot(), getSystemHealth(), getRuntimeStatus()]).then(([market, health, runtime]) => {
         if (!mounted) return
-        if (market.status === 'fulfilled') setMarketSnapshot(market.value)
+        if (market.status === 'fulfilled') applyRestMarketSnapshot(market.value, requestStartedAt)
         if (health.status === 'fulfilled') setSystemHealth(health.value)
         if (runtime.status === 'fulfilled') {
           setRuntimeStatus(runtime.value)
+          applyRuntimeHydration(runtime.value, requestStartedAt)
           setRuntimeError('')
         } else {
           setRuntimeError(runtime.reason instanceof Error ? runtime.reason.message : 'Could not load strategy state.')
@@ -183,7 +183,7 @@ function App() {
     }
   }, [authUser, bootNonce])
 
-  const displayedMarketSnapshot = pushedMarketSnapshot ?? marketSnapshot
+  const displayedMarketSnapshot = pushedMarketSnapshot
 
   useEffect(() => {
     const handler = () => {
@@ -257,7 +257,9 @@ function App() {
     setBootError('')
     try {
       await action()
-      setRuntimeStatus(await getRuntimeStatus())
+      const latest = await getRuntimeStatus()
+      setRuntimeStatus(latest)
+      applyRuntimeHydration(latest)
       setRuntimeError('')
     } catch (error) {
       setBootError(error instanceof Error ? error.message : 'Runtime action failed')
@@ -283,7 +285,9 @@ function App() {
     if (runtimeStatus?.selected_strategy?.instance_id !== instanceId) {
       throw new Error('The selected strategy changed. Refresh before starting.')
     }
-    setRuntimeStatus(await startSelectedPaperEngine())
+    const latest = await startSelectedPaperEngine(instanceId)
+    setRuntimeStatus(latest)
+    applyRuntimeHydration(latest)
     setRuntimeError('')
   }
 
@@ -465,6 +469,7 @@ function App() {
                     marketSnapshot={displayedMarketSnapshot}
                     engineMode={engineMode}
                     activeTrade={activeTrade}
+                    runtimePositionOpen={Boolean(runtimeStatus?.position.has_open_position)}
                     collapseControl={renderLeftCollapseButton()}
                   />
                 </motion.div>
@@ -612,7 +617,7 @@ function App() {
                   ✕
                 </button>
               </div>
-              <EngineLeftPanel marketSnapshot={displayedMarketSnapshot} engineMode={engineMode} activeTrade={activeTrade} />
+              <EngineLeftPanel marketSnapshot={displayedMarketSnapshot} engineMode={engineMode} activeTrade={activeTrade} runtimePositionOpen={Boolean(runtimeStatus?.position.has_open_position)} />
                 </motion.div>
               </motion.div>
             ) : null}

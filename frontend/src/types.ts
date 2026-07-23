@@ -272,6 +272,13 @@ export interface ActiveTrade {
   slippagePercent?: number
   srSuggestion?: SrSuggestion
   activeExitLevels?: ActiveExitLevels | null
+  riskArmed?: boolean
+  riskSource?: string | null
+  quoteSource?: string | null
+  quoteReceivedAt?: string | null
+  quoteStale?: boolean
+  quoteStatus?: string | null
+  quoteAgeSeconds?: number | null
   correlationId: string
   status: 'OPEN' | 'CLOSED'
 }

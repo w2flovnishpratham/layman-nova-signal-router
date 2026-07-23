@@ -33,7 +33,7 @@ function runtime(overrides: Partial<RuntimeStatus> = {}): RuntimeStatus {
       ltp: {
         value: null,
         source: null,
-        status: 'unavailable',
+        status: 'not_applicable',
         received_at: null,
         age_seconds: null,
         stale: false,
@@ -151,11 +151,41 @@ describe('Header runtime reliability controls', () => {
   it('labels stale LTP without inventing a fresh value', async () => {
     const user = userEvent.setup()
     const status = runtime({
-      position: { ltp: { value: 101.5, status: 'stale', stale: true } } as RuntimeStatus['position'],
+      position: { has_open_position: true, ltp: { value: 101.5, status: 'stale', stale: true } } as RuntimeStatus['position'],
     })
     render(<Header {...props(status)} />)
     await openMenu(user)
     expect(screen.getByText('LTP 101.5 · stale')).toBeInTheDocument()
+  })
+
+  it('renders flat as no active position instead of an LTP error', async () => {
+    const user = userEvent.setup()
+    render(<Header {...props()} />)
+    await openMenu(user)
+    expect(screen.getByText('Flat — no active option position')).toBeInTheDocument()
+    expect(screen.getByText('No active LTP')).toBeInTheDocument()
+    expect(screen.queryByText('Live option quote unavailable')).not.toBeInTheDocument()
+  })
+
+  it('shows source, timestamp, and age only for an open quote failure', async () => {
+    const user = userEvent.setup()
+    const status = runtime({
+      position: {
+        has_open_position: true,
+        ltp: {
+          value: null,
+          status: 'ltp_error',
+          stale: false,
+          source: 'dhan_marketfeed_ws',
+          received_at: '2026-07-21T08:00:00Z',
+          age_seconds: 17,
+        },
+      } as RuntimeStatus['position'],
+    })
+    render(<Header {...props(status)} />)
+    await openMenu(user)
+    expect(screen.getByText('Live option quote unavailable')).toBeInTheDocument()
+    expect(screen.getByText(/dhan_marketfeed_ws.*17s old/)).toBeInTheDocument()
   })
 
   it('does not expose stopped configuration while square-off is still stopping', async () => {

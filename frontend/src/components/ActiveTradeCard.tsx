@@ -1,6 +1,6 @@
 import { Check, ChevronDown, ExternalLink, Loader2, Pencil, Target, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { patchActiveExitLevels, patchActiveQuantity } from '../api'
@@ -18,6 +18,18 @@ interface Props {
 }
 
 export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSuggestion }: Props) {
+  return (
+    <ActiveTradeCardContent
+      key={trade.orderId}
+      trade={trade}
+      lotSize={lotSize}
+      compact={compact}
+      onApplySrSuggestion={onApplySrSuggestion}
+    />
+  )
+}
+
+function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSuggestion }: Props) {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [editingExitLevels, setEditingExitLevels] = useState(false)
   const [draftStopLoss, setDraftStopLoss] = useState('')
@@ -41,18 +53,14 @@ export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSugg
   const displayQty = savedQty ?? trade.qty
   const displayLots = lotsForQuantity(displayQty, lotSize)
   const srAccepted = Boolean(srSuggestion?.accepted || activeExitLevels?.source === 'sr_suggestion')
+  const quoteUnavailable = trade.quoteStatus != null && !['ready', 'stale'].includes(trade.quoteStatus)
   const exitLevelText = activeExitLevels?.stopLossPrice && activeExitLevels?.targetPrice
-    ? `${formatCurrency(activeExitLevels.stopLossPrice, { decimals: 2 })} / ${formatCurrency(activeExitLevels.targetPrice, { decimals: 2 })}`
-    : 'Not armed'
-
-  useEffect(() => {
-    setSavedExitLevels(null)
-    setSavedQty(null)
-    setEditingExitLevels(false)
-    setEditingQuantity(false)
-    setExitLevelStatus('')
-    setQuantityStatus('')
-  }, [trade.orderId])
+    ? `SL ${formatCurrency(activeExitLevels.stopLossPrice, { decimals: 2 })} · TP ${formatCurrency(activeExitLevels.targetPrice, { decimals: 2 })}`
+    : trade.riskArmed === true
+      ? 'Server managed'
+      : trade.riskArmed === false
+        ? 'Not armed'
+        : 'Risk status unavailable'
 
   function openQuantityEditor() {
     setDraftLots(String(Math.max(displayLots, 1)))
@@ -163,7 +171,14 @@ export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSugg
               />
             ) : null}
             <span>LTP</span>
-            <strong><TickingNumber value={trade.ltp} decimals={2} /></strong>
+            <strong>{quoteUnavailable ? 'Unavailable' : <TickingNumber value={trade.ltp} decimals={2} />}</strong>
+            {quoteUnavailable || trade.quoteStale ? (
+              <small>
+                {trade.quoteStale ? 'Stale quote' : 'Live option quote unavailable'}
+                {trade.quoteSource ? ` · ${trade.quoteSource}` : ''}
+                {trade.quoteAgeSeconds != null ? ` · ${Math.round(trade.quoteAgeSeconds)}s old` : ''}
+              </small>
+            ) : null}
           </motion.div>
           <TradeCell
             label="Qty"
@@ -315,11 +330,20 @@ export function ActiveTradeCard({ trade, lotSize, compact = false, onApplySrSugg
               ) : null}
               {trade.mode === 'paper' ? <div><dt>Simulated charges</dt><dd>{formatCurrency(trade.simulatedCharges ?? 0, { decimals: 2 })}</dd></div> : null}
               {activeExitLevels ? (
-                <div><dt>Active SL/TP</dt><dd>{formatCurrency(activeExitLevels.stopLossPrice ?? 0, { decimals: 2 })} / {formatCurrency(activeExitLevels.targetPrice ?? 0, { decimals: 2 })}</dd></div>
+                <div><dt>Active SL/TP</dt><dd>{formatCurrency(activeExitLevels.stopLossPrice ?? 0, { decimals: 2 })} / {formatCurrency(activeExitLevels.targetPrice ?? 0, { decimals: 2 })} · {trade.riskSource === 'broker' ? 'Broker managed' : 'Server managed'}</dd></div>
               ) : null}
               <div><dt>Exit mode</dt><dd>{trade.exitOn ?? 'Reversal flip'}</dd></div>
-              <div><dt>Correlation</dt><dd>{trade.correlationId || 'pending'}</dd></div>
-              <div><dt>Exchange order</dt><dd>{trade.exchOrderId ?? 'pending'}</dd></div>
+              {trade.mode === 'paper' ? (
+                <>
+                  <div><dt>Paper fill</dt><dd>Confirmed</dd></div>
+                  <div><dt>Order type</dt><dd>Simulated order · position persisted</dd></div>
+                </>
+              ) : (
+                <>
+                  <div><dt>Correlation</dt><dd>{trade.correlationId || 'pending'}</dd></div>
+                  <div><dt>Exchange order</dt><dd>{trade.exchOrderId ?? 'pending'}</dd></div>
+                </>
+              )}
               <div><dt>Status</dt><dd>{trade.status}</dd></div>
             </motion.dl>
           ) : null}

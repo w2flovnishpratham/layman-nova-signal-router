@@ -15,6 +15,17 @@ from fastapi.testclient import TestClient
 from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def isolated_webhook_auth_status_file(tmp_path, monkeypatch):
+    from app.services import private_webhook_service
+
+    monkeypatch.setattr(
+        private_webhook_service,
+        "_AUTH_FAILURE_FILE",
+        tmp_path / "private_webhook_auth_failures.json",
+    )
+
+
 def _now_iso(offset_seconds: float = 0.0) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)).isoformat()
 
@@ -174,7 +185,7 @@ def test_unknown_credential_is_uniform_401(client):
 
 
 def test_revoked_credential_rejected_like_unknown(client):
-    from app.services import strategy_instance_service
+    from app.services import private_webhook_service, strategy_instance_service
 
     user = make_user("cred-revoked@gmail.com")
     instance_id = _make_instance(user)
@@ -186,6 +197,10 @@ def test_revoked_credential_rejected_like_unknown(client):
     unknown = _post(client, "nwk_" + "y" * 43, _payload())
     assert response.json() == unknown.json()
     assert _jobs(instance_id) == []
+    auth_status = private_webhook_service.webhook_auth_status(instance_id, user.id)
+    assert auth_status["reason"] == "REVOKED_OR_ROTATED_CREDENTIAL"
+    assert auth_status["last_failed_at"] is not None
+    assert token not in private_webhook_service._AUTH_FAILURE_FILE.read_text(encoding="utf-8")
 
 
 def test_rotated_credential_old_rejected_new_works(client):
@@ -206,7 +221,7 @@ def test_inactive_instance_rejected(client, status):
     token = _issue_token(user, instance_id)
     response = _post(client, token, _payload())
     assert response.status_code == 409
-    assert response.json()["reason"] == "INACTIVE_INSTANCE"
+    assert response.json()["reason"] == "STRATEGY_INSTANCE_INACTIVE"
     assert _jobs(instance_id) == []
 
 
@@ -241,7 +256,7 @@ def test_non_webhook_journey_rejected(client):
         )
     response = _post(client, token, _payload())
     assert response.status_code == 409
-    assert response.json()["reason"] == "INACTIVE_INSTANCE"
+    assert response.json()["reason"] == "STRATEGY_INSTANCE_INACTIVE"
 
 
 def test_plaintext_credential_never_persisted_or_logged(client, tmp_path, monkeypatch):

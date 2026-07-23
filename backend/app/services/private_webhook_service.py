@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -23,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.config import DEFAULT_EXCHANGE_SEGMENT, settings
+from app.config import DEFAULT_EXCHANGE_SEGMENT, RUNTIME_STATE_DIR, settings
 from app.db import crud, models
 from app.db.engine import database_configured, session_scope
 from app.schemas.signal import NormalizedSignal
@@ -41,6 +42,8 @@ PRIVATE_WEBHOOK_SOURCE = "PRIVATE_TRADINGVIEW_WEBHOOK"
 # Exactly the four normalized actions. Case normalization only — no free-form
 # Pine vocabulary (LONG/SHORT/CALL/PUT/...) is interpreted here.
 NORMALIZED_ACTIONS = {"BUY_CE", "BUY_PE", "EXIT", "HOLD"}
+_AUTH_FAILURE_FILE = RUNTIME_STATE_DIR / "private_webhook_auth_failures.json"
+_AUTH_FAILURE_LOCK = threading.RLock()
 
 
 class PrivateWebhookError(Exception):
@@ -190,7 +193,13 @@ def authenticate_credential(token: str, *, correlation_id: str | None = None) ->
             _audit_credential_failure(correlation_id)
             raise _invalid_credential()
         if credential.revoked_at is not None:
-            _audit_credential_failure(correlation_id)
+            instance = db.get(models.StrategyInstance, credential.strategy_instance_id)
+            _record_known_credential_failure(
+                instance_id=str(credential.strategy_instance_id),
+                user_id=str(instance.user_id) if instance is not None else None,
+                reason="REVOKED_OR_ROTATED_CREDENTIAL",
+            )
+            _audit_credential_failure(correlation_id, instance_id=str(credential.strategy_instance_id))
             raise _invalid_credential()
         instance = db.get(models.StrategyInstance, credential.strategy_instance_id)
         if instance is None:
@@ -222,13 +231,51 @@ def _invalid_credential() -> PrivateWebhookError:
     )
 
 
-def _audit_credential_failure(correlation_id: str | None) -> None:
+def _audit_credential_failure(correlation_id: str | None, *, instance_id: str | None = None) -> None:
     log_audit_event(
         "private_webhook_auth_failed",
         "private_webhook_auth_failed",
         severity="WARNING",
-        metadata={"correlation_id": correlation_id},
+        metadata={
+            "correlation_id": correlation_id,
+            **({"strategy_instance_id": instance_id} if instance_id else {}),
+        },
     )
+
+
+def _record_known_credential_failure(*, instance_id: str, user_id: str | None, reason: str) -> None:
+    """Persist only safe routing metadata; never the supplied credential."""
+    with _AUTH_FAILURE_LOCK:
+        try:
+            current = json.loads(_AUTH_FAILURE_FILE.read_text(encoding="utf-8"))
+            if not isinstance(current, dict):
+                current = {}
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            current = {}
+        current[instance_id] = {
+            "last_failed_at": _now().isoformat(),
+            "reason": reason,
+            "user_id": user_id,
+        }
+        _AUTH_FAILURE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = _AUTH_FAILURE_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(current, sort_keys=True), encoding="utf-8")
+        temporary.replace(_AUTH_FAILURE_FILE)
+
+
+def webhook_auth_status(instance_id: uuid.UUID | str, user_id: uuid.UUID | str) -> dict[str, Any]:
+    with _AUTH_FAILURE_LOCK:
+        try:
+            current = json.loads(_AUTH_FAILURE_FILE.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            current = {}
+    item = current.get(str(instance_id)) if isinstance(current, dict) else None
+    if not isinstance(item, dict) or item.get("user_id") not in {None, str(user_id)}:
+        return {"last_failed_at": None, "reason": None}
+    return {
+        "last_failed_at": item.get("last_failed_at"),
+        "reason": item.get("reason"),
+    }
 
 
 def validate_instance_lifecycle(auth: dict[str, Any], action: str | None = None) -> None:
@@ -236,7 +283,7 @@ def validate_instance_lifecycle(auth: dict[str, Any], action: str | None = None)
         raise PrivateWebhookError(
             "This strategy instance does not accept private webhooks.",
             status_code=409,
-            reason="INACTIVE_INSTANCE",
+            reason="STRATEGY_INSTANCE_INACTIVE",
         )
     # C2 instances are born inert and accept only the one HOLD required for
     # routing verification. They never enter verification_mode, so BUY/SELL
@@ -257,7 +304,7 @@ def validate_instance_lifecycle(auth: dict[str, Any], action: str | None = None)
         raise PrivateWebhookError(
             "Strategy instance is stopped or not active.",
             status_code=409,
-            reason="INACTIVE_INSTANCE",
+            reason="STRATEGY_INSTANCE_INACTIVE",
         )
     if in_verification and auth.get("execution_mode") != "paper_live_data":
         # Verification is paper-only — a live instance can never ingest here.

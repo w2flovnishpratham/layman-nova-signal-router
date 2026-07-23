@@ -82,8 +82,9 @@ def _token_status(user: CurrentUser) -> dict[str, Any]:
     }
 
 
-def _position_status(position: dict[str, Any]) -> dict[str, Any]:
+def _position_status(position: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]:
     live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
+    has_open_position = bool(position.get("has_open_position"))
     checked_at = _parse_time(live_pnl.get("last_checked_at"))
     age_seconds: float | None = None
     if checked_at is not None:
@@ -94,28 +95,64 @@ def _position_status(position: dict[str, Any]) -> dict[str, Any]:
                 2,
             ),
         )
-    ltp = live_pnl.get("ltp")
-    quote_status = str(live_pnl.get("status") or ("ready" if ltp is not None else "unavailable"))
+    ltp = live_pnl.get("ltp") if has_open_position else None
+    quote_status = (
+        "not_applicable"
+        if not has_open_position
+        else str(live_pnl.get("status") or ("ready" if ltp is not None else "unavailable"))
+    )
     stale = bool(
-        ltp is not None
+        has_open_position
+        and ltp is not None
         and (age_seconds is None or age_seconds > LTP_STALE_AFTER_SECONDS)
     )
     if stale:
         quote_status = "stale"
+
+    entry_price = position.get("entry_price")
+    sl_percent = float(runtime.get("option_sl_percent") or 0)
+    tp_percent = float(runtime.get("option_tp_percent") or 0)
+    sl_price = live_pnl.get("sl_price") or position.get("broker_sl_price")
+    tp_price = live_pnl.get("tp_price") or position.get("broker_tp_price")
+    if has_open_position and entry_price:
+        if sl_price is None and sl_percent > 0 and not bool(runtime.get("option_disable_sl")):
+            sl_price = round(float(entry_price) * (1 - sl_percent / 100), 2)
+        if tp_price is None and tp_percent > 0:
+            tp_price = round(float(entry_price) * (1 + tp_percent / 100), 2)
+    active_levels = position.get("active_exit_levels") if isinstance(position.get("active_exit_levels"), dict) else {}
+    server_managed = bool(runtime.get("server_side_exit_enabled"))
+    broker_managed = bool(position.get("broker_sl_price") or position.get("broker_tp_price"))
+    risk_armed = has_open_position and bool(sl_price or tp_price) and (server_managed or broker_managed)
+    risk_source = active_levels.get("source") or (
+        "broker" if broker_managed else "server_monitor" if server_managed else None
+    )
     return {
-        "has_open_position": bool(position.get("has_open_position")),
+        "has_open_position": has_open_position,
         "security_id": position.get("security_id"),
         "trading_symbol": position.get("trading_symbol"),
         "option_side": position.get("option_side"),
+        "strike": position.get("strike"),
+        "expiry": position.get("expiry"),
+        "entry_order_id": position.get("entry_order_id"),
         "qty": position.get("qty") or 0,
         "lots": (
             round(float(position.get("qty") or 0) / DEFAULT_NIFTY_LOT_SIZE, 4)
             if position.get("qty")
             else 0
         ),
-        "entry_price": position.get("entry_price"),
+        "entry_price": entry_price,
         "opened_at": position.get("opened_at"),
         "unrealized_pnl": live_pnl.get("unrealized_pnl"),
+        "risk": {
+            "armed": risk_armed,
+            "status": "armed" if risk_armed else "unarmed" if has_open_position else "not_applicable",
+            "source": risk_source,
+            "server_managed": server_managed,
+            "stop_price": sl_price,
+            "target_price": tp_price,
+            "stop_loss_percent": sl_percent,
+            "take_profit_percent": tp_percent,
+        },
         "ltp": {
             "value": ltp,
             "source": live_pnl.get("source"),
@@ -123,7 +160,11 @@ def _position_status(position: dict[str, Any]) -> dict[str, Any]:
             "received_at": live_pnl.get("last_checked_at"),
             "age_seconds": age_seconds,
             "stale": stale,
-            "message": live_pnl.get("message"),
+            "message": (
+                "Flat — no active option position."
+                if not has_open_position
+                else live_pnl.get("message") or ("Live option quote unavailable." if ltp is None else None)
+            ),
         },
     }
 
@@ -138,6 +179,7 @@ def _pnl_status(mode: str | None, position: dict[str, Any]) -> dict[str, Any]:
             "unrealized": unrealized,
             "session": round(float(portfolio.realized_pnl) + float(unrealized or 0), 2),
             "available_balance": portfolio.available_balance,
+            "utilized_amount": portfolio.utilized_amount,
         }
     wallet = get_app_state().get("wallet") or {}
     return {
@@ -149,6 +191,7 @@ def _pnl_status(mode: str | None, position: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
         "available_balance": wallet.get("available_balance"),
+        "utilized_amount": wallet.get("utilized_amount"),
     }
 
 
@@ -164,8 +207,15 @@ def runtime_status(user: CurrentUser) -> dict[str, Any]:
         app_state.get("engine_lifecycle")
         or ("RUNNING" if app_state.get("webhook_trading_enabled") else "STOPPED")
     ).upper()
-    accepting = bool(app_state.get("webhook_trading_enabled")) and lifecycle == "RUNNING"
-    position_view = _position_status(position)
+    active_runtime = get_mode_runtime_settings(mode or "paper")
+    accepting = (
+        bool(app_state.get("webhook_trading_enabled"))
+        and lifecycle == "RUNNING"
+        and bool(active_runtime.get("allow_entry", True))
+        and not bool(active_runtime.get("emergency_stop", False))
+        and not bool(active_runtime.get("global_kill_switch", False))
+    )
+    position_view = _position_status(position, active_runtime)
     if position_view["has_open_position"] and lifecycle == "STOPPED":
         display = "POSITION OPEN — ENGINE STOPPED"
     elif position_view["has_open_position"] and lifecycle == "STOPPING":
@@ -191,7 +241,7 @@ def runtime_status(user: CurrentUser) -> dict[str, Any]:
         "position": position_view,
         "pnl": _pnl_status(mode, position),
         "config": {
-            "active": get_mode_runtime_settings(mode or "paper"),
+            "active": active_runtime,
             "paper": get_mode_runtime_settings("paper"),
             "live": get_mode_runtime_settings("live"),
         },

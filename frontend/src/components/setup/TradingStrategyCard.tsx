@@ -52,6 +52,7 @@ export function TradingStrategyCard({
   const paper = runtime?.config.paper ?? {}
   const [showChoices, setShowChoices] = useState(false)
   const [showConfig, setShowConfig] = useState(false)
+  const [confirmStartOpen, setConfirmStartOpen] = useState(false)
   const [busy, setBusy] = useState('')
   const [actionError, setActionError] = useState('')
   const serverDraft = {
@@ -212,7 +213,7 @@ export function TradingStrategyCard({
           type="button"
           className="strategy-start"
           disabled={!canStart || busy === 'start'}
-          onClick={() => void run('start', () => onStart(selected.instance_id))}
+          onClick={() => setConfirmStartOpen(true)}
         >
           {busy === 'start' ? <Loader2 className="strategy-card-spin" size={14} /> : <Play size={14} />}
           {runtime?.engine.running ? 'Paper Engine Running' : 'Start Paper Engine'}
@@ -225,6 +226,32 @@ export function TradingStrategyCard({
           Change Strategy <ChevronDown size={14} />
         </button>
       </div>
+
+      {confirmStartOpen && canStart ? (
+        <section className="strategy-start-confirm" role="dialog" aria-modal="true" aria-label="Confirm selected strategy start">
+          <div>
+            <span>NOVA plans to start</span>
+            <strong>{selected.display_name}</strong>
+            <small>{selected.strategy_version ? `Version ${selected.strategy_version} · ` : ''}Paper mode</small>
+          </div>
+          <dl>
+            <div><dt>Lots</dt><dd>{configuredLots}</dd></div>
+            <div><dt>Stop loss</dt><dd>{configuredSl}%</dd></div>
+            <div><dt>Take profit</dt><dd>{configuredTp}%</dd></div>
+          </dl>
+          <div className="strategy-start-confirm-actions">
+            <button type="button" className="strategy-start" disabled={busy === 'start'} onClick={() => void run('start', async () => {
+              await onStart(selected.instance_id)
+              setConfirmStartOpen(false)
+            })}>
+              {busy === 'start' ? <Loader2 className="strategy-card-spin" size={14} /> : <Play size={14} />}
+              Confirm and Start
+            </button>
+            <button type="button" onClick={() => { setConfirmStartOpen(false); setShowConfig(true) }}>Edit Settings</button>
+            <button type="button" onClick={() => setConfirmStartOpen(false)}>Cancel</button>
+          </div>
+        </section>
+      ) : null}
 
       {showChoices && !onChangeStrategy ? (
         <StrategyChoices

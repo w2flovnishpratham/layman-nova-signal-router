@@ -192,7 +192,7 @@ def test_live_setup_remains_blocked_and_paper_configuration_unchanged(mu_db, run
 
 def test_builtin_explicit_start_uses_supertrend_adapter(mu_db, runtime, monkeypatch):
     from app.routers import engine
-    from app.services import strategy_fanout
+    from app.services import strategy_fanout, strategy_instance_service
     from app.services.user_context import current_user_from_model
 
     _seed()
@@ -224,7 +224,10 @@ def test_builtin_explicit_start_uses_supertrend_adapter(mu_db, runtime, monkeypa
     )
     monkeypatch.setattr(engine, "_hydrated_runtime_status", lambda: {"ok": True})
 
-    assert engine.runtime_start_selected() == {"ok": True}
+    selected_id = strategy_instance_service.trading_selection_state(current.id)["selected_strategy"]["instance_id"]
+    assert engine.runtime_start_selected(
+        engine.StartSelectedRequest(strategy_instance_id=selected_id)
+    ) == {"ok": True}
     assert calls == [("supertrend", 3, "paper_live_data")]
 
 

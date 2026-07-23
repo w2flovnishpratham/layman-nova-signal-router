@@ -481,9 +481,16 @@ function StrategyDetail(props: DetailProps) {
           <Summary label="Mode" value="Paper" />
           <Summary label="Lots" value={String(detail.current_lots)} />
           <Summary label="Estimated quantity" value={detail.estimated_quantity ? `${detail.estimated_quantity} contracts` : 'Calculated at entry'} />
-          <Summary label="Credential" value={detail.webhook_credential ? 'Active' : 'Not generated'} />
+          <Summary label="Credential" value={detail.credential_status === 'revoked' ? 'Revoked' : detail.webhook_credential ? 'Active' : 'Not generated'} />
           <Summary label="Connection test" value={connectionPassed ? 'Passed' : 'Required'} />
           <Summary label="Last signal" value={formatDate(detail.last_signal_time)} />
+          <Summary label="Last authenticated" value={formatDate(detail.webhook_credential?.last_used_at)} />
+          <Summary label="Last auth failure" value={formatDate(detail.webhook_auth_status?.last_failed_at)} />
+          <Summary label="Installation" value={detail.installation_status ?? (detail.requires_managed_setup ? 'Pending' : 'Self-managed')} />
+          <Summary
+            label="Selected / running"
+            value={`${detail.selected_for_engine ? 'Selected' : 'Not selected'} · ${detail.engine_running ? 'Engine running' : 'Engine stopped'}`}
+          />
         </div>
         <div className="ps-readiness" aria-label="Activation readiness">
           {Object.entries(detail.readiness ?? {}).filter(([key]) => key !== 'can_activate').map(([key, ready]) => (
@@ -541,9 +548,15 @@ function StrategyDetail(props: DetailProps) {
         ) : null}
         {!managed && detail.webhook_credential ? (
           <>
+            {detail.webhook_auth_status?.last_failed_at ? (
+              <div className="ps-warning" role="alert">
+                <AlertTriangle size={16} />
+                <span>TradingView alert authentication failed at {formatDate(detail.webhook_auth_status.last_failed_at)}. The alert may be using an expired or rotated credential. Replace it in TradingView before sending another signal.</span>
+              </div>
+            ) : null}
             {detail.has_open_position ? <div className="ps-warning"><AlertTriangle size={16} /><span>Revoking this credential disables TradingView exit signals. NOVA manual and protective exits remain available.</span></div> : null}
             <div className="ps-actions">
-              <button type="button" className="secondary-button" disabled={!!props.busy} onClick={() => void props.onRotate()}><RotateCw size={14} /> Rotate</button>
+              <button type="button" className="secondary-button" disabled={!!props.busy} onClick={() => void props.onRotate()}><RotateCw size={14} /> Replace TradingView credential</button>
               <button type="button" className="ps-danger" disabled={!!props.busy} onClick={() => void props.onRevoke()}><Trash2 size={14} /> Revoke</button>
             </div>
           </>

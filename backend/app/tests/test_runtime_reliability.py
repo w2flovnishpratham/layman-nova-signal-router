@@ -113,11 +113,50 @@ def test_starting_and_running_transitions(runtime):
     assert status["engine"]["accepting_signals"] is True
 
 
+def test_running_runtime_reports_pause_and_resume_from_owner_settings(runtime):
+    user, _ = runtime
+    runtime_reliability.mark_running()
+    state_store.update_runtime_settings(allow_entry=False)
+    assert runtime_reliability.runtime_status(user)["engine"]["accepting_signals"] is False
+    state_store.update_runtime_settings(allow_entry=True)
+    assert runtime_reliability.runtime_status(user)["engine"]["accepting_signals"] is True
+
+
 def test_start_failure_returns_stopped(runtime):
     user, _ = runtime
     runtime_reliability.mark_starting()
     runtime_reliability.mark_start_failed()
     assert runtime_reliability.runtime_status(user)["engine"]["state"] == "STOPPED"
+
+
+def test_flat_runtime_marks_ltp_not_applicable(runtime):
+    user, _ = runtime
+    status = runtime_reliability.runtime_status(user)
+    assert status["position"]["has_open_position"] is False
+    assert status["position"]["ltp"]["status"] == "not_applicable"
+    assert status["position"]["ltp"]["message"] == "Flat — no active option position."
+
+
+def test_open_runtime_exposes_server_managed_risk_levels(runtime):
+    user, _ = runtime
+    state_store.update_runtime_settings(
+        server_side_exit_enabled=True,
+        option_disable_sl=False,
+        option_sl_percent=10,
+        option_tp_percent=20,
+    )
+    state_store.set_paper_position(_open_position())
+    risk = runtime_reliability.runtime_status(user)["position"]["risk"]
+    assert risk == {
+        "armed": True,
+        "status": "armed",
+        "source": "server_monitor",
+        "server_managed": True,
+        "stop_price": 90.0,
+        "target_price": 120.0,
+        "stop_loss_percent": 10.0,
+        "take_profit_percent": 20.0,
+    }
 
 
 @pytest.mark.parametrize(
@@ -207,6 +246,7 @@ def test_paper_reset_is_explicit_and_snapshotted(runtime):
     paper_portfolio.reset_paper_portfolio(125000)
     status = runtime_reliability.reset_paper_session(user, 150000)
     assert status["pnl"]["available_balance"] == 150000
+    assert status["pnl"]["utilized_amount"] == 0
     rows = [json.loads(row) for row in logs["runtime_snapshots"].read_text().splitlines()]
     assert rows[-1]["reason"] == "paper_reset"
     assert rows[-1]["final"] is True
@@ -349,6 +389,7 @@ def test_status_includes_realized_unrealized_and_session_pnl(runtime):
         "unrealized": -50,
         "session": 200.0,
         "available_balance": 100000.0,
+        "utilized_amount": 0.0,
     }
 
 

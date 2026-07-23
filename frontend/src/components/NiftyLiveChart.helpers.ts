@@ -39,12 +39,14 @@ export function chartConnectionLabel(args: {
   stale: boolean
   wsStatus: 'live' | 'degraded' | 'down'
   feedConnected?: boolean
+  snapshotSource?: 'push' | 'rest' | null
   updatedAt?: string | null
   now?: number
-}): 'Loading' | 'Live' | 'Delayed' | 'Reconnecting' | 'Market closed' | 'Unavailable' {
+}): 'Loading' | 'Live' | 'REST fallback' | 'Delayed' | 'Reconnecting' | 'Market closed' | 'Unavailable' {
   if (args.loading) return 'Loading'
   if (args.unavailable) return 'Unavailable'
   if (args.marketClosed) return 'Market closed'
+  if (args.feedConnected === true && args.snapshotSource === 'rest') return 'REST fallback'
   if (args.wsStatus !== 'live' || args.feedConnected !== true) return 'Reconnecting'
   const updated = Date.parse(args.updatedAt ?? '')
   if (args.stale || !Number.isFinite(updated) || (args.now ?? Date.now()) - updated > STALE_AFTER_MS) return 'Delayed'

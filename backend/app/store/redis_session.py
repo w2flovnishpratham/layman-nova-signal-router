@@ -79,6 +79,48 @@ class InMemorySessionStore:
                 and (user_id is None or session.user_id == user_id)
             ]
 
+    async def owner_session_ids(self, user_id: str) -> list[str]:
+        """Return every browser session owned by one authenticated user.
+
+        Runtime actions can be issued over REST while a chat session is still
+        cached as IDLE.  Owner-scoped runtime synchronization must therefore
+        not use conversational SetupState as its eligibility gate.
+        """
+        async with self._lock:
+            return [
+                session_id
+                for session_id, session in self._sessions.items()
+                if session.user_id == user_id and session.state is not SetupState.ENDED
+            ]
+
+    async def synchronize_runtime_state(
+        self,
+        session_id: str,
+        state: SetupState,
+        *,
+        engine_mode: str | None = None,
+        runtime_state: str | None = None,
+    ) -> None:
+        """Synchronize runtime presentation without replaying setup prompts."""
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return
+            session.state = state
+            if engine_mode in {"paper", "live"}:
+                session.config["engineMode"] = engine_mode
+            config = deepcopy(session.config)
+        await self.append_event(
+            session_id,
+            event(
+                "setup.state",
+                state=state.value,
+                config=config,
+                runtimeSync=True,
+                runtimeState=runtime_state,
+            ),
+        )
+
     def active_user_ids_sync(self) -> list[str]:
         sessions = list(self._sessions.values())
         return sorted(

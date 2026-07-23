@@ -60,7 +60,7 @@ def test_selected_paper_engine_starts_only_after_explicit_endpoint_call(monkeypa
     strategy_instance_service.require_selected_engine_strategy(user.id)
     assert started == []
 
-    result = engine.runtime_start_selected()
+    result = engine.runtime_start_selected(engine.StartSelectedRequest(strategy_instance_id="selected-owner-instance"))
     assert result is hydrated
     assert len(started) == 1
     assert started[0].engine_mode == "paper"
@@ -83,7 +83,7 @@ def test_selected_engine_start_fails_closed_when_selection_is_not_ready(monkeypa
     monkeypatch.setattr(strategy_instance_service, "require_selected_engine_strategy", blocked)
     monkeypatch.setattr(engine, "start_engine", lambda body: started.append(body))
     with pytest.raises(HTTPException) as caught:
-        engine.runtime_start_selected()
+        engine.runtime_start_selected(engine.StartSelectedRequest(strategy_instance_id="selected-owner-instance"))
     assert caught.value.status_code == 409
     assert caught.value.detail["reason"] == "INSTALLATION_SUSPENDED"
     assert started == []
@@ -119,6 +119,36 @@ def test_selected_engine_start_obeys_runtime_switch_guards(monkeypatch, state, p
     )
     monkeypatch.setattr(engine, "start_engine", lambda body: started.append(body))
     with pytest.raises(HTTPException) as caught:
-        engine.runtime_start_selected()
+        engine.runtime_start_selected(engine.StartSelectedRequest(strategy_instance_id="selected"))
     assert caught.value.status_code == 409
     assert started == []
+
+
+def test_selected_engine_start_requires_matching_confirmed_identity(monkeypatch):
+    user = dev_user()
+    monkeypatch.setattr(engine, "_execution_user", lambda: user)
+    monkeypatch.setattr(
+        strategy_instance_service,
+        "require_selected_engine_strategy",
+        lambda _user_id: {
+            "instance_id": "current-selection",
+            "paper_eligible": True,
+            "selectable": True,
+        },
+    )
+    monkeypatch.setattr(
+        engine.strategy_catalog_service,
+        "apply_selected_setup",
+        lambda *_args: {
+            "direction": "BOTH",
+            "lots": 1,
+            "stop_loss_percent": 10,
+            "take_profit_percent": 20,
+        },
+    )
+    with pytest.raises(HTTPException) as caught:
+        engine.runtime_start_selected(
+            engine.StartSelectedRequest(strategy_instance_id="stale-selection")
+        )
+    assert caught.value.status_code == 409
+    assert caught.value.detail["reason"] == "STRATEGY_CONFIRMATION_MISMATCH"

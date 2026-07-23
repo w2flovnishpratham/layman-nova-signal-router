@@ -94,12 +94,16 @@ describe('TradingStrategyCard', () => {
     expect(actions.onStart).not.toHaveBeenCalled()
   })
 
-  it('starts only after an explicit click and uses the selected instance id', async () => {
+  it('starts only after reviewing the explicit confirmation and uses the selected instance id', async () => {
     const actions = callbacks()
     const user = userEvent.setup()
     render(<TradingStrategyCard runtime={runtime()} loading={false} error="" {...actions} />)
     expect(actions.onStart).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: /start paper engine/i }))
+    expect(actions.onStart).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: /confirm selected strategy start/i })).toHaveTextContent('b@S_again Paper')
+    expect(screen.getByRole('dialog', { name: /confirm selected strategy start/i })).toHaveTextContent('8%')
+    await user.click(screen.getByRole('button', { name: /confirm and start/i }))
     expect(actions.onStart).toHaveBeenCalledTimes(1)
     expect(actions.onStart).toHaveBeenCalledWith('cf4799a2-e45d-4548-992c-69b2a1649cc1')
   })

@@ -234,6 +234,9 @@ describe('UnifiedStrategySetup', () => {
     render(<UnifiedStrategySetup runtime={runtime(true)} loading={false} error="" {...actions} />)
     expect(actions.onStart).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: /start paper engine/i }))
+    expect(actions.onStart).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: /confirm selected strategy start/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /confirm and start/i }))
     expect(actions.onStart).toHaveBeenCalledWith('cf4799a2-e45d-4548-992c-69b2a1649cc1')
   })
 
