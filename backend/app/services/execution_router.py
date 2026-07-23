@@ -2308,6 +2308,22 @@ def route_exit_signal(
     )
     if existing_intent is not None:
         return existing_intent
+    # Idempotent retry after a durable Paper exit already completed: the position
+    # is flat and its last exit operation is recorded. Return ALREADY_FLAT so a
+    # re-submitted exit (retry, duplicate delivery) is a benign no-op rather than
+    # a generic block — and never a second SELL.
+    if get_engine_mode() == "paper":
+        flat_check = get_open_position()
+        last_op = flat_check.get("last_exit_operation")
+        if not flat_check.get("has_open_position") and isinstance(last_op, dict) and last_op.get("status") == "COMPLETED":
+            return {
+                "success": True,
+                "status": "ALREADY_FLAT",
+                "idempotent": True,
+                "exit_operation_id": last_op.get("operation_id"),
+                "order_id": last_op.get("order_id"),
+                "reason": "Paper position already exited; no additional SELL sent.",
+            }
     decision: RiskDecision = evaluate_exit(signal, runtime=runtime)
     if not decision.allowed:
         return _blocked("BLOCKED", decision.reason, signal)

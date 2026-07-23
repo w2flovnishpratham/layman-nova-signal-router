@@ -266,3 +266,46 @@ def test_concurrent_exit_routes_persist_one_owner_and_send_one_order(tmp_path, m
     assert flat["last_closed_position_id"] == opened["position_id"]
     assert flat["last_exit_operation"]["status"] == "COMPLETED"
     assert flat["last_exit_operation"]["order_id"] == "PAPER-ONLY-EXIT"
+
+
+def test_exit_retry_after_confirmed_flat_is_already_flat_and_sends_no_order(tmp_path, monkeypatch):
+    """A retry / duplicate delivery after the durable exit completed is a benign
+    idempotent no-op — ALREADY_FLAT, and never a second SELL."""
+    _isolate_paper_runtime(tmp_path, monkeypatch)
+    state_store.init_runtime_files()
+    state_store.set_engine_mode("paper")
+    state_store.update_runtime_settings(allow_exit=True)
+    opened = state_store.set_open_position(
+        state_store.stamp_new_open_position(
+            {
+                "strategy_code": "supertrend", "symbol": "NIFTY", "instrument_type": "OPTIDX",
+                "exchange_segment": "NSE_FNO", "security_id": "123", "trading_symbol": "NIFTY TEST CE",
+                "option_side": "CE", "qty": 10, "entry_price": 100.0,
+                "order_type": "MARKET", "product_type": "INTRADAY",
+            }
+        )
+    )
+    monkeypatch.setattr(settings, "REQUIRE_MARKET_HOURS", False)
+    monkeypatch.setattr(execution_router, "_cancel_super_order_exit_legs", lambda _p: [])
+    monkeypatch.setattr(execution_router, "refresh_wallet_snapshot", lambda **_k: {})
+    monkeypatch.setattr(execution_router.position_operations, "on_position_closed", lambda *_a, **_k: None)
+
+    call_count = {"value": 0}
+
+    def place_once(*_args, **_kwargs):
+        call_count["value"] += 1
+        return {"success": True, "status": "TRADED", "order_id": "PAPER-ONLY-EXIT", "avg_price": 110.0}
+
+    monkeypatch.setattr(execution_router, "_place_order", place_once)
+
+    first = execution_router.route_exit_signal(_exit_signal("EXIT-1", "session_exit_open"))
+    assert first["status"] == "ORDER_PLACED"
+    assert state_store.get_open_position()["has_open_position"] is False
+
+    # Retry with a different signal id (e.g. duplicate webhook / manual re-click).
+    second = execution_router.route_exit_signal(_exit_signal("EXIT-RETRY", "manual_square_off"))
+    assert second["status"] == "ALREADY_FLAT"
+    assert second["idempotent"] is True
+    assert second["order_id"] == "PAPER-ONLY-EXIT"
+    assert call_count["value"] == 1  # no second SELL
+    assert opened["position_id"] == state_store.get_open_position()["last_closed_position_id"]
