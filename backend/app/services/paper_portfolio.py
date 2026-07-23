@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.services.state_store import PAPER_PORTFOLIO_FILE, get_runtime_settings, utc_now
+from app.services.state_store import _LOCK, PAPER_PORTFOLIO_FILE, get_runtime_settings, utc_now
 
 
 _IST = ZoneInfo("Asia/Kolkata")
@@ -80,24 +80,27 @@ def reset_paper_portfolio(starting_balance: float | None = None) -> PaperPortfol
 
 
 def apply_paper_entry(*, qty: int, price: float, charges: float, symbol: str, order_id: str) -> PaperPortfolio:
-    portfolio = get_paper_portfolio()
-    cost = round(qty * price, 2)
-    debit = round(cost + charges, 2)
-    if portfolio.available_balance < debit:
-        raise ValueError("Paper order rejected: insufficient virtual balance.")
-    portfolio.available_balance = round(portfolio.available_balance - debit, 2)
-    portfolio.utilized_amount = round(portfolio.utilized_amount + cost, 2)
-    portfolio.open_trade = {
-        "symbol": symbol,
-        "qty": qty,
-        "entry_price": price,
-        "entry_charges": charges,
-        "entry_value": cost,
-        "entry_order_id": order_id,
-        "opened_at": utc_now(),
-    }
-    portfolio.session_pnl = round(portfolio.available_balance + portfolio.utilized_amount - portfolio.session_start_balance, 2)
-    return _write(portfolio)
+    # Serialize read-check-write under the shared runtime lock so two concurrent
+    # mutations can't both read the same portfolio and double-book.
+    with _LOCK:
+        portfolio = get_paper_portfolio()
+        cost = round(qty * price, 2)
+        debit = round(cost + charges, 2)
+        if portfolio.available_balance < debit:
+            raise ValueError("Paper order rejected: insufficient virtual balance.")
+        portfolio.available_balance = round(portfolio.available_balance - debit, 2)
+        portfolio.utilized_amount = round(portfolio.utilized_amount + cost, 2)
+        portfolio.open_trade = {
+            "symbol": symbol,
+            "qty": qty,
+            "entry_price": price,
+            "entry_charges": charges,
+            "entry_value": cost,
+            "entry_order_id": order_id,
+            "opened_at": utc_now(),
+        }
+        portfolio.session_pnl = round(portfolio.available_balance + portfolio.utilized_amount - portfolio.session_start_balance, 2)
+        return _write(portfolio)
 
 
 def resize_paper_open_trade_quantity(*, qty: int) -> PaperPortfolio:
@@ -141,38 +144,43 @@ class NoOpenPaperTradeError(ValueError):
 
 
 def apply_paper_exit(*, qty: int, exit_price: float, charges: float, symbol: str, order_id: str) -> PaperPortfolio:
-    portfolio = get_paper_portfolio()
-    if not isinstance(portfolio.open_trade, dict) or not portfolio.open_trade:
-        raise NoOpenPaperTradeError("Paper exit rejected: no open trade exists.")
-    trade = dict(portfolio.open_trade)
-    if qty <= 0 or int(qty) != int(trade.get("qty") or 0):
-        raise NoOpenPaperTradeError(
-            f"Paper exit rejected: quantity {qty} does not match open trade quantity {trade.get('qty')}."
-        )
-    entry_price = float(trade.get("entry_price") or 0)
-    entry_charges = float(trade.get("entry_charges") or 0)
-    entry_value = float(trade.get("entry_value") or qty * entry_price)
-    exit_value = round(qty * exit_price, 2)
-    realized = round(exit_value - entry_value - entry_charges - charges, 2)
-    portfolio.available_balance = round(portfolio.available_balance + exit_value - charges, 2)
-    portfolio.utilized_amount = round(max(0.0, portfolio.utilized_amount - entry_value), 2)
-    portfolio.realized_pnl = round(portfolio.realized_pnl + realized, 2)
-    portfolio.session_pnl = round(portfolio.available_balance + portfolio.utilized_amount - portfolio.session_start_balance, 2)
-    portfolio.closed_trades = (
-        portfolio.closed_trades
-        + [{
-            **trade,
-            "symbol": symbol or trade.get("symbol"),
-            "qty": qty,
-            "exit_price": exit_price,
-            "exit_charges": charges,
-            "realized_pnl": realized,
-            "exit_order_id": order_id,
-            "closed_at": utc_now(),
-        }]
-    )[-200:]
-    portfolio.open_trade = None
-    return _write(portfolio)
+    # Serialize read-check-write: without the lock two concurrent exits (e.g.
+    # monitor SL/TP + manual/session/square-off) could both read the same
+    # open_trade and each book a SELL — the duplicate-exit false-profit race.
+    # Holding the lock across the guard makes the second exit see open_trade=None.
+    with _LOCK:
+        portfolio = get_paper_portfolio()
+        if not isinstance(portfolio.open_trade, dict) or not portfolio.open_trade:
+            raise NoOpenPaperTradeError("Paper exit rejected: no open trade exists.")
+        trade = dict(portfolio.open_trade)
+        if qty <= 0 or int(qty) != int(trade.get("qty") or 0):
+            raise NoOpenPaperTradeError(
+                f"Paper exit rejected: quantity {qty} does not match open trade quantity {trade.get('qty')}."
+            )
+        entry_price = float(trade.get("entry_price") or 0)
+        entry_charges = float(trade.get("entry_charges") or 0)
+        entry_value = float(trade.get("entry_value") or qty * entry_price)
+        exit_value = round(qty * exit_price, 2)
+        realized = round(exit_value - entry_value - entry_charges - charges, 2)
+        portfolio.available_balance = round(portfolio.available_balance + exit_value - charges, 2)
+        portfolio.utilized_amount = round(max(0.0, portfolio.utilized_amount - entry_value), 2)
+        portfolio.realized_pnl = round(portfolio.realized_pnl + realized, 2)
+        portfolio.session_pnl = round(portfolio.available_balance + portfolio.utilized_amount - portfolio.session_start_balance, 2)
+        portfolio.closed_trades = (
+            portfolio.closed_trades
+            + [{
+                **trade,
+                "symbol": symbol or trade.get("symbol"),
+                "qty": qty,
+                "exit_price": exit_price,
+                "exit_charges": charges,
+                "realized_pnl": realized,
+                "exit_order_id": order_id,
+                "closed_at": utc_now(),
+            }]
+        )[-200:]
+        portfolio.open_trade = None
+        return _write(portfolio)
 
 
 def paper_wallet_snapshot() -> dict[str, Any]:
