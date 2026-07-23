@@ -4170,7 +4170,9 @@ code {
 }
 
 /* --- NOVA conversation controller (schema-driven setup) ------------------- */
-.conv-canvas { display: flex; flex-direction: column; gap: 10px; }
+.conv-canvas { display: flex; flex-direction: column; gap: 10px; position: relative; max-height: 62vh; overflow-y: auto; padding-right: 4px; }
+.conv-jump { position: sticky; bottom: 4px; align-self: center; margin-top: 4px; padding: 6px 14px; border-radius: 999px; border: 1px solid rgba(200,255,90,0.5); background: rgba(20,20,26,0.92); color: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,0.35); }
+.conv-jump:hover { border-color: rgba(200,255,90,0.8); }
 .conv-question { margin: 2px 0 6px; }
 .conv-choices, .conv-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .conv-numeric { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

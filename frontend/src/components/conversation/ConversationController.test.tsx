@@ -134,6 +134,17 @@ describe('ConversationController — sequential questions & save/start', () => {
     expect(onStart).toHaveBeenCalledWith('inst-1')
   })
 
+  it('a rapid double-click on Save produces exactly one save request', () => {
+    const onSave = vi.fn(() => new Promise<void>(() => {})) // stays pending
+    render(<ConversationController {...props({ onSave })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
+    act(() => vi.advanceTimersByTime(700))
+    const btn = screen.getByRole('button', { name: /save setup/i })
+    fireEvent.click(btn)
+    fireEvent.click(btn) // second click before the disabled state re-renders
+    expect(onSave).toHaveBeenCalledTimes(1)
+  })
+
   it('a failed save keeps the prior setup and does not expose Start engine', async () => {
     const onSave = vi.fn(async () => { throw new Error('save rejected') })
     render(<ConversationController {...props({ onSave })} />)

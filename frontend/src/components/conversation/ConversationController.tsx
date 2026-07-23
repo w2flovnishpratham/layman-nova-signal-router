@@ -9,6 +9,7 @@ import { useAppReducedMotion } from '../MotionPrimitives'
 import { useConversation } from '../../state/useConversation'
 import { applicableFields, type SetupValues } from '../../state/conversationMachine'
 import { projectTranscript } from '../../state/conversationTranscript'
+import { useConversationScroll } from '../../state/useConversationScroll'
 
 interface Props {
   runtime: RuntimeStatus | null
@@ -141,6 +142,9 @@ export function ConversationController({
   const [saveError, setSaveError] = useState('')
   const [saved, setSaved] = useState(false)
   const [paperBalance, setPaperBalance] = useState(paperStartingBalance)
+  // Synchronous guard so two rapid clicks (before the disabled state re-renders)
+  // cannot fire a second save/start network request.
+  const inFlightRef = useRef(false)
 
   // Deterministic hydration: if the backend already established a mode (resume /
   // refresh), reflect it in the machine once. Otherwise the machine stays at mode
@@ -172,6 +176,11 @@ export function ConversationController({
     onModeSelect?.(m, paperBalance)
   }
 
+  // Hooks must run before any early return. The transcript is a pure projection
+  // of machine state; its length is the new-content signal for the scroll hook.
+  const transcript = projectTranscript(state)
+  const { ref: scrollRef, showJump, jumpToLatest } = useConversationScroll({ itemCount: transcript.length, reducedMotion })
+
   if (loading) {
     return <article className="setup-card catalog-state" role="status"><Loader2 className="strategy-card-spin" size={18} /> Loading strategy catalog…</article>
   }
@@ -197,7 +206,8 @@ export function ConversationController({
   }
 
   async function saveSetup() {
-    if (!selectedStrategy || pending !== 'idle') return
+    if (!selectedStrategy || inFlightRef.current) return
+    inFlightRef.current = true
     setPending('saving'); setSaveError('')
     try {
       await onSave(selectedStrategy.strategy_key, toSaveValues(state.draft))
@@ -206,12 +216,14 @@ export function ConversationController({
       setSaved(false)
       setSaveError(e instanceof Error ? e.message : 'Setup could not be saved. Your previous configuration is unchanged.')
     } finally {
+      inFlightRef.current = false
       setPending('idle')
     }
   }
 
   async function startEngine() {
-    if (!selectedStrategy?.strategy_instance_id || !saved || pending !== 'idle') return
+    if (!selectedStrategy?.strategy_instance_id || !saved || inFlightRef.current) return
+    inFlightRef.current = true
     setPending('starting')
     try {
       await onStart(selectedStrategy.strategy_instance_id)
@@ -219,17 +231,28 @@ export function ConversationController({
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Engine start failed.')
     } finally {
+      inFlightRef.current = false
       setPending('idle')
     }
   }
 
-  // Formal transcript projection: a deterministic, stable-ID view of the machine
-  // state. The answered history (NOVA-question + user-answer pairs) is rendered
-  // from it; interactive parts (decision, active question, review) are current UI.
-  const transcript = projectTranscript(state)
+  // Restrained live announcement: only the latest NOVA prompt, never the whole
+  // transcript, so screen readers hear new questions without re-reading history.
+  // Announcements are phrased distinctly from the visible NOVA bubbles so they
+  // read naturally to a screen reader without colliding with the on-screen text.
+  const announce = !state.mode
+    ? 'NOVA is asking which trading mode to use.'
+    : state.phase === 'SAVED_SETUP_FOUND'
+      ? `NOVA found your previous ${mode === 'paper' ? 'Paper' : 'Live'} configuration. Resume, review, or start new.`
+      : state.phase === 'QUESTION_ACTIVE' && state.activeQuestionKey
+        ? `NOVA asks for ${labelFor(fields, state.activeQuestionKey)}.`
+        : state.phase === 'SETUP_REVIEW' || state.phase === 'ENGINE_READY'
+          ? 'NOVA setup is ready to review, save, and start.'
+          : ''
 
   return (
-    <div className="conv-canvas" aria-live="polite">
+    <div ref={scrollRef} className="conv-canvas">
+      <div className="sr-only" role="status" aria-live="polite">{announce}</div>
       {!state.mode ? (
         <>
           <BotBubble>How should NOVA trade for you?</BotBubble>
@@ -328,6 +351,10 @@ export function ConversationController({
             {saved ? <span className="conv-saved-badge"><Check size={14} /> Setup saved</span> : null}
           </div>
         </div>
+      ) : null}
+
+      {showJump ? (
+        <button type="button" className="conv-jump" onClick={jumpToLatest}>Jump to latest ↓</button>
       ) : null}
     </div>
   )
