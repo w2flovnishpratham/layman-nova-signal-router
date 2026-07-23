@@ -1,0 +1,18 @@
+// Tiny URL-bound navigation helpers shared by the app shell and the landing CTA.
+// Kept separate from AppRouter.tsx so that file only exports a component
+// (react-refresh/only-export-components).
+
+export function currentPath(): string {
+  return window.location.pathname
+}
+
+export function isAppPath(path: string): boolean {
+  return path === '/app' || path.startsWith('/app/')
+}
+
+/** Client-side navigation without a full page load. */
+export function navigate(to: string): void {
+  if (window.location.pathname === to) return
+  window.history.pushState({}, '', to)
+  window.dispatchEvent(new PopStateEvent('popstate'))
+}
