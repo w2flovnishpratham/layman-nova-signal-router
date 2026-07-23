@@ -42,6 +42,7 @@ from app.services.state_store import (
     get_runtime_settings,
     record_entry_trade,
     set_open_position,
+    stamp_new_open_position,
     update_app_state,
     utc_now,
 )
@@ -1784,7 +1785,7 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
             message = "Dhan Super Order SL/TP is active; backend is display-only."
     else:
         message = "Server-side option premium monitor is armed."
-    return {
+    position = {
         "has_open_position": True,
         "strategy_code": signal.strategy_code,
         "symbol": signal.symbol,
@@ -1824,6 +1825,10 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
             "last_checked_at": utc_now(),
         },
     }
+    # Stamp a stable position_id + version=1 once at entry so the monitor's
+    # compare-and-set writes can detect an intervening exit and never resurrect
+    # a closed position.
+    return stamp_new_open_position(position)
 
 
 def _entry_filled_qty(order_result: dict[str, Any], requested_qty: int) -> int:

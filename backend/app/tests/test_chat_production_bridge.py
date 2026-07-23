@@ -504,6 +504,9 @@ def test_side_filter_closes_opposite_position_without_opening_disallowed_side(tm
             "product_type": "INTRADAY",
         }
     )
+    # A real paper entry creates the portfolio open_trade alongside the runtime
+    # position; seed it so the opposite-close exit has a trade to close.
+    paper_portfolio.apply_paper_entry(qty=65, price=100, charges=0.0, symbol="NIFTY CE", order_id="MOCK-ENTRY")
     signal = NormalizedSignal(
         payload_format="NOVA",
         secret="unused",

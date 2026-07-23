@@ -27,7 +27,15 @@ from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import market_data_credentials, shared_market_data_configured
 from app.services import position_operations
-from app.services.state_store import get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
+from app.services.state_store import (
+    get_engine_mode,
+    get_open_position,
+    get_runtime_settings,
+    patch_open_position_cas,
+    set_open_position,
+    stamp_new_open_position,
+    utc_now,
+)
 from app.store.redis_session import session_store
 
 
@@ -207,10 +215,60 @@ def _pnl_snapshot(
     }
 
 
-def _with_live_pnl(position: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
-    updated = dict(position)
-    updated["live_pnl"] = snapshot
-    return set_open_position(updated)
+def _ensure_position_identity(position: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a legacy open position (no position_id/version) exactly once so
+    the monitor's compare-and-set writes have an identity to check against."""
+    if not position.get("has_open_position") or position.get("position_id"):
+        return position
+    from app.services import state_store
+
+    with state_store._LOCK:
+        current = get_open_position()
+        if current.get("has_open_position") and not current.get("position_id"):
+            normalized = set_open_position(stamp_new_open_position(current))
+            log_order_event(
+                {
+                    "event": "LEGACY_POSITION_IDENTITY_NORMALIZED",
+                    "position_id": normalized.get("position_id"),
+                    "security_id": normalized.get("security_id"),
+                }
+            )
+            return normalized
+        return current
+
+
+def _patch_monitor_fields(
+    position: dict[str, Any], patch: dict[str, Any]
+) -> tuple[bool, dict[str, Any]]:
+    """Compare-and-set only monitoring fields onto the position captured at read
+    time. If an exit closed or advanced the position since, the stale write is
+    rejected (and logged) instead of resurrecting a flat position (root cause #1).
+    Never writes lifecycle/identity fields from an old snapshot."""
+    position_id = position.get("position_id")
+    position_version = position.get("position_version")
+    if not position_id:
+        return False, get_open_position()
+    applied, current = patch_open_position_cas(
+        position_id=str(position_id),
+        position_version=int(position_version or 0),
+        patch=patch,
+    )
+    if not applied:
+        log_order_event(
+            {
+                "event": "STALE_MONITOR_WRITE_REJECTED",
+                "position_id": position_id,
+                "expected_version": position_version,
+                "current_has_open_position": bool(current.get("has_open_position")),
+                "current_position_id": current.get("position_id"),
+                "current_position_version": current.get("position_version"),
+            }
+        )
+    return applied, current
+
+
+def _with_live_pnl(position: dict[str, Any], snapshot: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    return _patch_monitor_fields(position, {"live_pnl": snapshot})
 
 
 def _client() -> Any:
@@ -631,21 +689,19 @@ def monitor_once(*, force_rest: bool = False) -> None:
     if not _monitor_should_run(runtime):
         return
 
-    position = get_open_position()
+    position = _ensure_position_identity(get_open_position())
     if not _market_is_open():
         if not force_rest:
             clear_marketfeed_subscription()
-        current = dict(get_open_position())
-        if current.get("has_open_position"):
-            current["live_pnl"] = {
+        if position.get("has_open_position"):
+            _patch_monitor_fields(position, {"live_pnl": {
                 "source": "market_closed",
                 "status": "market_closed",
                 "message": "Market is closed; Dhan WebSocket and REST LTP fetching are disabled.",
                 "ltp": None,
                 "last_checked_at": utc_now(),
                 "ws_status": marketfeed_ws_status(),
-            }
-            set_open_position(current)
+            }})
         return
 
     snapshot_published = _publish_market_snapshot_from_monitor()
@@ -684,17 +740,14 @@ def monitor_once(*, force_rest: bool = False) -> None:
     )
 
     if not quote.success or quote.ltp is None:
-        current = dict(get_open_position())
-        if current.get("has_open_position"):
-            current["live_pnl"] = {
-                "source": getattr(quote, "source", "dhan_marketfeed_ltp"),
-                "status": "ltp_error",
-                "message": quote.message,
-                "error": quote.error,
-                "last_checked_at": utc_now(),
-                "ws_status": marketfeed_ws_status(),
-            }
-            set_open_position(current)
+        _patch_monitor_fields(position, {"live_pnl": {
+            "source": getattr(quote, "source", "dhan_marketfeed_ltp"),
+            "status": "ltp_error",
+            "message": quote.message,
+            "error": quote.error,
+            "last_checked_at": utc_now(),
+            "ws_status": marketfeed_ws_status(),
+        }})
         log_order_event(
             {
                 "event": "OPTION_LTP_FETCH_FAILED",
@@ -746,7 +799,12 @@ def monitor_once(*, force_rest: bool = False) -> None:
             snapshot = confirmed_snapshot
         exit_reason = confirmed_reason
 
-    updated = _with_live_pnl(position, snapshot)
+    applied, updated = _with_live_pnl(position, snapshot)
+    if not applied:
+        # The position we were monitoring was exited/closed (or advanced) during
+        # quote resolution. Discard this stale iteration: do not resurrect it and
+        # do not route a server exit on stale state.
+        return
     publish_tick_pnl_from_sync(
         symbol=str(position.get("trading_symbol") or position.get("symbol") or "NIFTY option"),
         security_id=security_id,

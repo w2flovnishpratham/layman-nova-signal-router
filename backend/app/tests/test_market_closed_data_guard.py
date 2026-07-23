@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.schemas.signal import NormalizedSignal
-from app.services import dhan_client, execution_router, option_position_monitor
+from app.services import audit_logger, dhan_client, execution_router, option_position_monitor, state_store
 
 
 def _signal() -> NormalizedSignal:
@@ -68,21 +68,30 @@ def test_order_router_blocks_before_broker_when_market_closed(monkeypatch):
     assert result["normalizedError"]["category"] == "MARKET_CLOSED"
 
 
-def test_option_monitor_marks_market_closed_without_ws_or_rest(monkeypatch):
-    position = {
+def test_option_monitor_marks_market_closed_without_ws_or_rest(tmp_path, monkeypatch):
+    # Exercise the real state_store: the monitor's market-closed write now goes
+    # through the atomic compare-and-set primitive, so module-level get/set mocks
+    # would be bypassed. Use a real (tmp) runtime dir instead.
+    state_dir = tmp_path / "runtime_state"
+    monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
+    monkeypatch.setattr(state_store, "OPEN_POSITION_FILE", state_dir / "open_position.json")
+    monkeypatch.setattr(state_store, "PAPER_POSITION_FILE", state_dir / "paper_position.json")
+    monkeypatch.setattr(state_store, "SEEN_SIGNALS_FILE", state_dir / "seen_signals.json")
+    monkeypatch.setattr(state_store, "SETTINGS_FILE", state_dir / "settings.json")
+    log_files = {k: tmp_path / "logs" / f"{k}.jsonl" for k in ("webhook", "order", "audit", "error")}
+    monkeypatch.setattr(state_store, "LOG_FILES", log_files)
+    monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
+    state_store.init_runtime_files()
+    state_store.update_app_state(engine_mode="paper")
+    state_store.set_open_position(state_store.stamp_new_open_position({
         "has_open_position": True,
         "security_id": "56376",
         "exchange_segment": "NSE_FNO",
         "entry_price": 100.0,
         "qty": 65,
-    }
-    updated = {}
+    }))
 
     monkeypatch.setattr(option_position_monitor, "_market_is_open", lambda: False)
-    monkeypatch.setattr(option_position_monitor, "get_runtime_settings", lambda: {})
-    monkeypatch.setattr(option_position_monitor, "get_engine_mode", lambda: "paper")
-    monkeypatch.setattr(option_position_monitor, "get_open_position", lambda: dict(position))
-    monkeypatch.setattr(option_position_monitor, "set_open_position", lambda value: updated.update(value) or value)
     monkeypatch.setattr(option_position_monitor, "marketfeed_ws_status", lambda: {"connected": False})
     cleared = {"called": False}
     monkeypatch.setattr(option_position_monitor, "clear_marketfeed_subscription", lambda: cleared.update(called=True))
@@ -94,6 +103,8 @@ def test_option_monitor_marks_market_closed_without_ws_or_rest(monkeypatch):
 
     option_position_monitor.monitor_once()
 
+    updated = state_store.get_open_position()
     assert cleared["called"] is True
+    assert updated["has_open_position"] is True
     assert updated["live_pnl"]["status"] == "market_closed"
     assert updated["live_pnl"]["source"] == "market_closed"
