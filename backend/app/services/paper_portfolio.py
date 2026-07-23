@@ -131,9 +131,24 @@ def resize_paper_open_trade_quantity(*, qty: int) -> PaperPortfolio:
     return _write(portfolio)
 
 
+class NoOpenPaperTradeError(ValueError):
+    """Raised when a Paper exit is attempted with no matching open trade.
+
+    Without this guard, apply_paper_exit computed entry_value=0 for an absent
+    open_trade and booked exit_value-charges as false realized profit — the
+    root cause of the duplicate-exit incident's phantom second SELL.
+    """
+
+
 def apply_paper_exit(*, qty: int, exit_price: float, charges: float, symbol: str, order_id: str) -> PaperPortfolio:
     portfolio = get_paper_portfolio()
-    trade = dict(portfolio.open_trade or {})
+    if not isinstance(portfolio.open_trade, dict) or not portfolio.open_trade:
+        raise NoOpenPaperTradeError("Paper exit rejected: no open trade exists.")
+    trade = dict(portfolio.open_trade)
+    if qty <= 0 or int(qty) != int(trade.get("qty") or 0):
+        raise NoOpenPaperTradeError(
+            f"Paper exit rejected: quantity {qty} does not match open trade quantity {trade.get('qty')}."
+        )
     entry_price = float(trade.get("entry_price") or 0)
     entry_charges = float(trade.get("entry_charges") or 0)
     entry_value = float(trade.get("entry_value") or qty * entry_price)

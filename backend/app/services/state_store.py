@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,6 +117,14 @@ def default_open_position() -> dict[str, Any]:
         "entry_price": None,
         "opened_at": None,
         "live_pnl": None,
+        # Identity + monotonic version for compare-and-set. A closed position
+        # leaves a tombstone (last_closed_position_id/version) so a late monitor
+        # write carrying an old id/version can be rejected instead of resurrecting
+        # a flat position.
+        "position_id": None,
+        "position_version": 0,
+        "last_closed_position_id": None,
+        "last_closed_position_version": 0,
     }
 
 
@@ -421,6 +430,68 @@ def set_paper_position(data: dict[str, Any]) -> dict[str, Any]:
 
 def clear_paper_position() -> dict[str, Any]:
     return set_paper_position(default_open_position())
+
+
+# ---------------------------------------------------------------------------
+# Compare-and-set position primitives (mode-routed via get/set_open_position).
+#
+# The option-position monitor reads the position, resolves a quote off-lock,
+# then writes back. If an exit clears the position in that gap, a full-position
+# write resurrects it (root cause #1 of the duplicate-exit incident). These
+# helpers make the read-modify-write atomic under the reentrant _LOCK and only
+# apply when the position identity+version still match — otherwise the stale
+# result is discarded, never recreating a flat position.
+# ---------------------------------------------------------------------------
+
+
+def stamp_new_open_position(data: dict[str, Any]) -> dict[str, Any]:
+    """Attach a fresh position_id + version=1 to a newly opened position."""
+    stamped = dict(data)
+    stamped["has_open_position"] = True
+    stamped["position_id"] = str(data.get("position_id") or uuid.uuid4().hex)
+    stamped["position_version"] = 1
+    return stamped
+
+
+def _cas_matches(current: dict[str, Any], position_id: str, position_version: int) -> bool:
+    return bool(
+        current.get("has_open_position")
+        and current.get("position_id") == position_id
+        and int(current.get("position_version") or 0) == int(position_version)
+    )
+
+
+def patch_open_position_cas(
+    *, position_id: str, position_version: int, patch: dict[str, Any]
+) -> tuple[bool, dict[str, Any]]:
+    """Merge a field-level patch onto the open position only if identity+version
+    still match. Bumps position_version on success. Returns (applied, position)."""
+    with _LOCK:
+        current = get_open_position()
+        if not _cas_matches(current, position_id, position_version):
+            return False, current
+        merged = {**current, **patch}
+        merged["has_open_position"] = True
+        merged["position_id"] = position_id
+        merged["position_version"] = int(position_version) + 1
+        return True, set_open_position(merged)
+
+
+def close_open_position_cas(
+    *, position_id: str, position_version: int
+) -> tuple[bool, dict[str, Any]]:
+    """Clear the open position to flat only if identity+version match, leaving a
+    confirmed-flat tombstone. Returns (closed, position). A no-match (already
+    flat, or a different/older version) returns (False, current) so callers can
+    treat it as ALREADY_FLAT/stale rather than forcing a second close."""
+    with _LOCK:
+        current = get_open_position()
+        if not _cas_matches(current, position_id, position_version):
+            return False, current
+        flat = default_open_position()
+        flat["last_closed_position_id"] = position_id
+        flat["last_closed_position_version"] = int(position_version)
+        return True, set_open_position(flat)
 
 
 def get_engine_mode(*, legacy_fallback: bool = True) -> str | None:
