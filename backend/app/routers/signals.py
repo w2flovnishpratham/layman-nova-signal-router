@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, Response
 
 from app.auth.dependencies import get_current_user
 from app.services import (
+    automations_overview,
     credentials_overview,
     reports_service,
     risk_overview,
@@ -127,3 +128,34 @@ def write_preferences(payload: PreferencesPayload, user: CurrentUser = Depends(g
         return {"ok": True, **user_preferences.save_preferences(user.id, values)}
     except user_preferences.PreferenceError as exc:
         return JSONResponse(status_code=422, content={"ok": False, "error": str(exc)})
+
+
+class AutomationsPayload(BaseModel):
+    """Only the four approved editable rules; anything else is refused."""
+
+    cooldown_after_loss_minutes: int | None = None
+    max_trades_per_day: int | None = None
+    max_daily_loss: float | None = None
+    entry_cutoff_ist: str | None = None
+
+
+@router.get("/automations")
+def read_automations(user: CurrentUser = Depends(get_current_user)):
+    """Editable risk controls plus the protected policies, which have no toggle."""
+    return automations_overview.build_automations_overview()
+
+
+@router.put("/automations")
+def write_automations(payload: AutomationsPayload, user: CurrentUser = Depends(get_current_user)):
+    from app.routers.setup import _save_risk_settings
+
+    values = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    if not values:
+        return {"ok": True, **automations_overview.build_automations_overview()}
+    try:
+        clean = automations_overview.validate_automation_changes(values)
+    except automations_overview.AutomationError as exc:
+        return JSONResponse(status_code=422, content={"ok": False, "error": str(exc)})
+    # Written through the existing risk-settings save, which audits the change.
+    _save_risk_settings(clean)
+    return {"ok": True, **automations_overview.build_automations_overview()}

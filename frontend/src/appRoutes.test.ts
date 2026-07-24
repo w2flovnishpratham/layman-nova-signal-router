@@ -39,7 +39,6 @@ describe('authenticated route resolution', () => {
     expect(isImplemented('reports')).toBe(true) // backed by GET /api/reports
     expect(isImplemented('strategies/new')).toBe(true) // backed by the personal-Pine workflow
     expect(isImplemented('settings')).toBe(true) // backed by GET/PUT /api/preferences
-    // Everything else must render a truthful placeholder, not a fake screen.
-    expect(isImplemented('automations')).toBe(false)
+    expect(isImplemented('automations')).toBe(true) // backed by GET/PUT /api/automations
   })
 })

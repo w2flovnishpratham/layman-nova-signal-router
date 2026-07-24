@@ -23,6 +23,7 @@ import { CredentialsPage } from './credentials/CredentialsPage'
 import { ReportsPage } from './reports/ReportsPage'
 import { AddStrategyPage } from './strategies/AddStrategyPage'
 import { SettingsPage } from './settings/SettingsPage'
+import { AutomationsPage } from './automations/AutomationsPage'
 import { SetupPage, type SetupSnapshot } from './setup/SetupPage'
 import { getConfigurationState, saveConfiguration } from './setup/configurationApi'
 import {
@@ -496,6 +497,8 @@ function App() {
         <AddStrategyPage />
       ) : route === 'settings' ? (
         <SettingsPage />
+      ) : route === 'automations' ? (
+        <AutomationsPage />
       ) : view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (

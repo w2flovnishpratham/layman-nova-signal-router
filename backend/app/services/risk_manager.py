@@ -104,7 +104,28 @@ def _entry_limit_checks(payload: NormalizedSignal, runtime: dict) -> RiskDecisio
     if cooldown:
         return cooldown
 
+    cutoff = _entry_cutoff_check(runtime)
+    if cutoff:
+        return cutoff
+
     return None
+
+
+def _entry_cutoff_check(runtime: dict) -> RiskDecision | None:
+    """Block new entries after an IST wall-clock time. Never blocks exits."""
+    raw = str(runtime.get("entry_cutoff_ist") or "").strip()
+    if not raw:
+        return None
+    try:
+        hour, minute = (int(part) for part in raw.split(":", 1))
+        cutoff = time(hour=hour, minute=minute)
+    except (TypeError, ValueError):
+        # A malformed cutoff must not silently block every entry.
+        return None
+    now_ist = datetime.now(IST).time()
+    if now_ist < cutoff:
+        return None
+    return RiskDecision(False, f"Trade blocked: entries are closed after {raw} IST.")
 
 
 def _cooldown_after_loss_check(runtime: dict) -> RiskDecision | None:

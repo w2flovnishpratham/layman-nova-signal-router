@@ -4473,3 +4473,17 @@ code {
 .nova-set-grid select { background: var(--nova-bg); border: 1px solid var(--nova-border); border-radius: 8px; color: var(--nova-text); padding: 8px 10px; font-size: 13px; }
 .nova-set-toggle { display: flex !important; flex-direction: row !important; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 9px; font-size: 13px; color: var(--nova-text); }
 .nova-set-toggle small { flex-basis: 100%; font-size: 11.5px; color: var(--nova-text-muted); }
+
+/* --- Automations --------------------------------------------------------- */
+.nova-auto-rule { border-top: 1px solid var(--nova-border); padding-top: 11px; margin-top: 11px; }
+.nova-auto-rule:first-of-type { border-top: 0; padding-top: 4px; margin-top: 4px; }
+.nova-auto-rule-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.nova-auto-effect { font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--nova-blue); border: 1px solid var(--nova-blue); border-radius: 999px; padding: 2px 9px; }
+.nova-auto-effect.is-protected { color: var(--nova-text-muted); border-color: var(--nova-border); }
+.nova-auto-edit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.nova-auto-edit input { width: 130px; background: var(--nova-bg); border: 1px solid var(--nova-border); border-radius: 8px; color: var(--nova-text); padding: 7px 10px; font-size: 13px; color-scheme: dark; }
+.nova-auto-unit { font-size: 12px; color: var(--nova-text-muted); }
+.nova-auto-protected { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 11px; }
+.nova-auto-protected li { border-left: 2px solid var(--nova-border); padding-left: 11px; }
+.nova-auto-protected p { margin: 4px 0 2px; font-size: 12.5px; }
+.nova-auto-protected small { font-size: 11.5px; color: var(--nova-text-muted); }

@@ -172,6 +172,7 @@ class RiskSetupRequest(BaseModel):
     # 0 disables the cooldown. Capped at a trading day so a typo cannot
     # silently block entries indefinitely.
     cooldown_after_loss_minutes: int = Field(default=0, ge=0, le=390)
+    entry_cutoff_ist: str = Field(default="", max_length=5)
     option_disable_sl: bool = True
     server_side_exit_enabled: bool = True
     marketfeed_ws_enabled: bool = True
@@ -208,6 +209,7 @@ class RiskSettingsPatchRequest(BaseModel):
     max_trades_per_day: int | None = Field(default=None, ge=0)
     max_daily_loss: float | None = Field(default=None, ge=0)
     cooldown_after_loss_minutes: int | None = Field(default=None, ge=0, le=390)
+    entry_cutoff_ist: str | None = Field(default=None, max_length=5)
     option_disable_sl: bool | None = None
     server_side_exit_enabled: bool | None = None
     marketfeed_ws_enabled: bool | None = None
@@ -572,6 +574,7 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
             "max_trades_per_day": runtime.get("max_trades_per_day"),
             "max_daily_loss": runtime.get("max_daily_loss"),
             "cooldown_after_loss_minutes": runtime.get("cooldown_after_loss_minutes"),
+            "entry_cutoff_ist": runtime.get("entry_cutoff_ist"),
             "option_disable_sl": runtime.get("option_disable_sl"),
             "server_side_exit_enabled": runtime.get("server_side_exit_enabled"),
             "marketfeed_ws_enabled": runtime.get("marketfeed_ws_enabled"),
