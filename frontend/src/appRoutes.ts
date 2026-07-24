@@ -25,7 +25,7 @@ export type AppRoute = (typeof APP_ROUTES)[number]
 export const DEFAULT_APP_ROUTE: AppRoute = 'trading'
 
 /** Routes backed by real, working screens today. Everything else is a truthful placeholder. */
-export const IMPLEMENTED_ROUTES: AppRoute[] = ['trading', 'dashboard', 'strategies', 'signals']
+export const IMPLEMENTED_ROUTES: AppRoute[] = ['trading', 'dashboard', 'strategies', 'signals', 'webhooks']
 
 export function appPath(route: AppRoute): string {
   return `/app/${route}`

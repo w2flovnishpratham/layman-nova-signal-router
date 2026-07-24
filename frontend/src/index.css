@@ -4373,3 +4373,12 @@ code {
 .nova-sig-bad { color: var(--nova-danger); font-weight: 600; }
 .nova-sig-neutral { color: var(--nova-text-secondary); font-weight: 600; }
 .nova-signals-err { color: var(--nova-danger); }
+
+/* --- Webhooks page ------------------------------------------------------- */
+.nova-hooks-endpoints { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.nova-hooks-card { border: 1px solid var(--nova-border); background: var(--nova-surface); border-radius: var(--nova-radius); padding: 14px 16px; margin-bottom: 14px; }
+.nova-hooks-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.nova-hooks-method { font-size: 10.5px; letter-spacing: .08em; border: 1px solid var(--nova-border); border-radius: 999px; padding: 1px 7px; color: var(--nova-text-muted); }
+.nova-hooks-card p { margin: 0 0 10px; color: var(--nova-text-secondary); font-size: 13px; }
+.nova-hooks-url { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.nova-hooks-url code, .nova-hooks-secret { font-family: "JetBrains Mono Variable", ui-monospace, monospace; font-size: 12px; background: var(--nova-bg-soft); border: 1px solid var(--nova-border); border-radius: 8px; padding: 6px 10px; color: var(--nova-text-secondary); word-break: break-all; }

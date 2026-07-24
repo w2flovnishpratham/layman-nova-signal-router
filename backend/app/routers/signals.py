@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import get_current_user
-from app.services import signals_feed
+from app.services import signals_feed, webhooks_overview
 from app.services.user_context import CurrentUser
 
 router = APIRouter()
@@ -32,3 +32,12 @@ def list_signals(
     if not result.get("ok", True):
         return JSONResponse(status_code=400, content=result)
     return result
+
+
+@router.get("/webhooks/overview")
+def webhooks_overview_endpoint(user: CurrentUser = Depends(get_current_user)):
+    """Owner-scoped webhook endpoints, masked secret metadata and delivery stats.
+
+    The raw webhook secret is never returned - only {set, masked, source}.
+    """
+    return webhooks_overview.build_webhooks_overview(user.id)

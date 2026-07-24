@@ -33,9 +33,9 @@ describe('authenticated route resolution', () => {
     expect(isImplemented('dashboard')).toBe(true)
     expect(isImplemented('strategies')).toBe(true)
     expect(isImplemented('signals')).toBe(true) // backed by GET /api/signals
+    expect(isImplemented('webhooks')).toBe(true) // backed by GET /api/webhooks/overview
     // Everything else must render a truthful placeholder, not a fake screen.
     expect(isImplemented('automations')).toBe(false)
-    expect(isImplemented('webhooks')).toBe(false)
     expect(isImplemented('credentials')).toBe(false)
     expect(isImplemented('risk')).toBe(false)
     expect(isImplemented('reports')).toBe(false)

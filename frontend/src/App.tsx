@@ -17,6 +17,7 @@ import { goToRoute, isImplemented, useAppRoute } from './appRoutes'
 import { NovaSidebar } from './components/shell/NovaSidebar'
 import { PlaceholderPage } from './components/shell/PlaceholderPage'
 import { SignalsPage } from './signals/SignalsPage'
+import { WebhooksPage } from './webhooks/WebhooksPage'
 import {
   getCurrentUser,
   getMarketSnapshot,
@@ -458,6 +459,8 @@ function App() {
         <PlaceholderPage route={route} />
       ) : route === 'signals' ? (
         <SignalsPage />
+      ) : route === 'webhooks' ? (
+        <WebhooksPage />
       ) : view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (
