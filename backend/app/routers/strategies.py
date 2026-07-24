@@ -11,12 +11,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.config import settings
 from app.db.engine import database_configured
 from app.services import entitlements, live_engine, runtime_reliability, strategy_fanout
+from app.services import setup_configuration
 from app.services import strategy_catalog_service, strategy_instance_service
 from app.services.execution_context import bind_user_execution_context
 from app.services import webhook_replay_store
@@ -166,6 +167,21 @@ class CatalogSelectionPayload(BaseModel):
     strategy_key: str = Field(min_length=1, max_length=120)
 
 
+class ConfigurationPayload(BaseModel):
+    """One save for both halves of a configuration.
+
+    Owner identity is never accepted from the browser - it comes from the auth
+    layer. ``expected_revision`` is the revision the client last read; omit it
+    only for a first save.
+    """
+
+    strategy_key: str = Field(min_length=1, max_length=120)
+    mode: str = Field(min_length=4, max_length=5)
+    setup: dict[str, Any]
+    risk: dict[str, Any]
+    expected_revision: int | None = Field(default=None, ge=0)
+
+
 class CatalogSetupPayload(BaseModel):
     strategy_key: str = Field(min_length=1, max_length=120)
     mode: str = Field(min_length=4, max_length=5)
@@ -269,6 +285,67 @@ def save_catalog_setup(
         }
     except Exception as exc:  # noqa: BLE001
         return _catalog_error(exc)
+
+
+@router.put("/api/setup/configuration")
+def save_configuration(
+    payload: ConfigurationPayload,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Commit strategy setup and risk settings as one revision."""
+    from app.routers.setup import normalize_risk_values
+
+    try:
+        runtime = _owner_runtime(user)
+        if runtime["engine"]["state"] != "STOPPED":
+            raise strategy_instance_service.InstanceError(
+                "Stop the engine before changing configuration.",
+                status_code=409,
+                code="RECONFIGURE_REQUIRED",
+            )
+        if runtime["position"]["has_open_position"]:
+            raise strategy_instance_service.InstanceError(
+                "Configuration cannot change while a tracked position is open.",
+                status_code=409,
+                code="OPEN_POSITION",
+            )
+        return setup_configuration.save_configuration(
+            user.id,
+            strategy_key=payload.strategy_key,
+            mode=payload.mode,
+            setup_values=payload.setup,
+            risk_values=payload.risk,
+            expected_revision=payload.expected_revision,
+            normalize_risk=normalize_risk_values,
+        )
+    except ValidationError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "error": "Risk settings are out of range.", "code": "INVALID_RISK",
+                     "detail": [{"field": list(e.get("loc") or ["risk"])[-1], "message": e.get("msg")} for e in exc.errors()]},
+        )
+    except setup_configuration.ConfigurationConflict as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error": exc.message,
+                "code": exc.code,
+                "expected_revision": exc.expected,
+                "current_revision": exc.current,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _catalog_error(exc)
+
+
+@router.get("/api/setup/configuration")
+def read_configuration(
+    mode: str = "paper",
+    user: CurrentUser = Depends(get_current_user),
+):
+    """The revision a save must echo back, and whether both halves agree."""
+    return {"ok": True, **setup_configuration.current_revision(user.id, mode)}
 
 
 @router.get("/api/strategies/subscriptions")

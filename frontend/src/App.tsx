@@ -20,6 +20,7 @@ import { SignalsPage } from './signals/SignalsPage'
 import { WebhooksPage } from './webhooks/WebhooksPage'
 import { RiskPage } from './risk/RiskPage'
 import { SetupPage, type SetupSnapshot } from './setup/SetupPage'
+import { getConfigurationState, saveConfiguration } from './setup/configurationApi'
 import {
   getCurrentUser,
   getMarketSnapshot,
@@ -31,7 +32,6 @@ import {
   prepareReconfigure,
   refreshRuntimeAccount,
   resetPaperRuntime,
-  saveCatalogStrategySetup,
   saveRuntimeConfig,
   selectCatalogStrategy,
   squareOffRuntime,
@@ -305,11 +305,24 @@ function App() {
     setRuntimeError('')
   }
 
-  async function configureTradingStrategy(strategyKey: string, values: Record<string, string | number>) {
+  async function configureTradingStrategy(
+    strategyKey: string,
+    values: Record<string, string | number>,
+    risk: Record<string, string | number>,
+  ) {
     if (runtimeStatus?.strategy_catalog?.selected_strategy_key !== strategyKey) {
       throw new Error('The selected strategy changed. Refresh before saving settings.')
     }
-    await saveCatalogStrategySetup(strategyKey, 'paper', values)
+    // Strategy setup and risk settings commit as one revision; a partial save
+    // could leave new limits paired with old sizing.
+    const state = await getConfigurationState('paper')
+    await saveConfiguration({
+      strategyKey,
+      mode: 'paper',
+      setup: values,
+      risk,
+      expectedRevision: state.revision,
+    })
     setRuntimeStatus(await getRuntimeStatus())
     setRuntimeError('')
   }

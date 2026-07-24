@@ -191,15 +191,17 @@ describe('ConversationController — sequential questions & save/start', () => {
   it('saves the validated draft, then exposes an explicit Start engine (never before save)', async () => {
     const onSave = vi.fn(noop)
     const onStart = vi.fn(noop)
-    const onSaveRisk = vi.fn(noop)
-    render(<ConversationController {...props({ onSave, onSaveRisk, onStart })} />)
+    render(<ConversationController {...props({ onSave, onStart })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull() // not before save
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
-    expect(onSave).toHaveBeenCalledWith('supertrend', { direction: 'CE', lots: 2 })
-    // Safety settings are runtime settings, saved through their own endpoint.
-    expect(onSaveRisk).toHaveBeenCalledWith({ max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 })
+    // Both halves travel in one call, so they commit as one revision.
+    expect(onSave).toHaveBeenCalledWith(
+      'supertrend',
+      { direction: 'CE', lots: 2 },
+      { max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 },
+    )
     expect(screen.getByRole('button', { name: /start engine/i })).toBeInTheDocument()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /start engine/i })) })
     expect(onStart).toHaveBeenCalledWith('inst-1')
@@ -213,7 +215,6 @@ describe('ConversationController — sequential questions & save/start', () => {
     const btn = screen.getByRole('button', { name: /save setup/i })
     fireEvent.click(btn)
     fireEvent.click(btn) // second click before the disabled state re-renders
-    await act(async () => { await Promise.resolve() }) // the risk save resolves first
     expect(onSave).toHaveBeenCalledTimes(1)
   })
 

@@ -246,6 +246,16 @@ def _field_map(schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {str(field["key"]): field for field in schema.get("fields", [])}
 
 
+def validate_setup_values(schema: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
+    """Public alias: lets a caller validate without writing anything."""
+    return _validate_values(schema, values)
+
+
+def setup_schema_for(strategy_key: str) -> dict[str, Any]:
+    definition = built_ins.get_built_in(strategy_key)
+    return definition["setup_schema"] if definition else built_ins.standard_setup_schema()
+
+
 def _validate_values(schema: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
     fields = _field_map(schema)
     unknown = set(values) - set(fields)
@@ -376,4 +386,31 @@ def apply_selected_setup(user_id: uuid.UUID, selected: dict[str, Any]) -> dict[s
             status_code=409,
             code="SETUP_INCOMPLETE",
         )
+    _require_committed_revision(paper)
     return paper
+
+
+def _require_committed_revision(saved: dict[str, Any]) -> None:
+    """The engine may only start on a configuration whose two halves agree.
+
+    A setup saved through the combined endpoint carries the same revision as the
+    risk settings. A mismatch means a torn or half-applied save, so refuse
+    rather than start the engine on limits that were never committed together.
+    """
+    from app.services.state_store import get_runtime_settings
+
+    try:
+        setup_revision = int(saved.get("configuration_revision") or 0)
+    except (TypeError, ValueError):
+        setup_revision = 0
+    try:
+        settings_revision = int(get_runtime_settings().get("configuration_revision") or 0)
+    except (TypeError, ValueError):
+        settings_revision = 0
+    if setup_revision != settings_revision:
+        raise instances.InstanceError(
+            "Strategy setup and risk settings are at different revisions. "
+            "Save the configuration again before starting the engine.",
+            status_code=409,
+            code="CONFIGURATION_TORN",
+        )

@@ -19,12 +19,14 @@ interface Props {
   error: string
   onManage: (instanceId: string) => void
   onSelect: (strategyKey: string) => Promise<void>
-  onSave: (strategyKey: string, values: Record<string, string | number>) => Promise<void>
+  onSave: (
+    strategyKey: string,
+    values: Record<string, string | number>,
+    risk: Record<string, string | number>,
+  ) => Promise<void>
   /** Reports machine state so the setup rail and configuration panel can
       project from the same source rather than tracking their own copy. */
   onStateChange?: (snapshot: { state: ConversationState; strategyName: string | null; strategyVersion: string | null }) => void
-  /** Saves the engine safety settings (daily loss cap, trade cap, cooldown). */
-  onSaveRisk?: (values: Record<string, string | number>) => Promise<void>
   onStart: (instanceId: string) => Promise<void>
   onUserReply: (text: string) => void
   /** Sync the backend when the machine picks a mode (setup.mode command + draft). */
@@ -134,7 +136,7 @@ function StrategyGroup({ title, strategies, onPick }: { title: string; strategie
 }
 
 export function ConversationController({
-  runtime, loading, error, onSelect, onSave, onSaveRisk, onStart, onStateChange,
+  runtime, loading, error, onSelect, onSave, onStart, onStateChange,
   onModeSelect, onRetry, liveAvailable = false, paperStartingBalance = 100000,
 }: Props) {
   const reducedMotion = useAppReducedMotion()
@@ -255,11 +257,9 @@ export function ConversationController({
     setPending('saving'); setSaveError('')
     try {
       const { strategy, risk } = splitDraft(state.draft)
-      // Engine safety settings are runtime settings, not strategy setup, so they
-      // go to their own endpoint. Save them first: if the strategy save fails the
-      // user is left with tighter limits, never looser ones.
-      if (Object.keys(risk).length > 0) await onSaveRisk?.(toSaveValues(risk))
-      await onSave(selectedStrategy.strategy_key, toSaveValues(strategy))
+      // Both halves go in one revision-bound request. Two separate saves could
+      // leave new limits applied to old sizing, or the reverse.
+      await onSave(selectedStrategy.strategy_key, toSaveValues(strategy), toSaveValues(risk))
       if (isStale(gen, strategyKey)) return // conversation moved on — ignore result
       setSaved(true)
     } catch (e) {

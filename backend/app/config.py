@@ -36,6 +36,9 @@ DEFAULT_RUNTIME_SETTINGS = {
     # H8 — Optimistic-locking counter; incremented on every settings write.
     # Clients pass the version they last read; mismatched writes return 409.
     "_version": 0,
+    # Revision of the last committed strategy+risk configuration. Both halves
+    # carry the same number, so a torn save is detectable before the engine starts.
+    "configuration_revision": 0,
     "allowed_option_side": "BOTH",
     "configured_lots": 1,
     "max_trades_per_day": 0,

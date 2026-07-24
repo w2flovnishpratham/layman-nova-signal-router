@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationState } from '../state/conversationMachine'
-import { getBrokerStatus } from './riskSettingsApi'
+import { getBrokerStatus } from './brokerApi'
 import { deriveSteps } from './setupFields'
 import { SetupConfigPanel, SetupStepRail } from './SetupProgressPanel'
 

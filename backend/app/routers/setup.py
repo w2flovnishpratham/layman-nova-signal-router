@@ -334,6 +334,18 @@ def _model_dump(model: BaseModel, **kwargs: Any) -> dict[str, Any]:
     return model.dict(**kwargs)
 
 
+def normalize_risk_values(values: dict[str, Any]) -> dict[str, Any]:
+    """Validate risk values with exactly the rules the settings API enforces.
+
+    Raises pydantic ValidationError on an out-of-bounds value, so a combined
+    configuration save fails validation before anything is written.
+    """
+    model = RiskSettingsPatchRequest(**values)
+    changes = _model_dump(model, exclude_unset=True, exclude_none=True)
+    changes.pop("expected_version", None)
+    return _normalize_risk_changes(changes)
+
+
 def _normalize_risk_changes(changes: dict[str, Any]) -> dict[str, Any]:
     normalized = {key: value for key, value in changes.items() if value is not None}
     if "option_ltp_source" in normalized:

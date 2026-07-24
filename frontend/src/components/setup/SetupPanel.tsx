@@ -9,7 +9,6 @@ import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
 import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
 import type { SetupSnapshot } from '../../setup/SetupPage'
-import { patchRiskSettings } from '../../setup/riskSettingsApi'
 import { ConversationController } from '../conversation/ConversationController'
 
 const DISABLED_STOP_LOSS_PCT = 99.9
@@ -28,7 +27,11 @@ interface Props {
   runtimeLoading: boolean
   runtimeError: string
   onManageStrategy: (instanceId: string) => void
-  onConfigureStrategy: (strategyKey: string, values: Record<string, string | number>) => Promise<void>
+  onConfigureStrategy: (
+    strategyKey: string,
+    values: Record<string, string | number>,
+    risk: Record<string, string | number>,
+  ) => Promise<void>
   onSelectStrategy: (strategyKey: string) => Promise<void>
   onStartStrategy: (instanceId: string) => Promise<void>
   onRetryRuntime: () => void
@@ -76,7 +79,6 @@ export function SetupPanel({
       error={runtimeError}
       onManage={onManageStrategy}
       onSave={onConfigureStrategy}
-      onSaveRisk={patchRiskSettings}
       onStateChange={onSetupState}
       onSelect={onSelectStrategy}
       onStart={onStartStrategy}
