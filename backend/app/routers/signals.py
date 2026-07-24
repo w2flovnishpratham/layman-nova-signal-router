@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import get_current_user
-from app.services import signals_feed, webhooks_overview
+from app.services import risk_overview, signals_feed, webhooks_overview
 from app.services.user_context import CurrentUser
 
 router = APIRouter()
@@ -41,3 +41,12 @@ def webhooks_overview_endpoint(user: CurrentUser = Depends(get_current_user)):
     The raw webhook secret is never returned - only {set, masked, source}.
     """
     return webhooks_overview.build_webhooks_overview(user.id)
+
+
+@router.get("/risk/overview")
+def risk_overview_endpoint(user: CurrentUser = Depends(get_current_user)):
+    """Owner-scoped strategy fan-out risk limits and today's IST usage.
+
+    Limits of 0 mean "no limit"; utilisation is then undefined rather than 0%.
+    """
+    return risk_overview.build_risk_overview(user.id)

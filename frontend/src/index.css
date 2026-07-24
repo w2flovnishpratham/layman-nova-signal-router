@@ -4382,3 +4382,16 @@ code {
 .nova-hooks-card p { margin: 0 0 10px; color: var(--nova-text-secondary); font-size: 13px; }
 .nova-hooks-url { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .nova-hooks-url code, .nova-hooks-secret { font-family: "JetBrains Mono Variable", ui-monospace, monospace; font-size: 12px; background: var(--nova-bg-soft); border: 1px solid var(--nova-border); border-radius: 8px; padding: 6px 10px; color: var(--nova-text-secondary); word-break: break-all; }
+
+/* --- Risk page ----------------------------------------------------------- */
+.nova-risk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 4px; }
+.nova-risk-grid > div { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--nova-border); border-radius: 10px; padding: 9px 11px; background: var(--nova-bg-soft); }
+.nova-risk-grid span { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--nova-text-muted); }
+.nova-risk-grid strong { font-size: 14px; }
+.nova-risk-note { margin: 10px 0 0 !important; font-size: 12px; color: var(--nova-text-muted) !important; }
+.nova-risk-meter { margin-top: 10px; }
+.nova-risk-meter-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; margin-bottom: 5px; }
+.nova-risk-meter-head span { color: var(--nova-text-secondary); }
+.nova-risk-track { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.07); overflow: hidden; }
+.nova-risk-fill { height: 100%; border-radius: 999px; background: var(--nova-blue); }
+.nova-risk-fill[data-high='true'] { background: var(--nova-warning); }

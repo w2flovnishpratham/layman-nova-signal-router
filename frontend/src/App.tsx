@@ -18,6 +18,7 @@ import { NovaSidebar } from './components/shell/NovaSidebar'
 import { PlaceholderPage } from './components/shell/PlaceholderPage'
 import { SignalsPage } from './signals/SignalsPage'
 import { WebhooksPage } from './webhooks/WebhooksPage'
+import { RiskPage } from './risk/RiskPage'
 import {
   getCurrentUser,
   getMarketSnapshot,
@@ -461,6 +462,8 @@ function App() {
         <SignalsPage />
       ) : route === 'webhooks' ? (
         <WebhooksPage />
+      ) : route === 'risk' ? (
+        <RiskPage />
       ) : view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (
