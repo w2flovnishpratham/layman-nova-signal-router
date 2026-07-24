@@ -2,18 +2,23 @@
 """Reports: real aggregates over closed trades, honest about zero denominators."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from app.db import models
 from app.db.engine import session_scope
 from app.services import reports_service
 from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 
-TODAY = datetime.now(reports_service.IST).date()
+# Pinned, never "now": an earlier version captured today's date at import and
+# created trades relative to the clock, so a suite that ran across midnight put
+# the trades on the next IST day and the report range excluded them.
+TRADE_DAY = date(2026, 7, 24)
+BASE = datetime(2026, 7, 24, 11, 0, tzinfo=reports_service.IST)
 
 
 def _trade(user_id, pnl: float, *, minutes: int = 0, mode: str = "paper", symbol: str = "NIFTY CE"):
-    closed = datetime.now(reports_service.IST) - timedelta(minutes=minutes)
+    # `minutes` orders trades within the pinned day; later values close earlier.
+    closed = BASE - timedelta(minutes=minutes)
     with session_scope() as db:
         db.add(models.PortfolioTrade(
             user_id=user_id,
@@ -34,7 +39,7 @@ def _trade(user_id, pnl: float, *, minutes: int = 0, mode: str = "paper", symbol
 
 
 def _report(user_id, **kwargs):
-    return reports_service.build_report(user_id, start=TODAY, end=TODAY, **kwargs)
+    return reports_service.build_report(user_id, start=TRADE_DAY, end=TRADE_DAY, **kwargs)
 
 
 def test_an_empty_period_reports_unknown_rather_than_zero(mu_db):
