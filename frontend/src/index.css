@@ -4210,3 +4210,91 @@ code {
 .conv-mode-balance { display: flex; flex-direction: column; gap: 4px; font-size: 12px; opacity: .85; }
 .conv-mode-balance input { padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.04); color: inherit; }
 .conv-pill--current { border-color: rgba(200,255,90,0.7); background: rgba(200,255,90,0.18); }
+
+/* =========================================================================
+   NOVA authenticated-app design system — pitch black + electric blue.
+   Scoped under .nova-app so the public landing page palette is untouched.
+   Semantic colour rules are load-bearing:
+     blue = navigation / primary non-trading actions
+     purple = NOVA assistant intelligence
+     green = Buy + genuine success   red = Exit/Stop/destructive
+     cyan = Paper mode               orange = Live mode   amber = warning
+   ========================================================================= */
+.nova-app {
+  --nova-bg: #030406;
+  --nova-bg-soft: #080A0F;
+  --nova-surface: #0C0F15;
+  --nova-surface-raised: #11151D;
+  --nova-surface-hover: #161B25;
+
+  --nova-border: rgba(255, 255, 255, 0.08);
+  --nova-border-strong: rgba(255, 255, 255, 0.14);
+
+  --nova-text-primary: #F4F6FA;
+  --nova-text-secondary: #939BAA;
+  --nova-text-muted: #626B7A;
+
+  --nova-blue: #2F6BED;
+  --nova-blue-hover: #477CF2;
+  --nova-blue-soft: rgba(47, 107, 237, 0.14);
+
+  --nova-purple: #9B5CFF;
+  --nova-paper: #36C7F4;
+  --nova-live: #FF9C45;
+  --nova-success: #42D49A;
+  --nova-danger: #FF6673;
+  --nova-warning: #F3C64E;
+
+  --nova-radius: 12px;
+  --nova-rail-w: 232px;
+  --nova-rail-w-collapsed: 68px;
+}
+
+/* --- App shell ---------------------------------------------------------- */
+.nova-shell { display: flex; min-height: 100vh; background: var(--nova-bg); color: var(--nova-text-primary); }
+.nova-rail {
+  width: var(--nova-rail-w); flex: 0 0 var(--nova-rail-w); border-right: 1px solid var(--nova-border);
+  background: var(--nova-bg-soft); display: flex; flex-direction: column; gap: 2px; padding: 12px 10px;
+}
+.nova-rail[data-collapsed='true'] { width: var(--nova-rail-w-collapsed); flex-basis: var(--nova-rail-w-collapsed); }
+.nova-rail-brand { display: flex; align-items: center; gap: 9px; padding: 6px 8px 14px; font-weight: 700; letter-spacing: -0.01em; }
+.nova-rail-group { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--nova-text-muted); padding: 12px 10px 6px; }
+.nova-navitem {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 10px;
+  border: 1px solid transparent; background: transparent; color: var(--nova-text-secondary);
+  font-size: 13.5px; font-weight: 500; cursor: pointer; text-align: left; transition: background .14s, color .14s, border-color .14s;
+}
+.nova-navitem:hover { background: var(--nova-surface-hover); color: var(--nova-text-primary); }
+.nova-navitem:focus-visible { outline: 2px solid var(--nova-blue); outline-offset: 2px; }
+.nova-navitem[aria-current='page'] { background: var(--nova-blue-soft); border-color: rgba(47,107,237,0.42); color: #CFE0FF; font-weight: 650; }
+.nova-navitem-soon { margin-left: auto; font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--nova-text-muted); border: 1px solid var(--nova-border); border-radius: 999px; padding: 1px 6px; }
+.nova-rail[data-collapsed='true'] .nova-navitem-label,
+.nova-rail[data-collapsed='true'] .nova-navitem-soon,
+.nova-rail[data-collapsed='true'] .nova-rail-group { display: none; }
+
+.nova-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.nova-content { flex: 1 1 auto; min-width: 0; }
+
+/* --- Mode badges (never green) ------------------------------------------ */
+.nova-mode { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 650; border-radius: 999px; padding: 3px 10px; border: 1px solid; }
+.nova-mode--paper { color: var(--nova-paper); border-color: rgba(54,199,244,0.45); background: rgba(54,199,244,0.10); }
+.nova-mode--live { color: var(--nova-live); border-color: rgba(255,156,69,0.45); background: rgba(255,156,69,0.10); }
+
+/* --- Placeholder pages -------------------------------------------------- */
+.nova-placeholder { max-width: 760px; margin: 0 auto; padding: 56px 24px; }
+.nova-placeholder h1 { font-size: 26px; font-weight: 700; margin: 0 0 6px; }
+.nova-placeholder p { color: var(--nova-text-secondary); font-size: 14px; line-height: 1.6; margin: 0 0 18px; }
+.nova-placeholder-card { border: 1px solid var(--nova-border); background: var(--nova-surface); border-radius: var(--nova-radius); padding: 18px 20px; }
+.nova-placeholder-status { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--nova-warning); border: 1px solid rgba(243,198,78,0.4); background: rgba(243,198,78,0.10); border-radius: 999px; padding: 3px 10px; }
+.nova-placeholder-list { margin: 14px 0 0; padding-left: 18px; color: var(--nova-text-secondary); font-size: 13.5px; line-height: 1.75; }
+
+/* --- Mobile ------------------------------------------------------------- */
+.nova-rail-toggle { display: none; }
+@media (max-width: 1023px) {
+  .nova-rail { position: fixed; inset: 0 auto 0 0; z-index: 60; transform: translateX(-100%); transition: transform .2s ease; box-shadow: 0 0 0 100vmax rgba(0,0,0,0); }
+  .nova-rail[data-open='true'] { transform: translateX(0); box-shadow: 0 0 0 100vmax rgba(0,0,0,0.55); }
+  .nova-rail-toggle { display: inline-flex; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nova-rail, .nova-navitem { transition: none; }
+}

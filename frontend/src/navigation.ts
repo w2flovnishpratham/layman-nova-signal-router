@@ -16,3 +16,10 @@ export function navigate(to: string): void {
   window.history.pushState({}, '', to)
   window.dispatchEvent(new PopStateEvent('popstate'))
 }
+
+/** Canonicalise the URL without adding a history entry (redirects/normalisation). */
+export function replacePath(to: string): void {
+  if (window.location.pathname === to) return
+  window.history.replaceState({}, '', to)
+  window.dispatchEvent(new PopStateEvent('popstate'))
+}

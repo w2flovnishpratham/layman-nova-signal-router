@@ -42,11 +42,22 @@ describe('AppRouter route boundary', () => {
     expect(screen.getByTestId('app-view')).toBeInTheDocument()
   })
 
-  it('landing CTA navigates to /app without a full reload', () => {
+  it('landing CTA navigates into the app without a full reload', () => {
     setPath('/')
     render(<AppRouter />)
     fireEvent.click(screen.getByText('enter app'))
-    expect(window.location.pathname).toBe('/app')
+    // /app canonicalises to the default authenticated route.
+    expect(window.location.pathname).toBe('/app/trading')
+    expect(screen.getByTestId('app-view')).toBeInTheDocument()
+  })
+
+  it('redirects bare /app to the default route, and an unknown /app/* resolves safely', () => {
+    setPath('/app')
+    render(<AppRouter />)
+    expect(window.location.pathname).toBe('/app/trading')
+    expect(screen.getByTestId('app-view')).toBeInTheDocument()
+    act(() => { window.history.pushState({}, '', '/app/does-not-exist'); window.dispatchEvent(new PopStateEvent('popstate')) })
+    expect(window.location.pathname).toBe('/app/trading')
     expect(screen.getByTestId('app-view')).toBeInTheDocument()
   })
 
@@ -67,8 +78,8 @@ describe('AppRouter route boundary', () => {
   it('navigate() updates history and re-renders via popstate', () => {
     setPath('/')
     render(<AppRouter />)
-    act(() => navigate('/app'))
-    expect(window.location.pathname).toBe('/app')
+    act(() => navigate('/app/dashboard'))
+    expect(window.location.pathname).toBe('/app/dashboard')
     expect(screen.getByTestId('app-view')).toBeInTheDocument()
     act(() => window.history.back())
   })

@@ -13,6 +13,9 @@ import { SetupPanel } from './components/setup/SetupPanel'
 import { PortfolioDashboard } from './dashboard/PortfolioDashboard'
 import { PersonalStrategiesPage } from './strategies/PersonalStrategiesPage'
 import type { NovaView } from './types'
+import { goToRoute, isImplemented, useAppRoute } from './appRoutes'
+import { NovaSidebar } from './components/shell/NovaSidebar'
+import { PlaceholderPage } from './components/shell/PlaceholderPage'
 import {
   getCurrentUser,
   getMarketSnapshot,
@@ -43,7 +46,20 @@ function App() {
   const wsRef = useRef<SessionWS | null>(null)
   const lastCommandRef = useRef<{ key: string; at: number } | null>(null)
   const [bootNonce, setBootNonce] = useState(0)
-  const [view, setView] = useState<NovaView>('trading')
+  // View is derived from the URL (nested /app/* routes), never from in-memory
+  // state, so refresh and Back/Forward work on every page. setView is kept as the
+  // same seam so existing call sites simply navigate.
+  const route = useAppRoute()
+  const view: NovaView = route === 'dashboard'
+    ? 'dashboard'
+    : route === 'strategies' || route === 'strategies/new'
+      ? 'strategies'
+      : 'trading'
+  const setView = useCallback((next: NovaView) => {
+    goToRoute(next === 'dashboard' ? 'dashboard' : next === 'strategies' ? 'strategies' : 'trading')
+  }, [])
+  const [railOpen, setRailOpen] = useState(false)
+  const [railCollapsed, setRailCollapsed] = useState(false)
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState('')
@@ -383,6 +399,16 @@ function App() {
 
   return (
     <main className="nova-app">
+      <div className="nova-shell">
+      <NovaSidebar
+        route={route}
+        open={railOpen}
+        collapsed={railCollapsed}
+        onNavigate={goToRoute}
+        onToggleCollapsed={() => setRailCollapsed((c) => !c)}
+        onClose={() => setRailOpen(false)}
+      />
+      <div className="nova-main">
       <Header
         status={wsStatus}
         clientId={config.broker?.clientId}
@@ -427,7 +453,9 @@ function App() {
         </div>
       ) : null}
 
-      {view === 'dashboard' ? (
+      {!isImplemented(route) ? (
+        <PlaceholderPage route={route} />
+      ) : view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (
         <PersonalStrategiesPage user={authUser} focusInstanceId={managedStrategyId} />
@@ -758,6 +786,8 @@ function App() {
       )}
 
       <footer className="app-footer pb-20 lg:pb-4">(c) 2026 Layman Signal Route. Deployed Live with Dhan. All rights reserved.</footer>
+      </div>
+      </div>
     </main>
   )
 }
