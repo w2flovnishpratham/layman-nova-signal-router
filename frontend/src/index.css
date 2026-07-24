@@ -4453,3 +4453,16 @@ code {
 .nova-report-stat strong { font-size: 16px; }
 .nova-report-stat small { font-size: 11px; color: var(--nova-text-muted); }
 .nova-report-unknown { font-size: 13px !important; color: var(--nova-text-muted); }
+
+/* --- Add Strategy (Pine import) ------------------------------------------ */
+.nova-pine-stages { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; }
+.nova-pine-stages li { font-size: 11.5px; border: 1px solid var(--nova-border); border-radius: 999px; padding: 5px 11px; color: var(--nova-text-muted); background: var(--nova-bg-soft); }
+.nova-pine-stages li.is-active { border-color: var(--nova-blue); color: var(--nova-text); }
+.nova-pine-stages li.is-done { border-color: var(--nova-success); color: var(--nova-success); }
+.nova-pine-input, .nova-pine-source { width: 100%; background: var(--nova-bg); border: 1px solid var(--nova-border); border-radius: 9px; color: var(--nova-text); padding: 9px 11px; font-size: 13px; margin: 5px 0 12px; }
+.nova-pine-source { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; resize: vertical; }
+.nova-pine-findings { list-style: none; margin: 10px 0 12px; padding: 0; display: grid; gap: 7px; }
+.nova-pine-findings li { border-left: 2px solid var(--nova-border); padding: 4px 0 4px 10px; display: grid; gap: 2px; }
+.nova-pine-findings li.is-error { border-left-color: var(--nova-danger); }
+.nova-pine-findings li.is-warning { border-left-color: var(--nova-warning); }
+.nova-pine-findings span { font-size: 12px; color: var(--nova-text-muted); }

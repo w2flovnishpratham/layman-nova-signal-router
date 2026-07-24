@@ -21,6 +21,7 @@ import { WebhooksPage } from './webhooks/WebhooksPage'
 import { RiskPage } from './risk/RiskPage'
 import { CredentialsPage } from './credentials/CredentialsPage'
 import { ReportsPage } from './reports/ReportsPage'
+import { AddStrategyPage } from './strategies/AddStrategyPage'
 import { SetupPage, type SetupSnapshot } from './setup/SetupPage'
 import { getConfigurationState, saveConfiguration } from './setup/configurationApi'
 import {
@@ -490,6 +491,8 @@ function App() {
         <CredentialsPage />
       ) : route === 'reports' ? (
         <ReportsPage />
+      ) : route === 'strategies/new' ? (
+        <AddStrategyPage />
       ) : view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (
