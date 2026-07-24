@@ -15,6 +15,7 @@ import { PersonalStrategiesPage } from './strategies/PersonalStrategiesPage'
 import type { NovaView } from './types'
 import { goToRoute, isImplemented, useAppRoute } from './appRoutes'
 import { NovaSidebar } from './components/shell/NovaSidebar'
+import { PageErrorBoundary } from './components/shell/PageErrorBoundary'
 import { PlaceholderPage } from './components/shell/PlaceholderPage'
 import { SignalsPage } from './signals/SignalsPage'
 import { WebhooksPage } from './webhooks/WebhooksPage'
@@ -479,6 +480,9 @@ function App() {
         </div>
       ) : null}
 
+      {/* A page-level boundary: a crash in the routed page shows a retry card
+          instead of blanking the sidebar, header and the whole shell. */}
+      <PageErrorBoundary resetKey={route}>
       {!isImplemented(route) ? (
         <PlaceholderPage route={route} />
       ) : route === 'signals' ? (
@@ -660,6 +664,7 @@ function App() {
         ) : null}
       </motion.section>
       )}
+      </PageErrorBoundary>
 
       {/* Mobile-only sliding drawers and floating action bar */}
       {engineLive && (

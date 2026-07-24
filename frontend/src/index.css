@@ -4487,3 +4487,9 @@ code {
 .nova-auto-protected li { border-left: 2px solid var(--nova-border); padding-left: 11px; }
 .nova-auto-protected p { margin: 4px 0 2px; font-size: 12.5px; }
 .nova-auto-protected small { font-size: 11.5px; color: var(--nova-text-muted); }
+
+/* --- Page error boundary ------------------------------------------------- */
+.nova-page-error { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 48px 24px; margin: 24px auto; max-width: 460px; border: 1px solid var(--nova-border); border-radius: 14px; background: var(--nova-bg-soft); color: var(--nova-text); }
+.nova-page-error svg { color: var(--nova-warning); }
+.nova-page-error h2 { margin: 0; font-size: 16px; }
+.nova-page-error p { margin: 0; font-size: 13px; color: var(--nova-text-muted); }
