@@ -19,6 +19,7 @@ import { PlaceholderPage } from './components/shell/PlaceholderPage'
 import { SignalsPage } from './signals/SignalsPage'
 import { WebhooksPage } from './webhooks/WebhooksPage'
 import { RiskPage } from './risk/RiskPage'
+import { CredentialsPage } from './credentials/CredentialsPage'
 import { SetupPage, type SetupSnapshot } from './setup/SetupPage'
 import { getConfigurationState, saveConfiguration } from './setup/configurationApi'
 import {
@@ -484,6 +485,8 @@ function App() {
         <RiskPage />
       ) : route === 'setup' ? (
         <SetupPage conversation={setupPanel} snapshot={setupSnapshot} />
+      ) : route === 'credentials' ? (
+        <CredentialsPage />
       ) : view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (
