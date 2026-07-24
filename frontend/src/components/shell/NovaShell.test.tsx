@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { APP_ROUTES, ROUTE_META, isImplemented } from '../../appRoutes'
 import { NovaSidebar } from './NovaSidebar'
 import { PlaceholderPage } from './PlaceholderPage'
 
@@ -40,13 +41,15 @@ describe('NovaSidebar', () => {
     expect(screen.getByRole('button', { name: /^Strategies/ })).toHaveAttribute('aria-current', 'page')
   })
 
-  it('labels not-yet-built pages truthfully rather than faking them', () => {
+  it('marks a page "Soon" only while it is genuinely unbuilt', () => {
     render(sidebar())
-    // Unbuilt pages carry a "Soon" marker; pages backed by a real screen do not.
-    expect(screen.getByRole('button', { name: /^Automations/ })).toHaveTextContent('Soon')
-    expect(screen.getByRole('button', { name: /^Trading/ })).not.toHaveTextContent('Soon')
-    // Signals is now backed by GET /api/signals, so it is no longer "Soon".
-    expect(screen.getByRole('button', { name: /^Signals/ })).not.toHaveTextContent('Soon')
+    // Every route now has a real screen, so nothing may claim to be coming soon.
+    // strategies/new is reached from the Strategies page, not the rail.
+    for (const route of APP_ROUTES.filter((r) => r !== 'strategies/new')) {
+      const item = screen.getByRole('button', { name: new RegExp(`^${ROUTE_META[route].label}`) })
+      expect(item).not.toHaveTextContent('Soon')
+    }
+    expect(APP_ROUTES.every(isImplemented)).toBe(true)
   })
 
   it('navigates by keyboard', async () => {

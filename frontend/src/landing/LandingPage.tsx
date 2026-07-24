@@ -188,27 +188,27 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
   }
 
   return (
-    <div className="nova-landing w-full min-h-screen bg-[#0A0D04] text-[#FAFFF3] overflow-x-hidden relative">
+    <div className="nova-landing w-full min-h-screen bg-[#05070C] text-[#F5F8FF] overflow-x-hidden relative">
       {/* ----------------- Top Navigation Header ----------------- */}
-      <header className="sticky top-0 z-50 w-full bg-[#0A0D04]/90 backdrop-blur-xl border-b border-[#C0F53D]/15 py-4 px-6 md:px-12 flex items-center justify-between">
+      <header className="sticky top-0 z-50 w-full bg-[#05070C]/90 backdrop-blur-xl border-b border-[#2F6BED]/15 py-4 px-6 md:px-12 flex items-center justify-between">
         <div className="flex items-center gap-12">
           <span className="font-extrabold text-xl tracking-tighter text-white uppercase font-montreal flex items-center gap-2">
-            <span className="w-3 h-3 rounded-full bg-[#C0F53D] shadow-[0_0_12px_#C0F53D]" />
+            <span className="w-3 h-3 rounded-full bg-[#2F6BED] shadow-[0_0_12px_#2F6BED]" />
             NOVA SIGNAL ROUTE
           </span>
           <nav className="hidden md:flex items-center gap-8" aria-label="Landing Navigation">
-            <a href="#services" className="text-[11px] font-medium tracking-[0.12em] uppercase text-[#FAFFF3]/60 hover:text-[#C0F53D] transition-colors">SERVICES</a>
-            <a href="#work" className="text-[11px] font-medium tracking-[0.12em] uppercase text-[#FAFFF3]/60 hover:text-[#C0F53D] transition-colors">WORK</a>
-            <a href="#about" className="text-[11px] font-medium tracking-[0.12em] uppercase text-[#FAFFF3]/60 hover:text-[#C0F53D] transition-colors">ABOUT</a>
-            <a href="#case-studies" className="text-[11px] font-medium tracking-[0.12em] uppercase text-[#FAFFF3]/60 hover:text-[#C0F53D] transition-colors">CASE STUDIES</a>
-            <a href="#contact" className="text-[11px] font-medium tracking-[0.12em] uppercase text-[#FAFFF3]/60 hover:text-[#C0F53D] transition-colors">CONTACT</a>
+            <a href="#services" className="text-[11px] font-medium tracking-[0.12em] uppercase text-[#F5F8FF]/60 hover:text-[#2F6BED] transition-colors">SERVICES</a>
+            <a href="#work" className="text-[11px] font-medium tracking-[0.12em] uppercase text-[#F5F8FF]/60 hover:text-[#2F6BED] transition-colors">WORK</a>
+            <a href="#about" className="text-[11px] font-medium tracking-[0.12em] uppercase text-[#F5F8FF]/60 hover:text-[#2F6BED] transition-colors">ABOUT</a>
+            <a href="#case-studies" className="text-[11px] font-medium tracking-[0.12em] uppercase text-[#F5F8FF]/60 hover:text-[#2F6BED] transition-colors">CASE STUDIES</a>
+            <a href="#contact" className="text-[11px] font-medium tracking-[0.12em] uppercase text-[#F5F8FF]/60 hover:text-[#2F6BED] transition-colors">CONTACT</a>
           </nav>
         </div>
         <div className="flex items-center gap-3">
 
           <a
             href="#discovery"
-            className="hidden sm:inline-flex px-5 py-2 rounded-full border border-white/20 text-xs font-medium text-white hover:border-[#C0F53D] hover:text-[#C0F53D] transition-colors"
+            className="hidden sm:inline-flex px-5 py-2 rounded-full border border-white/20 text-xs font-medium text-white hover:border-[#2F6BED] hover:text-[#2F6BED] transition-colors"
           >
             LAUNCH TRADING APP
           </a>
@@ -226,7 +226,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
               </span>
               <span className="block overflow-hidden py-1">
                 <span className="block reveal-text will-change-transform">
-                  <em className="font-serif italic font-normal text-[#C0F53D] tracking-normal pr-2">The</em>
+                  <em className="font-serif italic font-normal text-[#9B5CFF] tracking-normal pr-2">The</em>
                   Signals
                 </span>
               </span>
@@ -254,36 +254,36 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
         {/* Bottom Hero Statement Text (Staggered reveal animation from overflow hidden) */}
         <div ref={statementRef} className="mt-4 py-10 flex flex-col items-center justify-center text-center">
           <div className="max-w-5xl px-4">
-            <p className="text-xl md:text-2xl lg:text-[35px] leading-relaxed md:leading-[1.38] tracking-tight font-extralight text-[#FAFFF3]">
+            <p className="text-xl md:text-2xl lg:text-[35px] leading-relaxed md:leading-[1.38] tracking-tight font-extralight text-[#F5F8FF]">
               <span className="inline-block overflow-hidden align-top py-0.5">
                 <span className="inline-block reveal-word uppercase tracking-widest text-white font-extralight will-change-transform">NOVA SIGNAL ROUTE</span>
               </span>{' '}
               <span className="inline-block overflow-hidden align-top py-0.5">
-                <em className="inline-block reveal-word font-serif italic font-extralight text-[#C0F53D] pr-1.5 will-change-transform">empowers</em>
+                <em className="inline-block reveal-word font-serif italic font-extralight text-[#9B5CFF] pr-1.5 will-change-transform">empowers</em>
               </span>{' '}
               <span className="inline-block overflow-hidden align-top py-0.5">
                 <span className="inline-block reveal-word uppercase tracking-wider text-white font-extralight will-change-transform">ALGORITHMIC TRADERS</span>
               </span>{' '}
               <span className="inline-block overflow-hidden align-top py-0.5">
-                <em className="inline-block reveal-word font-serif italic font-extralight text-[#FAFFF3]/90 px-1.5 will-change-transform">and</em>
+                <em className="inline-block reveal-word font-serif italic font-extralight text-[#F5F8FF]/90 px-1.5 will-change-transform">and</em>
               </span>{' '}
               <span className="inline-block overflow-hidden align-top py-0.5">
                 <span className="inline-block reveal-word uppercase tracking-wider text-white font-extralight will-change-transform">INSTITUTIONAL INVESTORS</span>
               </span>{' '}
               <span className="inline-block overflow-hidden align-top py-0.5">
-                <em className="inline-block reveal-word font-serif italic font-extralight text-[#FAFFF3]/90 px-1.5 will-change-transform">with</em>
+                <em className="inline-block reveal-word font-serif italic font-extralight text-[#F5F8FF]/90 px-1.5 will-change-transform">with</em>
               </span>{' '}
               <span className="inline-block overflow-hidden align-top py-0.5">
-                <em className="inline-block reveal-word font-serif italic font-extralight text-[#C0F53D] pr-1.5 will-change-transform">real-time risk management,</em>
+                <em className="inline-block reveal-word font-serif italic font-extralight text-[#9B5CFF] pr-1.5 will-change-transform">real-time risk management,</em>
               </span>{' '}
               <span className="inline-block overflow-hidden align-top py-0.5">
                 <span className="inline-block reveal-word uppercase tracking-wider text-white font-extralight will-change-transform">LOW-LATENCY EXECUTION,</span>
               </span>{' '}
               <span className="inline-block overflow-hidden align-top py-0.5">
-                <em className="inline-block reveal-word font-serif italic font-extralight text-[#FAFFF3]/90 px-1.5 will-change-transform">and</em>
+                <em className="inline-block reveal-word font-serif italic font-extralight text-[#F5F8FF]/90 px-1.5 will-change-transform">and</em>
               </span>{' '}
               <span className="inline-block overflow-hidden align-top py-0.5">
-                <span className="inline-block reveal-word font-serif italic font-extralight text-[#C0F53D] uppercase tracking-wider will-change-transform">INTERACTIVE ANALYTICS TIMELINES.</span>
+                <span className="inline-block reveal-word font-serif italic font-extralight text-[#9B5CFF] uppercase tracking-wider will-change-transform">INTERACTIVE ANALYTICS TIMELINES.</span>
               </span>
             </p>
           </div>
@@ -291,7 +291,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
       </section>
 
       {/* Cinematic Landing Hero Component (Full width layer to prevent ScrollTrigger pinning layout shifts) */}
-      <div className="w-full relative border-y border-[#C0F53D]/10 bg-[#0A0D04]">
+      <div className="w-full relative border-y border-[#2F6BED]/10 bg-[#05070C]">
         <CinematicHero />
       </div>
 
@@ -300,7 +300,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
         <div className="text-center max-w-3xl mx-auto mb-16">
           <h2 className="text-3xl md:text-5xl font-medium tracking-tight text-white leading-tight">
             Institutional risk management & ultra low-latency <br />
-            <em className="font-serif italic text-[#C0F53D]">signal execution</em> architecture.
+            <em className="font-serif italic text-[#9B5CFF]">signal execution</em> architecture.
           </h2>
         </div>
 
@@ -311,21 +311,21 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
       <section className="py-24 px-6 md:px-12 max-w-7xl mx-auto border-t border-white/10" id="work">
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-16 gap-6">
           <div>
-            <span className="text-xs font-bold uppercase tracking-widest text-[#C0F53D] block mb-2">
+            <span className="text-xs font-bold uppercase tracking-widest text-[#2F6BED] block mb-2">
               02 / SELECTED WORK
             </span>
             <h2 className="text-4xl md:text-6xl font-medium tracking-tight text-white">
-              Next Level <em className="font-serif italic text-[#C0F53D]">Execution</em>
+              Next Level <em className="font-serif italic text-[#9B5CFF]">Execution</em>
             </h2>
           </div>
-          <a href="#case-studies" className="inline-flex items-center gap-2 px-5 py-2 rounded-full border border-[#C0F53D]/25 bg-[#1A2209]/50 text-xs font-semibold text-[#FAFFF3] hover:border-[#C0F53D] hover:text-[#C0F53D] transition-all self-start md:self-auto">
+          <a href="#case-studies" className="inline-flex items-center gap-2 px-5 py-2 rounded-full border border-[#2F6BED]/25 bg-[#101828]/50 text-xs font-semibold text-[#F5F8FF] hover:border-[#2F6BED] hover:text-[#2F6BED] transition-all self-start md:self-auto">
             Portfolio
           </a>
         </div>
 
         {/* Portfolio Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div className="bg-[#1A2209]/70 border border-[#C0F53D]/12 rounded-2xl overflow-hidden hover:-translate-y-1 hover:border-[#C0F53D]/40 transition-all duration-300 group cursor-pointer">
+          <div className="bg-[#101828]/70 border border-[#2F6BED]/12 rounded-2xl overflow-hidden hover:-translate-y-1 hover:border-[#2F6BED]/40 transition-all duration-300 group cursor-pointer">
             <div className="h-96 w-full overflow-hidden relative">
               <img
                 src={portfolioCard}
@@ -334,7 +334,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
               />
               <div className="absolute inset-0 bg-linear-to-t from-black/90 via-black/20 to-transparent" />
               <div className="absolute bottom-6 left-6 right-6">
-                <span className="text-xs text-[#C0F53D] uppercase font-bold block mb-1">
+                <span className="text-xs text-[#2F6BED] uppercase font-bold block mb-1">
                   SIGNAL ROUTING
                 </span>
                 <h3 className="text-2xl font-bold text-white">TradingView to Dhan Gateway</h3>
@@ -343,7 +343,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
             </div>
           </div>
 
-          <div className="bg-[#1A2209]/70 border border-[#C0F53D]/12 rounded-2xl overflow-hidden hover:-translate-y-1 hover:border-[#C0F53D]/40 transition-all duration-300 group cursor-pointer">
+          <div className="bg-[#101828]/70 border border-[#2F6BED]/12 rounded-2xl overflow-hidden hover:-translate-y-1 hover:border-[#2F6BED]/40 transition-all duration-300 group cursor-pointer">
             <div className="h-96 w-full overflow-hidden relative">
               <img
                 src={riskLimitCard}
@@ -352,7 +352,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
               />
               <div className="absolute inset-0 bg-linear-to-t from-black/90 via-black/20 to-transparent" />
               <div className="absolute bottom-6 left-6 right-6">
-                <span className="text-xs text-[#C0F53D] uppercase font-bold block mb-1">
+                <span className="text-xs text-[#2F6BED] uppercase font-bold block mb-1">
                   RISK MANAGEMENT
                 </span>
                 <h3 className="text-2xl font-bold text-white">Institutional Risk Control</h3>
@@ -371,7 +371,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
       <section className="py-24 px-6 md:px-12 max-w-7xl mx-auto" id="case-studies">
         <div className="text-center max-w-3xl mx-auto mb-16">
           <h2 className="text-4xl md:text-6xl font-medium tracking-tight text-white mb-4">
-            Empowering Traders to <em className="font-serif italic text-[#C0F53D]">Execute Faster</em>
+            Empowering Traders to <em className="font-serif italic text-[#9B5CFF]">Execute Faster</em>
           </h2>
           <p className="text-sm text-white/60">
             Proven results delivering institutional execution & low-latency performance.
@@ -379,9 +379,9 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="bg-white/3 border border-white/10 rounded-2xl p-8 flex flex-col justify-between hover:border-[#C0F53D]/50 transition-colors">
+          <div className="bg-white/3 border border-white/10 rounded-2xl p-8 flex flex-col justify-between hover:border-[#2F6BED]/50 transition-colors">
             <div>
-              <span className="text-xs text-[#C0F53D] font-bold block mb-2">CASE 01</span>
+              <span className="text-xs text-[#2F6BED] font-bold block mb-2">CASE 01</span>
               <h3 className="text-2xl font-bold text-white mb-2">Apex Alpha Fund</h3>
               <p className="text-xs text-white/60 leading-relaxed mb-6">
                 Automated Nifty index options routing with sub-50ms webhook ingestion.
@@ -389,7 +389,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
             </div>
             <div className="pt-6 border-t border-white/10 flex justify-between items-center">
               <div>
-                <span className="text-2xl font-extrabold text-[#C0F53D] block">&lt;35ms</span>
+                <span className="text-2xl font-extrabold text-[#2F6BED] block">&lt;35ms</span>
                 <span className="text-[10px] text-white/50 uppercase">Order Latency</span>
               </div>
               <div className="text-right">
@@ -399,9 +399,9 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
             </div>
           </div>
 
-          <div className="bg-white/3 border border-white/10 rounded-2xl p-8 flex flex-col justify-between hover:border-[#C0F53D]/50 transition-colors">
+          <div className="bg-white/3 border border-white/10 rounded-2xl p-8 flex flex-col justify-between hover:border-[#2F6BED]/50 transition-colors">
             <div>
-              <span className="text-xs text-[#C0F53D] font-bold block mb-2">CASE 02</span>
+              <span className="text-xs text-[#2F6BED] font-bold block mb-2">CASE 02</span>
               <h3 className="text-2xl font-bold text-white mb-2">QuantPulse Capital</h3>
               <p className="text-xs text-white/60 leading-relaxed mb-6">
                 Real-time risk management and institutional position sizing automation.
@@ -409,7 +409,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
             </div>
             <div className="pt-6 border-t border-white/10 flex justify-between items-center">
               <div>
-                <span className="text-2xl font-extrabold text-[#C0F53D] block">$12.4M</span>
+                <span className="text-2xl font-extrabold text-[#2F6BED] block">$12.4M</span>
                 <span className="text-[10px] text-white/50 uppercase">Volume Routed</span>
               </div>
               <div className="text-right">
@@ -419,9 +419,9 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
             </div>
           </div>
 
-          <div className="bg-white/3 border border-white/10 rounded-2xl p-8 flex flex-col justify-between hover:border-[#C0F53D]/50 transition-colors">
+          <div className="bg-white/3 border border-white/10 rounded-2xl p-8 flex flex-col justify-between hover:border-[#2F6BED]/50 transition-colors">
             <div>
-              <span className="text-xs text-[#C0F53D] font-bold block mb-2">CASE 03</span>
+              <span className="text-xs text-[#2F6BED] font-bold block mb-2">CASE 03</span>
               <h3 className="text-2xl font-bold text-white mb-2">Veloce Trading</h3>
               <p className="text-xs text-white/60 leading-relaxed mb-6">
                 Seamless paper-to-live strategy transition with zero code modifications.
@@ -429,7 +429,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
             </div>
             <div className="pt-6 border-t border-white/10 flex justify-between items-center">
               <div>
-                <span className="text-2xl font-extrabold text-[#d4ff32] block">99.99%</span>
+                <span className="text-2xl font-extrabold text-[#5C93FF] block">99.99%</span>
                 <span className="text-[10px] text-white/50 uppercase">Signal Uptime</span>
               </div>
               <div className="text-right">
@@ -460,13 +460,13 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
       {/* ----------------- Light Services Showcase Section ----------------- */}
       <section className="" id="services">
         {/* Ambient Lime Outer Gradient Frame */}
-        <div className="relative p-3 sm:p-5 md:p-7 bg-linear-to-b from-[#ccf661] via-[#d2f47c] to-[#d7f695] shadow-[0_0_60px_rgba(192,245,61,0.25)]">
+        <div className="relative p-3 sm:p-5 md:p-7 bg-linear-to-b from-[#6E9DFF] via-[#7FA9FF] to-[#9DBEFF] shadow-[0_0_60px_rgba(192,245,61,0.25)]">
           {/* Inner Floating Ivory Card */}
           <div
             ref={servicesContainerRef}
             onMouseMove={handleServicesMouseMove}
             onMouseLeave={handleServiceMouseLeave}
-            className="relative bg-[#FAFFF3] text-[#0A0D04] p-8 my-10 sm:p-12 md:p-16 shadow-2xl overflow-hidden"
+            className="relative bg-[#F5F8FF] text-[#05070C] p-8 my-10 sm:p-12 md:p-16 shadow-2xl overflow-hidden"
           >
             <div className="text-center max-w-2xl mx-auto mb-14">
               <h2 className="text-4xl sm:text-5xl md:text-6xl font-medium tracking-tight text-black">
@@ -524,13 +524,13 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
                   >
                     <div className="flex items-center gap-6 md:w-1/2">
                       <span
-                        className={`text-sm font-montreal transition-colors duration-300 ${isActive ? 'text-[#80AF1B] font-bold' : 'text-black/50'
+                        className={`text-sm font-montreal transition-colors duration-300 ${isActive ? 'text-[#2456C0] font-bold' : 'text-black/50'
                           }`}
                       >
                         {service.num}
                       </span>
                       <h3
-                        className={`text-xl sm:text-2xl md:text-3xl font-montreal font-medium transition-colors duration-300 ${isActive ? 'text-[#80AF1B]' : 'text-black'
+                        className={`text-xl sm:text-2xl md:text-3xl font-montreal font-medium transition-colors duration-300 ${isActive ? 'text-[#2456C0]' : 'text-black'
                           }`}
                       >
                         {service.title}
@@ -553,12 +553,12 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
       {/* ----------------- Product Animation Video Section ----------------- */}
       <section className="py-24 px-6 md:px-12 max-w-7xl mx-auto border-t border-white/10">
         <div className="text-center max-w-3xl mx-auto mb-12">
-          <span className="text-xs font-medium uppercase tracking-widest text-[#C0F53D] block mb-4">
+          <span className="text-xs font-medium uppercase tracking-widest text-[#2F6BED] block mb-4">
             PRODUCT ANIMATION
           </span>
           <h2 className="text-3xl md:text-5xl font-medium tracking-tight text-white mb-4">
             Experience real-time execution & <br className="hidden md:block" />
-            <em className="font-serif italic text-[#C0F53D]">low-latency risk routing</em> in action.
+            <em className="font-serif italic text-[#9B5CFF]">low-latency risk routing</em> in action.
           </h2>
           <p className="text-xs text-white/60 font-normal">
             Seamless TradingView webhook ingestion, Dhan API execution, and live position safeguards.
@@ -587,7 +587,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
 
       {/* ----------------- Full Electric Lime CTA Section ----------------- */}
       <section className="py-16" id="contact">
-        <div className="bg-[#C0F53D] text-[#0A0D04]  py-16 px-9 text-center">
+        <div className="bg-[#2F6BED] text-[#05070C]  py-16 px-9 text-center">
           <span className="text-xs font-extrabold uppercase tracking-widest text-black/70 block mb-3">
             GET STARTED
           </span>
@@ -598,12 +598,12 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
             <button
               type="button"
               onClick={onEnterApp}
-              className="bg-[#0A0D04]  text-[#C0F53D] border-2 border-[#0A0D04] font-bold text-xs px-6 py-3 rounded-full hover:bg-[#1A2209] hover:-translate-y-0.5 transition-all cursor-pointer "
+              className="bg-[#05070C]  text-[#2F6BED] border-2 border-[#05070C] font-bold text-xs px-6 py-3 rounded-full hover:bg-[#101828] hover:-translate-y-0.5 transition-all cursor-pointer "
             >
               Launch Trading Platform
             </button>
           ) : (
-            <a href="#discovery" className="bg-[#0A0D04]  text-[#C0F53D] font-bold text-xs px-6 py-3 rounded-full hover:bg-[#1A2209] hover:-translate-y-0.5 transition-all cursor-pointer inline-block">
+            <a href="#discovery" className="bg-[#05070C]  text-[#2F6BED] font-bold text-xs px-6 py-3 rounded-full hover:bg-[#101828] hover:-translate-y-0.5 transition-all cursor-pointer inline-block">
               Get Started
             </a>
           )}
@@ -612,7 +612,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
 
       {/* ----------------- Unified Matte-Black to Olive-Lime Footer Card ----------------- */}
       <footer className=''>
-        <div className="relative flex min-h-[500px] flex-col justify-between overflow-hidden bg-[#070807] p-8 shadow-[0_0_60px_rgba(0,0,0,0.8)] sm:p-12 md:p-16">
+        <div className="relative flex min-h-[500px] flex-col justify-between overflow-hidden bg-[#06070A] p-8 shadow-[0_0_60px_rgba(0,0,0,0.8)] sm:p-12 md:p-16">
           {/* Large unrestricted bottom blur — no inner overflow clipping */}
           <div
             className="
@@ -635,7 +635,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
         h-[460px] w-full
         -translate-x-1/2
         rounded-[50%]
-        bg-[#7FA52B]/20
+        bg-[#1F4CAB]/20
         blur-[135px]
       "
           />
@@ -664,7 +664,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
               </h3>
 
               {emailDone ? (
-                <div className="max-w-sm rounded-xl border border-[#C0F53D]/30 bg-[#C0F53D]/10 px-4 py-3 text-xs font-medium text-[#C0F53D]">
+                <div className="max-w-sm rounded-xl border border-[#2F6BED]/30 bg-[#2F6BED]/10 px-4 py-3 text-xs font-medium text-[#2F6BED]">
                   ✓ Thank you! You&apos;re subscribed to NOVA updates.
                 </div>
               ) : (
@@ -679,14 +679,14 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
                       placeholder="Email"
                       value={emailSub}
                       onChange={(e) => setEmailSub(e.target.value)}
-                      className="w-full rounded-xl border border-white/20 bg-black/40 px-4 py-3 text-xs text-white placeholder:text-white/40 transition-colors focus:border-[#C0F53D] focus:outline-none"
+                      className="w-full rounded-xl border border-white/20 bg-black/40 px-4 py-3 text-xs text-white placeholder:text-white/40 transition-colors focus:border-[#2F6BED] focus:outline-none"
                     />
                   </div>
 
                   <button
                     type="submit"
                     aria-label="Subscribe"
-                    className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-[#C0F53D]/30 bg-[#1A2209] text-sm font-bold text-white transition-all hover:border-[#C0F53D] hover:text-[#C0F53D]"
+                    className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-[#2F6BED]/30 bg-[#101828] text-sm font-bold text-white transition-all hover:border-[#2F6BED] hover:text-[#2F6BED]"
                   >
                     →
                   </button>

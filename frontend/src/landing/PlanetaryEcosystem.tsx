@@ -181,7 +181,7 @@ export function PlanetaryEcosystem() {
             if (isActive) {
               cardContentEl.style.borderColor = 'rgba(192, 245, 61, 0.85)'
               cardContentEl.style.boxShadow = '0 0 25px rgba(192, 245, 61, 0.3)'
-              cardContentEl.style.backgroundColor = '#1A2209'
+              cardContentEl.style.backgroundColor = '#101828'
             } else {
               cardContentEl.style.borderColor = 'rgba(192, 245, 61, 0.2)'
               cardContentEl.style.boxShadow = 'none'
@@ -346,14 +346,14 @@ export function PlanetaryEcosystem() {
       >
         {/* Main Circular Orbit Line (Expanded Outer Size) */}
         <div
-          className="orbit-line absolute w-[300px] h-[300px] sm:w-[380px] sm:h-[380px] md:w-[460px] md:h-[460px] rounded-full border border-[#C0F53D]/20 bg-[radial-gradient(circle,rgba(192,245,61,0.06)_0%,transparent_70%)] pointer-events-none"
+          className="orbit-line absolute w-[300px] h-[300px] sm:w-[380px] sm:h-[380px] md:w-[460px] md:h-[460px] rounded-full border border-[#2F6BED]/20 bg-[radial-gradient(circle,rgba(192,245,61,0.06)_0%,transparent_70%)] pointer-events-none"
           aria-hidden="true"
         />
 
         {/* Inner Technical Ring */}
         <div
           ref={innerRingRef}
-          className="inner-technical-ring absolute w-[200px] h-[200px] sm:w-[260px] sm:h-[260px] md:w-[280px] md:h-[280px] rounded-full border border-dashed border-[#C0F53D]/15 pointer-events-none opacity-40 will-change-transform"
+          className="inner-technical-ring absolute w-[200px] h-[200px] sm:w-[260px] sm:h-[260px] md:w-[280px] md:h-[280px] rounded-full border border-dashed border-[#2F6BED]/15 pointer-events-none opacity-40 will-change-transform"
           aria-hidden="true"
         />
 
@@ -396,7 +396,7 @@ export function PlanetaryEcosystem() {
                         onFocus={() => handleCardMouseEnter(index)}
                         onBlur={handleCardMouseLeave}
                         tabIndex={0}
-                        className="orbit-card-content px-4 py-2 sm:px-4.5 sm:py-2.5 rounded-2xl text-center bg-[#0A0D04]/90 border border-[#C0F53D]/20 text-[#FAFFF3] hover:border-[#C0F53D] hover:text-[#C0F53D] cursor-pointer transition-colors duration-200 backdrop-blur-md flex flex-col items-center justify-center focus:outline-none focus:ring-2 focus:ring-[#C0F53D]"
+                        className="orbit-card-content px-4 py-2 sm:px-4.5 sm:py-2.5 rounded-2xl text-center bg-[#05070C]/90 border border-[#2F6BED]/20 text-[#F5F8FF] hover:border-[#2F6BED] hover:text-[#2F6BED] cursor-pointer transition-colors duration-200 backdrop-blur-md flex flex-col items-center justify-center focus:outline-none focus:ring-2 focus:ring-[#2F6BED]"
                       >
                         <span className="text-xs sm:text-sm font-medium tracking-tight block text-white">
                           {module.label}
@@ -421,7 +421,7 @@ export function PlanetaryEcosystem() {
           <div className="translate-y-[-150px] sm:translate-y-[-190px] md:translate-y-[-230px]">
             <div
               ref={signalParticleRef}
-              className="signal-particle w-2.5 h-2.5 rounded-full bg-[#C0F53D] shadow-[0_0_12px_#C0F53D,0_0_24px_#C0F53D]"
+              className="signal-particle w-2.5 h-2.5 rounded-full bg-[#2F6BED] shadow-[0_0_12px_#2F6BED,0_0_24px_#2F6BED]"
               aria-hidden="true"
             />
           </div>
@@ -433,11 +433,11 @@ export function PlanetaryEcosystem() {
           className="core-magnetic-wrapper relative z-30 pointer-events-auto will-change-transform"
         >
           <div ref={corePulseRef} className="core-pulse-wrapper will-change-transform">
-            <div className="nova-core w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-[#070906] border border-white/20 hover:border-[#C0F53D] transition-colors duration-300 flex flex-col items-center justify-center text-center p-4 shadow-[0_0_30px_rgba(0,0,0,0.8),inset_0_0_20px_rgba(192,245,61,0.05)] cursor-pointer">
+            <div className="nova-core w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-[#06070B] border border-white/20 hover:border-[#2F6BED] transition-colors duration-300 flex flex-col items-center justify-center text-center p-4 shadow-[0_0_30px_rgba(0,0,0,0.8),inset_0_0_20px_rgba(192,245,61,0.05)] cursor-pointer">
               <span className="text-[10px] uppercase font-medium text-white/50 tracking-wider">
                 CORE SYSTEM
               </span>
-              <strong className="text-xs sm:text-sm font-extr-mfont-medium text-[#C0F53D] mt-1 leading-tight">
+              <strong className="text-xs sm:text-sm font-extr-mfont-medium text-[#2F6BED] mt-1 leading-tight">
                 NOVA Signal Engine
               </strong>
             </div>
