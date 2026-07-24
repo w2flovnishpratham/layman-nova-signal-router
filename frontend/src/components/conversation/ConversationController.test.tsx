@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeStatus } from '../../api'
 import { ConversationController } from './ConversationController'
 
+// The setup conversation also asks the engine safety questions (daily loss
+// cap, trade cap, cooldown after a loss), so a 'complete' saved setup must
+// include them or Resume correctly lands on the first unanswered one.
 const FIELDS = [
   { key: 'direction', type: 'choice' as const, label: 'Direction', options: ['CE', 'PE', 'BOTH'], required: true, default: 'BOTH' },
   { key: 'lots', type: 'integer' as const, label: 'Lots', minimum: 1, maximum: 10, required: true, default: 1 },
@@ -26,7 +29,7 @@ function runtimeWith(saved: Record<string, unknown>): RuntimeStatus {
 const noop = async () => {}
 function props(over: Partial<Parameters<typeof ConversationController>[0]> = {}) {
   return {
-    runtime: runtimeWith({ direction: 'CE', lots: 2 }), loading: false, error: '',
+    runtime: runtimeWith({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 }), loading: false, error: '',
     onManage: () => {}, onSelect: vi.fn(noop), onSave: vi.fn(noop), onStart: vi.fn(noop),
     onUserReply: () => {}, ...over,
   }
@@ -88,7 +91,7 @@ describe('ConversationController — error recovery', () => {
   })
 
   it('halts an unavailable strategy with its reason and no Save', () => {
-    const r = runtimeWith({ direction: 'CE', lots: 2 }) as unknown as { strategy_catalog: { strategies: Array<{ availability: string; paper_eligible: boolean; disabled_reason: string }> } }
+    const r = runtimeWith({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 }) as unknown as { strategy_catalog: { strategies: Array<{ availability: string; paper_eligible: boolean; disabled_reason: string }> } }
     r.strategy_catalog.strategies[0].availability = 'DISABLED'
     r.strategy_catalog.strategies[0].paper_eligible = false
     r.strategy_catalog.strategies[0].disabled_reason = 'Strategy paused by admin.'
@@ -174,24 +177,35 @@ describe('ConversationController — sequential questions & save/start', () => {
     fireEvent.change(input, { target: { value: '3' } })
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
     act(() => vi.advanceTimersByTime(700))
+    // The engine safety questions follow the strategy schema.
+    for (const [label, value] of [['max_daily_loss', '25000'], ['max_trades_per_day', '6'], ['cooldown_after_loss_minutes', '30']] as const) {
+      const numeric = document.getElementById(`q-${label}`) as HTMLInputElement
+      expect(numeric).not.toBeNull()
+      fireEvent.change(numeric, { target: { value } })
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+      act(() => vi.advanceTimersByTime(700))
+    }
     expect(screen.getByRole('button', { name: /save setup/i })).toBeInTheDocument()
   })
 
   it('saves the validated draft, then exposes an explicit Start engine (never before save)', async () => {
     const onSave = vi.fn(noop)
     const onStart = vi.fn(noop)
-    render(<ConversationController {...props({ onSave, onStart })} />)
+    const onSaveRisk = vi.fn(noop)
+    render(<ConversationController {...props({ onSave, onSaveRisk, onStart })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull() // not before save
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
     expect(onSave).toHaveBeenCalledWith('supertrend', { direction: 'CE', lots: 2 })
+    // Safety settings are runtime settings, saved through their own endpoint.
+    expect(onSaveRisk).toHaveBeenCalledWith({ max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 })
     expect(screen.getByRole('button', { name: /start engine/i })).toBeInTheDocument()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /start engine/i })) })
     expect(onStart).toHaveBeenCalledWith('inst-1')
   })
 
-  it('a rapid double-click on Save produces exactly one save request', () => {
+  it('a rapid double-click on Save produces exactly one save request', async () => {
     const onSave = vi.fn(() => new Promise<void>(() => {})) // stays pending
     render(<ConversationController {...props({ onSave })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
@@ -199,6 +213,7 @@ describe('ConversationController — sequential questions & save/start', () => {
     const btn = screen.getByRole('button', { name: /save setup/i })
     fireEvent.click(btn)
     fireEvent.click(btn) // second click before the disabled state re-renders
+    await act(async () => { await Promise.resolve() }) // the risk save resolves first
     expect(onSave).toHaveBeenCalledTimes(1)
   })
 

@@ -8,6 +8,7 @@ import { currentPath, navigate } from './navigation'
 export const APP_ROUTES = [
   'dashboard',
   'trading',
+  'setup',
   'strategies',
   'strategies/new',
   'signals',
@@ -25,7 +26,7 @@ export type AppRoute = (typeof APP_ROUTES)[number]
 export const DEFAULT_APP_ROUTE: AppRoute = 'trading'
 
 /** Routes backed by real, working screens today. Everything else is a truthful placeholder. */
-export const IMPLEMENTED_ROUTES: AppRoute[] = ['trading', 'dashboard', 'strategies', 'signals', 'webhooks', 'risk']
+export const IMPLEMENTED_ROUTES: AppRoute[] = ['trading', 'dashboard', 'strategies', 'signals', 'webhooks', 'risk', 'setup']
 
 export function appPath(route: AppRoute): string {
   return `/app/${route}`
@@ -63,6 +64,7 @@ export function goToRoute(route: AppRoute): void {
 export const ROUTE_META: Record<AppRoute, { label: string; description: string }> = {
   dashboard: { label: 'Dashboard', description: 'Portfolio, equity curve and session performance.' },
   trading: { label: 'Trading', description: 'Live chart, engine controls and the active position.' },
+  setup: { label: 'Setup', description: 'Answer the setup questions, then arm the engine.' },
   strategies: { label: 'Strategies', description: 'NOVA, imported Pine and manual strategies.' },
   'strategies/new': { label: 'Add Strategy', description: 'Import a Pine script and validate it before routing.' },
   signals: { label: 'Signals', description: 'Every TradingView alert received and what happened to it.' },

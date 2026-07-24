@@ -5,6 +5,9 @@ import type { RuntimeStatus } from '../../api'
 import { ConversationController } from './ConversationController'
 
 // Real timers + userEvent: keyboard-only operation of the real controller.
+// The setup conversation also asks the engine safety questions (daily loss
+// cap, trade cap, cooldown after a loss), so a 'complete' saved setup must
+// include them or Resume correctly lands on the first unanswered one.
 const FIELDS = [
   { key: 'direction', type: 'choice' as const, label: 'Direction', options: ['CE', 'PE', 'BOTH'], required: true, default: 'BOTH' },
   { key: 'lots', type: 'integer' as const, label: 'Lots', minimum: 1, maximum: 10, required: true, default: 1 },
@@ -58,7 +61,7 @@ describe('ConversationController — keyboard-only operation', () => {
 
   it('operates the saved-setup decision and choice question by keyboard', async () => {
     const user = userEvent.setup()
-    render(<ConversationController {...props({ runtime: runtime({ saved: { direction: 'CE', lots: 2 } }) })} />)
+    render(<ConversationController {...props({ runtime: runtime({ saved: { direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 } }) })} />)
     const startNew = screen.getByRole('button', { name: 'Start New Setup' })
     startNew.focus()
     await user.keyboard('{Enter}')
@@ -74,7 +77,7 @@ describe('ConversationController — keyboard-only operation', () => {
     const user = userEvent.setup()
     const onSave = vi.fn(noop)
     const onStart = vi.fn(noop)
-    render(<ConversationController {...props({ runtime: runtime({ saved: { direction: 'CE', lots: 2 } }), onSave, onStart })} />)
+    render(<ConversationController {...props({ runtime: runtime({ saved: { direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 } }), onSave, onStart })} />)
     ;(screen.getByRole('button', { name: 'Resume' })).focus()
     await user.keyboard('{Enter}')
     const save = await screen.findByRole('button', { name: /save setup/i })
@@ -106,7 +109,7 @@ describe('ConversationController — keyboard-only operation', () => {
 
 describe('ConversationController — ARIA live region', () => {
   it('exposes exactly one polite live region announcing the latest prompt, not the transcript', () => {
-    render(<ConversationController {...props({ runtime: runtime({ saved: { direction: 'CE', lots: 2 } }) })} />)
+    render(<ConversationController {...props({ runtime: runtime({ saved: { direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 } }) })} />)
     const statuses = screen.getAllByRole('status').filter((el) => el.getAttribute('aria-live') === 'polite')
     // one dedicated conversation live region (others may exist for unrelated widgets)
     const live = statuses.find((el) => /NOVA/.test(el.textContent ?? ''))

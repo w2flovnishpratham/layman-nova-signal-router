@@ -5,7 +5,13 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.services.state_store import _LOCK, PAPER_PORTFOLIO_FILE, get_runtime_settings, utc_now
+from app.services.state_store import (
+    _LOCK,
+    PAPER_PORTFOLIO_FILE,
+    get_runtime_settings,
+    record_losing_exit,
+    utc_now,
+)
 
 
 _IST = ZoneInfo("Asia/Kolkata")
@@ -180,7 +186,11 @@ def apply_paper_exit(*, qty: int, exit_price: float, charges: float, symbol: str
             }]
         )[-200:]
         portfolio.open_trade = None
-        return _write(portfolio)
+        written = _write(portfolio)
+    # Outside the portfolio lock: the cooldown stamp lives in a different file,
+    # and failing to record it must never roll back an exit that was booked.
+    record_losing_exit(realized)
+    return written
 
 
 def paper_wallet_snapshot() -> dict[str, Any]:

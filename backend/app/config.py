@@ -40,6 +40,9 @@ DEFAULT_RUNTIME_SETTINGS = {
     "configured_lots": 1,
     "max_trades_per_day": 0,
     "max_daily_loss": 0.0,
+    # Minutes to block new entries after a losing exit. 0 disables the
+    # cooldown entirely; it never blocks exits, only entries.
+    "cooldown_after_loss_minutes": 0,
     # SL disable — when True, _broker_exit_levels sets the Super Order SL
     # leg to a floor price (~Rs.0.10 or 0.1% of entry) so it effectively never
     # fires. Position is exited by opposite Supertrend reversal, TP, or EOD.

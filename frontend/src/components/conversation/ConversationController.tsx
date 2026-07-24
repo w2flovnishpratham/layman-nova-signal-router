@@ -8,6 +8,8 @@ import { TypingDots } from '../TypingDots'
 import { useAppReducedMotion } from '../MotionPrimitives'
 import { useConversation } from '../../state/useConversation'
 import { applicableFields, type SetupValues } from '../../state/conversationMachine'
+import type { ConversationState } from '../../state/conversationMachine'
+import { splitDraft, withRiskFields } from '../../setup/setupFields'
 import { projectTranscript } from '../../state/conversationTranscript'
 import { useConversationScroll } from '../../state/useConversationScroll'
 
@@ -18,6 +20,11 @@ interface Props {
   onManage: (instanceId: string) => void
   onSelect: (strategyKey: string) => Promise<void>
   onSave: (strategyKey: string, values: Record<string, string | number>) => Promise<void>
+  /** Reports machine state so the setup rail and configuration panel can
+      project from the same source rather than tracking their own copy. */
+  onStateChange?: (snapshot: { state: ConversationState; strategyName: string | null; strategyVersion: string | null }) => void
+  /** Saves the engine safety settings (daily loss cap, trade cap, cooldown). */
+  onSaveRisk?: (values: Record<string, string | number>) => Promise<void>
   onStart: (instanceId: string) => Promise<void>
   onUserReply: (text: string) => void
   /** Sync the backend when the machine picks a mode (setup.mode command + draft). */
@@ -127,7 +134,7 @@ function StrategyGroup({ title, strategies, onPick }: { title: string; strategie
 }
 
 export function ConversationController({
-  runtime, loading, error, onSelect, onSave, onStart,
+  runtime, loading, error, onSelect, onSave, onSaveRisk, onStart, onStateChange,
   onModeSelect, onRetry, liveAvailable = false, paperStartingBalance = 100000,
 }: Props) {
   const reducedMotion = useAppReducedMotion()
@@ -141,6 +148,14 @@ export function ConversationController({
     () => strategies.find((s) => s.strategy_key === state.strategyKey) ?? null,
     [strategies, state.strategyKey],
   )
+
+  useEffect(() => {
+    onStateChange?.({
+      state,
+      strategyName: selectedStrategy?.name ?? null,
+      strategyVersion: selectedStrategy?.version ?? null,
+    })
+  }, [state, selectedStrategy, onStateChange])
 
   const [pending, setPending] = useState<'idle' | 'saving' | 'starting'>('idle')
   const [saveError, setSaveError] = useState('')
@@ -180,7 +195,7 @@ export function ConversationController({
     const strat = strategies.find((s) => s.strategy_key === key)
     if (!strat) return
     initedFor.current = key
-    conv.selectStrategy(strat.strategy_key, strat.setup_schema.fields, strat.saved_setup?.[state.mode] ?? {})
+    conv.selectStrategy(strat.strategy_key, withRiskFields(strat.setup_schema.fields), strat.saved_setup?.[state.mode] ?? {})
   }, [catalog, strategies, state.mode, conv])
 
   function pickMode(m: EngineMode) {
@@ -206,7 +221,7 @@ export function ConversationController({
     )
   }
 
-  const fields = selectedStrategy?.setup_schema.fields ?? state.fields
+  const fields = selectedStrategy ? withRiskFields(selectedStrategy.setup_schema.fields) : state.fields
   // A selected strategy that lost readiness, or that exposes no setup schema,
   // must halt progression — no review, save or start — with a truthful reason.
   const strategyUnavailable = !!selectedStrategy && !(selectedStrategy.availability === 'READY' && selectedStrategy.paper_eligible)
@@ -214,7 +229,7 @@ export function ConversationController({
   const setupBlocked = !!state.strategyKey && (strategyUnavailable || schemaMissing)
 
   async function pickStrategy(s: CatalogStrategy) {
-    conv.selectStrategy(s.strategy_key, s.setup_schema.fields, s.saved_setup?.[mode] ?? {})
+    conv.selectStrategy(s.strategy_key, withRiskFields(s.setup_schema.fields), s.saved_setup?.[mode] ?? {})
     initedFor.current = s.strategy_key
     try {
       await onSelect(s.strategy_key)
@@ -239,7 +254,12 @@ export function ConversationController({
     inFlightRef.current = true
     setPending('saving'); setSaveError('')
     try {
-      await onSave(selectedStrategy.strategy_key, toSaveValues(state.draft))
+      const { strategy, risk } = splitDraft(state.draft)
+      // Engine safety settings are runtime settings, not strategy setup, so they
+      // go to their own endpoint. Save them first: if the strategy save fails the
+      // user is left with tighter limits, never looser ones.
+      if (Object.keys(risk).length > 0) await onSaveRisk?.(toSaveValues(risk))
+      await onSave(selectedStrategy.strategy_key, toSaveValues(strategy))
       if (isStale(gen, strategyKey)) return // conversation moved on — ignore result
       setSaved(true)
     } catch (e) {

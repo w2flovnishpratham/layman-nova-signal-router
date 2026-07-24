@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.config import (
@@ -100,7 +100,37 @@ def _entry_limit_checks(payload: NormalizedSignal, runtime: dict) -> RiskDecisio
     if max_daily_loss > 0 and isinstance(session_pnl, (int, float)) and float(session_pnl) <= -max_daily_loss:
         return RiskDecision(False, "Trade blocked: maximum daily loss reached.")
 
+    cooldown = _cooldown_after_loss_check(runtime)
+    if cooldown:
+        return cooldown
+
     return None
+
+
+def _cooldown_after_loss_check(runtime: dict) -> RiskDecision | None:
+    """Block entries for N minutes after a losing exit. Never blocks exits."""
+    minutes = _setting_int(runtime, "cooldown_after_loss_minutes", 0)
+    if minutes <= 0:
+        return None
+    last_loss = get_daily_risk().get("last_loss_exit_at")
+    if not last_loss:
+        return None
+    try:
+        stamped = datetime.fromisoformat(str(last_loss).replace("Z", "+00:00"))
+    except ValueError:
+        # An unparseable stamp must not silently disable the gate, but it also
+        # must not wedge entries forever; treat it as "no cooldown recorded".
+        return None
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=UTC)
+    remaining = (stamped + timedelta(minutes=minutes)) - datetime.now(UTC)
+    if remaining.total_seconds() <= 0:
+        return None
+    mins_left = max(1, int(remaining.total_seconds() // 60) + 1)
+    return RiskDecision(
+        False,
+        f"Trade blocked: cooldown after a losing trade is active for another {mins_left} min.",
+    )
 
 
 def evaluate_entry(payload: NormalizedSignal, runtime: dict | None = None) -> RiskDecision:

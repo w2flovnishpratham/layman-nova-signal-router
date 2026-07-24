@@ -19,6 +19,7 @@ import { PlaceholderPage } from './components/shell/PlaceholderPage'
 import { SignalsPage } from './signals/SignalsPage'
 import { WebhooksPage } from './webhooks/WebhooksPage'
 import { RiskPage } from './risk/RiskPage'
+import { SetupPage, type SetupSnapshot } from './setup/SetupPage'
 import {
   getCurrentUser,
   getMarketSnapshot,
@@ -61,6 +62,9 @@ function App() {
   const setView = useCallback((next: NovaView) => {
     goToRoute(next === 'dashboard' ? 'dashboard' : next === 'strategies' ? 'strategies' : 'trading')
   }, [])
+  // Held here so /app/setup can project the rail and configuration panel from
+  // the same conversation state the controller owns.
+  const [setupSnapshot, setSetupSnapshot] = useState<SetupSnapshot | null>(null)
   const [railOpen, setRailOpen] = useState(false)
   const [railCollapsed, setRailCollapsed] = useState(false)
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
@@ -397,6 +401,7 @@ function App() {
       onUserReply={addUserMessage}
       onDraft={updateSetupDraft}
       onStep={setSetupFlowStep}
+      onSetupState={setSetupSnapshot}
     />
   )
 
@@ -464,6 +469,8 @@ function App() {
         <WebhooksPage />
       ) : route === 'risk' ? (
         <RiskPage />
+      ) : route === 'setup' ? (
+        <SetupPage conversation={setupPanel} snapshot={setupSnapshot} />
       ) : view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (

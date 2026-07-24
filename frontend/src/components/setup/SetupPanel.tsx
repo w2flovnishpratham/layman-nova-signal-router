@@ -8,6 +8,8 @@ import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
 import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
+import type { SetupSnapshot } from '../../setup/SetupPage'
+import { patchRiskSettings } from '../../setup/riskSettingsApi'
 import { ConversationController } from '../conversation/ConversationController'
 
 const DISABLED_STOP_LOSS_PCT = 99.9
@@ -34,6 +36,7 @@ interface Props {
   onUserReply: (text: string) => void
   onDraft: (patch: Partial<SetupDraft>) => void
   onStep: (step: SetupFlowStep) => void
+  onSetupState?: (snapshot: SetupSnapshot) => void
 }
 
 export function SetupPanel({
@@ -57,6 +60,7 @@ export function SetupPanel({
   onUserReply,
   onDraft,
   onStep,
+  onSetupState,
 }: Props) {
   if (state === 'LIVE' || state === 'PAUSED' || state === 'ENDED' || flowStep === 'complete') return null
   if (flowStep === 'live_access') return <LiveAccessStep onContinue={() => {
@@ -72,6 +76,8 @@ export function SetupPanel({
       error={runtimeError}
       onManage={onManageStrategy}
       onSave={onConfigureStrategy}
+      onSaveRisk={patchRiskSettings}
+      onStateChange={onSetupState}
       onSelect={onSelectStrategy}
       onStart={onStartStrategy}
       onUserReply={onUserReply}
