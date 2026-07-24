@@ -82,3 +82,29 @@ allow. None of these may be implemented without a separate verified review:
 2. Strategies + Signals — Signals needs the first genuinely new read endpoint.
 3. Then, and only then, evaluate Automations/Reports/Settings writes with a
    safety review before any migration.
+
+## Setup-conversation mockup (7-step wizard) — audit 2026-07-24
+
+A mockup was supplied showing a `Setup` screen: top horizontal nav, a 7-step
+rail, a chat transcript, and a live "CONFIGURATION" panel with a progress
+percentage and an "Arm Engine (Paper)" CTA. The shipped chatbot was built from
+the earlier flow and does **not** match it. Delta:
+
+| Mockup element | Reality today | Gap |
+| --- | --- | --- |
+| Top nav: Dashboard / Trading / Strategies / **Setup** / Signals / Risk / Settings | Left sidebar, 11 routes, **no `/app/setup`** | nav model decision + a new route |
+| 7-step numbered rail with tick marks | Machine has *phases*, not a fixed 7-step model | new derivation from the schema |
+| Right-hand live "CONFIGURATION" cards | No such panel | new component; must project from the machine, not a second source |
+| "Setup progress 71%" | Not modelled | derivable once steps are fixed |
+| Step 1 Broker `Dhan ••••1097` | `UserCredentialVault` + masked display exist | read-only step, no new data |
+| Step 2 `NOVA Supertrend v2.4.1` | Registry says `nova-supertrend`, version **1.0.0** | version must come from the API; the mockup string is fictional |
+| Step 3 Mode Paper/Live | `MODE_SELECTION` exists in the machine | matches |
+| Step 4 Sizing `1 lot · CE+PE · 75 qty` | `lots` + `direction` exist. Lot size resolves per instrument; `DEFAULT_NIFTY_LOT_SIZE = 65` | qty must come from instrument resolution, never hardcoded |
+| Step 5 `₹25,000 · max 6 trades` | `UserRiskControl.max_loss_per_day_paise` / `max_orders_per_day` exist and are enforced — but in the **strategy fan-out** subsystem, not in `setup_schema` | wiring decision: setup writes risk controls |
+| Step 6 Cooldown after a losing trade | **Does not exist anywhere.** The only cooldowns are the REST-fallback and rate-limiter ones | new column **and** new enforcement in the execution path — safety-critical |
+| Step 7 Review & arm | `SETUP_REVIEW` / `ENGINE_READY` exist | matches |
+| Mic / voice input | Not built | new |
+| Missing from mockup: `stop_loss_percent`, `take_profit_percent` | Both are **required** fields in `_standard_setup_schema()` and drive real exits | do not drop them to match the mockup |
+
+Rules that still apply: no setup-bypassing activation, and the mockup's own
+promise ("nothing routes until you arm the engine") must remain literally true.
