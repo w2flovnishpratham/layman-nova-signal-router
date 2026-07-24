@@ -4298,3 +4298,54 @@ code {
 @media (prefers-reduced-motion: reduce) {
   .nova-rail, .nova-navitem { transition: none; }
 }
+
+/* =========================================================================
+   Legacy app palette remapped onto the black + electric-blue system.
+   Every authenticated component keeps consuming the same variable names; only
+   the values change, so no component logic is touched. Scoped to .nova-app so
+   the public landing page is unaffected.
+   Purple is no longer the app accent — it is reserved for NOVA intelligence.
+   ========================================================================= */
+.nova-app {
+  --bg-0: var(--nova-bg);
+  --bg-1: var(--nova-bg-soft);
+  --bg-2: var(--nova-surface);
+  --bg-3: var(--nova-surface-raised);
+  --surface: var(--nova-surface);
+  --surface-2: var(--nova-surface-raised);
+  --surface-3: var(--nova-surface-hover);
+  --bg-tertiary: var(--nova-surface-raised);
+
+  --border: var(--nova-border);
+  --border-hi: var(--nova-border-strong);
+
+  --text-1: var(--nova-text-primary);
+  --text-2: var(--nova-text-secondary);
+  --text-3: var(--nova-text-muted);
+
+  /* navigation + primary non-trading actions */
+  --accent: var(--nova-blue);
+  --accent-2: var(--nova-blue-hover);
+
+  /* mode badges keep their reserved meanings */
+  --accent-paper: var(--nova-paper);
+  --accent-paper-bg: rgba(54, 199, 244, 0.10);
+  --accent-live: var(--nova-live);
+  --accent-live-bg: rgba(255, 156, 69, 0.10);
+
+  /* green = profit / Buy / genuine success · red = loss / Exit / destructive */
+  --success: var(--nova-success);
+  --success-bg: rgba(66, 212, 154, 0.10);
+  --danger: var(--nova-danger);
+  --danger-bg: rgba(255, 102, 115, 0.10);
+  --warning: var(--nova-warning);
+  --tick-up: rgba(66, 212, 154, 0.18);
+  --tick-down: rgba(255, 102, 115, 0.18);
+
+  background: var(--nova-bg);
+  color: var(--nova-text-primary);
+}
+
+/* NOVA assistant identity stays purple inside the app. */
+.nova-app .nova-intelligence,
+.nova-app .bot-bubble-accent { color: var(--nova-purple); }
