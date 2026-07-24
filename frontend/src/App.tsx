@@ -20,6 +20,7 @@ import { SignalsPage } from './signals/SignalsPage'
 import { WebhooksPage } from './webhooks/WebhooksPage'
 import { RiskPage } from './risk/RiskPage'
 import { CredentialsPage } from './credentials/CredentialsPage'
+import { ReportsPage } from './reports/ReportsPage'
 import { SetupPage, type SetupSnapshot } from './setup/SetupPage'
 import { getConfigurationState, saveConfiguration } from './setup/configurationApi'
 import {
@@ -487,6 +488,8 @@ function App() {
         <SetupPage conversation={setupPanel} snapshot={setupSnapshot} />
       ) : route === 'credentials' ? (
         <CredentialsPage />
+      ) : route === 'reports' ? (
+        <ReportsPage />
       ) : view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (

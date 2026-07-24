@@ -4443,3 +4443,13 @@ code {
 .nova-cred-confirm { margin-top: 12px; border: 1px solid var(--nova-danger); border-radius: 10px; padding: 11px; background: rgba(255, 59, 48, 0.06); }
 .nova-cred-confirm p { margin: 0; font-size: 13px; }
 .nova-cred-blockers { margin: 10px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--nova-text-muted); }
+
+/* --- Reports ------------------------------------------------------------- */
+.nova-report-range { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.nova-report-range input[type='date'] { background: var(--nova-bg-soft); border: 1px solid var(--nova-border); border-radius: 8px; color: var(--nova-text); padding: 6px 9px; font-size: 12.5px; color-scheme: dark; }
+.nova-report-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 9px; }
+.nova-report-stat { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--nova-border); border-radius: 10px; padding: 10px 12px; background: var(--nova-bg-soft); }
+.nova-report-stat span { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--nova-text-muted); }
+.nova-report-stat strong { font-size: 16px; }
+.nova-report-stat small { font-size: 11px; color: var(--nova-text-muted); }
+.nova-report-unknown { font-size: 13px !important; color: var(--nova-text-muted); }

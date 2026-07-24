@@ -1,13 +1,19 @@
 """Signals read endpoint - owner-scoped list of inbound webhook signal events."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.auth.dependencies import get_current_user
-from app.services import credentials_overview, risk_overview, signals_feed, webhooks_overview
+from app.services import (
+    credentials_overview,
+    reports_service,
+    risk_overview,
+    signals_feed,
+    webhooks_overview,
+)
 from app.services.user_context import CurrentUser
 
 router = APIRouter()
@@ -56,3 +62,44 @@ def risk_overview_endpoint(user: CurrentUser = Depends(get_current_user)):
 def credentials_overview_endpoint(user: CurrentUser = Depends(get_current_user)):
     """Owner-scoped broker credential status. Never returns a stored secret."""
     return credentials_overview.build_credentials_overview(user.id)
+
+
+def _period(start: date | None, end: date | None) -> tuple[date, date]:
+    """Default to the last 30 IST days when no range is given."""
+    today = datetime.now(reports_service.IST).date()
+    resolved_end = end or today
+    resolved_start = start or (resolved_end - timedelta(days=29))
+    return resolved_start, resolved_end
+
+
+@router.get("/reports")
+def reports_endpoint(
+    start: date | None = Query(None),
+    end: date | None = Query(None),
+    mode: str = Query("paper", pattern="^(paper|live)$"),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Performance over a date range, computed from the owner's closed trades."""
+    begin, finish = _period(start, end)
+    if begin > finish:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "start must not be after end."})
+    return reports_service.build_report(user.id, start=begin, end=finish, mode=mode)
+
+
+@router.get("/reports/export.csv")
+def reports_csv_endpoint(
+    start: date | None = Query(None),
+    end: date | None = Query(None),
+    mode: str = Query("paper", pattern="^(paper|live)$"),
+    user: CurrentUser = Depends(get_current_user),
+):
+    begin, finish = _period(start, end)
+    if begin > finish:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "start must not be after end."})
+    report = reports_service.build_report(user.id, start=begin, end=finish, mode=mode)
+    filename = f"nova-{mode}-{begin.isoformat()}-to-{finish.isoformat()}.csv"
+    return Response(
+        content=reports_service.report_csv(report),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
