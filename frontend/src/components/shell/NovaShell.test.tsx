@@ -42,9 +42,11 @@ describe('NovaSidebar', () => {
 
   it('labels not-yet-built pages truthfully rather than faking them', () => {
     render(sidebar())
-    // Implemented pages carry no "Soon" marker; unbuilt ones do.
-    expect(screen.getByRole('button', { name: /^Signals/ })).toHaveTextContent('Soon')
+    // Unbuilt pages carry a "Soon" marker; pages backed by a real screen do not.
+    expect(screen.getByRole('button', { name: /^Automations/ })).toHaveTextContent('Soon')
     expect(screen.getByRole('button', { name: /^Trading/ })).not.toHaveTextContent('Soon')
+    // Signals is now backed by GET /api/signals, so it is no longer "Soon".
+    expect(screen.getByRole('button', { name: /^Signals/ })).not.toHaveTextContent('Soon')
   })
 
   it('navigates by keyboard', async () => {

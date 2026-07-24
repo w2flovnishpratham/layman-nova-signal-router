@@ -16,6 +16,7 @@ import type { NovaView } from './types'
 import { goToRoute, isImplemented, useAppRoute } from './appRoutes'
 import { NovaSidebar } from './components/shell/NovaSidebar'
 import { PlaceholderPage } from './components/shell/PlaceholderPage'
+import { SignalsPage } from './signals/SignalsPage'
 import {
   getCurrentUser,
   getMarketSnapshot,
@@ -455,6 +456,8 @@ function App() {
 
       {!isImplemented(route) ? (
         <PlaceholderPage route={route} />
+      ) : route === 'signals' ? (
+        <SignalsPage />
       ) : view === 'dashboard' ? (
         <PortfolioDashboard />
       ) : view === 'strategies' ? (
