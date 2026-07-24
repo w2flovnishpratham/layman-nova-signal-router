@@ -87,15 +87,29 @@ def test_an_empty_cutoff_disables_it_rather_than_blocking_everything(runtime):
     assert risk_manager._entry_cutoff_check({"entry_cutoff_ist": "not-a-time"}) is None
 
 
-def test_the_cutoff_blocks_entries_after_the_time_and_never_before(runtime):
-    now_ist = datetime.now(risk_manager.IST)
-    past = (now_ist - timedelta(minutes=5)).strftime("%H:%M")
-    future = (now_ist + timedelta(hours=1)).strftime("%H:%M")
+def test_the_cutoff_blocks_entries_after_the_time_and_never_before(runtime, monkeypatch):
+    """Clock is injected, not read.
 
-    blocked = risk_manager._entry_cutoff_check({"entry_cutoff_ist": past})
+    Deriving the "future" cutoff from the real clock wrapped past midnight when
+    the suite ran at 23:49, turning 00:49 into an *earlier* wall-clock time and
+    failing a correct implementation. A cutoff has no date, so the test must not
+    depend on what time it happens to run.
+    """
+    fixed_now = datetime(2026, 7, 24, 14, 30, tzinfo=risk_manager.IST)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now
+
+    monkeypatch.setattr(risk_manager, "datetime", FrozenDatetime)
+
+    blocked = risk_manager._entry_cutoff_check({"entry_cutoff_ist": "14:25"})
     assert blocked is not None and blocked.allowed is False
     assert "entries are closed" in blocked.reason
-    assert risk_manager._entry_cutoff_check({"entry_cutoff_ist": future}) is None
+    # Exactly at the cutoff, entries are already closed.
+    assert risk_manager._entry_cutoff_check({"entry_cutoff_ist": "14:30"}) is not None
+    assert risk_manager._entry_cutoff_check({"entry_cutoff_ist": "15:20"}) is None
 
 
 def test_a_cooldown_change_reaches_the_entry_gate(runtime):
