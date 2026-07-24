@@ -4466,3 +4466,10 @@ code {
 .nova-pine-findings li.is-error { border-left-color: var(--nova-danger); }
 .nova-pine-findings li.is-warning { border-left-color: var(--nova-warning); }
 .nova-pine-findings span { font-size: 12px; color: var(--nova-text-muted); }
+
+/* --- Settings ------------------------------------------------------------ */
+.nova-set-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 11px; margin-top: 6px; }
+.nova-set-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--nova-text-secondary); }
+.nova-set-grid select { background: var(--nova-bg); border: 1px solid var(--nova-border); border-radius: 8px; color: var(--nova-text); padding: 8px 10px; font-size: 13px; }
+.nova-set-toggle { display: flex !important; flex-direction: row !important; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 9px; font-size: 13px; color: var(--nova-text); }
+.nova-set-toggle small { flex-basis: 100%; font-size: 11.5px; color: var(--nova-text-muted); }

@@ -238,6 +238,33 @@ class WebhookNonce(Base):
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class UserPreference(Base):
+    """Per-user presentation settings.
+
+    Deliberately separate from the engine's runtime settings file: those are read
+    by the entry path on every decision and carry the optimistic-locking version
+    the risk API depends on. A table-density change must never touch that.
+    """
+
+    __tablename__ = "user_preferences"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_user_preferences_user"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata", nullable=False)
+    reduced_motion: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    table_density: Mapped[str] = mapped_column(String(16), default="comfortable", nullable=False)
+    default_chart_timeframe: Mapped[str] = mapped_column(String(16), default="5m", nullable=False)
+    notification_preferences: Mapped[dict] = mapped_column(JSONType, default=dict, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
 class UserRiskControl(Base):
     """Per-user server-side risk gates for strategy fan-out."""
 

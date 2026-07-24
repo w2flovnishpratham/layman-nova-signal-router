@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from fastapi.responses import JSONResponse, Response
 
 from app.auth.dependencies import get_current_user
@@ -12,6 +13,7 @@ from app.services import (
     reports_service,
     risk_overview,
     signals_feed,
+    user_preferences,
     webhooks_overview,
 )
 from app.services.user_context import CurrentUser
@@ -103,3 +105,25 @@ def reports_csv_endpoint(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+class PreferencesPayload(BaseModel):
+    timezone: str | None = None
+    reduced_motion: bool | None = None
+    table_density: str | None = None
+    default_chart_timeframe: str | None = None
+    notification_preferences: dict[str, bool] | None = None
+
+
+@router.get("/preferences")
+def read_preferences(user: CurrentUser = Depends(get_current_user)):
+    return {"ok": True, **user_preferences.get_preferences(user.id)}
+
+
+@router.put("/preferences")
+def write_preferences(payload: PreferencesPayload, user: CurrentUser = Depends(get_current_user)):
+    values = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    try:
+        return {"ok": True, **user_preferences.save_preferences(user.id, values)}
+    except user_preferences.PreferenceError as exc:
+        return JSONResponse(status_code=422, content={"ok": False, "error": str(exc)})
