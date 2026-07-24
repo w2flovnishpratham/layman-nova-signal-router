@@ -25,8 +25,8 @@ const INJECTED_STYLES = `
   .bg-grid-theme {
       background-size: 60px 60px;
       background-image:
-          linear-gradient(to right, color-mix(in srgb, #C0F53D 8%, transparent) 1px, transparent 1px),
-          linear-gradient(to bottom, color-mix(in srgb, #C0F53D 8%, transparent) 1px, transparent 1px);
+          linear-gradient(to right, color-mix(in srgb, #2F6BED 8%, transparent) 1px, transparent 1px),
+          linear-gradient(to bottom, color-mix(in srgb, #2F6BED 8%, transparent) 1px, transparent 1px);
       mask-image: radial-gradient(ellipse at center, black 0%, transparent 70%);
       -webkit-mask-image: radial-gradient(ellipse at center, black 0%, transparent 70%);
   }
@@ -37,26 +37,26 @@ const INJECTED_STYLES = `
 
   /* OUTSIDE THE CARD: Theme-aware text (Ivory & Lime Glow) */
   .text-3d-matte {
-      color: #FAFFF3;
+      color: #F5F8FF;
       text-shadow:
-          0 10px 30px rgba(192, 245, 61, 0.18),
+          0 10px 30px rgba(47,107,237, 0.18),
           0 2px 4px rgba(0, 0, 0, 0.6);
   }
 
   .text-silver-matte {
-      background: linear-gradient(180deg, #FAFFF3 0%, #C0F53D 100%);
+      background: linear-gradient(180deg, #F5F8FF 0%, #2F6BED 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
       transform: translateZ(0); /* Hardware acceleration to prevent WebKit clipping bug */
       filter:
-          drop-shadow(0px 10px 20px rgba(192,245,61,0.25))
+          drop-shadow(0px 10px 20px rgba(47,107,237,0.25))
           drop-shadow(0px 2px 4px rgba(0,0,0,0.5));
   }
 
   /* INSIDE THE CARD: Metallic Lime / Ivory for the dark olive background */
   .text-card-silver-matte {
-      background: linear-gradient(180deg, #FAFFF3 0%, #C0F53D 100%);
+      background: linear-gradient(180deg, #F5F8FF 0%, #2F6BED 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
@@ -68,38 +68,38 @@ const INJECTED_STYLES = `
 
   /* Deep Physical Card with Dynamic Mouse Lighting */
   .premium-depth-card {
-      background: linear-gradient(145deg, #1C270A 0%, #0A0D04 100%);
+      background: linear-gradient(145deg, #101828 0%, #05070C 100%);
       box-shadow:
           0 40px 100px -20px rgba(0, 0, 0, 0.95),
           0 20px 40px -20px rgba(0, 0, 0, 0.85),
-          inset 0 1px 2px rgba(192, 245, 61, 0.25),
+          inset 0 1px 2px rgba(47,107,237, 0.25),
           inset 0 -2px 4px rgba(0, 0, 0, 0.9);
-      border: 1px solid rgba(192, 245, 61, 0.2);
+      border: 1px solid rgba(47,107,237, 0.2);
       position: relative;
   }
 
   .card-sheen {
       position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 50;
-      background: radial-gradient(800px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(192,245,61,0.12) 0%, transparent 40%);
+      background: radial-gradient(800px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(47,107,237,0.12) 0%, transparent 40%);
       mix-blend-mode: screen; transition: opacity 0.3s ease;
   }
 
   /* Physical Tactile Buttons matched to Lime Accent */
   .btn-modern-light {
       transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
-      background: linear-gradient(180deg, #C0F53D 0%, #A6E025 100%);
-      color: #0A0D04;
-      box-shadow: 0 0 0 1px rgba(192,245,61,0.4), 0 4px 20px rgba(192,245,61,0.3), 0 12px 28px -4px rgba(0,0,0,0.7), inset 0 1px 1px rgba(255,255,255,0.7), inset 0 -3px 6px rgba(0,0,0,0.15);
+      background: linear-gradient(180deg, #2F6BED 0%, #2456C0 100%);
+      color: #05070C;
+      box-shadow: 0 0 0 1px rgba(47,107,237,0.4), 0 4px 20px rgba(47,107,237,0.3), 0 12px 28px -4px rgba(0,0,0,0.7), inset 0 1px 1px rgba(255,255,255,0.7), inset 0 -3px 6px rgba(0,0,0,0.15);
   }
   .btn-modern-light:hover {
       transform: translateY(-3px);
-      background: linear-gradient(180deg, #D4FF54 0%, #B5F230 100%);
-      box-shadow: 0 0 0 1px rgba(192,245,61,0.6), 0 8px 30px rgba(192,245,61,0.45), 0 20px 36px -6px rgba(0,0,0,0.8), inset 0 1px 1px rgba(255,255,255,0.8), inset 0 -3px 6px rgba(0,0,0,0.15);
+      background: linear-gradient(180deg, #5C93FF 0%, #3F78F0 100%);
+      box-shadow: 0 0 0 1px rgba(47,107,237,0.6), 0 8px 30px rgba(47,107,237,0.45), 0 20px 36px -6px rgba(0,0,0,0.8), inset 0 1px 1px rgba(255,255,255,0.8), inset 0 -3px 6px rgba(0,0,0,0.15);
   }
   .btn-modern-light:active {
       transform: translateY(1px);
-      background: linear-gradient(180deg, #A6E025 0%, #8CC217 100%);
-      box-shadow: 0 0 0 1px rgba(192,245,61,0.3), 0 2px 4px rgba(0,0,0,0.4), inset 0 3px 6px rgba(0,0,0,0.2), inset 0 0 0 1px rgba(0,0,0,0.05);
+      background: linear-gradient(180deg, #2456C0 0%, #1F4CAB 100%);
+      box-shadow: 0 0 0 1px rgba(47,107,237,0.3), 0 2px 4px rgba(0,0,0,0.4), inset 0 3px 6px rgba(0,0,0,0.2), inset 0 0 0 1px rgba(0,0,0,0.05);
   }
 `;
 
@@ -120,7 +120,7 @@ export function CinematicHero({
     tagline1 = "Track the market,",
     tagline2 = "master the signals.",
     cardHeading = "Signal Route, Redefined.",
-    cardDescription = <><span className="text-[#FAFFF3] font-semibold">NOVA Signal Route</span> empowers algorithmic traders and institutional investors with real-time risk management, low-latency execution, and interactive analytics timelines.</>,
+    cardDescription = <><span className="text-[#F5F8FF] font-semibold">NOVA Signal Route</span> empowers algorithmic traders and institutional investors with real-time risk management, low-latency execution, and interactive analytics timelines.</>,
     metricValue = 365,
     ctaHeading = "Start trading now.",
     ctaDescription = "Join high-performance algorithmic traders and take control of your execution route today.",
@@ -234,7 +234,7 @@ export function CinematicHero({
     return (
         <div
             ref={containerRef}
-            className={cn("relative w-full min-h-screen overflow-hidden flex items-center justify-center bg-[#0A0D04] text-[#FAFFF3] font-montreal antialiased", className)}
+            className={cn("relative w-full min-h-screen overflow-hidden flex items-center justify-center bg-[#05070C] text-[#F5F8FF] font-montreal antialiased", className)}
             style={{ perspective: "1500px" }}
             {...props}
         >
@@ -257,13 +257,13 @@ export function CinematicHero({
                 <h2 className="text-4xl md:text-6xl lg:text-7xl font-bold mb-6 tracking-tight text-silver-matte">
                     {ctaHeading}
                 </h2>
-                <p className="text-[#FAFFF3]/70 text-lg md:text-xl mb-12 max-w-xl mx-auto font-light leading-relaxed">
+                <p className="text-[#F5F8FF]/70 text-lg md:text-xl mb-12 max-w-xl mx-auto font-light leading-relaxed">
                     {ctaDescription}
                 </p>
                 <div className="flex flex-col sm:flex-row gap-6">
-                    <a href="#discovery" aria-label="Launch Trading Platform" className="btn-modern-light flex items-center justify-center gap-3 px-8 py-4 rounded-[1.25rem] group focus:outline-none focus:ring-2 focus:ring-[#C0F53D] focus:ring-offset-2">
+                    <a href="#discovery" aria-label="Launch Trading Platform" className="btn-modern-light flex items-center justify-center gap-3 px-8 py-4 rounded-[1.25rem] group focus:outline-none focus:ring-2 focus:ring-[#2F6BED] focus:ring-offset-2">
                         <div className="text-center">
-                            <div className="text-xs font-extrabold tracking-wider text-[#0A0D04] uppercase">LAUNCH TRADING PLATFORM</div>
+                            <div className="text-xs font-extrabold tracking-wider text-[#05070C] uppercase">LAUNCH TRADING PLATFORM</div>
                         </div>
                     </a>
                 </div>
@@ -310,8 +310,8 @@ export function CinematicHero({
                                 </div>
 
                                 {/* Floating Widget Card 1 (Top Left): Portfolio Live Performance Chart */}
-                                <div className="floating-badge absolute top-2 lg:top-4 left-[-15px] md:left-[-40px] lg:left-[-70px] z-30 w-24 md:w-36 lg:w-40 rounded-xl border border-[#C0F53D]/25 shadow-[0_15px_35px_rgba(0,0,0,0.85)] hover:scale-[1.05] transition-all duration-300 pointer-events-auto overflow-hidden bg-[#0D1206]/90 backdrop-blur-xl group">
-                                    <div className="absolute inset-0 bg-gradient-to-tr from-[#C0F53D]/10 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                                <div className="floating-badge absolute top-2 lg:top-4 left-[-15px] md:left-[-40px] lg:left-[-70px] z-30 w-24 md:w-36 lg:w-40 rounded-xl border border-[#2F6BED]/25 shadow-[0_15px_35px_rgba(0,0,0,0.85)] hover:scale-[1.05] transition-all duration-300 pointer-events-auto overflow-hidden bg-[#080B14]/90 backdrop-blur-xl group">
+                                    <div className="absolute inset-0 bg-gradient-to-tr from-[#2F6BED]/10 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                                     <img
                                         src={portfolioCard}
                                         alt="Portfolio Live Performance Chart"
@@ -320,8 +320,8 @@ export function CinematicHero({
                                 </div>
 
                                 {/* Floating Widget Card 2 (Bottom Right): Real-Time Risk Limit Gauge */}
-                                <div className="floating-badge absolute bottom-6 lg:bottom-10 right-[-15px] md:right-[-40px] lg:right-[-70px] z-30 w-24 md:w-36 lg:w-40 rounded-xl border border-[#C0F53D]/25 shadow-[0_15px_35px_rgba(0,0,0,0.85)] hover:scale-[1.05] transition-all duration-300 pointer-events-auto overflow-hidden bg-[#0D1206]/90 backdrop-blur-xl group">
-                                    <div className="absolute inset-0 bg-gradient-to-bl from-[#C0F53D]/10 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                                <div className="floating-badge absolute bottom-6 lg:bottom-10 right-[-15px] md:right-[-40px] lg:right-[-70px] z-30 w-24 md:w-36 lg:w-40 rounded-xl border border-[#2F6BED]/25 shadow-[0_15px_35px_rgba(0,0,0,0.85)] hover:scale-[1.05] transition-all duration-300 pointer-events-auto overflow-hidden bg-[#080B14]/90 backdrop-blur-xl group">
+                                    <div className="absolute inset-0 bg-gradient-to-bl from-[#2F6BED]/10 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                                     <img
                                         src={riskLimitCard}
                                         alt="Real-Time Risk Limit Gauge"
@@ -334,11 +334,11 @@ export function CinematicHero({
 
                         {/* 3. BOTTOM (Mobile) / LEFT (Desktop): ACCOUNTABILITY TEXT */}
                         <div className="card-left-text gsap-reveal order-3 lg:order-1 flex flex-col justify-center text-center lg:text-left z-20 w-full lg:max-w-none px-4 lg:px-0">
-                            <h3 className="text-[#FAFFF3] text-2xl md:text-3xl lg:text-4xl font-medium mb-0 lg:mb-5 tracking-tight">
+                            <h3 className="text-[#F5F8FF] text-2xl md:text-3xl lg:text-4xl font-medium mb-0 lg:mb-5 tracking-tight">
                                 {cardHeading}
                             </h3>
                             {/* HIDDEN ON MOBILE (added hidden md:block) */}
-                            <p className="hidden md:block text-[#FAFFF3]/80 text-sm md:text-base lg:text-lg font-normal leading-relaxed mx-auto lg:mx-0 max-w-sm lg:max-w-none">
+                            <p className="hidden md:block text-[#F5F8FF]/80 text-sm md:text-base lg:text-lg font-normal leading-relaxed mx-auto lg:mx-0 max-w-sm lg:max-w-none">
                                 {cardDescription}
                             </p>
                         </div>

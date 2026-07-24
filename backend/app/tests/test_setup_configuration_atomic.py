@@ -217,3 +217,130 @@ def test_a_coherent_configuration_starts_normally(mu_db, runtime):
     applied = strategy_catalog_service.apply_selected_setup(user.id, selection["selected"])
     assert applied["lots"] == 2
     assert setup_configuration.committed_revision(user.id) == 1
+
+
+def test_a_runtime_file_write_failure_rolls_the_database_back(mu_db, runtime, monkeypatch):
+    """The settings write is inside the transaction, so its failure undoes the DB half."""
+    from app.routers.setup import normalize_risk_values
+
+    user, client = _ready("atomic-filefail@example.com")
+
+    def exploding_write(_data):
+        raise OSError("simulated runtime-settings write failure")
+
+    monkeypatch.setattr(setup_configuration, "set_runtime_settings", exploding_write)
+
+    with pytest.raises(OSError):
+        setup_configuration.save_configuration(
+            user.id,
+            strategy_key="nova-supertrend",
+            mode="paper",
+            setup_values=SETUP,
+            risk_values=RISK,
+            expected_revision=0,
+            normalize_risk=normalize_risk_values,
+        )
+
+    monkeypatch.undo()
+    assert _saved_setup(client) == {}, "the strategy half must not survive a failed settings write"
+    assert state_store.get_runtime_settings()["configuration_revision"] == 0
+
+
+def test_a_database_failure_before_the_settings_write_changes_nothing(mu_db, runtime, monkeypatch):
+    from app.routers.setup import normalize_risk_values
+
+    user, client = _ready("atomic-dbfail@example.com")
+    before = dict(state_store.get_runtime_settings())
+
+    def exploding_now():
+        raise RuntimeError("simulated mid-transaction database failure")
+
+    monkeypatch.setattr(setup_configuration.strategy_catalog_service, "_now", exploding_now)
+
+    with pytest.raises(RuntimeError):
+        setup_configuration.save_configuration(
+            user.id,
+            strategy_key="nova-supertrend",
+            mode="paper",
+            setup_values=SETUP,
+            risk_values=RISK,
+            expected_revision=0,
+            normalize_risk=normalize_risk_values,
+        )
+
+    monkeypatch.undo()
+    after = state_store.get_runtime_settings()
+    assert after["configuration_revision"] == before["configuration_revision"] == 0
+    assert after["max_daily_loss"] == before["max_daily_loss"]
+    assert _saved_setup(client) == {}
+
+
+def test_a_failed_compensating_restore_is_audited_and_still_raises(mu_db, runtime, monkeypatch):
+    """Worst case: the commit failed AND the restore failed.
+
+    The original error must still surface, and the failure must be recorded, so
+    the torn state is never silent. The Start Engine gate is what protects
+    trading from here.
+    """
+    import contextlib
+
+    from app.routers.setup import normalize_risk_values
+
+    user, client = _ready("atomic-restorefail@example.com")
+    assert _save(client, revision=0).status_code == 200
+
+    real_scope = setup_configuration.session_scope
+    real_set = setup_configuration.set_runtime_settings
+    audited: list[str] = []
+
+    @contextlib.contextmanager
+    def failing_commit():
+        with real_scope() as db:
+            yield db
+        raise RuntimeError("simulated commit failure")
+
+    calls = {"n": 0}
+
+    def set_then_fail(data):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_set(data)
+        raise OSError("simulated restore failure")
+
+    monkeypatch.setattr(setup_configuration, "session_scope", failing_commit)
+    monkeypatch.setattr(setup_configuration, "set_runtime_settings", set_then_fail)
+    monkeypatch.setattr(setup_configuration, "log_audit_event",
+                        lambda event, *a, **k: audited.append(event))
+
+    with pytest.raises(RuntimeError, match="simulated commit failure"):
+        setup_configuration.save_configuration(
+            user.id,
+            strategy_key="nova-supertrend",
+            mode="paper",
+            setup_values={**SETUP, "lots": 4},
+            risk_values={"max_daily_loss": 25000, "max_trades_per_day": 8, "cooldown_after_loss_minutes": 5},
+            expected_revision=1,
+            normalize_risk=normalize_risk_values,
+        )
+
+    assert "CONFIGURATION_ROLLBACK_FAILED" in audited
+    monkeypatch.undo()
+    # The resulting state is torn, and that is exactly what the gate detects.
+    state = setup_configuration.current_revision(user.id)
+    assert state["coherent"] is False
+    with pytest.raises(setup_configuration.ConfigurationConflict):
+        setup_configuration.committed_revision(user.id)
+
+
+def test_a_restart_with_matching_revisions_starts_normally(mu_db, runtime):
+    """Simulates a process restart: state is re-read from disk and the database."""
+    from app.services import strategy_catalog_service
+
+    user, client = _ready("atomic-restart-ok@example.com")
+    assert _save(client, revision=0).status_code == 200
+
+    # Nothing cached: both halves are read fresh, as they would be after a restart.
+    state = setup_configuration.current_revision(user.id)
+    assert (state["settings_revision"], state["setup_revision"], state["coherent"]) == (1, 1, True)
+    selection = strategy_catalog_service.instances.get_engine_selection(user.id)
+    assert strategy_catalog_service.apply_selected_setup(user.id, selection["selected"])["lots"] == 2

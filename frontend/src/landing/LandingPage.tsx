@@ -237,7 +237,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
           <div className="lg:col-span-7 flex items-center justify-center lg:justify-end relative py-2">
             <div className="relative flex items-center justify-center w-full translate-x-6 md:translate-x-16 lg:translate-x-28 translate-y-2 md:translate-y-4 lg:translate-y-8">
               {/* Greenish glowing circle with blur radius behind laptop */}
-              <div className="absolute w-180 bg-[radial-gradient(circle,rgba(192,245,61,0.48)_0%,rgba(160,230,40,0.28)_45%,rgba(192,245,61,0)_75%)] blur-[95px] pointer-events-none top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-pulse" aria-hidden="true" />
+              <div className="absolute w-180 bg-[radial-gradient(circle,rgba(47,107,237,0.48)_0%,rgba(36,86,192,0.28)_45%,rgba(47,107,237,0)_75%)] blur-[95px] pointer-events-none top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-pulse" aria-hidden="true" />
 
               {/* Floating Laptop Component animated with GSAP */}
               <div ref={laptopRef} className="relative z-10 w-full max-w-[960px] scale-105 lg:scale-125 origin-center will-change-transform">
@@ -460,7 +460,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
       {/* ----------------- Light Services Showcase Section ----------------- */}
       <section className="" id="services">
         {/* Ambient Lime Outer Gradient Frame */}
-        <div className="relative p-3 sm:p-5 md:p-7 bg-linear-to-b from-[#6E9DFF] via-[#7FA9FF] to-[#9DBEFF] shadow-[0_0_60px_rgba(192,245,61,0.25)]">
+        <div className="relative p-3 sm:p-5 md:p-7 bg-linear-to-b from-[#6E9DFF] via-[#7FA9FF] to-[#9DBEFF] shadow-[0_0_60px_rgba(47,107,237,0.25)]">
           {/* Inner Floating Ivory Card */}
           <div
             ref={servicesContainerRef}
@@ -621,7 +621,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
         h-[430px] w-[92%]
         -translate-x-1/2
         rounded-[50%]
-        bg-[linear-gradient(90deg,rgba(192,245,61,0.88)_0%,rgba(177,228,57,0.74)_48%,rgba(101,205,135,0.50)_100%)]
+        bg-[linear-gradient(90deg,rgba(47,107,237,0.88)_0%,rgba(63,120,240,0.74)_48%,rgba(107,140,255,0.50)_100%)]
         opacity-85
         blur-[95px]
       "
@@ -644,7 +644,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
           <div
             className="
         pointer-events-none absolute inset-0
-        bg-[linear-gradient(180deg,rgba(7,8,7,1)_0%,rgba(7,8,7,1)_48%,rgba(7,8,7,0.96)_62%,rgba(7,8,7,0.55)_78%,rgba(7,8,7,0)_100%)]
+        bg-[linear-gradient(180deg,rgba(6,7,11,1)_0%,rgba(6,7,11,1)_48%,rgba(6,7,11,0.96)_62%,rgba(6,7,11,0.55)_78%,rgba(6,7,11,0)_100%)]
       "
           />
 

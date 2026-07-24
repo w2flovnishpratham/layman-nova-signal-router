@@ -179,13 +179,13 @@ export function PlanetaryEcosystem() {
 
           if (cardContentEl) {
             if (isActive) {
-              cardContentEl.style.borderColor = 'rgba(192, 245, 61, 0.85)'
-              cardContentEl.style.boxShadow = '0 0 25px rgba(192, 245, 61, 0.3)'
+              cardContentEl.style.borderColor = 'rgba(47,107,237, 0.85)'
+              cardContentEl.style.boxShadow = '0 0 25px rgba(47,107,237, 0.3)'
               cardContentEl.style.backgroundColor = '#101828'
             } else {
-              cardContentEl.style.borderColor = 'rgba(192, 245, 61, 0.2)'
+              cardContentEl.style.borderColor = 'rgba(47,107,237, 0.2)'
               cardContentEl.style.boxShadow = 'none'
-              cardContentEl.style.backgroundColor = 'rgba(10, 13, 4, 0.9)'
+              cardContentEl.style.backgroundColor = 'rgba(5,7,12, 0.9)'
             }
           }
         })
@@ -346,7 +346,7 @@ export function PlanetaryEcosystem() {
       >
         {/* Main Circular Orbit Line (Expanded Outer Size) */}
         <div
-          className="orbit-line absolute w-[300px] h-[300px] sm:w-[380px] sm:h-[380px] md:w-[460px] md:h-[460px] rounded-full border border-[#2F6BED]/20 bg-[radial-gradient(circle,rgba(192,245,61,0.06)_0%,transparent_70%)] pointer-events-none"
+          className="orbit-line absolute w-[300px] h-[300px] sm:w-[380px] sm:h-[380px] md:w-[460px] md:h-[460px] rounded-full border border-[#2F6BED]/20 bg-[radial-gradient(circle,rgba(47,107,237,0.06)_0%,transparent_70%)] pointer-events-none"
           aria-hidden="true"
         />
 
@@ -433,7 +433,7 @@ export function PlanetaryEcosystem() {
           className="core-magnetic-wrapper relative z-30 pointer-events-auto will-change-transform"
         >
           <div ref={corePulseRef} className="core-pulse-wrapper will-change-transform">
-            <div className="nova-core w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-[#06070B] border border-white/20 hover:border-[#2F6BED] transition-colors duration-300 flex flex-col items-center justify-center text-center p-4 shadow-[0_0_30px_rgba(0,0,0,0.8),inset_0_0_20px_rgba(192,245,61,0.05)] cursor-pointer">
+            <div className="nova-core w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-[#06070B] border border-white/20 hover:border-[#2F6BED] transition-colors duration-300 flex flex-col items-center justify-center text-center p-4 shadow-[0_0_30px_rgba(0,0,0,0.8),inset_0_0_20px_rgba(47,107,237,0.05)] cursor-pointer">
               <span className="text-[10px] uppercase font-medium text-white/50 tracking-wider">
                 CORE SYSTEM
               </span>
