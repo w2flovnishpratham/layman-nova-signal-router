@@ -40,3 +40,22 @@ describe('ManualOrderPanel runtime exposure fallback', () => {
     expect(await screen.findByText('Position closed')).toBeVisible()
   })
 })
+
+describe('trading action colour semantics', () => {
+  it('uses the reserved buy-green for BOTH Buy CE and Buy PE, never red', () => {
+    render(<ManualOrderPanel engineMode="paper" activeTrade={null} />)
+    const ce = screen.getByRole('button', { name: 'Buy CE market' })
+    const pe = screen.getByRole('button', { name: 'Buy PE market' })
+    // Green is reserved for Buy; red is reserved for Exit / Square-off / Stop, so
+    // a purchase must never be styled as a destructive action.
+    expect(ce.className).toMatch(/emerald/)
+    expect(pe.className).toMatch(/emerald/)
+    expect(pe.className).not.toMatch(/rose|red/)
+  })
+
+  it('keeps Exit Position out of the buy-green treatment', () => {
+    render(<ManualOrderPanel engineMode="paper" activeTrade={null} runtimePositionOpen />)
+    const exit = screen.getByRole('button', { name: 'Exit Position' })
+    expect(exit.className).not.toMatch(/emerald/)
+  })
+})

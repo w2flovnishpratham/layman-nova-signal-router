@@ -228,7 +228,11 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
           loading={activeAction === 'entry-PE'}
           loadingLabel="Buying PE…"
           ariaLabel="Buy PE market"
-          className="flex-1 py-3 px-4 rounded-xl font-semibold border border-rose-500/20 hover:border-rose-500/50 bg-rose-500/10 text-rose-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          // Both CE and PE are BUY entries, so both use the reserved "buy" green.
+          // Red is reserved for Exit / Square-off / Stop — colouring Buy PE red made
+          // a purchase read as a destructive action. Direction stays legible from the
+          // CE/PE label, not from colour alone.
+          className="flex-1 py-3 px-4 rounded-xl font-semibold border border-emerald-500/20 hover:border-emerald-500/50 bg-emerald-500/10 text-emerald-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
           <ShoppingCart size={13} />
           Buy PE

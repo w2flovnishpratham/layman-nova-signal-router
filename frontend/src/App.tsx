@@ -524,7 +524,7 @@ function App() {
         >
           {!snapshotLoaded && !bootError ? (
             <div className="flex flex-col items-center justify-center flex-grow min-h-[350px] gap-3 text-white/40">
-              <MotionSpinner className="text-[#9d5bff]">
+              <MotionSpinner className="text-[#2F6BED]">
                 <Loader2 className="w-8 h-8" />
               </MotionSpinner>
               <MotionPulseText className="text-xs font-semibold tracking-widest uppercase">Initializing Session...</MotionPulseText>
@@ -719,7 +719,7 @@ function App() {
           <div className="fixed bottom-0 left-0 right-0 h-16 bg-[#0c0a14]/95 backdrop-blur-md border-t border-white/10 flex items-center justify-around z-[90] lg:hidden px-2">
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'trading' && !leftDrawerOpen && !rightDrawerOpen ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'trading' && !leftDrawerOpen && !rightDrawerOpen ? 'bg-[rgba(47,107,237,0.14)] text-[#2F6BED] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('trading')
                 setLeftDrawerOpen(false)
@@ -732,7 +732,7 @@ function App() {
 
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'dashboard' ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'dashboard' ? 'bg-[rgba(47,107,237,0.14)] text-[#2F6BED] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('dashboard')
                 setLeftDrawerOpen(false)
@@ -745,7 +745,7 @@ function App() {
 
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'strategies' ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'strategies' ? 'bg-[rgba(47,107,237,0.14)] text-[#2F6BED] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('strategies')
                 setLeftDrawerOpen(false)
@@ -758,7 +758,7 @@ function App() {
 
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${leftDrawerOpen ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${leftDrawerOpen ? 'bg-[rgba(47,107,237,0.14)] text-[#2F6BED] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('trading')
                 setLeftDrawerOpen(true)
@@ -771,7 +771,7 @@ function App() {
 
             <button
               type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${rightDrawerOpen ? 'bg-[rgba(157,91,255,0.12)] text-[#9d5bff] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
+              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${rightDrawerOpen ? 'bg-[rgba(47,107,237,0.14)] text-[#2F6BED] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
               onClick={() => {
                 setView('trading')
                 setLeftDrawerOpen(false)
