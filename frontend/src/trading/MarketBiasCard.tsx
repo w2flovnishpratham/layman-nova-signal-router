@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getNiftyCandles, type NiftyCandle } from '../api'
+import { getMarketSentiment, getNiftyCandles, type NiftyCandle } from '../api'
 
 export interface MarketBiasSnapshot {
   bullish_percentage: number
@@ -27,6 +27,23 @@ export function MarketBiasCard() {
   useEffect(() => {
     let active = true
     const load = async () => {
+      // Prefer the real NOVA intelligence sentiment; fall back to the local
+      // candle-direction heuristic if it is unavailable, so the card is never blank.
+      try {
+        const s = await getMarketSentiment()
+        if (s.available && s.bullish_percent != null) {
+          if (active) {
+            setBias({
+              bullish_percentage: s.bullish_percent,
+              bearish_percentage: s.bearish_percent ?? 100 - s.bullish_percent,
+              updated_at: s.updated_at,
+            })
+          }
+          return
+        }
+      } catch {
+        // fall through to the candle heuristic
+      }
       try {
         const series = await getNiftyCandles()
         if (active) setBias(deriveMarketBias(series.candles, series.updated_at ?? null))
@@ -35,7 +52,7 @@ export function MarketBiasCard() {
       }
     }
     void load()
-    const timer = window.setInterval(() => void load(), 5 * 60 * 1000)
+    const timer = window.setInterval(() => void load(), 60 * 1000)
     return () => {
       active = false
       window.clearInterval(timer)

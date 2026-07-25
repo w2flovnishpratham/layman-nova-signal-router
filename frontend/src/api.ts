@@ -473,6 +473,22 @@ export async function getNiftyCandles(signal?: AbortSignal): Promise<NiftyCandle
   return response.json() as Promise<NiftyCandleSeries>
 }
 
+export interface MarketSentiment {
+  available: boolean
+  bullish_percent: number | null
+  bearish_percent: number | null
+  updated_at: string | null
+  cached?: boolean
+  stale?: boolean
+}
+
+/** NOVA intelligence buy/sell sentiment, proxied+cached by the backend. */
+export async function getMarketSentiment(): Promise<MarketSentiment> {
+  const response = await apiFetch('/api/market/sentiment', { cache: 'no-store' })
+  if (!response.ok) throw new Error(`Could not load sentiment: ${response.status}`)
+  return response.json() as Promise<MarketSentiment>
+}
+
 export interface NiftyMarkerResponse {
   symbol: string
   trading_date: string

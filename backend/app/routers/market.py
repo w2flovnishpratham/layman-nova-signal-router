@@ -48,6 +48,50 @@ def nifty_chart_status() -> dict[str, Any]:
     return chart_status()
 
 
+# Cached passthrough to the NOVA intelligence buy/sell sentiment. The upstream
+# service already recomputes on its own schedule, so a background poller here
+# would be redundant — this just caches ~45s and serves last-known on failure.
+# ponytail: in-memory cache; add a DB-backed poller only if offline resilience
+# across restarts is ever needed.
+_SENTIMENT_URL = "https://intelligence.novatradesolution.com/api/v1/sentiment/buy-sell"
+_SENTIMENT_TTL_SECONDS = 45.0
+_sentiment_cache: dict[str, Any] = {"data": None, "at": 0.0}
+
+
+def _fetch_sentiment(url: str = _SENTIMENT_URL) -> dict[str, Any]:
+    import httpx
+
+    response = httpx.get(url, timeout=6.0)
+    response.raise_for_status()
+    raw = response.json()
+    return {
+        "available": True,
+        "bullish_percent": int(raw["bullish_percent"]),
+        "bearish_percent": int(raw["bearish_percent"]),
+        "updated_at": raw.get("updated_at"),
+    }
+
+
+@router.get("/market/sentiment")
+def market_sentiment() -> dict[str, Any]:
+    import time
+
+    now = time.monotonic()
+    cached = _sentiment_cache["data"]
+    if cached is not None and now - float(_sentiment_cache["at"]) < _SENTIMENT_TTL_SECONDS:
+        return {**cached, "cached": True}
+    try:
+        data = _fetch_sentiment()
+    except Exception:
+        # Serve the last good value if we have one; never 500 the Trading page.
+        if cached is not None:
+            return {**cached, "cached": True, "stale": True}
+        return {"available": False, "bullish_percent": None, "bearish_percent": None, "updated_at": None}
+    _sentiment_cache["data"] = data
+    _sentiment_cache["at"] = now
+    return {**data, "cached": False}
+
+
 @router.get("/market/nifty/markers")
 def nifty_markers(
     mode: str | None = Query(default=None, pattern="^(paper|live)$"),
