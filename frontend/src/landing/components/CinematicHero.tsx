@@ -113,6 +113,7 @@ export interface CinematicHeroProps extends React.HTMLAttributes<HTMLDivElement>
     metricLabel?: string;
     ctaHeading?: string;
     ctaDescription?: string;
+    onEnterApp?: () => void;
 }
 
 export function CinematicHero({
@@ -124,6 +125,7 @@ export function CinematicHero({
     metricValue = 365,
     ctaHeading = "Start trading now.",
     ctaDescription = "Join high-performance algorithmic traders and take control of your execution route today.",
+    onEnterApp,
     className,
     ...props
 }: CinematicHeroProps) {
@@ -261,11 +263,11 @@ export function CinematicHero({
                     {ctaDescription}
                 </p>
                 <div className="flex flex-col sm:flex-row gap-6">
-                    <a href="#discovery" aria-label="Launch Trading Platform" className="btn-modern-light flex items-center justify-center gap-3 px-8 py-4 rounded-[1.25rem] group focus:outline-none focus:ring-2 focus:ring-[#2F6BED] focus:ring-offset-2">
+                    <button type="button" onClick={onEnterApp} aria-label="Launch Trading Platform" className="btn-modern-light flex items-center justify-center gap-3 px-8 py-4 rounded-[1.25rem] group focus:outline-none focus:ring-2 focus:ring-[#2F6BED] focus:ring-offset-2 cursor-pointer">
                         <div className="text-center">
                             <div className="text-xs font-extrabold tracking-wider text-[#05070C] uppercase">LAUNCH TRADING PLATFORM</div>
                         </div>
-                    </a>
+                    </button>
                 </div>
             </div>
 

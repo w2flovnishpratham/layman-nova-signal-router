@@ -206,12 +206,13 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
         </div>
         <div className="flex items-center gap-3">
 
-          <a
-            href="#discovery"
-            className="hidden sm:inline-flex px-5 py-2 rounded-full border border-white/20 text-xs font-medium text-white hover:border-[#2F6BED] hover:text-[#2F6BED] transition-colors"
+          <button
+            type="button"
+            onClick={onEnterApp}
+            className="hidden sm:inline-flex px-5 py-2 rounded-full border border-white/20 text-xs font-medium text-white hover:border-[#2F6BED] hover:text-[#2F6BED] transition-colors cursor-pointer"
           >
             LAUNCH TRADING APP
-          </a>
+          </button>
         </div>
       </header>
 
@@ -292,7 +293,7 @@ export function LandingPage({ onEnterApp }: { onEnterApp?: () => void }) {
 
       {/* Cinematic Landing Hero Component (Full width layer to prevent ScrollTrigger pinning layout shifts) */}
       <div className="w-full relative border-y border-[#2F6BED]/10 bg-[#05070C]">
-        <CinematicHero />
+        <CinematicHero onEnterApp={onEnterApp} />
       </div>
 
       {/* ----------------- Ecosystem Diagram Section ----------------- */}
