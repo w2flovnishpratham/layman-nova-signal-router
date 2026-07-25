@@ -101,7 +101,12 @@ def test_builtin_selection_persists_without_execution_side_effects(mu_db, runtim
 
     catalog = client.get("/api/strategies/catalog").json()
     assert catalog["selected_strategy_key"] == "nova-supertrend"
-    assert next(item for item in catalog["strategies"] if item["strategy_key"] == "nova-supertrend")["selected"] is True
+    selected_entry = next(item for item in catalog["strategies"] if item["strategy_key"] == "nova-supertrend")
+    assert selected_entry["selected"] is True
+    # Regression: the selected built-in must expose its real instance id, or the
+    # client's Start-engine guard reads null and the click silently does nothing.
+    assert selected_entry["strategy_instance_id"] is not None
+    assert selected_entry["strategy_instance_id"] == catalog["selected_strategy_instance_id"]
     with session_scope() as db:
         subscription = db.scalar(
             select(models.StrategySubscription).where(
