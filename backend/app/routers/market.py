@@ -56,12 +56,20 @@ def nifty_chart_status() -> dict[str, Any]:
 _SENTIMENT_URL = "https://intelligence.novatradesolution.com/api/v1/sentiment/buy-sell"
 _SENTIMENT_TTL_SECONDS = 45.0
 _sentiment_cache: dict[str, Any] = {"data": None, "at": 0.0}
+_SENTIMENT_UNAVAILABLE = {
+    "available": False, "bullish_percent": None, "bearish_percent": None, "updated_at": None,
+}
 
 
 def _fetch_sentiment(url: str = _SENTIMENT_URL) -> dict[str, Any]:
     import httpx
 
     response = httpx.get(url, timeout=6.0)
+    # Per the upstream contract, 503 means "no valid value right now" — the
+    # service is healthy but has nothing to report. It is not an error and must
+    # not be presented as a stale reading.
+    if response.status_code == 503:
+        return dict(_SENTIMENT_UNAVAILABLE)
     response.raise_for_status()
     raw = response.json()
     return {
@@ -83,10 +91,13 @@ def market_sentiment() -> dict[str, Any]:
     try:
         data = _fetch_sentiment()
     except Exception:
-        # Serve the last good value if we have one; never 500 the Trading page.
+        # Network / unexpected upstream error (not a documented 503): serve the
+        # last good value if we have one; never 500 the Trading page.
         if cached is not None:
             return {**cached, "cached": True, "stale": True}
-        return {"available": False, "bullish_percent": None, "bearish_percent": None, "updated_at": None}
+        return dict(_SENTIMENT_UNAVAILABLE)
+    # A fresh reading (or a fresh 503-unavailable) both become the current state;
+    # caching the unavailable result avoids hammering upstream during a 503 window.
     _sentiment_cache["data"] = data
     _sentiment_cache["at"] = now
     return {**data, "cached": False}

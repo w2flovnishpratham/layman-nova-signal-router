@@ -45,3 +45,36 @@ def test_reports_unavailable_when_no_cache_and_upstream_fails(monkeypatch):
                         lambda url=market._SENTIMENT_URL: (_ for _ in ()).throw(RuntimeError("down")))
     result = market.market_sentiment()
     assert result["available"] is False and result["bullish_percent"] is None
+
+
+def test_upstream_503_is_unavailable_not_an_error(monkeypatch):
+    import httpx
+
+    class _Resp:
+        status_code = 503
+
+        def raise_for_status(self):
+            raise AssertionError("503 must not raise")
+
+        def json(self):
+            raise AssertionError("503 carries no body")
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp())
+    result = market._fetch_sentiment()
+    assert result["available"] is False and result["bullish_percent"] is None
+
+
+def test_503_does_not_serve_a_stale_reading(monkeypatch):
+    _reset()
+    monkeypatch.setattr(market, "_fetch_sentiment",
+                        lambda url=market._SENTIMENT_URL: {"available": True, "bullish_percent": 70,
+                                                           "bearish_percent": 30, "updated_at": "t"})
+    market.market_sentiment()
+    market._sentiment_cache["at"] = 0.0  # expire
+    # Upstream now returns the documented 503 -> unavailable, not the stale 70.
+    monkeypatch.setattr(market, "_fetch_sentiment",
+                        lambda url=market._SENTIMENT_URL: dict(market._SENTIMENT_UNAVAILABLE))
+    result = market.market_sentiment()
+    assert result["available"] is False
+    assert result["bullish_percent"] is None
+    assert not result.get("stale")
