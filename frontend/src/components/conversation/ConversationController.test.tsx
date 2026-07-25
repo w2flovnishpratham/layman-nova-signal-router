@@ -46,6 +46,11 @@ function runtimeNoMode(): RuntimeStatus {
   return r as unknown as RuntimeStatus
 }
 
+function choosePaperAndStrategy() {
+  fireEvent.click(screen.getByRole('button', { name: /start in paper/i }))
+  fireEvent.click(screen.getByRole('button', { name: /Supertrend/i }))
+}
+
 describe('ConversationController — mode selection in the machine', () => {
   it('renders Paper/Live mode selection when the backend has no mode yet', () => {
     render(<ConversationController {...props({ runtime: runtimeNoMode() })} />)
@@ -60,6 +65,14 @@ describe('ConversationController — mode selection in the machine', () => {
     expect(onModeSelect).toHaveBeenCalledWith('paper', 1000000)
     expect(screen.queryByText('How should NOVA trade for you?')).toBeNull() // advanced past mode
     expect(screen.getByText('Which strategy should NOVA run?')).toBeInTheDocument()
+  })
+
+  it('does not silently replay a persisted backend mode or strategy', () => {
+    const callbacks = props()
+    render(<ConversationController {...callbacks} />)
+    expect(screen.getByText('How should NOVA trade for you?')).toBeInTheDocument()
+    expect(screen.queryByText('Which signals should NOVA trade??')).not.toBeInTheDocument()
+    expect(callbacks.onSelect).not.toHaveBeenCalled()
   })
 
   it('Live is disabled and cannot advance when unavailable', () => {
@@ -86,6 +99,7 @@ describe('ConversationController — error recovery', () => {
     const r = runtimeWith({}) as unknown as { strategy_catalog: { strategies: Array<{ setup_schema: { fields: unknown[] } }> } }
     r.strategy_catalog.strategies[0].setup_schema = { fields: [] } // missing schema
     render(<ConversationController {...props({ runtime: r as unknown as RuntimeStatus })} />)
+    choosePaperAndStrategy()
     expect(screen.getByText(/can't be configured right now/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /save setup/i })).toBeNull()
   })
@@ -96,6 +110,7 @@ describe('ConversationController — error recovery', () => {
     r.strategy_catalog.strategies[0].paper_eligible = false
     r.strategy_catalog.strategies[0].disabled_reason = 'Strategy paused by admin.'
     render(<ConversationController {...props({ runtime: r as unknown as RuntimeStatus })} />)
+    choosePaperAndStrategy()
     expect(screen.getByText('Strategy paused by admin.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /save setup/i })).toBeNull()
   })
@@ -104,6 +119,7 @@ describe('ConversationController — error recovery', () => {
 describe('ConversationController — edit answer & async safety', () => {
   it('editing a field prefills its current value and hides Start until re-save', async () => {
     render(<ConversationController {...props()} />)
+    choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700)) // review
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
@@ -120,6 +136,7 @@ describe('ConversationController — edit answer & async safety', () => {
     let resolveSave: (() => void) | undefined
     const onSave = vi.fn(() => new Promise<void>((res) => { resolveSave = res }))
     render(<ConversationController {...props({ onSave })} />)
+    choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     fireEvent.click(screen.getByRole('button', { name: /save setup/i })) // save in flight
@@ -134,20 +151,23 @@ describe('ConversationController — saved setup decision', () => {
   it('shows the saved-setup decision with Resume / Review / Start New, not answer bubbles', () => {
     const p = props()
     render(<ConversationController {...p} />)
+    choosePaperAndStrategy()
     expect(screen.getByText('I found your previous Paper configuration.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Review' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Start New Setup' })).toBeInTheDocument()
     // saved values appear in the summary, NOT as user-answer bubbles
     expect(screen.queryByText('Direction: CE')).toBeNull()
-    // hydration must not call any backend API
+    // Reading saved values does not save or start anything; the only backend
+    // action is the user's explicit strategy selection.
     expect(p.onSave).not.toHaveBeenCalled()
     expect(p.onStart).not.toHaveBeenCalled()
-    expect(p.onSelect).not.toHaveBeenCalled()
+    expect(p.onSelect).toHaveBeenCalledWith('supertrend')
   })
 
   it('Resume on a complete saved setup goes to the review card with a Save action', () => {
     render(<ConversationController {...props()} />)
+    choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     expect(screen.getByRole('button', { name: /save setup/i })).toBeInTheDocument()
@@ -156,6 +176,7 @@ describe('ConversationController — saved setup decision', () => {
   it('Start New asks the first fresh question and does not overwrite the saved setup', () => {
     const p = props()
     render(<ConversationController {...p} />)
+    choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Start New Setup' }))
     act(() => vi.advanceTimersByTime(700))
     // first question is Direction, rendered as choice pills
@@ -168,6 +189,7 @@ describe('ConversationController — saved setup decision', () => {
 describe('ConversationController — sequential questions & save/start', () => {
   it('asks one question at a time and reaches review after all answers', () => {
     render(<ConversationController {...props({ runtime: runtimeWith({}) })} />) // no saved -> straight to questions
+    choosePaperAndStrategy()
     act(() => vi.advanceTimersByTime(700))
     // Direction active
     fireEvent.click(screen.getByRole('button', { name: 'CE' }))
@@ -194,6 +216,7 @@ describe('ConversationController — sequential questions & save/start', () => {
     const onSave = vi.fn(noop)
     const onStart = vi.fn(noop)
     render(<ConversationController {...props({ onSave, onStart })} />)
+    choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull() // not before save
@@ -212,6 +235,7 @@ describe('ConversationController — sequential questions & save/start', () => {
   it('a rapid double-click on Save produces exactly one save request', async () => {
     const onSave = vi.fn(() => new Promise<void>(() => {})) // stays pending
     render(<ConversationController {...props({ onSave })} />)
+    choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     const btn = screen.getByRole('button', { name: /save setup/i })
@@ -223,6 +247,7 @@ describe('ConversationController — sequential questions & save/start', () => {
   it('a failed save keeps the prior setup and does not expose Start engine', async () => {
     const onSave = vi.fn(async () => { throw new Error('save rejected') })
     render(<ConversationController {...props({ onSave })} />)
+    choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })

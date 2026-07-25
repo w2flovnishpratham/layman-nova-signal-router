@@ -34,6 +34,11 @@ function props(over: Record<string, unknown> = {}) {
   return { runtime: runtime(), loading: false, error: '', onManage: () => {}, onSelect: vi.fn(noop), onSave: vi.fn(noop), onStart: vi.fn(noop), onUserReply: () => {}, ...over }
 }
 
+async function choosePaperAndStrategy(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: /start in paper/i }))
+  await user.click(await screen.findByRole('button', { name: /Supertrend/i }))
+}
+
 afterEach(() => cleanup())
 
 describe('ConversationController — keyboard-only operation', () => {
@@ -62,6 +67,7 @@ describe('ConversationController — keyboard-only operation', () => {
   it('operates the saved-setup decision and choice question by keyboard', async () => {
     const user = userEvent.setup()
     render(<ConversationController {...props({ runtime: runtime({ saved: { direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' } }) })} />)
+    await choosePaperAndStrategy(user)
     const startNew = screen.getByRole('button', { name: 'Start New Setup' })
     startNew.focus()
     await user.keyboard('{Enter}')
@@ -78,6 +84,7 @@ describe('ConversationController — keyboard-only operation', () => {
     const onSave = vi.fn(noop)
     const onStart = vi.fn(noop)
     render(<ConversationController {...props({ runtime: runtime({ saved: { direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' } }), onSave, onStart })} />)
+    await choosePaperAndStrategy(user)
     ;(screen.getByRole('button', { name: 'Resume' })).focus()
     await user.keyboard('{Enter}')
     const save = await screen.findByRole('button', { name: /save setup/i })
@@ -93,6 +100,7 @@ describe('ConversationController — keyboard-only operation', () => {
   it('associates a validation error with the field and does not advance on an invalid value', async () => {
     const user = userEvent.setup()
     render(<ConversationController {...props({ runtime: runtime({ saved: {}, selected: true }) })} />) // fresh questions
+    await choosePaperAndStrategy(user)
     // direction first (choice) -> pick CE to reach lots (numeric)
     const ce = await screen.findByRole('button', { name: 'CE' })
     await user.click(ce)

@@ -40,16 +40,23 @@ function baseProps(over: Record<string, unknown> = {}) {
   }
 }
 
+function choosePaperAndStrategy() {
+  fireEvent.click(screen.getByRole('button', { name: /start in paper/i }))
+  fireEvent.click(screen.getByRole('button', { name: /Supertrend/i }))
+}
+
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers(); cleanup() })
 
 describe('ConversationController — session isolation & logout', () => {
   it('a new session (mount) shows only the current owner\'s saved values, never a prior one', () => {
     const a = render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' }) })} />)
+    choosePaperAndStrategy()
     expect(screen.getByText('CE')).toBeInTheDocument() // owner A summary
     a.unmount() // logout: authenticated subtree removed
 
     render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'PE', lots: 5 }, 'inst-2') })} />)
+    choosePaperAndStrategy()
     // owner B sees only their own saved values; no leaked global conversation state
     expect(screen.getByText('PE')).toBeInTheDocument()
     expect(screen.getByText('5')).toBeInTheDocument()
@@ -60,12 +67,14 @@ describe('ConversationController — session isolation & logout', () => {
     let resolveA: (() => void) | undefined
     const onSaveA = vi.fn(() => new Promise<void>((res) => { resolveA = res }))
     const a = render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' }), onSave: onSaveA })} />)
+    choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     fireEvent.click(screen.getByRole('button', { name: /save setup/i })) // A's save in flight
     a.unmount() // logout while save pending
 
     render(<ConversationController {...baseProps({ runtime: runtimeFor({}, 'inst-2') })} />) // owner B, fresh
+    choosePaperAndStrategy()
     await act(async () => { resolveA?.() }) // A's stale save resolves after logout
     // B is unaffected: no Start engine fabricated, B is at its own decision/questions.
     expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull()
@@ -75,6 +84,7 @@ describe('ConversationController — session isolation & logout', () => {
     const onSave = vi.fn(async () => { throw new Error('401 Unauthorized: session expired') })
     const onStart = vi.fn(noop)
     render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' }), onSave, onStart })} />)
+    choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
@@ -87,6 +97,7 @@ describe('ConversationController — session isolation & logout', () => {
     let resolve: (() => void) | undefined
     const onSave = vi.fn(() => new Promise<void>((res) => { resolve = res }))
     const a = render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' }), onSave })} />)
+    choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     fireEvent.click(screen.getByRole('button', { name: /save setup/i }))

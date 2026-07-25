@@ -144,7 +144,7 @@ export function ConversationController({
   const { state } = conv
 
   const catalog = runtime?.strategy_catalog
-  const mode: EngineMode = state.mode ?? (catalog?.setup_progress.mode ?? 'paper') as EngineMode
+  const mode: EngineMode = state.mode ?? 'paper'
   const strategies = useMemo(() => catalog?.strategies ?? [], [catalog])
   const selectedStrategy = useMemo(
     () => strategies.find((s) => s.strategy_key === state.strategyKey) ?? null,
@@ -174,30 +174,6 @@ export function ConversationController({
     genRef.current = state.generation
     strategyRef.current = state.strategyKey
   }, [state.generation, state.strategyKey])
-
-  // Deterministic hydration: if the backend already established a mode (resume /
-  // refresh), reflect it in the machine once. Otherwise the machine stays at mode
-  // selection so the user picks it here (one controller owns mode + strategy).
-  const backendMode = catalog?.setup_progress.mode ?? null
-  const initedMode = useRef(false)
-  useEffect(() => {
-    if (!backendMode || state.mode || initedMode.current) return
-    initedMode.current = true
-    conv.selectMode(backendMode)
-  }, [backendMode, state.mode, conv])
-
-  // One-time deterministic initialization from the backend-selected strategy,
-  // once a mode is known (mode determines which saved_setup applies).
-  const initedFor = useRef<string | null>(null)
-  useEffect(() => {
-    if (!catalog || !state.mode) return
-    const key = catalog.selected_strategy_key
-    if (!key || initedFor.current === key) return
-    const strat = strategies.find((s) => s.strategy_key === key)
-    if (!strat) return
-    initedFor.current = key
-    conv.selectStrategy(strat.strategy_key, withRiskFields(strat.setup_schema.fields), strat.saved_setup?.[state.mode] ?? {})
-  }, [catalog, strategies, state.mode, conv])
 
   function pickMode(m: EngineMode) {
     if (m === 'live' && !liveAvailable) return // never advance when Live is blocked
@@ -231,7 +207,6 @@ export function ConversationController({
 
   async function pickStrategy(s: CatalogStrategy) {
     conv.selectStrategy(s.strategy_key, withRiskFields(s.setup_schema.fields), s.saved_setup?.[mode] ?? {})
-    initedFor.current = s.strategy_key
     try {
       await onSelect(s.strategy_key)
     } catch {
