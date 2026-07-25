@@ -92,7 +92,10 @@ def get_catalog(user_id: uuid.UUID, *, runtime_state: str = "STOPPED") -> dict[s
         nova.append(
             {
                 **definition,
-                "strategy_instance_id": None,
+                # The selected built-in must expose its real instance id so the
+                # client can start the engine; unselected built-ins have no
+                # persistent instance and stay null.
+                "strategy_instance_id": str(selected_id) if selected and selected_id is not None else None,
                 "source_type": "BUILT_IN",
                 "selected": selected,
                 "runtime_state": runtime_state,
