@@ -19,9 +19,7 @@ interface Props {
   health: SystemHealth | null
   user: AuthUser
   market: MarketSnapshot | null
-  setupActive: boolean
   onNavigate: (route: AppRoute) => void
-  onOpenSetup: () => void
   onKill: () => void
   onStop: () => void
   onReconfigure: () => void
@@ -43,9 +41,7 @@ export function Header({
   health,
   user,
   market,
-  setupActive,
   onNavigate,
-  onOpenSetup,
   onKill,
   onStop,
   onReconfigure,
@@ -142,9 +138,9 @@ export function Header({
             <button
               type="button"
               key={item.label}
-              className={item.route === null ? (setupActive ? 'is-active' : '') : (route === item.route && !setupActive ? 'is-active' : '')}
-              aria-current={item.route === null ? (setupActive ? 'page' : undefined) : (route === item.route && !setupActive ? 'page' : undefined)}
-              onClick={() => item.route === null ? onOpenSetup() : onNavigate(item.route)}
+              className={route === item.route ? 'is-active' : ''}
+              aria-current={route === item.route ? 'page' : undefined}
+              onClick={() => onNavigate(item.route)}
             >
               {item.label}
             </button>
@@ -521,11 +517,10 @@ export function Header({
   )
 }
 
-const TOP_NAVIGATION: Array<{ route: AppRoute | null; label: string }> = [
+const TOP_NAVIGATION: Array<{ route: AppRoute; label: string }> = [
   { route: 'dashboard', label: 'Dashboard' },
   { route: 'trading', label: 'Trading' },
   { route: 'strategies', label: 'Strategies' },
-  { route: null, label: 'Setup' },
   { route: 'signals', label: 'Signals' },
   { route: 'automations', label: 'Automations' },
   { route: 'webhooks', label: 'Webhooks' },

@@ -363,7 +363,6 @@ function App() {
   const runtimeEntriesBlocked = sessionEngineLive && systemHealth?.engine === 'paused'
   const effectiveSetupState = runtimeEntriesBlocked || setupState === 'PAUSED' ? 'PAUSED' : setupState
   const engineLive = sessionEngineLive
-  const setupActive = route === 'trading' && !engineLive
   const panelLayoutTransition = reduceMotion
     ? { duration: 0 }
     : { type: 'spring' as const, stiffness: 380, damping: 42, mass: 0.8 }
@@ -445,16 +444,7 @@ function App() {
         health={systemHealth}
         user={authUser}
         market={displayedMarketSnapshot}
-        setupActive={setupActive}
         onNavigate={goToRoute}
-        onOpenSetup={() => {
-          if (engineLive) {
-            window.dispatchEvent(new CustomEvent('nova:reconfigure-request'))
-            return
-          }
-          window.history.replaceState({}, '', '/app/trading?editSetup=1')
-          window.dispatchEvent(new PopStateEvent('popstate'))
-        }}
         onKill={() => void updateRuntime(squareOffRuntime)}
         onStop={() => void updateRuntime(stopRuntimeEngine)}
         onReconfigure={reconfigure}

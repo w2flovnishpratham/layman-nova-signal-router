@@ -31,9 +31,7 @@ export function DashboardPreview() {
             latestSignal: {},
             activeOptionLtp: 172.2,
           }}
-          setupActive={false}
           onNavigate={() => undefined}
-          onOpenSetup={() => undefined}
           onKill={() => undefined}
           onStop={() => undefined}
           onReconfigure={() => undefined}

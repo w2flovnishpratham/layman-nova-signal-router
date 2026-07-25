@@ -85,7 +85,6 @@ function props(status = runtime()) {
     setupState: 'IDLE' as const,
     health: null,
     market: null,
-    setupActive: false,
     user: {
       id: 'owner-1',
       email: 'owner@example.com',
@@ -102,7 +101,6 @@ function props(status = runtime()) {
       },
     },
     onNavigate: vi.fn(),
-    onOpenSetup: vi.fn(),
     onKill: vi.fn(),
     onStop: vi.fn(),
     onReconfigure: vi.fn(),
@@ -125,6 +123,12 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('Header runtime reliability controls', () => {
+  it('keeps setup inside Trading instead of exposing a duplicate top-level route', () => {
+    render(<Header {...props()} />)
+    expect(screen.getByRole('button', { name: 'Trading' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.queryByRole('button', { name: 'Setup' })).not.toBeInTheDocument()
+  })
+
   it('renders the backend lifecycle display', async () => {
     const user = userEvent.setup()
     render(<Header {...props()} />)
