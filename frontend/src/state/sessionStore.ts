@@ -189,6 +189,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     seenEvents.add(event.id)
     const patch = reduceSessionEvent(current, event)
     set({ ...patch, seenEvents })
+    if (typeof window !== 'undefined' && (
+      event.type === 'order.filled'
+      || event.type === 'trade.exit'
+      || event.type === 'position.update'
+      || event.type === 'session.eod'
+      || event.type === 'bot.message'
+    )) {
+      window.dispatchEvent(new CustomEvent('nova:terminal-delta', { detail: event }))
+    }
   },
 
 }))
@@ -218,6 +227,8 @@ export function applyManualOrderHydration(response: ManualOrderResponse): void {
   const symbol = position.trading_symbol || position.security_id || 'NIFTY option'
   useSessionStore.setState({
     activeTrade: normalizeTrade({
+      positionId: position.position_id ?? undefined,
+      positionVersion: position.position_version,
       symbol,
       strike: Number(position.strike ?? 0),
       optType: position.option_side === 'PE' ? 'PE' : 'CE',
@@ -266,6 +277,8 @@ export function applyRuntimeHydration(status: RuntimeStatus, requestStartedAt = 
   const risk = position.risk
   const activeTrade = position.has_open_position
     ? normalizeTrade({
+      positionId: position.position_id ?? undefined,
+      positionVersion: position.position_version,
       mode: engineMode ?? undefined,
       symbol: position.trading_symbol || 'NIFTY option',
       strike: Number(position.strike ?? 0),
@@ -475,6 +488,8 @@ function normalizeTrade(data: Partial<ActiveTrade>, config: TradeConfig, lotSize
   const pnl = Number(data.pnl ?? 0)
   const qty = Number(data.qty ?? contractsForLots(config.risk?.lots ?? 1, lotSize))
   return {
+    positionId: data.positionId,
+    positionVersion: data.positionVersion,
     symbol: data.symbol ?? 'NIFTY option',
     strike: Number(data.strike ?? 0),
     optType: data.optType ?? 'CE',

@@ -361,11 +361,11 @@ def test_configuring_paper_mode_starts_fresh_portfolio(tmp_path, monkeypatch):
 
     from app.routers.setup import EngineModeRequest, configure_engine_mode
 
-    result = configure_engine_mode(EngineModeRequest(engine_mode="paper", paper_starting_balance=100000))
+    result = configure_engine_mode(EngineModeRequest(engine_mode="paper", paper_starting_balance=1000000))
     refreshed = paper_portfolio.get_paper_portfolio()
 
-    assert result["paper_portfolio"]["available_balance"] == 100000
-    assert refreshed.available_balance == 100000
+    assert result["paper_portfolio"]["available_balance"] == 1000000
+    assert refreshed.available_balance == 1000000
     assert refreshed.utilized_amount == 0
     assert refreshed.realized_pnl == 0
     assert refreshed.session_pnl == 0
@@ -392,7 +392,7 @@ def test_paper_quantity_update_rejects_when_portfolio_trade_is_missing(tmp_path,
     result = update_active_position_quantity(QuantityRequest(qty=130))
 
     assert result["ok"] is False
-    assert "paper open trade" in result["normalizedError"]["technicalMessage"].lower()
+    assert "direct quantity replacement is retired" in result["message"].lower()
     assert state_store.get_paper_position()["qty"] == 65
 
 

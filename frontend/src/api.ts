@@ -117,6 +117,8 @@ export interface RuntimeStatus {
   }
   position: {
     has_open_position: boolean
+    position_id?: string | null
+    position_version?: number
     security_id: string | null
     trading_symbol: string | null
     option_side: string | null
@@ -173,6 +175,17 @@ export interface RuntimeStatus {
     live_orders_enabled: boolean
   }
   selected_strategy: EngineStrategy | null
+  selected_configuration?: {
+    id: string
+    strategy_instance_id: string
+    strategy_version_id: string
+    mode: 'paper' | 'live'
+    revision: number
+    status: string
+    configuration: Record<string, unknown>
+    risk: Record<string, unknown>
+    committed_at: string | null
+  } | null
   eligible_strategies: EngineStrategy[]
   selection_issue: string | null
   strategy_catalog?: StrategyCatalog
@@ -198,8 +211,17 @@ async function runtimeCall(path: `/${string}`, method = 'GET', payload?: unknown
 }
 
 export const getRuntimeStatus = () => runtimeCall('/api/runtime/status')
-export const startSelectedPaperEngine = (strategyInstanceId: string) =>
-  runtimeCall('/api/runtime/start-selected', 'POST', { strategy_instance_id: strategyInstanceId })
+export const startSelectedEngine = (
+  strategyInstanceId: string,
+  configurationRevisionId: string,
+  configurationRevision: number,
+  mode: 'paper' | 'live',
+) => runtimeCall('/api/runtime/start-selected', 'POST', {
+  strategy_instance_id: strategyInstanceId,
+  configuration_revision_id: configurationRevisionId,
+  configuration_revision: configurationRevision,
+  mode,
+})
 export const stopRuntimeEngine = () => runtimeCall('/api/runtime/stop', 'POST')
 export const squareOffRuntime = () => runtimeCall('/api/runtime/square-off', 'POST')
 export const switchRuntimeMode = (mode: 'paper' | 'live') =>
@@ -327,6 +349,8 @@ export interface ManualOrderResponse {
   operationState?: 'POSITION_OPEN' | 'POSITION_CLOSED' | 'PAPER_ORDER_ACCEPTED' | 'RECONCILIATION_REQUIRED' | 'REJECTED_NO_FRESH_QUOTE' | 'REJECTED' | 'FAILED' | string
   position?: {
     has_open_position?: boolean
+    position_id?: string | null
+    position_version?: number
     entry_order_id?: string | null
     entry_price?: number | null
     qty?: number
@@ -352,17 +376,15 @@ export interface ManualOrderResponse {
 export interface ExitLevelsPayload {
   stopLossPrice: number
   targetPrice: number
+  expectedPositionVersion?: number
 }
 
 export interface ExitLevelsResponse {
   ok: boolean
   message: string
   activeExitLevels?: ActiveExitLevels
+  positionVersion?: number
   normalizedError?: Record<string, unknown> | null
-}
-
-export interface QuantityPayload {
-  qty: number
 }
 
 export interface QuantityResponse {
@@ -371,6 +393,12 @@ export interface QuantityResponse {
   qty?: number
   lots?: number
   normalizedError?: Record<string, unknown> | null
+}
+
+export interface PositionAdjustmentResponse extends QuantityResponse {
+  operationState?: string
+  positionVersion?: number
+  fillPrice?: number
 }
 
 export interface OrderQuote {
@@ -605,17 +633,18 @@ export async function patchActiveExitLevels(payload: ExitLevelsPayload): Promise
   return body ?? { ok: false, message: 'Could not update SL/TP.' }
 }
 
-export async function patchActiveQuantity(payload: QuantityPayload): Promise<QuantityResponse> {
-  const response = await apiFetch('/api/orders/active-position/quantity', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  const body = await response.json().catch(() => null) as QuantityResponse | null
-  if (!response.ok) {
-    throw new Error(body?.message || `Could not update qty: ${response.status}`)
-  }
-  return body ?? { ok: false, message: 'Could not update qty.' }
+export async function postActiveAddLots(
+  payload: { lots: number; expectedPositionVersion: number },
+  operationId = newIdempotencyKey(),
+): Promise<PositionAdjustmentResponse> {
+  return postPositionAdjustment('/api/orders/active-position/add-lots', payload, operationId)
+}
+
+export async function postActivePartialExit(
+  payload: { lots?: number; percentage?: 25 | 50 | 75; expectedPositionVersion: number },
+  operationId = newIdempotencyKey(),
+): Promise<PositionAdjustmentResponse> {
+  return postPositionAdjustment('/api/orders/active-position/partial-exit', payload, operationId)
 }
 
 function newIdempotencyKey(): string {
@@ -642,6 +671,23 @@ async function postManualOrder(path: `/${string}`, payload: unknown, operationId
     throw new Error(body?.message || `Manual order failed: ${response.status}`)
   }
   return body ?? { ok: false, message: 'Manual order failed.' }
+}
+
+async function postPositionAdjustment(
+  path: `/${string}`,
+  payload: unknown,
+  operationId: string,
+): Promise<PositionAdjustmentResponse> {
+  const response = await apiFetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationId },
+    body: JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null) as PositionAdjustmentResponse | null
+  if (!response.ok) {
+    throw new Error(body?.message || `Position operation failed: ${response.status}`)
+  }
+  return body ?? { ok: false, message: 'Position operation failed.' }
 }
 
 // ---------------------------------------------------------------------------

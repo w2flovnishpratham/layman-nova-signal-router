@@ -30,22 +30,22 @@ describe('setup fields', () => {
 
   it('asks the safety questions after the strategy schema', () => {
     const keys = withRiskFields(schema).map((f) => f.key)
-    expect(keys.slice(-3)).toEqual(['max_daily_loss', 'max_trades_per_day', 'cooldown_after_loss_minutes'])
+    expect(keys.slice(-3)).toEqual(['max_daily_loss', 'max_trades_per_day', 'entry_cutoff_ist'])
   })
 
   it('does not bolt safety questions onto a strategy with no schema', () => {
     expect(withRiskFields([])).toEqual([])
   })
 
-  it('caps the cooldown so a typo cannot block entries indefinitely', () => {
-    const cooldown = RISK_FIELDS.find((f) => f.key === 'cooldown_after_loss_minutes')
-    expect(cooldown && 'maximum' in cooldown ? cooldown.maximum : 0).toBe(390)
+  it('offers deterministic entry-cutoff choices', () => {
+    const cutoff = RISK_FIELDS.find((f) => f.key === 'entry_cutoff_ist')
+    expect(cutoff && 'options' in cutoff ? cutoff.options : []).toEqual(['14:30', '15:00', '15:15', 'No cutoff'])
   })
 
   it('routes safety answers away from the strategy setup payload', () => {
-    const { strategy, risk } = splitDraft({ lots: 2, direction: 'BOTH', max_daily_loss: 25000, cooldown_after_loss_minutes: 30 })
+    const { strategy, risk } = splitDraft({ lots: 2, direction: 'BOTH', max_daily_loss: 25000, entry_cutoff_ist: 'No cutoff' })
     expect(strategy).toEqual({ lots: 2, direction: 'BOTH' })
-    expect(risk).toEqual({ max_daily_loss: 25000, cooldown_after_loss_minutes: 30 })
+    expect(risk).toEqual({ max_daily_loss: 25000, entry_cutoff_ist: '' })
   })
 })
 
@@ -56,17 +56,17 @@ describe('step derivation', () => {
   })
 
   it('states plainly when the broker is not connected', () => {
-    const steps = deriveSteps({ ...base, brokerConnected: false, brokerMasked: null })
+    const steps = deriveSteps({ ...base, mode: 'live', brokerConnected: false, brokerMasked: null })
     const broker = steps.find((s) => s.id === 'broker')
     expect(broker?.status).toBe('pending')
     expect(broker?.summary).toMatch(/not connected/i)
   })
 
   it('marks the step holding the active question', () => {
-    const steps = deriveSteps({ ...base, activeKey: 'cooldown_after_loss_minutes' })
-    const cooldown = steps.find((s) => s.id === 'cooldown')
-    expect(cooldown?.status).toBe('active')
-    expect(cooldown?.summary).toMatch(/awaiting/i)
+    const steps = deriveSteps({ ...base, activeKey: 'entry_cutoff_ist' })
+    const cutoff = steps.find((s) => s.id === 'safety')
+    expect(cutoff?.status).toBe('active')
+    expect(cutoff?.summary).toMatch(/awaiting/i)
   })
 
   it('summarises answers without rounding them away', () => {
@@ -75,9 +75,9 @@ describe('step derivation', () => {
     expect(steps.find((s) => s.id === 'safety')?.summary).toBe('₹25,000 · max 6 trades')
   })
 
-  it('says "no cooldown" rather than showing a bare zero', () => {
-    const steps = deriveSteps({ ...base, draft: { cooldown_after_loss_minutes: 0 } })
-    expect(steps.find((s) => s.id === 'cooldown')?.summary).toBe('no cooldown')
+  it('states when the entry cutoff is disabled', () => {
+    const steps = deriveSteps({ ...base, draft: { entry_cutoff_ist: 'No cutoff' } })
+    expect(steps.find((s) => s.id === 'safety')?.summary).toBe('no entry cutoff')
   })
 
   it('gives an unknown backend field its own step instead of hiding it', () => {

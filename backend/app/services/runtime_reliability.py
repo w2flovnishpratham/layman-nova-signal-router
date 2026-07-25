@@ -140,6 +140,8 @@ def _position_status(position: dict[str, Any], runtime: dict[str, Any]) -> dict[
     )
     return {
         "has_open_position": has_open_position,
+        "position_id": position.get("position_id"),
+        "position_version": int(position.get("position_version") or 0),
         "security_id": position.get("security_id"),
         "trading_symbol": position.get("trading_symbol"),
         "option_side": position.get("option_side"),

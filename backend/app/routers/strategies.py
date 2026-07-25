@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
@@ -346,6 +346,75 @@ def read_configuration(
 ):
     """The revision a save must echo back, and whether both halves agree."""
     return {"ok": True, **setup_configuration.current_revision(user.id, mode)}
+
+
+@router.get("/api/trading/configurations")
+def list_trading_configurations(
+    mode: str | None = Query(default=None, pattern="^(paper|live)$"),
+    strategy_instance_id: uuid.UUID | None = Query(default=None),
+    user: CurrentUser = Depends(get_current_user),
+):
+    return {
+        "ok": True,
+        "items": setup_configuration.list_configurations(
+            user.id,
+            mode=mode,
+            strategy_instance_id=strategy_instance_id,
+        ),
+        "selected": setup_configuration.selected_configuration(user.id, mode),
+    }
+
+
+@router.get("/api/trading/configurations/{configuration_id}")
+def read_trading_configuration(
+    configuration_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+):
+    configuration = setup_configuration.get_configuration(user.id, configuration_id)
+    if configuration is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Configuration not found."})
+    return {"ok": True, "configuration": configuration}
+
+
+@router.get("/api/trading/bootstrap")
+def trading_bootstrap(user: CurrentUser = Depends(get_current_user)):
+    """One owner-scoped read model for setup restoration and terminal startup."""
+    from app.services import automations_overview, risk_overview, user_preferences
+
+    runtime = _owner_runtime(user)
+    mode = runtime["engine"].get("mode")
+    catalog = strategy_catalog_service.get_catalog(
+        user.id,
+        runtime_state=runtime["engine"]["state"],
+    )
+    selected_configuration = setup_configuration.selected_configuration(user.id, mode)
+    return {
+        "ok": True,
+        "mode": mode,
+        "setup_state": catalog.get("setup_progress"),
+        "compatible_configurations": setup_configuration.list_configurations(user.id, mode=mode),
+        "selected_configuration": selected_configuration,
+        "engine": runtime["engine"],
+        "position": runtime["position"],
+        "risk_usage": risk_overview.build_risk_overview(user.id),
+        "manual_defaults": {
+            "paper": {"lots": 1, "stop_loss_percent": 10, "take_profit_percent": 20, "order_type": "MARKET"},
+            "live": {"lots": 1, "stop_loss_percent": 10, "take_profit_percent": 20, "order_type": "MARKET"},
+        },
+        "automation_settings": automations_overview.build_automations_overview(),
+        "notification_preferences": user_preferences.get_preferences(user.id).get("notification_preferences", {}),
+        "terminal_capabilities": {
+            "max_open_positions": 1,
+            "paper_add_quantity": True,
+            "live_add_quantity": False,
+            "paper_partial_exit": True,
+            "live_partial_exit": False,
+            "paper_modify_protection": True,
+            "live_modify_super_order_protection": True,
+            "manual_market_orders": True,
+            "manual_limit_orders": False,
+        },
+    }
 
 
 @router.get("/api/strategies/subscriptions")

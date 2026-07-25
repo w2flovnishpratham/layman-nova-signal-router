@@ -22,6 +22,13 @@ export function AppRouter() {
   // unknown "/app/*" path resolves safely to it, without adding a history entry.
   useEffect(() => {
     if (!isAppPath(path)) return
+    if (path === '/app/setup') {
+      const params = new URLSearchParams(window.location.search)
+      params.delete('edit')
+      params.set('editSetup', '1')
+      replacePath(`${appPath('trading')}?${params.toString()}`)
+      return
+    }
     const canonical = appPath(routeFromPath(path))
     if (path !== canonical) replacePath(canonical)
   }, [path])

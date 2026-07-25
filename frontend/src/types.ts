@@ -251,6 +251,8 @@ export interface ActiveExitLevels {
 }
 
 export interface ActiveTrade {
+  positionId?: string
+  positionVersion?: number
   mode?: EngineMode
   symbol: string
   strike: number

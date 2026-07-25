@@ -8,13 +8,11 @@ import { NiftyLiveChart } from './components/NiftyLiveChart'
 import { EngineSidebar } from './components/EngineSidebar'
 import { Header } from './components/Header'
 import { MotionPulseText, MotionSpinner, softEase, useAppReducedMotion } from './components/MotionPrimitives'
-import { ChatLog } from './components/messages/ChatLog'
 import { SetupPanel } from './components/setup/SetupPanel'
 import { PortfolioDashboard } from './dashboard/PortfolioDashboard'
 import { PersonalStrategiesPage } from './strategies/PersonalStrategiesPage'
 import type { NovaView } from './types'
 import { goToRoute, isImplemented, useAppRoute } from './appRoutes'
-import { NovaSidebar } from './components/shell/NovaSidebar'
 import { PageErrorBoundary } from './components/shell/PageErrorBoundary'
 import { PlaceholderPage } from './components/shell/PlaceholderPage'
 import { SignalsPage } from './signals/SignalsPage'
@@ -25,6 +23,7 @@ import { ReportsPage } from './reports/ReportsPage'
 import { AddStrategyPage } from './strategies/AddStrategyPage'
 import { SettingsPage } from './settings/SettingsPage'
 import { AutomationsPage } from './automations/AutomationsPage'
+import { TradingActivityTabs } from './trading/TradingActivityTabs'
 import { SetupPage, type SetupSnapshot } from './setup/SetupPage'
 import { getConfigurationState, saveConfiguration } from './setup/configurationApi'
 import {
@@ -41,7 +40,7 @@ import {
   saveRuntimeConfig,
   selectCatalogStrategy,
   squareOffRuntime,
-  startSelectedPaperEngine,
+  startSelectedEngine,
   startSession,
   stopRuntimeEngine,
   switchRuntimeMode,
@@ -68,11 +67,9 @@ function App() {
   const setView = useCallback((next: NovaView) => {
     goToRoute(next === 'dashboard' ? 'dashboard' : next === 'strategies' ? 'strategies' : 'trading')
   }, [])
-  // Held here so /app/setup can project the rail and configuration panel from
-  // the same conversation state the controller owns.
+  // Held here so the Trading route can project the setup rail and configuration
+  // panel from the same conversation state the controller owns.
   const [setupSnapshot, setSetupSnapshot] = useState<SetupSnapshot | null>(null)
-  const [railOpen, setRailOpen] = useState(false)
-  const [railCollapsed, setRailCollapsed] = useState(false)
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [authError, setAuthError] = useState('')
@@ -93,7 +90,6 @@ function App() {
   const setupState = useSessionStore((state) => state.setupState)
   const engineMode = useSessionStore((state) => state.engineMode)
   const config = useSessionStore((state) => state.config)
-  const messages = useSessionStore((state) => state.messages)
   const activeTrade = useSessionStore((state) => state.activeTrade)
   const pushedMarketSnapshot = useSessionStore((state) => state.marketSnapshot)
   const wallet = useSessionStore((state) => state.wallet)
@@ -337,7 +333,16 @@ function App() {
     if (runtimeStatus?.selected_strategy?.instance_id !== instanceId) {
       throw new Error('The selected strategy changed. Refresh before starting.')
     }
-    const latest = await startSelectedPaperEngine(instanceId)
+    const selectedConfiguration = runtimeStatus?.selected_configuration
+    if (!selectedConfiguration || selectedConfiguration.strategy_instance_id !== instanceId) {
+      throw new Error('Save and select an exact configuration revision before starting.')
+    }
+    const latest = await startSelectedEngine(
+      instanceId,
+      selectedConfiguration.id,
+      selectedConfiguration.revision,
+      selectedConfiguration.mode,
+    )
     setRuntimeStatus(latest)
     applyRuntimeHydration(latest)
     setRuntimeError('')
@@ -358,6 +363,7 @@ function App() {
   const runtimeEntriesBlocked = sessionEngineLive && systemHealth?.engine === 'paused'
   const effectiveSetupState = runtimeEntriesBlocked || setupState === 'PAUSED' ? 'PAUSED' : setupState
   const engineLive = sessionEngineLive
+  const setupActive = route === 'trading' && !engineLive
   const panelLayoutTransition = reduceMotion
     ? { duration: 0 }
     : { type: 'spring' as const, stiffness: 380, damping: 42, mass: 0.8 }
@@ -427,16 +433,9 @@ function App() {
   return (
     <main className="nova-app">
       <div className="nova-shell">
-      <NovaSidebar
-        route={route}
-        open={railOpen}
-        collapsed={railCollapsed}
-        onNavigate={goToRoute}
-        onToggleCollapsed={() => setRailCollapsed((c) => !c)}
-        onClose={() => setRailOpen(false)}
-      />
       <div className="nova-main">
       <Header
+        route={route}
         status={wsStatus}
         clientId={config.broker?.clientId}
         runtime={runtimeStatus}
@@ -445,8 +444,17 @@ function App() {
         setupState={effectiveSetupState}
         health={systemHealth}
         user={authUser}
-        view={view}
-        onNavigate={setView}
+        market={displayedMarketSnapshot}
+        setupActive={setupActive}
+        onNavigate={goToRoute}
+        onOpenSetup={() => {
+          if (engineLive) {
+            window.dispatchEvent(new CustomEvent('nova:reconfigure-request'))
+            return
+          }
+          window.history.replaceState({}, '', '/app/trading?editSetup=1')
+          window.dispatchEvent(new PopStateEvent('popstate'))
+        }}
         onKill={() => void updateRuntime(squareOffRuntime)}
         onStop={() => void updateRuntime(stopRuntimeEngine)}
         onReconfigure={reconfigure}
@@ -481,7 +489,7 @@ function App() {
       ) : null}
 
       {/* A page-level boundary: a crash in the routed page shows a retry card
-          instead of blanking the sidebar, header and the whole shell. */}
+          instead of blanking the header and the whole shell. */}
       <PageErrorBoundary resetKey={route}>
       {!isImplemented(route) ? (
         <PlaceholderPage route={route} />
@@ -491,8 +499,6 @@ function App() {
         <WebhooksPage />
       ) : route === 'risk' ? (
         <RiskPage />
-      ) : route === 'setup' ? (
-        <SetupPage conversation={setupPanel} snapshot={setupSnapshot} />
       ) : route === 'credentials' ? (
         <CredentialsPage />
       ) : route === 'reports' ? (
@@ -504,9 +510,17 @@ function App() {
       ) : route === 'automations' ? (
         <AutomationsPage />
       ) : view === 'dashboard' ? (
-        <PortfolioDashboard />
+        <PortfolioDashboard
+          runtime={runtimeStatus}
+          health={systemHealth}
+          onKill={() => void updateRuntime(squareOffRuntime)}
+          onManageStrategies={() => setView('strategies')}
+          onViewHealth={() => goToRoute('webhooks')}
+        />
       ) : view === 'strategies' ? (
         <PersonalStrategiesPage user={authUser} focusInstanceId={managedStrategyId} />
+      ) : !engineLive ? (
+        <SetupPage conversation={setupPanel} snapshot={setupSnapshot} />
       ) : (
         <motion.section
           layout
@@ -555,9 +569,11 @@ function App() {
                   <EngineLeftPanel
                     marketSnapshot={displayedMarketSnapshot}
                     engineMode={engineMode}
+                    runtime={runtimeStatus}
                     activeTrade={activeTrade}
                     runtimePositionOpen={Boolean(runtimeStatus?.position.has_open_position)}
                     collapseControl={renderLeftCollapseButton()}
+                    onStop={() => void updateRuntime(stopRuntimeEngine)}
                   />
                 </motion.div>
               )}
@@ -579,19 +595,10 @@ function App() {
             </div>
           ) : (
             <>
-              <ChatLog
-                messages={messages}
-                typing={typing}
-                panelKey={`${effectiveSetupState}-${setupFlowStep}-${engineLive ? 'engine' : 'setup'}`}
-                inlinePanel={setupFlowStep === 'mode' ? setupPanel : null}
-              >
-                {setupFlowStep === 'mode' ? null : setupPanel}
-              </ChatLog>
-              {engineLive ? (
-                <div className="live-engine-stack">
-                  <NiftyLiveChart engineMode={engineMode} />
-                </div>
-              ) : null}
+              <div className="live-engine-stack">
+                <NiftyLiveChart engineMode={engineMode} />
+                <TradingActivityTabs />
+              </div>
 
               {/* Mobile-only inline active position & routing controls below main chat */}
               {engineLive ? (
@@ -605,6 +612,7 @@ function App() {
                     lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
                     side={config.risk?.side ?? 'BOTH'}
                     engineMode={engineMode}
+                    runtime={runtimeStatus}
                     onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
                     hideMargin={true}
                   />
@@ -654,6 +662,7 @@ function App() {
                     lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
                     side={config.risk?.side ?? 'BOTH'}
                     engineMode={engineMode}
+                    runtime={runtimeStatus}
                     onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
                     collapseControl={renderRightCollapseButton()}
                   />
@@ -705,7 +714,14 @@ function App() {
                   ✕
                 </button>
               </div>
-              <EngineLeftPanel marketSnapshot={displayedMarketSnapshot} engineMode={engineMode} activeTrade={activeTrade} runtimePositionOpen={Boolean(runtimeStatus?.position.has_open_position)} />
+              <EngineLeftPanel
+                marketSnapshot={displayedMarketSnapshot}
+                engineMode={engineMode}
+                activeTrade={activeTrade}
+                runtimePositionOpen={Boolean(runtimeStatus?.position.has_open_position)}
+                runtime={runtimeStatus}
+                onStop={() => void updateRuntime(stopRuntimeEngine)}
+              />
                 </motion.div>
               </motion.div>
             ) : null}
@@ -756,6 +772,7 @@ function App() {
                 lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
                 side={config.risk?.side ?? 'BOTH'}
                 engineMode={engineMode}
+                runtime={runtimeStatus}
                 onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
                 onlyMargin={true}
               />

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Literal
+import uuid
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from app.config import settings
-from app.db.engine import database_configured
+from app.db import models
+from app.db.engine import database_configured, session_scope
 from app.routers.setup import setup_readiness, setup_status_payload
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import dhan_token_age_metadata
@@ -14,7 +18,7 @@ from app.services.dhan_debugger import get_outgoing_ip
 from app.services.paper_portfolio import get_paper_portfolio
 from app.services.state_store import get_app_state, get_engine_mode, set_engine_mode, update_app_state
 from app.services.execution_context import current_execution_user
-from app.services import runtime_reliability, strategy_catalog_service, strategy_fanout, strategy_instance_service
+from app.services import runtime_reliability, setup_configuration, strategy_catalog_service, strategy_fanout, strategy_instance_service
 
 
 router = APIRouter()
@@ -42,6 +46,9 @@ class PaperResetRequest(BaseModel):
 
 class StartSelectedRequest(BaseModel):
     strategy_instance_id: str = Field(min_length=1, max_length=64)
+    configuration_revision_id: str = Field(min_length=1, max_length=64)
+    configuration_revision: int = Field(ge=1)
+    mode: Literal["paper", "live"]
 
 
 def _execution_user():
@@ -84,7 +91,16 @@ def _hydrated_runtime_status() -> dict[str, Any]:
         user.id,
         runtime_state=runtime["engine"]["state"],
     )
-    return {**runtime, **selection, "strategy_catalog": catalog}
+    selected_configuration = setup_configuration.selected_configuration(
+        user.id,
+        runtime["engine"].get("mode"),
+    )
+    return {
+        **runtime,
+        **selection,
+        "strategy_catalog": catalog,
+        "selected_configuration": selected_configuration,
+    }
 
 
 def _deactivate_selected_builtin(user) -> None:
@@ -93,6 +109,55 @@ def _deactivate_selected_builtin(user) -> None:
     selected = strategy_instance_service.get_engine_selection(user.id).get("selected")
     if selected and selected.get("source_type") == "NOVA_SHARED" and selected.get("strategy_code") == "supertrend":
         strategy_fanout.set_subscription_active(user.id, "supertrend", False)
+
+
+def _record_configuration_run(user, selected: dict[str, Any], configuration: dict[str, Any]) -> None:
+    if not database_configured():
+        return
+    with session_scope() as db:
+        active = db.scalars(
+            select(models.UserRun).where(
+                models.UserRun.user_id == user.id,
+                models.UserRun.status == "running",
+            ).with_for_update()
+        ).all()
+        now = datetime.now(timezone.utc)
+        for run in active:
+            run.status = "stopped"
+            run.stopped_at = now
+        db.add(
+            models.UserRun(
+                user_id=user.id,
+                run_type=configuration["mode"],
+                strategy_name=selected.get("display_name") or selected.get("label"),
+                status="running",
+                execution_mode="paper_live_data" if configuration["mode"] == "paper" else "real_orders",
+                mode_config={
+                    "configuration_revision_id": configuration["id"],
+                    "configuration_revision": configuration["revision"],
+                },
+                configuration_revision_id=uuid.UUID(configuration["id"]),
+                configuration_revision=int(configuration["revision"]),
+                strategy_version_id=uuid.UUID(configuration["strategy_version_id"]),
+                started_at=now,
+            )
+        )
+
+
+def _stop_recorded_runs(user) -> None:
+    if not database_configured():
+        return
+    with session_scope() as db:
+        rows = db.scalars(
+            select(models.UserRun).where(
+                models.UserRun.user_id == user.id,
+                models.UserRun.status == "running",
+            ).with_for_update()
+        ).all()
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            row.status = "stopped"
+            row.stopped_at = now
 
 
 def _build_engine_readiness_checks(
@@ -381,6 +446,7 @@ def stop_engine() -> dict[str, Any]:
     user = _execution_user()
     status = runtime_reliability.stop_engine(user)
     _deactivate_selected_builtin(user)
+    _stop_recorded_runs(user)
     _sync_runtime_sessions(user, status)
     return {
         "success": True,
@@ -395,6 +461,7 @@ def prepare_reconfigure() -> dict[str, Any]:
     user = _execution_user()
     status = runtime_reliability.stop_engine(user, reason="reconfigure")
     _deactivate_selected_builtin(user)
+    _stop_recorded_runs(user)
     _sync_runtime_sessions(user, status)
     position_open = bool(status["position"]["has_open_position"])
     if not position_open:
@@ -438,7 +505,6 @@ def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
     user = _execution_user()
     try:
         selected = strategy_instance_service.require_selected_engine_strategy(user.id)
-        saved_setup = strategy_catalog_service.apply_selected_setup(user.id, selected)
     except strategy_instance_service.InstanceError as exc:
         raise HTTPException(
             status_code=exc.status_code,
@@ -452,6 +518,35 @@ def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
                 "reason": "STRATEGY_CONFIRMATION_MISMATCH",
             },
         )
+    try:
+        configuration_id = uuid.UUID(body.configuration_revision_id)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid configuration revision ID.") from exc
+    selected_configuration = setup_configuration.get_configuration(user.id, configuration_id)
+    if selected_configuration is None:
+        raise HTTPException(status_code=404, detail="The selected configuration revision was not found.")
+    if (
+        selected_configuration["strategy_instance_id"] != body.strategy_instance_id
+        or int(selected_configuration["revision"]) != body.configuration_revision
+        or selected_configuration["mode"] != body.mode
+        or selected_configuration["status"] != "active"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "The selected configuration revision changed. Review the current revision before starting.",
+                "reason": "CONFIGURATION_CONFIRMATION_MISMATCH",
+            },
+        )
+    if str(selected.get("strategy_version_id")) != selected_configuration["strategy_version_id"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "The saved configuration belongs to a different strategy version.",
+                "reason": "STRATEGY_VERSION_MISMATCH",
+            },
+        )
+    saved_setup = selected_configuration["configuration"]
     status = runtime_reliability.runtime_status(user)
     if status["engine"]["state"] != "STOPPED":
         raise HTTPException(status_code=409, detail="The engine is already running or changing state.")
@@ -463,7 +558,7 @@ def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
     try:
         runtime_reliability.configure_mode(
             user,
-            mode="paper",
+            mode=body.mode,
             lots=int(saved_setup["lots"]),
             stop_loss_percent=float(saved_setup["stop_loss_percent"]),
             target_profit_percent=float(saved_setup["take_profit_percent"]),
@@ -471,7 +566,7 @@ def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
         )
         if selected.get("source_type") in {"NOVA_HOSTED_PERSONAL", "PERSONAL_TRADINGVIEW"}:
             strategy_fanout.set_subscription_active(user.id, "supertrend", False)
-        start_engine(StartEngineRequest(engine_mode="paper"))
+        start_engine(StartEngineRequest(engine_mode=body.mode, confirm_live_orders=body.mode == "live"))
         if selected.get("source_type") == "NOVA_SHARED":
             if selected.get("strategy_code") != "supertrend":
                 raise ValueError("The selected built-in strategy has no supported execution adapter.")
@@ -479,8 +574,9 @@ def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
                 user.id,
                 "supertrend",
                 lots=int(saved_setup["lots"]),
-                execution_mode="paper_live_data",
+                execution_mode="paper_live_data" if body.mode == "paper" else "real_orders",
             )
+        _record_configuration_run(user, selected, selected_configuration)
     except Exception:
         failed = runtime_reliability.stop_engine(user, reason="selected_strategy_start_failed")
         _sync_runtime_sessions(user, failed)
@@ -495,6 +591,7 @@ def runtime_stop() -> dict[str, Any]:
     user = _execution_user()
     status = runtime_reliability.stop_engine(user)
     _deactivate_selected_builtin(user)
+    _stop_recorded_runs(user)
     _sync_runtime_sessions(user, status)
     return _hydrated_runtime_status()
 
@@ -503,6 +600,7 @@ def runtime_stop() -> dict[str, Any]:
 def runtime_square_off() -> dict[str, Any]:
     user = _execution_user()
     result = runtime_reliability.square_off(user)
+    _stop_recorded_runs(user)
     _sync_runtime_sessions(user, result)
     return result
 

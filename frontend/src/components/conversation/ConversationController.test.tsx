@@ -4,7 +4,7 @@ import type { RuntimeStatus } from '../../api'
 import { ConversationController } from './ConversationController'
 
 // The setup conversation also asks the engine safety questions (daily loss
-// cap, trade cap, cooldown after a loss), so a 'complete' saved setup must
+// cap, trade cap and entry cutoff), so a 'complete' saved setup must
 // include them or Resume correctly lands on the first unanswered one.
 const FIELDS = [
   { key: 'direction', type: 'choice' as const, label: 'Direction', options: ['CE', 'PE', 'BOTH'], required: true, default: 'BOTH' },
@@ -29,7 +29,7 @@ function runtimeWith(saved: Record<string, unknown>): RuntimeStatus {
 const noop = async () => {}
 function props(over: Partial<Parameters<typeof ConversationController>[0]> = {}) {
   return {
-    runtime: runtimeWith({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 }), loading: false, error: '',
+    runtime: runtimeWith({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' }), loading: false, error: '',
     onManage: () => {}, onSelect: vi.fn(noop), onSave: vi.fn(noop), onStart: vi.fn(noop),
     onUserReply: () => {}, ...over,
   }
@@ -57,7 +57,7 @@ describe('ConversationController — mode selection in the machine', () => {
     const onModeSelect = vi.fn()
     render(<ConversationController {...props({ runtime: runtimeNoMode(), onModeSelect })} />)
     fireEvent.click(screen.getByRole('button', { name: /start in paper/i }))
-    expect(onModeSelect).toHaveBeenCalledWith('paper', 100000)
+    expect(onModeSelect).toHaveBeenCalledWith('paper', 1000000)
     expect(screen.queryByText('How should NOVA trade for you?')).toBeNull() // advanced past mode
     expect(screen.getByText('Which strategy should NOVA run?')).toBeInTheDocument()
   })
@@ -91,7 +91,7 @@ describe('ConversationController — error recovery', () => {
   })
 
   it('halts an unavailable strategy with its reason and no Save', () => {
-    const r = runtimeWith({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 }) as unknown as { strategy_catalog: { strategies: Array<{ availability: string; paper_eligible: boolean; disabled_reason: string }> } }
+    const r = runtimeWith({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' }) as unknown as { strategy_catalog: { strategies: Array<{ availability: string; paper_eligible: boolean; disabled_reason: string }> } }
     r.strategy_catalog.strategies[0].availability = 'DISABLED'
     r.strategy_catalog.strategies[0].paper_eligible = false
     r.strategy_catalog.strategies[0].disabled_reason = 'Strategy paused by admin.'
@@ -178,13 +178,15 @@ describe('ConversationController — sequential questions & save/start', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
     act(() => vi.advanceTimersByTime(700))
     // The engine safety questions follow the strategy schema.
-    for (const [label, value] of [['max_daily_loss', '25000'], ['max_trades_per_day', '6'], ['cooldown_after_loss_minutes', '30']] as const) {
+    for (const [label, value] of [['max_daily_loss', '25000'], ['max_trades_per_day', '6']] as const) {
       const numeric = document.getElementById(`q-${label}`) as HTMLInputElement
       expect(numeric).not.toBeNull()
       fireEvent.change(numeric, { target: { value } })
       fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
       act(() => vi.advanceTimersByTime(700))
     }
+    fireEvent.click(screen.getByRole('button', { name: '15:15' }))
+    act(() => vi.advanceTimersByTime(700))
     expect(screen.getByRole('button', { name: /save setup/i })).toBeInTheDocument()
   })
 
@@ -200,7 +202,7 @@ describe('ConversationController — sequential questions & save/start', () => {
     expect(onSave).toHaveBeenCalledWith(
       'supertrend',
       { direction: 'CE', lots: 2 },
-      { max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 },
+      { max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' },
     )
     expect(screen.getByRole('button', { name: /start engine/i })).toBeInTheDocument()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /start engine/i })) })

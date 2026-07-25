@@ -13,7 +13,9 @@ from app.services import (
     credentials_overview,
     reports_service,
     risk_overview,
+    runtime_reliability,
     signals_feed,
+    terminal_feeds,
     user_preferences,
     webhooks_overview,
 )
@@ -137,6 +139,54 @@ class AutomationsPayload(BaseModel):
     max_trades_per_day: int | None = None
     max_daily_loss: float | None = None
     entry_cutoff_ist: str | None = None
+
+
+class AlertAcknowledgementPayload(BaseModel):
+    event_ids: list[str]
+
+
+@router.get("/trading/activity")
+def trading_activity(
+    limit: int = Query(100, ge=1, le=200),
+    user: CurrentUser = Depends(get_current_user),
+):
+    return terminal_feeds.activity(user.id, limit=limit)
+
+
+@router.get("/trading/engine-log")
+def trading_engine_log(
+    limit: int = Query(100, ge=1, le=200),
+    user: CurrentUser = Depends(get_current_user),
+):
+    return terminal_feeds.engine_log(limit=limit)
+
+
+@router.get("/trading/executions")
+def trading_executions(
+    limit: int = Query(100, ge=1, le=200),
+    user: CurrentUser = Depends(get_current_user),
+):
+    return terminal_feeds.executions(limit=limit)
+
+
+@router.get("/trading/alerts")
+def trading_alerts(
+    limit: int = Query(100, ge=1, le=200),
+    user: CurrentUser = Depends(get_current_user),
+):
+    return terminal_feeds.alerts(
+        user.id,
+        runtime=runtime_reliability.runtime_status(user),
+        limit=limit,
+    )
+
+
+@router.post("/trading/alerts/acknowledge-visible")
+def acknowledge_visible_alerts(
+    payload: AlertAcknowledgementPayload,
+    user: CurrentUser = Depends(get_current_user),
+):
+    return {"ok": True, "acknowledged": terminal_feeds.acknowledge(user.id, payload.event_ids)}
 
 
 @router.get("/automations")

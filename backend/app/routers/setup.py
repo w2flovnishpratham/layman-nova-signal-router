@@ -162,7 +162,7 @@ class WebhookSecretRequest(BaseModel):
 
 class EngineModeRequest(BaseModel):
     engine_mode: Literal["paper", "live"]
-    paper_starting_balance: float = Field(default=100000.0, ge=10000.0, le=1000000.0)
+    paper_starting_balance: float = Field(default=1000000.0, ge=1000000.0, le=1000000.0)
 
 
 class RiskSetupRequest(BaseModel):

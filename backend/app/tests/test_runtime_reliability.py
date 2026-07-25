@@ -388,7 +388,7 @@ def test_status_includes_realized_unrealized_and_session_pnl(runtime):
         "realized": 250,
         "unrealized": -50,
         "session": 200.0,
-        "available_balance": 100000.0,
+        "available_balance": 1000000.0,
         "utilized_amount": 0.0,
     }
 

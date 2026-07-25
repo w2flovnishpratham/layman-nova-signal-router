@@ -207,6 +207,11 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
         <span className={`sidebar-mode-chip ${engineMode ?? 'unset'}`}>{engineMode ?? 'unset'}</span>
       </div>
 
+      <div className="manual-order-type" role="group" aria-label="Order type">
+        <button type="button" aria-pressed="true">Market</button>
+        <button type="button" disabled title="Limit orders are not available in this release">Limit</button>
+      </div>
+
       {/* Main Order Action Buttons (Side-by-side CE and PE) */}
       <div className="flex gap-2 mt-4">
         <ActionButton

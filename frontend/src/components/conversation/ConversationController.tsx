@@ -137,7 +137,7 @@ function StrategyGroup({ title, strategies, onPick }: { title: string; strategie
 
 export function ConversationController({
   runtime, loading, error, onSelect, onSave, onStart, onStateChange,
-  onModeSelect, onRetry, liveAvailable = false, paperStartingBalance = 100000,
+  onModeSelect, onRetry, liveAvailable = false,
 }: Props) {
   const reducedMotion = useAppReducedMotion()
   const conv = useConversation({ reducedMotion })
@@ -162,7 +162,6 @@ export function ConversationController({
   const [pending, setPending] = useState<'idle' | 'saving' | 'starting'>('idle')
   const [saveError, setSaveError] = useState('')
   const [saved, setSaved] = useState(false)
-  const [paperBalance, setPaperBalance] = useState(paperStartingBalance)
   // Synchronous guard so two rapid clicks (before the disabled state re-renders)
   // cannot fire a second save/start network request.
   const inFlightRef = useRef(false)
@@ -203,7 +202,7 @@ export function ConversationController({
   function pickMode(m: EngineMode) {
     if (m === 'live' && !liveAvailable) return // never advance when Live is blocked
     conv.selectMode(m)
-    onModeSelect?.(m, paperBalance)
+    onModeSelect?.(m, 1_000_000)
   }
 
   // Hooks must run before any early return. The transcript is a pure projection
@@ -314,13 +313,7 @@ export function ConversationController({
           <div className="conv-mode-grid">
             <section className="conv-mode-card">
               <div className="conv-mode-head"><strong>Paper</strong><span className="conv-mode-badge">Recommended</span></div>
-              <p>Real market data, simulated fills, virtual balance. No real orders.</p>
-              <label className="conv-mode-balance">Virtual starting balance
-                <input
-                  type="number" min={10000} max={1000000} step={10000} value={paperBalance}
-                  onChange={(e) => setPaperBalance(Math.min(1000000, Math.max(10000, Number(e.target.value) || 10000)))}
-                />
-              </label>
+              <p>Real market data, simulated fills, and a fixed ₹10,00,000 virtual balance. No Dhan account or real orders.</p>
               <button type="button" className="conv-pill conv-pill--primary" onClick={() => pickMode('paper')}>Start in Paper</button>
             </section>
             <section className="conv-mode-card">

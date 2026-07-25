@@ -76,6 +76,7 @@ function runtime(overrides: Partial<RuntimeStatus> = {}): RuntimeStatus {
 
 function props(status = runtime()) {
   return {
+    route: 'trading' as const,
     status: 'live' as const,
     clientId: undefined,
     runtime: status,
@@ -83,6 +84,8 @@ function props(status = runtime()) {
     engineMode: status.engine.mode,
     setupState: 'IDLE' as const,
     health: null,
+    market: null,
+    setupActive: false,
     user: {
       id: 'owner-1',
       email: 'owner@example.com',
@@ -98,8 +101,8 @@ function props(status = runtime()) {
         max_strategy_count: 0,
       },
     },
-    view: 'trading' as const,
     onNavigate: vi.fn(),
+    onOpenSetup: vi.fn(),
     onKill: vi.fn(),
     onStop: vi.fn(),
     onReconfigure: vi.fn(),

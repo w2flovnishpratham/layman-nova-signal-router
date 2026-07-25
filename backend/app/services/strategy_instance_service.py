@@ -946,6 +946,7 @@ def _engine_entry(
         "instance_id": str(row.id),
         "display_name": row.label,
         "strategy_code": decorated.get("strategy_code"),
+        "strategy_version_id": str(row.strategy_version_id),
         "strategy_version": version.version if version else None,
         "source_type": row.source_journey,
         "setup_type": decorated.get("setup_type"),

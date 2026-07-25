@@ -17,11 +17,23 @@ from app.services import entitlements, order_idempotency
 from app.services.execution_context import current_execution_user
 from app.services.execution_router import route_signal
 from app.services.normalized_errors import classify_failure
-from app.services.paper_portfolio import paper_wallet_snapshot, resize_paper_open_trade_quantity
+from app.services.paper_broker import _simulated_charges
+from app.services.paper_portfolio import (
+    apply_paper_add_fill,
+    apply_paper_partial_exit,
+    paper_wallet_snapshot,
+)
 from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.security_id_resolver import resolve_security_id, suggest_option_contract
-from app.services.state_store import get_app_state, get_engine_mode, get_open_position, set_open_position, utc_now
+from app.services.state_store import (
+    ensure_open_position_identity,
+    get_app_state,
+    get_engine_mode,
+    get_open_position,
+    patch_open_position_cas,
+    utc_now,
+)
 
 
 router = APIRouter()
@@ -49,10 +61,22 @@ class ManualReverseRequest(BaseModel):
 class ExitLevelsRequest(BaseModel):
     stopLossPrice: float = Field(gt=0)
     targetPrice: float = Field(gt=0)
+    expectedPositionVersion: int | None = Field(default=None, ge=1)
 
 
 class QuantityRequest(BaseModel):
     qty: int = Field(ge=1)
+
+
+class AddLotsRequest(BaseModel):
+    lots: int = Field(ge=1, le=20)
+    expectedPositionVersion: int = Field(ge=1)
+
+
+class PartialExitRequest(BaseModel):
+    lots: int | None = Field(default=None, ge=1, le=20)
+    percentage: int | None = Field(default=None)
+    expectedPositionVersion: int = Field(ge=1)
 
 
 class QuoteRequest(BaseModel):
@@ -238,77 +262,205 @@ def manual_reverse(request: Request, body: ManualReverseRequest) -> Any:
 
 @router.patch("/orders/active-position/quantity")
 def update_active_position_quantity(body: QuantityRequest) -> dict[str, Any]:
-    position = get_open_position()
-    mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
-    if not position.get("has_open_position"):
-        error = classify_failure(
-            "Quantity update blocked: no open position exists.",
-            source="RISK_ENGINE",
-            mode=mode,
-            order_sent_to_broker=False,
-            money_at_risk=False,
-        )
-        return {"ok": False, "message": error["userMessage"], "normalizedError": error}
-
-    if mode != "paper":
-        error = classify_failure(
-            "Quantity update blocked: live position quantity changes require broker add/reduce order flow.",
-            source="RISK_ENGINE",
-            mode=mode,
-            order_sent_to_broker=False,
-            money_at_risk=True,
-        )
-        return {"ok": False, "message": error["userMessage"], "normalizedError": error}
-
-    lot_size = max(int(current_nifty_lot_size() or 1), 1)
-    qty = int(body.qty)
-    if qty % lot_size != 0:
-        return _quantity_error(f"Qty must be a whole lot of {lot_size}.", mode=mode)
-
-    updated = dict(position)
-    current_qty = int(updated.get("qty") or 0)
-    updated["qty"] = qty
-    updated["requested_qty"] = qty
-    updated["filled_qty"] = qty
-    updated["quantity_adjustment"] = {
-        "source": "manual",
-        "previousQty": current_qty,
-        "qty": qty,
-        "lots": qty // lot_size,
-        "acceptedAt": utc_now(),
+    return {
+        "ok": False,
+        "message": (
+            "Direct quantity replacement is retired. Use Add Lots or Partial Exit "
+            "with an idempotency key and the expected position version."
+        ),
     }
 
+
+@router.post("/orders/active-position/add-lots")
+def add_active_position_lots(request: Request, body: AddLotsRequest) -> Any:
+    return _run_manual_operation(
+        request=request,
+        operation="ADD_LOTS",
+        payload=body.model_dump(),
+        execute=lambda: _apply_paper_position_adjustment(
+            operation="add",
+            lots=body.lots,
+            percentage=None,
+            expected_version=body.expectedPositionVersion,
+            operation_id=str(request.headers.get("Idempotency-Key") or f"PAPER-ADD-{int(time.time() * 1000)}"),
+        ),
+    )
+
+
+@router.post("/orders/active-position/partial-exit")
+def partial_exit_active_position(request: Request, body: PartialExitRequest) -> Any:
+    if body.lots is None and body.percentage not in {25, 50, 75}:
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "message": "Choose 25%, 50%, 75%, or a whole-lot quantity."},
+        )
+    return _run_manual_operation(
+        request=request,
+        operation="PARTIAL_EXIT",
+        payload=body.model_dump(),
+        execute=lambda: _apply_paper_position_adjustment(
+            operation="partial_exit",
+            lots=body.lots,
+            percentage=body.percentage,
+            expected_version=body.expectedPositionVersion,
+            operation_id=str(request.headers.get("Idempotency-Key") or f"PAPER-PARTIAL-{int(time.time() * 1000)}"),
+        ),
+    )
+
+
+def _apply_paper_position_adjustment(
+    *,
+    operation: str,
+    lots: int | None,
+    percentage: int | None,
+    expected_version: int,
+    operation_id: str,
+) -> dict[str, Any]:
+    mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
+    if mode != "paper":
+        return {
+            "ok": False,
+            "operationState": "REJECTED",
+            "message": (
+                "Live add/partial-exit is unavailable until the broker-confirmed "
+                "order flow can preserve one-position and CAS guarantees."
+            ),
+        }
+    position = ensure_open_position_identity()
+    if not position.get("has_open_position"):
+        return {"ok": False, "operationState": "REJECTED", "message": "No active position exists."}
+    current_version = int(position.get("position_version") or 0)
+    if current_version != int(expected_version):
+        return {
+            "ok": False,
+            "operationState": "POSITION_CHANGED",
+            "message": "The position changed. Refresh before submitting this operation.",
+            "positionVersion": current_version,
+        }
+    if isinstance(position.get("exit_operation"), dict):
+        return {"ok": False, "operationState": "EXIT_IN_PROGRESS", "message": "An exit is already in progress."}
+
+    lot_size = max(int(current_nifty_lot_size() or 1), 1)
+    current_qty = int(position.get("qty") or 0)
+    current_lots = current_qty // lot_size
     live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
-    updated_live_pnl = dict(live_pnl)
-    updated_live_pnl["qty"] = qty
-    entry_price = _number(position.get("entry_price") or live_pnl.get("entry_price"))
-    ltp = _number(live_pnl.get("ltp") or entry_price)
-    if entry_price is not None and ltp is not None:
-        unrealized = round((ltp - entry_price) * qty, 2)
-        exposure = entry_price * qty
-        updated_live_pnl["unrealized_pnl"] = unrealized
-        updated_live_pnl["pnl_percent"] = round((unrealized / exposure) * 100, 2) if exposure else 0.0
-    updated_live_pnl["message"] = "Manual paper quantity is applied."
-    updated_live_pnl["last_checked_at"] = utc_now()
-    updated["live_pnl"] = updated_live_pnl
+    fill_price = _number(live_pnl.get("ltp") or position.get("entry_price"))
+    if fill_price is None or fill_price <= 0:
+        return {
+            "ok": False,
+            "operationState": "REJECTED_NO_FRESH_QUOTE",
+            "message": "A retained valid LTP is required before changing position size.",
+        }
+
+    if operation == "add":
+        change_lots = int(lots or 0)
+        change_qty = change_lots * lot_size
+        charges = _simulated_charges(change_qty, fill_price, "BUY")
+        portfolio = paper_wallet_snapshot()
+        required = change_qty * fill_price + charges
+        if required > float(portfolio.get("available_balance") or 0):
+            return {"ok": False, "operationState": "REJECTED", "message": "Insufficient virtual balance."}
+        entry_price = float(position.get("entry_price") or fill_price)
+        new_qty = current_qty + change_qty
+        new_entry_price = round(((entry_price * current_qty) + (fill_price * change_qty)) / new_qty, 4)
+        event = {
+            "operation_id": operation_id,
+            "type": "ADD_LOTS",
+            "qty": change_qty,
+            "fill_price": fill_price,
+            "accepted_at": utc_now(),
+        }
+    else:
+        if lots is not None:
+            change_lots = int(lots)
+        else:
+            change_lots = max(1, int(current_lots * int(percentage or 0) / 100))
+        if change_lots >= current_lots:
+            return {
+                "ok": False,
+                "operationState": "REJECTED",
+                "message": "Partial exit must leave at least one whole lot open. Use Exit Position to close all.",
+            }
+        change_qty = change_lots * lot_size
+        charges = _simulated_charges(change_qty, fill_price, "SELL")
+        new_qty = current_qty - change_qty
+        new_entry_price = float(position.get("entry_price") or fill_price)
+        event = {
+            "operation_id": operation_id,
+            "type": "PARTIAL_EXIT",
+            "qty": change_qty,
+            "fill_price": fill_price,
+            "accepted_at": utc_now(),
+        }
+
+    new_live_pnl = dict(live_pnl)
+    new_live_pnl["qty"] = new_qty
+    new_live_pnl["entry_price"] = new_entry_price
+    new_live_pnl["unrealized_pnl"] = round((fill_price - new_entry_price) * new_qty, 2)
+    exposure = new_entry_price * new_qty
+    new_live_pnl["pnl_percent"] = (
+        round(float(new_live_pnl["unrealized_pnl"]) / exposure * 100, 2) if exposure else 0.0
+    )
+    new_live_pnl["last_checked_at"] = utc_now()
+    applied, updated = patch_open_position_cas(
+        position_id=str(position["position_id"]),
+        position_version=current_version,
+        patch={
+            "qty": new_qty,
+            "requested_qty": new_qty,
+            "filled_qty": new_qty,
+            "entry_price": new_entry_price,
+            "live_pnl": new_live_pnl,
+            "last_position_operation": event,
+        },
+        reject_when_exit_pending=True,
+    )
+    if not applied:
+        return {
+            "ok": False,
+            "operationState": "POSITION_CHANGED",
+            "message": "The position changed before the operation could be applied.",
+            "positionVersion": int(updated.get("position_version") or 0),
+        }
 
     try:
-        resize_paper_open_trade_quantity(qty=qty)
-    except ValueError as exc:
-        return _quantity_error(str(exc), mode=mode)
-
-    set_open_position(updated)
+        if operation == "add":
+            apply_paper_add_fill(
+                qty=change_qty,
+                fill_price=fill_price,
+                charges=charges,
+                order_id=operation_id,
+            )
+        else:
+            apply_paper_partial_exit(
+                qty=change_qty,
+                exit_price=fill_price,
+                charges=charges,
+                symbol=str(position.get("trading_symbol") or position.get("symbol") or "NIFTY"),
+                order_id=operation_id,
+            )
+    except Exception:
+        return {
+            "ok": False,
+            "operationState": "RECONCILIATION_REQUIRED",
+            "message": "Position state changed, but the Paper ledger requires reconciliation.",
+            "positionVersion": int(updated.get("position_version") or 0),
+        }
     return {
         "ok": True,
-        "message": "Qty updated.",
-        "qty": qty,
-        "lots": qty // lot_size,
+        "operationState": "POSITION_UPDATED",
+        "message": "Lots added." if operation == "add" else "Partial exit completed.",
+        "qty": new_qty,
+        "lots": new_qty // lot_size,
+        "positionVersion": int(updated.get("position_version") or 0),
+        "fillPrice": fill_price,
+        "portfolio": paper_wallet_snapshot(),
     }
 
 
 @router.patch("/orders/active-position/exit-levels")
 def update_active_position_exit_levels(body: ExitLevelsRequest) -> dict[str, Any]:
-    position = get_open_position()
+    position = ensure_open_position_identity()
     if not position.get("has_open_position"):
         error = classify_failure(
             "SL/TP update blocked: no open position exists.",
@@ -320,6 +472,14 @@ def update_active_position_exit_levels(body: ExitLevelsRequest) -> dict[str, Any
         return {"ok": False, "message": error["userMessage"], "normalizedError": error}
 
     mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
+    current_version = int(position.get("position_version") or 0)
+    if body.expectedPositionVersion is not None and current_version != body.expectedPositionVersion:
+        return {
+            "ok": False,
+            "message": "The position changed. Refresh before editing SL/TP.",
+            "operationState": "POSITION_CHANGED",
+            "positionVersion": current_version,
+        }
     stop_loss = round(float(body.stopLossPrice), 2)
     target = round(float(body.targetPrice), 2)
     live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
@@ -354,8 +514,6 @@ def update_active_position_exit_levels(body: ExitLevelsRequest) -> dict[str, Any
         "targetPrice": target,
         "acceptedAt": utc_now(),
     }
-    updated = dict(position)
-    updated["active_exit_levels"] = levels
     updated_live_pnl = dict(live_pnl)
     updated_live_pnl.update(
         {
@@ -366,12 +524,37 @@ def update_active_position_exit_levels(body: ExitLevelsRequest) -> dict[str, Any
             "last_checked_at": utc_now(),
         }
     )
-    updated["live_pnl"] = updated_live_pnl
-    set_open_position(updated)
+    applied, updated = patch_open_position_cas(
+        position_id=str(position["position_id"]),
+        position_version=current_version,
+        patch={
+            "active_exit_levels": levels,
+            "live_pnl": updated_live_pnl,
+            "last_position_operation": {
+                "type": "EDIT_PROTECTION",
+                "accepted_at": utc_now(),
+                "stop_loss_price": stop_loss,
+                "target_price": target,
+            },
+        },
+        reject_when_exit_pending=True,
+    )
+    if not applied:
+        return {
+            "ok": False,
+            "message": (
+                "The position changed while SL/TP was being updated."
+                if mode == "paper"
+                else "Broker protection may have changed; reconciliation is required."
+            ),
+            "operationState": "POSITION_CHANGED" if mode == "paper" else "RECONCILIATION_REQUIRED",
+            "positionVersion": int(updated.get("position_version") or 0),
+        }
     return {
         "ok": True,
         "message": "SL/TP levels updated.",
         "activeExitLevels": levels,
+        "positionVersion": int(updated.get("position_version") or 0),
     }
 
 

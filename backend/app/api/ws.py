@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSock
 from app.auth.dependencies import get_current_websocket_user
 from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.events import event
-from app.domain.state_machine import SetupState, StateTransitionError, validate_command
+from app.domain.state_machine import StateTransitionError, validate_command
 from app.routers.control import panic_exit
 from app.routers.engine import StartEngineRequest, start_engine, stop_engine
 from app.routers.setup import EngineModeRequest, configure_engine_mode, validate_dhan_credentials
@@ -213,7 +213,7 @@ async def _apply_production_command(
             configure_engine_mode,
             EngineModeRequest(
                 engine_mode=cast(Literal["paper", "live"], raw_mode),
-                paper_starting_balance=float(data.get("paperStartingBalance") or 100000),
+                paper_starting_balance=float(data.get("paperStartingBalance") or 1000000),
             ),
         )
         return

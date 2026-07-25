@@ -10,7 +10,7 @@ import { ConversationController } from './ConversationController'
 // exact subtree on logout, so an instance boundary is the faithful unit.)
 
 // The setup conversation also asks the engine safety questions (daily loss
-// cap, trade cap, cooldown after a loss), so a 'complete' saved setup must
+// cap, trade cap and entry cutoff), so a 'complete' saved setup must
 // include them or Resume correctly lands on the first unanswered one.
 const FIELDS = [
   { key: 'direction', type: 'choice' as const, label: 'Direction', options: ['CE', 'PE', 'BOTH'], required: true, default: 'BOTH' },
@@ -45,7 +45,7 @@ afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers(); cleanup() })
 
 describe('ConversationController — session isolation & logout', () => {
   it('a new session (mount) shows only the current owner\'s saved values, never a prior one', () => {
-    const a = render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 }) })} />)
+    const a = render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' }) })} />)
     expect(screen.getByText('CE')).toBeInTheDocument() // owner A summary
     a.unmount() // logout: authenticated subtree removed
 
@@ -59,7 +59,7 @@ describe('ConversationController — session isolation & logout', () => {
   it('a save that resolves after logout cannot leak into the next session', async () => {
     let resolveA: (() => void) | undefined
     const onSaveA = vi.fn(() => new Promise<void>((res) => { resolveA = res }))
-    const a = render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 }), onSave: onSaveA })} />)
+    const a = render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' }), onSave: onSaveA })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     fireEvent.click(screen.getByRole('button', { name: /save setup/i })) // A's save in flight
@@ -74,7 +74,7 @@ describe('ConversationController — session isolation & logout', () => {
   it('an auth-expiry style save rejection keeps setup unsaved and never exposes Start engine', async () => {
     const onSave = vi.fn(async () => { throw new Error('401 Unauthorized: session expired') })
     const onStart = vi.fn(noop)
-    render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 }), onSave, onStart })} />)
+    render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' }), onSave, onStart })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
@@ -86,7 +86,7 @@ describe('ConversationController — session isolation & logout', () => {
   it('navigating away during a pending save (unmount) does not throw when it resolves', async () => {
     let resolve: (() => void) | undefined
     const onSave = vi.fn(() => new Promise<void>((res) => { resolve = res }))
-    const a = render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, cooldown_after_loss_minutes: 30 }), onSave })} />)
+    const a = render(<ConversationController {...baseProps({ runtime: runtimeFor({ direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' }), onSave })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     fireEvent.click(screen.getByRole('button', { name: /save setup/i }))

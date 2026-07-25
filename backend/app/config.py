@@ -4,8 +4,7 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.domain.trading_constants import DEFAULT_EXCHANGE_SEGMENT
-
+from app.domain.trading_constants import DEFAULT_EXCHANGE_SEGMENT  # noqa: F401 - compatibility re-export
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -72,7 +71,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "allow_exit": True,
     "emergency_stop": False,
     "global_kill_switch": False,
-    "paper_starting_balance": 100000.0,
+    "paper_starting_balance": 1000000.0,
     "paper_slippage_percent": 0.10,
 }
 

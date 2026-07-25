@@ -199,14 +199,20 @@ def test_builtin_explicit_start_uses_supertrend_adapter(mu_db, runtime, monkeypa
     user = make_user("catalog-start@example.com")
     client = _client(user)
     client.put("/api/strategies/catalog/selection", json={"strategy_key": "nova-supertrend"})
-    client.put(
-        "/api/strategies/catalog/setup",
+    saved_configuration = client.put(
+        "/api/setup/configuration",
         json={
             "strategy_key": "nova-supertrend",
             "mode": "paper",
-            "values": {"direction": "PE", "lots": 3, "stop_loss_percent": 9, "take_profit_percent": 18},
+            "setup": {"direction": "PE", "lots": 3, "stop_loss_percent": 9, "take_profit_percent": 18},
+            "risk": {
+                "max_daily_loss": 25_000,
+                "max_trades_per_day": 6,
+                "entry_cutoff_ist": "15:15",
+            },
+            "expected_revision": 0,
         },
-    )
+    ).json()
     current = current_user_from_model(user)
     calls: list[tuple[str, int, str]] = []
     monkeypatch.setattr(engine, "_execution_user", lambda: current)
@@ -226,7 +232,12 @@ def test_builtin_explicit_start_uses_supertrend_adapter(mu_db, runtime, monkeypa
 
     selected_id = strategy_instance_service.trading_selection_state(current.id)["selected_strategy"]["instance_id"]
     assert engine.runtime_start_selected(
-        engine.StartSelectedRequest(strategy_instance_id=selected_id)
+        engine.StartSelectedRequest(
+            strategy_instance_id=selected_id,
+            configuration_revision_id=saved_configuration["configuration_revision_id"],
+            configuration_revision=saved_configuration["configuration_revision"],
+            mode="paper",
+        )
     ) == {"ok": True}
     assert calls == [("supertrend", 3, "paper_live_data")]
 

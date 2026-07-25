@@ -1,6 +1,6 @@
 import {
   Activity, BarChart3, Bot, FileText, Gauge, KeyRound, LayoutDashboard,
-  LineChart, PanelLeftClose, PanelLeftOpen, Settings, ShieldCheck, Sliders, Webhook,
+  LineChart, PanelLeftClose, PanelLeftOpen, Settings, ShieldCheck, Webhook,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { APP_ROUTES, ROUTE_META, isImplemented, type AppRoute } from '../../appRoutes'
@@ -9,7 +9,6 @@ const ICONS: Partial<Record<AppRoute, ComponentType<{ size?: number }>>> = {
   dashboard: LayoutDashboard,
   trading: LineChart,
   strategies: BarChart3,
-  setup: Sliders,
   signals: Activity,
   automations: Bot,
   webhooks: Webhook,
@@ -21,7 +20,7 @@ const ICONS: Partial<Record<AppRoute, ComponentType<{ size?: number }>>> = {
 
 // "strategies/new" is reached from within Strategies, not the rail.
 const RAIL_ROUTES = APP_ROUTES.filter((r) => r !== 'strategies/new')
-const MANAGE: AppRoute[] = ['dashboard', 'trading', 'setup', 'strategies', 'signals', 'automations']
+const MANAGE: AppRoute[] = ['dashboard', 'trading', 'strategies', 'signals', 'automations']
 const CONFIGURE: AppRoute[] = ['webhooks', 'credentials', 'risk', 'reports', 'settings']
 
 interface Props {

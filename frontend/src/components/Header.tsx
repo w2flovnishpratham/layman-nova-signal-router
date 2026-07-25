@@ -1,13 +1,15 @@
-import { BarChart3, Check, Copy, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, Webhook, Wifi, X, Zap } from 'lucide-react'
+import { Check, Copy, LogOut, MoreVertical, RotateCcw, ShieldAlert, Wifi, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import type { AuthUser, LogoutEngineAction, RuntimeStatus } from '../api'
 import { getEgressStatus } from '../api'
+import type { AppRoute } from '../appRoutes'
 import { modeBadgeText } from '../lib/mode'
 import { MotionPing, MotionProgressFill, softEase, useAppReducedMotion } from './MotionPrimitives'
-import type { EngineMode, NovaView, SetupState, SystemHealth, WsStatus } from '../types'
+import type { EngineMode, MarketSnapshot, SetupState, SystemHealth, WsStatus } from '../types'
 
 interface Props {
+  route: AppRoute
   status: WsStatus
   clientId?: string
   runtime: RuntimeStatus | null
@@ -16,8 +18,10 @@ interface Props {
   setupState: SetupState
   health: SystemHealth | null
   user: AuthUser
-  view: NovaView
-  onNavigate: (view: NovaView) => void
+  market: MarketSnapshot | null
+  setupActive: boolean
+  onNavigate: (route: AppRoute) => void
+  onOpenSetup: () => void
   onKill: () => void
   onStop: () => void
   onReconfigure: () => void
@@ -29,6 +33,7 @@ interface Props {
 }
 
 export function Header({
+  route,
   status,
   clientId,
   runtime,
@@ -37,8 +42,10 @@ export function Header({
   setupState,
   health,
   user,
-  view,
+  market,
+  setupActive,
   onNavigate,
+  onOpenSetup,
   onKill,
   onStop,
   onReconfigure,
@@ -58,6 +65,7 @@ export function Header({
   const [tpPercent, setTpPercent] = useState<number | null>(null)
   const [staticIp, setStaticIp] = useState<string | null>(null)
   const [ipCopied, setIpCopied] = useState(false)
+  const [clock, setClock] = useState(() => new Date())
   const holdTimer = useRef<number | null>(null)
 
   // Fetch the assigned Nova Static IP whenever the account menu opens, so a
@@ -71,6 +79,11 @@ export function Header({
       .catch(() => { if (active) setStaticIp(null) })
     return () => { active = false }
   }, [menuOpen])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(new Date()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const activeConfig = runtime?.config.active
   const displayedLots = lots ?? Number(activeConfig?.configured_lots ?? 1)
@@ -121,45 +134,50 @@ export function Header({
     <>
       <header className="app-header">
         <div className="brand-lockup">
-          <span className="nova-mark" />
-          <strong>NOVA SIGNAL ROUTER</strong>
-          <nav className="nv-nav-tabs hidden lg:flex" aria-label="Primary">
-            <button
-              type="button"
-              className={`nv-nav-tab${view === 'trading' ? ' active' : ''}`}
-              aria-current={view === 'trading'}
-              onClick={() => onNavigate('trading')}
-            >
-              <LineChart size={13} />
-              Trading
-            </button>
-            <button
-              type="button"
-              className={`nv-nav-tab${view === 'dashboard' ? ' active' : ''}`}
-              aria-current={view === 'dashboard'}
-              onClick={() => onNavigate('dashboard')}
-            >
-              <BarChart3 size={13} />
-              Dashboard
-            </button>
-            <button
-              type="button"
-              className={`nv-nav-tab${view === 'strategies' ? ' active' : ''}`}
-              aria-current={view === 'strategies'}
-              onClick={() => onNavigate('strategies')}
-            >
-              <Webhook size={13} />
-              Strategies
-            </button>
-          </nav>
+          <span className="brand-copy"><strong>NOVA</strong><span>Signal Router</span></span>
         </div>
 
-        <div className="header-actions relative flex items-center gap-3">
+        <nav className="top-navigation" aria-label="Primary navigation">
+          {TOP_NAVIGATION.map((item) => (
+            <button
+              type="button"
+              key={item.label}
+              className={item.route === null ? (setupActive ? 'is-active' : '') : (route === item.route && !setupActive ? 'is-active' : '')}
+              aria-current={item.route === null ? (setupActive ? 'page' : undefined) : (route === item.route && !setupActive ? 'page' : undefined)}
+              onClick={() => item.route === null ? onOpenSetup() : onNavigate(item.route)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="header-runtime">
+          <div className={`header-market-status is-${market?.marketStatus ?? 'closed'}`}>
+            <span>{market?.marketStatus === 'open' ? 'Market Open' : 'Market Closed'}</span>
+            <time>{clock.toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' })} IST</time>
+          </div>
+          <div className="header-nifty">
+            <span>NIFTY 50</span>
+            <strong>{market?.niftySpot == null ? '—' : market.niftySpot.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong>
+            <em className={(market?.dayChangePct ?? 0) >= 0 ? 'positive' : 'negative'}>
+              {market?.dayChangePct == null ? '—' : `${market.dayChangePct >= 0 ? '+' : ''}${market.dayChangePct.toFixed(2)}%`}
+            </em>
+          </div>
+        </div>
+
+        <div className="header-actions relative flex items-center gap-2">
           <div className={`mode-badge mode-badge-${engineMode ?? 'unset'}`}>
-            {engineMode === 'paper' ? <FlaskConical size={13} /> : engineMode === 'live' ? <Zap size={13} /> : null}
             <MotionPing className={status === 'live' ? 'mode-status-ok' : 'mode-status-warn'} />
             {modeBadgeText(engineMode)}{engineLive ? ` - ${statusLabel(status, setupState)}` : ''}
           </div>
+
+          <button type="button" className="header-user" onClick={() => setMenuOpen(!menuOpen)} aria-label="Open account menu">
+            {user.picture_url ? <img src={user.picture_url} alt="" referrerPolicy="no-referrer" /> : <span>{initials(user.name || user.email)}</span>}
+            <span className="header-user-copy">
+              <strong>{user.name || user.email}</strong>
+              <small>{formatMoney(runtime?.pnl.available_balance)}</small>
+            </span>
+          </button>
 
           <button
             className="icon-button p-1.5 rounded-lg border border-white/10 hover:bg-white/5 transition-colors"
@@ -501,6 +519,34 @@ export function Header({
       </AnimatePresence>
     </>
   )
+}
+
+const TOP_NAVIGATION: Array<{ route: AppRoute | null; label: string }> = [
+  { route: 'dashboard', label: 'Dashboard' },
+  { route: 'trading', label: 'Trading' },
+  { route: 'strategies', label: 'Strategies' },
+  { route: null, label: 'Setup' },
+  { route: 'signals', label: 'Signals' },
+  { route: 'automations', label: 'Automations' },
+  { route: 'webhooks', label: 'Webhooks' },
+  { route: 'credentials', label: 'Credentials' },
+  { route: 'risk', label: 'Risk' },
+  { route: 'reports', label: 'Reports' },
+  { route: 'settings', label: 'Settings' },
+]
+
+function initials(value: string): string {
+  return value
+    .split(/\s+|@/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('')
+}
+
+function formatMoney(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return 'Balance unavailable'
+  return `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function HealthStrip({ setupState, health }: { setupState: SetupState; health: SystemHealth | null }) {

@@ -36,7 +36,7 @@ def _today() -> str:
 
 
 def _default_balance() -> float:
-    return max(float(get_runtime_settings().get("paper_starting_balance") or 100000.0), 0.0)
+    return max(float(get_runtime_settings().get("paper_starting_balance") or 1000000.0), 0.0)
 
 
 def _default() -> PaperPortfolio:
@@ -138,6 +138,125 @@ def resize_paper_open_trade_quantity(*, qty: int) -> PaperPortfolio:
     )
     portfolio.open_trade = trade
     return _write(portfolio)
+
+
+def apply_paper_add_fill(
+    *,
+    qty: int,
+    fill_price: float,
+    charges: float,
+    order_id: str,
+) -> PaperPortfolio:
+    """Book an intentional add-to-position fill without rewriting history.
+
+    The existing trade remains the single open position. Its average price is
+    recomputed from the original and added fills, while cash, utilization and
+    charges are advanced exactly once under the portfolio lock.
+    """
+    with _LOCK:
+        portfolio = get_paper_portfolio()
+        trade = dict(portfolio.open_trade or {})
+        if not trade:
+            raise ValueError("Paper add rejected: no paper open trade exists.")
+        add_qty = int(qty)
+        price = float(fill_price)
+        fee = max(float(charges), 0.0)
+        if add_qty <= 0 or price <= 0:
+            raise ValueError("Paper add rejected: fill quantity and price must be positive.")
+        debit = round(add_qty * price + fee, 2)
+        if debit > portfolio.available_balance:
+            raise ValueError("Paper add rejected: insufficient virtual balance.")
+
+        old_qty = max(int(trade.get("qty") or 0), 0)
+        old_entry_value = float(trade.get("entry_value") or old_qty * float(trade.get("entry_price") or 0))
+        added_value = round(add_qty * price, 2)
+        new_qty = old_qty + add_qty
+        new_entry_value = round(old_entry_value + added_value, 2)
+        weighted_price = round(new_entry_value / new_qty, 4)
+
+        portfolio.available_balance = round(portfolio.available_balance - debit, 2)
+        portfolio.utilized_amount = round(portfolio.utilized_amount + added_value, 2)
+        portfolio.session_pnl = round(
+            portfolio.available_balance + portfolio.utilized_amount - portfolio.session_start_balance,
+            2,
+        )
+        trade.update(
+            {
+                "qty": new_qty,
+                "entry_price": weighted_price,
+                "entry_value": new_entry_value,
+                "entry_charges": round(float(trade.get("entry_charges") or 0) + fee, 2),
+                "last_add_order_id": order_id,
+                "last_add_fill_price": price,
+                "quantity_adjusted_at": utc_now(),
+            }
+        )
+        portfolio.open_trade = trade
+        return _write(portfolio)
+
+
+def apply_paper_partial_exit(
+    *,
+    qty: int,
+    exit_price: float,
+    charges: float,
+    symbol: str,
+    order_id: str,
+) -> PaperPortfolio:
+    """Book an intentional partial exit while retaining one open position."""
+    with _LOCK:
+        portfolio = get_paper_portfolio()
+        trade = dict(portfolio.open_trade or {})
+        if not trade:
+            raise NoOpenPaperTradeError("Paper partial exit rejected: no open trade exists.")
+        exit_qty = int(qty)
+        open_qty = max(int(trade.get("qty") or 0), 0)
+        if exit_qty <= 0 or exit_qty >= open_qty:
+            raise ValueError("Paper partial exit must leave at least one lot open.")
+
+        entry_price = float(trade.get("entry_price") or 0)
+        entry_charges_total = float(trade.get("entry_charges") or 0)
+        allocated_entry_charges = round(entry_charges_total * exit_qty / open_qty, 2)
+        allocated_entry_value = round(entry_price * exit_qty, 2)
+        exit_value = round(exit_qty * float(exit_price), 2)
+        fee = max(float(charges), 0.0)
+        realized = round(exit_value - allocated_entry_value - allocated_entry_charges - fee, 2)
+        remaining_qty = open_qty - exit_qty
+
+        portfolio.available_balance = round(portfolio.available_balance + exit_value - fee, 2)
+        portfolio.utilized_amount = round(max(0.0, portfolio.utilized_amount - allocated_entry_value), 2)
+        portfolio.realized_pnl = round(portfolio.realized_pnl + realized, 2)
+        portfolio.session_pnl = round(
+            portfolio.available_balance + portfolio.utilized_amount - portfolio.session_start_balance,
+            2,
+        )
+        portfolio.closed_trades = (
+            portfolio.closed_trades
+            + [{
+                **trade,
+                "symbol": symbol or trade.get("symbol"),
+                "qty": exit_qty,
+                "exit_price": exit_price,
+                "exit_charges": fee,
+                "realized_pnl": realized,
+                "exit_order_id": order_id,
+                "partial_exit": True,
+                "closed_at": utc_now(),
+            }]
+        )[-200:]
+        trade.update(
+            {
+                "qty": remaining_qty,
+                "entry_value": round(entry_price * remaining_qty, 2),
+                "entry_charges": round(entry_charges_total - allocated_entry_charges, 2),
+                "last_partial_exit_order_id": order_id,
+                "quantity_adjusted_at": utc_now(),
+            }
+        )
+        portfolio.open_trade = trade
+        written = _write(portfolio)
+    record_losing_exit(realized)
+    return written
 
 
 class NoOpenPaperTradeError(ValueError):

@@ -3,7 +3,12 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { patchActiveExitLevels, patchActiveQuantity } from '../api'
+import {
+  patchActiveExitLevels,
+  postActiveAddLots,
+  postActivePartialExit,
+  postManualExit,
+} from '../api'
 import { formatCurrency, formatPercent } from '../lib/format'
 import { TickingNumber } from './TickingNumber'
 import { MotionSpinner, softEase, useAppReducedMotion } from './MotionPrimitives'
@@ -40,8 +45,10 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
   const [editingQuantity, setEditingQuantity] = useState(false)
   const [draftLots, setDraftLots] = useState('')
   const [savingQuantity, setSavingQuantity] = useState(false)
+  const [positionOperation, setPositionOperation] = useState<'partial' | 'exit' | null>(null)
   const [quantityStatus, setQuantityStatus] = useState('')
   const [savedQty, setSavedQty] = useState<number | null>(null)
+  const [savedPositionVersion, setSavedPositionVersion] = useState<number | null>(null)
   const reduceMotion = useAppReducedMotion()
   const tone = trade.pnl > 0 ? 'up' : trade.pnl < 0 ? 'down' : 'flat'
   const pnlPct = trade.pnlPct ?? 0
@@ -49,9 +56,11 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
   const srStop = srSuggestion?.stopLossPrice
   const srTarget = srSuggestion?.targetPrice
   const srReady = trade.mode === 'paper' && Boolean(srSuggestion?.available) && srStop !== undefined && srTarget !== undefined
+  const sizingOperationsAvailable = trade.mode === 'paper'
   const activeExitLevels = savedExitLevels ?? trade.activeExitLevels ?? null
   const displayQty = savedQty ?? trade.qty
   const displayLots = lotsForQuantity(displayQty, lotSize)
+  const positionVersion = savedPositionVersion ?? trade.positionVersion
   const srAccepted = Boolean(srSuggestion?.accepted || activeExitLevels?.source === 'sr_suggestion')
   const quoteUnavailable = trade.quoteStatus != null && !['ready', 'stale'].includes(trade.quoteStatus)
   const exitLevelText = activeExitLevels?.stopLossPrice && activeExitLevels?.targetPrice
@@ -63,7 +72,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
         : 'Risk status unavailable'
 
   function openQuantityEditor() {
-    setDraftLots(String(Math.max(displayLots, 1)))
+    setDraftLots('1')
     setQuantityStatus('')
     setEditingExitLevels(false)
     setEditingQuantity(true)
@@ -86,20 +95,24 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
       setQuantityStatus('Enter a valid whole lot count.')
       return
     }
-    const qty = lots * lotSize
+    if (!positionVersion) {
+      setQuantityStatus('Position version is unavailable. Refresh before adding lots.')
+      return
+    }
     setSavingQuantity(true)
     setQuantityStatus('')
     try {
-      const response = await patchActiveQuantity({ qty })
+      const response = await postActiveAddLots({ lots, expectedPositionVersion: positionVersion })
       if (!response.ok) {
         setQuantityStatus(response.message || 'Could not update qty.')
         return
       }
-      setSavedQty(response.qty ?? qty)
+      setSavedQty(response.qty ?? displayQty + (lots * lotSize))
+      if (response.positionVersion) setSavedPositionVersion(response.positionVersion)
       setEditingQuantity(false)
-      setQuantityStatus(response.message || 'Qty updated.')
+      setQuantityStatus(response.message || 'Lots added.')
     } catch (error) {
-      setQuantityStatus(error instanceof Error ? error.message : 'Could not update qty.')
+      setQuantityStatus(error instanceof Error ? error.message : 'Could not add lots.')
     } finally {
       setSavingQuantity(false)
     }
@@ -116,18 +129,59 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
     setSavingExitLevels(true)
     setExitLevelStatus('')
     try {
-      const response = await patchActiveExitLevels({ stopLossPrice, targetPrice })
+      const response = await patchActiveExitLevels({
+        stopLossPrice,
+        targetPrice,
+        expectedPositionVersion: positionVersion,
+      })
       if (!response.ok) {
         setExitLevelStatus(response.message || 'Could not update SL/TP.')
         return
       }
       if (response.activeExitLevels) setSavedExitLevels(response.activeExitLevels)
+      if (response.positionVersion) setSavedPositionVersion(response.positionVersion)
       setEditingExitLevels(false)
       setExitLevelStatus(response.message || 'SL/TP updated.')
     } catch (error) {
       setExitLevelStatus(error instanceof Error ? error.message : 'Could not update SL/TP.')
     } finally {
       setSavingExitLevels(false)
+    }
+  }
+
+  async function runPositionOperation(operation: 'partial' | 'exit') {
+    if (positionOperation || savingQuantity || savingExitLevels) return
+    if (!positionVersion) {
+      setQuantityStatus('Position version is unavailable. Refresh before changing exposure.')
+      return
+    }
+    setPositionOperation(operation)
+    setQuantityStatus('')
+    try {
+      if (operation === 'partial') {
+        if (displayLots < 2) {
+          setQuantityStatus('Partial exit must leave at least one whole lot open.')
+          return
+        }
+        const response = await postActivePartialExit({
+          percentage: 50,
+          expectedPositionVersion: positionVersion,
+        })
+        if (!response.ok) {
+          setQuantityStatus(response.message || 'Partial exit could not be completed.')
+          return
+        }
+        if (response.qty) setSavedQty(response.qty)
+        if (response.positionVersion) setSavedPositionVersion(response.positionVersion)
+        setQuantityStatus(response.message || 'Partial exit completed.')
+      } else {
+        const response = await postManualExit()
+        setQuantityStatus(response.message || (response.ok ? 'Exit completed.' : 'Exit could not be completed.'))
+      }
+    } catch (error) {
+      setQuantityStatus(error instanceof Error ? error.message : 'Position operation failed.')
+    } finally {
+      setPositionOperation(null)
     }
   }
 
@@ -183,13 +237,40 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
           <TradeCell
             label="Qty"
             value={`${displayQty} (${displayLots} lot)`}
-            action={<button type="button" className="trade-cell-action" onClick={openQuantityEditor} title="Edit lots"><Pencil size={12} /></button>}
           />
           <TradeCell
             label="SL / TP"
             value={exitLevelText}
             action={<button type="button" className="trade-cell-action" onClick={openExitLevelEditor} title="Edit SL/TP levels"><Pencil size={12} /></button>}
           />
+        </div>
+
+        <div className="position-operation-actions" aria-label="Active position actions">
+          <button
+            type="button"
+            onClick={openQuantityEditor}
+            disabled={!sizingOperationsAvailable || Boolean(positionOperation)}
+            title={sizingOperationsAvailable ? undefined : 'Adding lots is unavailable for Live positions'}
+          >
+            Add Lots
+          </button>
+          <button
+            type="button"
+            onClick={() => void runPositionOperation('partial')}
+            disabled={!sizingOperationsAvailable || displayLots < 2 || Boolean(positionOperation)}
+            title={sizingOperationsAvailable ? undefined : 'Partial exit is unavailable for Live positions'}
+          >
+            {positionOperation === 'partial' ? 'Exiting…' : 'Partial Exit'}
+          </button>
+          <button type="button" onClick={openExitLevelEditor} disabled={Boolean(positionOperation)}>Edit Current SL/TP</button>
+          <button
+            type="button"
+            className="is-danger"
+            onClick={() => void runPositionOperation('exit')}
+            disabled={Boolean(positionOperation)}
+          >
+            {positionOperation === 'exit' ? 'Exiting…' : 'Exit Position'}
+          </button>
         </div>
 
         <AnimatePresence initial={false}>
@@ -202,7 +283,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
               transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: softEase }}
             >
               <label>
-                <span>Lots</span>
+                <span>Additional lots</span>
                 <input
                   type="number"
                   min="1"
@@ -210,7 +291,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
                   value={draftLots}
                   disabled={savingQuantity}
                   onChange={(event) => setDraftLots(event.target.value)}
-                  aria-label="Lot count"
+                  aria-label="Additional lot count"
                 />
               </label>
               <button type="button" onClick={() => void saveQuantity()} disabled={savingQuantity}>

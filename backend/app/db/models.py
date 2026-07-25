@@ -166,6 +166,13 @@ class UserRun(Base):
     execution_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
     # signal_only/paper_live_data/real_orders
     mode_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    configuration_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"), nullable=True
+    )
+    configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="SET NULL"), nullable=True
+    )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -263,6 +270,24 @@ class UserPreference(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
+
+
+class TerminalAlertAcknowledgement(Base):
+    """Per-user acknowledgement state for persisted terminal alert events."""
+
+    __tablename__ = "terminal_alert_acknowledgements"
+    __table_args__ = (
+        UniqueConstraint("user_id", "event_key", name="uq_terminal_alert_ack_user_event"),
+        Index("ix_terminal_alert_ack_user_at", "user_id", "acknowledged_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class UserRiskControl(Base):
@@ -1135,7 +1160,66 @@ class UserEngineConfig(Base):
     selected_strategy_instance_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("strategy_instances.id", ondelete="SET NULL"), nullable=True
     )
+    selected_configuration_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"), nullable=True
+    )
+    selected_configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class StrategyConfigurationRevision(Base):
+    """Canonical immutable committed setup for one strategy version and mode.
+
+    Runtime JSON may mirror the active revision for the execution path, but this
+    row owns history, selection and the exact revision an engine run used.
+    """
+
+    __tablename__ = "strategy_configuration_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "strategy_instance_id",
+            "strategy_version_id",
+            "mode",
+            "revision",
+            name="uq_strategy_configuration_revision_identity",
+        ),
+        Index(
+            "ix_strategy_configuration_user_mode_status",
+            "user_id",
+            "mode",
+            "status",
+        ),
+        Index(
+            "ix_strategy_configuration_instance_created",
+            "strategy_instance_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    configuration_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    risk_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="committed", nullable=False)
+    supersedes_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    committed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )

@@ -3,7 +3,10 @@ import type { ReactNode } from 'react'
 import { ActiveTradeCard } from './ActiveTradeCard'
 import { TickingNumber } from './TickingNumber'
 import { formatCurrency } from '../lib/format'
+import type { RuntimeStatus } from '../api'
 import type { ActiveTrade, ClientCommand, EngineMode, SetupState, SideFilter } from '../types'
+import { MarketBiasCard } from '../trading/MarketBiasCard'
+import { RiskAutomationCard } from '../trading/RiskAutomationCard'
 
 interface Props {
   state: SetupState
@@ -14,6 +17,7 @@ interface Props {
   lotSize: number
   side: SideFilter
   engineMode: EngineMode | null
+  runtime: RuntimeStatus | null
   onSend: (command: ClientCommand) => void
   collapseControl?: ReactNode
 }
@@ -27,6 +31,7 @@ export function EngineSidebar({
   lotSize,
   side,
   engineMode,
+  runtime,
   onSend,
   collapseControl,
   onlyMargin = false,
@@ -72,6 +77,18 @@ export function EngineSidebar({
               </div>
             )}
           </section>
+
+          <section className="sidebar-card pnl-overview-card">
+            <div className="sidebar-title"><span>P&amp;L Overview</span></div>
+            <div className="pnl-overview-grid">
+              <MetricRow label="Session"><TickingNumber value={runtime?.pnl.session ?? realizedPnl} decimals={2} signed /></MetricRow>
+              <MetricRow label="Realized"><TickingNumber value={runtime?.pnl.realized ?? realizedPnl} decimals={2} signed /></MetricRow>
+              <MetricRow label="Unrealized"><TickingNumber value={runtime?.pnl.unrealized ?? 0} decimals={2} signed /></MetricRow>
+            </div>
+          </section>
+
+          <MarketBiasCard />
+          <RiskAutomationCard runtime={runtime} />
 
           <section className="sidebar-card route-card">
             <div className="sidebar-title">

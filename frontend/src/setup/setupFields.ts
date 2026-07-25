@@ -26,13 +26,12 @@ export const RISK_FIELDS: StrategySetupField[] = [
     default: 6,
   },
   {
-    key: 'cooldown_after_loss_minutes',
-    type: 'integer',
-    label: 'After a losing trade, how many minutes should NOVA pause before taking the next signal? Enter 0 for no cooldown.',
-    minimum: 0,
-    maximum: 390,
+    key: 'entry_cutoff_ist',
+    type: 'choice',
+    label: 'After what time should NOVA stop accepting new entries?',
+    options: ['14:30', '15:00', '15:15', 'No cutoff'],
     required: true,
-    default: 30,
+    default: '15:15',
   },
 ]
 
@@ -52,7 +51,7 @@ export function splitDraft(draft: SetupValues): { strategy: SetupValues; risk: S
   const strategy: SetupValues = {}
   const risk: SetupValues = {}
   for (const [key, value] of Object.entries(draft)) {
-    if (RISK_KEYS.includes(key)) risk[key] = value
+    if (RISK_KEYS.includes(key)) risk[key] = key === 'entry_cutoff_ist' && value === 'No cutoff' ? '' : value
     else strategy[key] = value
   }
   return { strategy, risk }
@@ -71,10 +70,9 @@ export interface SetupStep {
 }
 
 const GROUPS: { id: string; label: string; keys: string[] }[] = [
-  { id: 'sizing', label: 'Sizing', keys: ['direction', 'lots'] },
+  { id: 'sizing', label: 'Sizing & allowed sides', keys: ['direction', 'lots'] },
   { id: 'exits', label: 'Exit levels', keys: ['stop_loss_percent', 'take_profit_percent'] },
-  { id: 'safety', label: 'Daily loss cap', keys: ['max_daily_loss', 'max_trades_per_day'] },
-  { id: 'cooldown', label: 'Cooldown after loss', keys: ['cooldown_after_loss_minutes'] },
+  { id: 'safety', label: 'Risk limits', keys: ['max_daily_loss', 'max_trades_per_day', 'entry_cutoff_ist'] },
 ]
 
 function rupees(value: unknown): string {
@@ -90,7 +88,7 @@ function summarise(key: string, value: unknown): string {
     case 'take_profit_percent': return `TP ${value}%`
     case 'max_daily_loss': return rupees(value)
     case 'max_trades_per_day': return Number(value) === 0 ? 'no trade cap' : `max ${value} trades`
-    case 'cooldown_after_loss_minutes': return Number(value) === 0 ? 'no cooldown' : `${value} min pause`
+    case 'entry_cutoff_ist': return value === 'No cutoff' ? 'no entry cutoff' : `${value} IST`
     default: return String(value)
   }
 }
@@ -113,13 +111,22 @@ export function deriveSteps(args: {
 
   const steps: SetupStep[] = [
     {
-      id: 'broker',
-      label: 'Broker',
+      id: 'mode',
+      label: 'Mode',
       keys: [],
-      status: args.brokerConnected ? 'done' : 'pending',
-      summary: args.brokerConnected
-        ? `Dhan ${args.brokerMasked ?? 'connected'}`
-        : 'Not connected — connect Dhan in Credentials',
+      status: args.mode ? 'done' : 'active',
+      summary: args.mode === 'paper' ? 'Paper — simulated' : args.mode === 'live' ? 'Live — real orders' : 'Not chosen yet',
+    },
+    {
+      id: 'broker',
+      label: 'Broker readiness',
+      keys: [],
+      status: args.mode === 'paper' || args.brokerConnected ? 'done' : 'pending',
+      summary: args.mode === 'paper'
+        ? 'Not required for Paper'
+        : args.brokerConnected
+          ? `Dhan ${args.brokerMasked ?? 'connected'}`
+          : 'Not connected — connect Dhan in Credentials',
     },
     {
       id: 'strategy',
@@ -130,13 +137,6 @@ export function deriveSteps(args: {
       summary: args.strategyName
         ? `${args.strategyName}${args.strategyVersion ? ` v${args.strategyVersion}` : ''}`
         : 'Not chosen yet',
-    },
-    {
-      id: 'mode',
-      label: 'Mode',
-      keys: [],
-      status: args.mode ? 'done' : 'active',
-      summary: args.mode === 'paper' ? 'Paper — simulated' : args.mode === 'live' ? 'Live — real orders' : 'Not chosen yet',
     },
   ]
 
