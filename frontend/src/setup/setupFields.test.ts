@@ -50,6 +50,27 @@ describe('setup fields', () => {
 })
 
 describe('step derivation', () => {
+  it('shows the complete seven-stage journey before mode or strategy selection', () => {
+    const steps = deriveSteps({
+      ...base,
+      brokerConnected: false,
+      brokerMasked: null,
+      strategyName: null,
+      strategyVersion: null,
+      mode: null,
+      fields: [],
+    })
+    expect(steps.map((step) => step.id)).toEqual([
+      'mode',
+      'broker',
+      'strategy',
+      'sizing',
+      'exits',
+      'safety',
+      'review',
+    ])
+  })
+
   it('never invents a strategy version', () => {
     const steps = deriveSteps({ ...base, strategyVersion: null })
     expect(steps.find((s) => s.id === 'strategy')?.summary).toBe('Supertrend')

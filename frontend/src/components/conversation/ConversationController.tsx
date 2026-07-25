@@ -113,24 +113,26 @@ function StrategyGroup({ title, strategies, onPick }: { title: string; strategie
   return (
     <section className="conv-strategy-group">
       <h3 className="conv-group-title">{title}</h3>
-      {strategies.map((s) => {
-        const usable = s.availability === 'READY' && s.paper_eligible
-        return (
-          <button
-            key={s.strategy_key}
-            type="button"
-            className="conv-strategy-card"
-            disabled={!usable}
-            onClick={() => usable && onPick(s)}
-          >
-            <span className="conv-strategy-name">{s.name}{s.version ? ` · v${s.version}` : ''}</span>
-            <span className="conv-strategy-desc">{s.description}</span>
-            <span className="conv-strategy-meta">
-              {usable ? `Paper ready${s.live_eligible ? ' · Live eligible' : ''}` : (s.disabled_reason ?? s.availability)}
-            </span>
-          </button>
-        )
-      })}
+      <div className="conv-strategy-row">
+        {strategies.map((s) => {
+          const usable = s.availability === 'READY' && s.paper_eligible
+          return (
+            <button
+              key={s.strategy_key}
+              type="button"
+              className="conv-strategy-card"
+              disabled={!usable}
+              onClick={() => usable && onPick(s)}
+            >
+              <span className="conv-strategy-name">{s.name}{s.version ? ` · v${s.version}` : ''}</span>
+              <span className="sr-only">{s.description}. </span>
+              <span className="sr-only">
+                {usable ? `Paper ready${s.live_eligible ? ' · Live eligible' : ''}` : (s.disabled_reason ?? s.availability)}
+              </span>
+            </button>
+          )
+        })}
+      </div>
     </section>
   )
 }
@@ -284,27 +286,21 @@ export function ConversationController({
       <div className="sr-only" role="status" aria-live="polite">{announce}</div>
       {!state.mode ? (
         <>
-          <BotBubble>How should NOVA trade for you?</BotBubble>
-          <div className="conv-mode-grid">
-            <section className="conv-mode-card">
-              <div className="conv-mode-head"><strong>Paper</strong><span className="conv-mode-badge">Recommended</span></div>
-              <p>Real market data, simulated fills, and a fixed ₹10,00,000 virtual balance. No Dhan account or real orders.</p>
-              <button type="button" className="conv-pill conv-pill--primary" onClick={() => pickMode('paper')}>Start in Paper</button>
-            </section>
-            <section className="conv-mode-card">
-              <div className="conv-mode-head"><strong>Live</strong></div>
-              <p>{liveAvailable ? 'Routes real orders to Dhan. Real money is at risk; static IP required.' : 'Live is unavailable — execution gates are not enabled on this environment.'}</p>
-              <button type="button" className="conv-pill" disabled={!liveAvailable} aria-disabled={!liveAvailable} onClick={() => pickMode('live')}>
-                {liveAvailable ? 'Configure Live' : 'Live unavailable'}
-              </button>
-            </section>
+          <BotBubble showAvatar>
+            <strong>How should NOVA trade for you?</strong> I recommend Paper first — it uses real market data with simulated fills, and no order reaches Dhan.
+          </BotBubble>
+          <div className="conv-choices conv-mode-choices" aria-label="Choose trading mode">
+            <button type="button" className="conv-pill conv-pill--primary" onClick={() => pickMode('paper')}>Start in Paper</button>
+            <button type="button" className="conv-pill" disabled={!liveAvailable} aria-disabled={!liveAvailable} onClick={() => pickMode('live')}>
+              {liveAvailable ? 'Configure Live' : 'Live unavailable'}
+            </button>
           </div>
         </>
       ) : null}
 
       {state.mode && (state.phase === 'STRATEGY_SELECTION' || !state.strategyKey) ? (
         <>
-          <BotBubble>Which strategy should NOVA run?</BotBubble>
+          <BotBubble showAvatar>Which strategy should NOVA run?</BotBubble>
           <StrategyGroup title="NOVA Strategies" strategies={strategies.filter((s) => s.source_type === 'BUILT_IN')} onPick={pickStrategy} />
           <StrategyGroup title="My Strategies" strategies={strategies.filter((s) => s.source_type === 'IMPORTED')} onPick={pickStrategy} />
         </>
@@ -312,7 +308,7 @@ export function ConversationController({
 
       {setupBlocked ? (
         <div role="alert">
-          <BotBubble tone="normal">
+          <BotBubble tone="normal" showAvatar>
             {schemaMissing
               ? `${selectedStrategy?.name ?? 'This strategy'} can't be configured right now — it has no setup questions.`
               : (selectedStrategy?.disabled_reason ?? 'This strategy is currently unavailable, so setup is paused.')}
@@ -325,7 +321,7 @@ export function ConversationController({
 
       {!setupBlocked && state.phase === 'SAVED_SETUP_FOUND' ? (
         <>
-          <BotBubble>I found your previous {mode === 'paper' ? 'Paper' : 'Live'} configuration.</BotBubble>
+          <BotBubble showAvatar>I found your previous {mode === 'paper' ? 'Paper' : 'Live'} configuration.</BotBubble>
           <div className="conv-saved-summary" role="group" aria-label="Saved setup summary">
             {applicableFields(fields).filter((f) => f.key in state.saved).map((f) => (
               <div key={f.key} className="conv-summary-row"><span>{f.label}</span><strong>{String(state.saved[f.key])}</strong></div>
@@ -341,7 +337,7 @@ export function ConversationController({
 
       {transcript.filter((e) => e.type === 'user_answer').map((e) => (
         <div key={e.id}>
-          <BotBubble>{String(e.payload.label)}?</BotBubble>
+          <BotBubble showAvatar>{String(e.payload.label)}?</BotBubble>
           <UserBubble text={`${String(e.payload.label)}: ${String(e.payload.value)}`} />
         </div>
       ))}
@@ -350,7 +346,7 @@ export function ConversationController({
 
       {!setupBlocked && state.phase === 'QUESTION_ACTIVE' && state.activeQuestionKey ? (
         <>
-          <BotBubble>{labelFor(fields, state.activeQuestionKey)}?</BotBubble>
+          <BotBubble showAvatar>{labelFor(fields, state.activeQuestionKey)}?</BotBubble>
           <ActiveQuestion
             key={`${state.activeQuestionKey}-${state.generation}`}
             field={fields.find((f) => f.key === state.activeQuestionKey)!}
@@ -362,7 +358,7 @@ export function ConversationController({
 
       {!setupBlocked && (state.phase === 'SETUP_REVIEW' || state.phase === 'ENGINE_READY') ? (
         <div className="conv-review" role="group" aria-label="Setup review">
-          <BotBubble>Here is your {selectedStrategy?.name ?? 'strategy'} configuration. Review, then save and start.</BotBubble>
+          <BotBubble showAvatar>Here is your {selectedStrategy?.name ?? 'strategy'} configuration. Review, then save and start.</BotBubble>
           <div className="conv-saved-summary">
             {applicableFields(fields).filter((f) => f.key in state.draft).map((f) => (
               <div key={f.key} className="conv-summary-row">

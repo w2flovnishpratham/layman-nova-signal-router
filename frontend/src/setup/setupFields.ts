@@ -143,16 +143,16 @@ export function deriveSteps(args: {
   const present = new Set(args.fields.map((f) => f.key))
   for (const group of GROUPS) {
     const keys = group.keys.filter((k) => present.has(k))
-    if (keys.length === 0) continue
     const isActive = activeKey !== null && keys.includes(activeKey)
-    const allAnswered = keys.every(answered)
+    const allAnswered = keys.length > 0 && keys.every(answered)
+    const notApplicable = Boolean(args.strategyName) && keys.length === 0
     steps.push({
       id: group.id,
       label: group.label,
       keys,
-      status: allAnswered ? 'done' : isActive ? 'active' : 'pending',
+      status: allAnswered || notApplicable ? 'done' : isActive ? 'active' : 'pending',
       summary: keys.filter(answered).map((k) => summarise(k, draft[k])).join(' · ')
-        || (isActive ? 'Awaiting your answer…' : 'Not answered yet'),
+        || (notApplicable ? 'Not required for this strategy' : isActive ? 'Awaiting your answer…' : 'Not answered yet'),
     })
   }
 

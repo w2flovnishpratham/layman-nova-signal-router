@@ -56,4 +56,23 @@ No actionable P0, P1, or P2 differences remain.
 
 - Live production values may create different chart shapes and longer strategy names than the deterministic QA state; truncation and horizontal table overflow are already defined for those cases.
 
-final result: passed
+## Trading Setup UI — 2026-07-25
+
+- source visual truth path: `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-f0f11fbb-c22a-4620-ae8b-6fcf19539f78.png`
+- implementation URL: `http://localhost:5174/app/trading`
+- intended state: engine stopped, setup not yet started, all seven setup stages visible
+- functional evidence:
+  - 249 frontend tests passed
+  - TypeScript production build passed
+  - Vite production build passed
+  - local preview responds with HTTP 200
+- implemented comparison points:
+  - single profile/account-menu trigger; redundant three-dot trigger removed
+  - stable seven-stage rail and configuration projection from the first screen
+  - compact horizontal strategy selector
+  - reference-style left rail, centered conversational workspace, and fixed right configuration panel
+  - setup remains inside the Trading route; no duplicate Setup navigation item was reintroduced
+
+The selected reference image was opened at original resolution. A current implementation screenshot and same-viewport composite comparison could not be captured because the configured in-app Browser control is unavailable in this task. Direct Playwright capture requires user permission, so visual comparison remains blocked.
+
+final result: blocked

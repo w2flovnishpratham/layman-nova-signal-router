@@ -49,7 +49,14 @@ export function SetupPage({ conversation, snapshot }: { conversation: ReactNode;
   return (
     <div className="nova-setup">
       <SetupStepRail steps={steps} />
-      <section className="nova-setup-main" aria-label="Setup conversation">{conversation}</section>
+      <section className="nova-setup-main" aria-label="Setup conversation">
+        <div className="nova-setup-conversation-inner">
+          <p className="nova-setup-kicker">
+            Guided engine setup <span aria-hidden="true">·</span> {mode === 'paper' ? 'Paper mode' : mode === 'live' ? 'Live mode' : 'Choose mode'} <span aria-hidden="true">·</span> resumes where you left off
+          </p>
+          {conversation}
+        </div>
+      </section>
       <SetupConfigPanel
         steps={steps}
         // Arming happens in the review step inside the conversation; this panel

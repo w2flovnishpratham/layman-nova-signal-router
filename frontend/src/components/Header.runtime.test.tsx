@@ -113,7 +113,7 @@ function props(status = runtime()) {
 }
 
 async function openMenu(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole('button', { name: 'More actions' }))
+  await user.click(screen.getByRole('button', { name: 'Open account menu' }))
 }
 
 beforeEach(() => {
@@ -241,7 +241,7 @@ describe('Header runtime reliability controls', () => {
     vi.useFakeTimers()
     const callbacks = props(runtime({ engine: { running: true, state: 'RUNNING' } as RuntimeStatus['engine'] }))
     render(<Header {...callbacks} />)
-    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open account menu' }))
     fireEvent.click(screen.getByRole('button', { name: 'Stop & Square Off' }))
     fireEvent.pointerDown(screen.getByRole('button', { name: /hold to stop/i }))
     expect(callbacks.onKill).not.toHaveBeenCalled()

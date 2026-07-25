@@ -1,4 +1,4 @@
-import { Check, Copy, LogOut, MoreVertical, RotateCcw, ShieldAlert, Wifi, X } from 'lucide-react'
+import { Check, Copy, LogOut, RotateCcw, ShieldAlert, Wifi, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import type { AuthUser, LogoutEngineAction, RuntimeStatus } from '../api'
@@ -167,22 +167,19 @@ export function Header({
             {modeBadgeText(engineMode)}{engineLive ? ` - ${statusLabel(status, setupState)}` : ''}
           </div>
 
-          <button type="button" className="header-user" onClick={() => setMenuOpen(!menuOpen)} aria-label="Open account menu">
+          <button
+            type="button"
+            className="header-user"
+            onClick={() => setMenuOpen(!menuOpen)}
+            aria-label="Open account menu"
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
+          >
             {user.picture_url ? <img src={user.picture_url} alt="" referrerPolicy="no-referrer" /> : <span>{initials(user.name || user.email)}</span>}
             <span className="header-user-copy">
               <strong>{user.name || user.email}</strong>
               <small>{formatMoney(runtime?.pnl.available_balance)}</small>
             </span>
-          </button>
-
-          <button
-            className="icon-button p-1.5 rounded-lg border border-white/10 hover:bg-white/5 transition-colors"
-            type="button"
-            aria-label="More actions"
-            title="More actions"
-            onClick={() => setMenuOpen(!menuOpen)}
-          >
-            <MoreVertical size={18} />
           </button>
 
           <AnimatePresence initial={false}>
