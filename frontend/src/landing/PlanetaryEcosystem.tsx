@@ -50,7 +50,7 @@ const MODULES: ModuleItem[] = [
   },
 ]
 
-export function PlanetaryEcosystem() {
+export function PlanetaryEcosystem({ onEnterApp }: { onEnterApp?: () => void } = {}) {
   const [activeNodeId, setActiveNodeId] = useState<string>('Signals')
   const [, setHoveredIndex] = useState<number | null>(null)
 
@@ -433,14 +433,19 @@ export function PlanetaryEcosystem() {
           className="core-magnetic-wrapper relative z-30 pointer-events-auto will-change-transform"
         >
           <div ref={corePulseRef} className="core-pulse-wrapper will-change-transform">
-            <div className="nova-core w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-[#06070B] border border-white/20 hover:border-[#2F6BED] transition-colors duration-300 flex flex-col items-center justify-center text-center p-4 shadow-[0_0_30px_rgba(0,0,0,0.8),inset_0_0_20px_rgba(47,107,237,0.05)] cursor-pointer">
+            <button
+              type="button"
+              onClick={onEnterApp}
+              aria-label="Launch Trading Platform"
+              className="nova-core w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-[#06070B] border border-white/20 hover:border-[#2F6BED] transition-colors duration-300 flex flex-col items-center justify-center text-center p-4 shadow-[0_0_30px_rgba(0,0,0,0.8),inset_0_0_20px_rgba(47,107,237,0.05)] cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#2F6BED] focus:ring-offset-2 focus:ring-offset-[#05070C]"
+            >
               <span className="text-[10px] uppercase font-medium text-white/50 tracking-wider">
                 CORE SYSTEM
               </span>
               <strong className="text-xs sm:text-sm font-extr-mfont-medium text-[#2F6BED] mt-1 leading-tight">
                 NOVA Signal Engine
               </strong>
-            </div>
+            </button>
           </div>
         </div>
       </div>

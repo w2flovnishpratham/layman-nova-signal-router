@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import App from './App'
-import { LandingPage } from './landing/LandingPage'
+import { MinimalHome } from './landing/MinimalHome'
 import { currentPath, isAppPath, navigate, replacePath } from './navigation'
 import { appPath, routeFromPath } from './appRoutes'
 
@@ -36,5 +36,5 @@ export function AppRouter() {
   if (isAppPath(path)) {
     return <App />
   }
-  return <LandingPage onEnterApp={() => navigate(appPath(routeFromPath('/app')))} />
+  return <MinimalHome onEnterApp={() => navigate(appPath(routeFromPath('/app')))} />
 }
