@@ -189,13 +189,69 @@ export interface RuntimeStatus {
   eligible_strategies: EngineStrategy[]
   selection_issue: string | null
   strategy_catalog?: StrategyCatalog
+  chart_preferences?: {
+    default_timeframe: string
+  }
 }
 
-async function runtimeCall(path: `/${string}`, method = 'GET', payload?: unknown): Promise<RuntimeStatus> {
+export interface TradingBootstrap extends RuntimeStatus {
+  mode: 'paper' | 'live' | null
+  setup: {
+    state: unknown
+    saved_complete: boolean
+    mode_selected: boolean
+  }
+  selected_strategy_key: string | null
+  current_run: {
+    id: string
+    status: string
+    mode: 'paper' | 'live'
+    execution_mode: string | null
+    strategy_name: string | null
+    strategy_version_id: string | null
+    configuration_revision_id: string | null
+    configuration_revision: number | null
+    started_at: string | null
+    stopped_at: string | null
+  } | null
+  live_readiness: {
+    ready: boolean
+    real_orders_allowed: boolean
+    blockers: string[]
+    checks: Record<string, unknown>
+  }
+  pending_operation: {
+    id: string
+    type: string
+    status: string
+    mode: 'paper' | 'live'
+    configuration_revision_id: string
+    configuration_revision: number
+    created_at: string
+  } | null
+  chart_preferences: {
+    default_timeframe: string
+  }
+  terminal_state: {
+    engine_state: string
+    position_version: number | null
+    reconciliation_status: string
+  }
+}
+
+async function runtimeCall(
+  path: `/${string}`,
+  method = 'GET',
+  payload?: unknown,
+  headers?: Record<string, string>,
+): Promise<RuntimeStatus> {
   const response = await apiFetch(path, {
     method,
     cache: 'no-store',
-    headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' },
+    headers: {
+      ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...headers,
+    },
     body: payload === undefined ? undefined : JSON.stringify(payload),
   })
   const body = await response.json().catch(() => null) as (RuntimeStatus & { detail?: string | RuntimeStatus; message?: string }) | null
@@ -211,17 +267,34 @@ async function runtimeCall(path: `/${string}`, method = 'GET', payload?: unknown
 }
 
 export const getRuntimeStatus = () => runtimeCall('/api/runtime/status')
+export async function getTradingBootstrap(): Promise<TradingBootstrap> {
+  const response = await apiFetch('/api/trading/bootstrap', { cache: 'no-store' })
+  const body = await response.json().catch(() => null) as (TradingBootstrap & {
+    detail?: string
+    message?: string
+  }) | null
+  if (!response.ok) {
+    throw new Error(body?.detail || body?.message || `Trading bootstrap failed: ${response.status}`)
+  }
+  if (!body) throw new Error('Trading bootstrap response was empty.')
+  return body
+}
 export const startSelectedEngine = (
   strategyInstanceId: string,
+  strategyVersionId: string,
   configurationRevisionId: string,
   configurationRevision: number,
   mode: 'paper' | 'live',
+  liveAcknowledged: boolean,
+  idempotencyKey = crypto.randomUUID(),
 ) => runtimeCall('/api/runtime/start-selected', 'POST', {
   strategy_instance_id: strategyInstanceId,
+  strategy_version_id: strategyVersionId,
   configuration_revision_id: configurationRevisionId,
   configuration_revision: configurationRevision,
   mode,
-})
+  live_acknowledged: liveAcknowledged,
+}, { 'Idempotency-Key': idempotencyKey })
 export const stopRuntimeEngine = () => runtimeCall('/api/runtime/stop', 'POST')
 export const squareOffRuntime = () => runtimeCall('/api/runtime/square-off', 'POST')
 export const switchRuntimeMode = (mode: 'paper' | 'live') =>
@@ -374,9 +447,10 @@ export interface ManualOrderResponse {
 }
 
 export interface ExitLevelsPayload {
-  stopLossPrice: number
-  targetPrice: number
-  expectedPositionVersion?: number
+  unit: 'PERCENTAGE' | 'POINTS' | 'ABSOLUTE_TRIGGER'
+  stopLossValue: number
+  targetValue: number
+  expectedPositionVersion: number
 }
 
 export interface ExitLevelsResponse {
@@ -399,6 +473,8 @@ export interface PositionAdjustmentResponse extends QuantityResponse {
   operationState?: string
   positionVersion?: number
   fillPrice?: number
+  fillOrderId?: string
+  activeExitLevels?: ActiveExitLevels
 }
 
 export interface OrderQuote {
@@ -465,8 +541,13 @@ export interface NiftyTradeMarker {
   exit_kind?: 'SL' | 'TARGET' | 'REVERSAL' | 'EOD' | 'EXIT' | string | null
 }
 
-export async function getNiftyCandles(signal?: AbortSignal): Promise<NiftyCandleSeries> {
-  const response = await apiFetch('/api/market/nifty/candles?interval=5m', { cache: 'no-store', signal })
+export type ChartTimeframe = '1m' | '5m' | '15m'
+
+export async function getNiftyCandles(
+  timeframe: ChartTimeframe = '5m',
+  signal?: AbortSignal,
+): Promise<NiftyCandleSeries> {
+  const response = await apiFetch(`/api/market/nifty/candles?interval=${timeframe}`, { cache: 'no-store', signal })
   if (!response.ok) {
     throw new Error(`Could not load NIFTY candles: ${response.status}`)
   }
@@ -650,14 +731,20 @@ export async function patchActiveExitLevels(payload: ExitLevelsPayload): Promise
 }
 
 export async function postActiveAddLots(
-  payload: { lots: number; expectedPositionVersion: number },
+  payload: {
+    lots: number
+    expectedPositionVersion: number
+    protectionMode: 'KEEP_EXISTING' | 'RECALCULATE_FROM_AVERAGE' | 'CUSTOM'
+    customStopLossPrice?: number
+    customTargetPrice?: number
+  },
   operationId = newIdempotencyKey(),
 ): Promise<PositionAdjustmentResponse> {
   return postPositionAdjustment('/api/orders/active-position/add-lots', payload, operationId)
 }
 
 export async function postActivePartialExit(
-  payload: { lots?: number; percentage?: 25 | 50 | 75; expectedPositionVersion: number },
+  payload: { lots: number; expectedPositionVersion: number },
   operationId = newIdempotencyKey(),
 ): Promise<PositionAdjustmentResponse> {
   return postPositionAdjustment('/api/orders/active-position/partial-exit', payload, operationId)
@@ -979,6 +1066,14 @@ export interface PineValidation {
   findings: PineFinding[]
 }
 
+export interface PineReviewEvent {
+  decision: string
+  note: string | null
+  previous_status: string
+  new_status: string
+  reviewed_at: string | null
+}
+
 export interface PineVersion {
   id: string
   strategy_id: string
@@ -990,6 +1085,7 @@ export interface PineVersion {
   created_at: string | null
   approved_at: string | null
   validation: PineValidation | null
+  review_history?: PineReviewEvent[]
 }
 
 export interface PineStrategy {
@@ -1019,6 +1115,8 @@ export const getPineStrategy = async (id: string) =>
   pineCall<{ strategy: PineStrategy; versions: PineVersion[] }>(`/api/personal-pine-strategies/${id}` as `/${string}`)
 export const createPineStrategy = async (payload: { name: string; source: string; filename: string; description?: string }) =>
   pineCall<{ strategy: PineStrategy; version: PineVersion }>('/api/personal-pine-strategies', 'POST', payload)
+export const deletePineStrategy = async (id: string) =>
+  pineCall<{ deleted: boolean; strategy_id: string }>(`/api/personal-pine-strategies/${id}` as `/${string}`, 'DELETE')
 export const createPineVersion = async (strategyId: string, payload: { source: string; filename: string; changelog?: string }) =>
   pineCall<{ version: PineVersion; reused: boolean }>(`/api/personal-pine-strategies/${strategyId}/versions` as `/${string}`, 'POST', payload)
 export const validatePineVersion = async (strategyId: string, versionId: string) =>
@@ -1405,6 +1503,8 @@ export const generatePineConversionPackage = (strategyId: string, versionId: str
   pineCall<{ package: string; filename: string; package_sha256: string }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/conversion-package` as `/${string}`, 'POST')
 export const createPineConversion = (strategyId: string, versionId: string) =>
   pineCall<{ conversion: PineConversion; reused: boolean }>(`/api/personal-pine-strategies/${strategyId}/versions/${versionId}/convert` as `/${string}`, 'POST', { consent: true })
+export const listPineConversions = async () =>
+  (await pineCall<{ conversions: PineConversion[] }>('/api/pine-conversions')).conversions
 export const getPineConversion = (id: string) => pineCall<{ conversion: PineConversion }>(`/api/pine-conversions/${id}` as `/${string}`)
 export const acceptPineConversion = (id: string) => pineCall<{ conversion: PineConversion }>(`/api/pine-conversions/${id}/accept` as `/${string}`, 'POST')
 export const rejectPineConversion = (id: string) => pineCall<{ conversion: PineConversion }>(`/api/pine-conversions/${id}/reject` as `/${string}`, 'POST', {})

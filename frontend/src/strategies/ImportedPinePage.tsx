@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Copy, Download, FileCode2, Loader2, Plus, ShieldCheck, Sparkles, Upload, X } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Download, FileCode2, Loader2, Plus, ShieldCheck, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   acceptPineConversion,
@@ -7,6 +7,7 @@ import {
   createPineVersion,
   createTradingViewSetup,
   decidePineReview,
+  deletePineStrategy,
   generateManagedTradingViewCredential,
   generatePineConversionPackage,
   getPineConversion,
@@ -18,6 +19,7 @@ import {
   getTradingViewSetup,
   linkPineVersion,
   listManagedTradingViewSetups,
+  listPineConversions,
   listPineReviews,
   listPineStrategies,
   listStrategyInstances,
@@ -81,10 +83,12 @@ function OwnerWorkspace() {
   const [conversionAssumptions, setConversionAssumptions] = useState('')
   const [setupType, setSetupType] = useState<TradingViewSetupType>('USER_MANAGED_TRADINGVIEW')
   const [tvSetup, setTvSetup] = useState<TradingViewSetup | null>(null)
+  const [conversionHistory, setConversionHistory] = useState<PineConversion[]>([])
   const sourceRef = useRef<HTMLTextAreaElement>(null)
 
   const selected = versions.find((row) => row.id === versionId) ?? null
   const findings = selected?.validation?.findings ?? []
+  const rejectionNote = selected?.review_history?.filter((event) => ['rejected', 'changes_requested'].includes(event.decision)).at(-1) ?? null
 
   const refreshList = useCallback(async (preferred?: string) => {
     const [scripts, rows] = await Promise.all([listPineStrategies(), listStrategyInstances()])
@@ -94,11 +98,12 @@ function OwnerWorkspace() {
   }, [])
 
   useEffect(() => {
-    Promise.all([listPineStrategies(), listStrategyInstances(), getPineConversionConfig()]).then(([scripts, rows, config]) => {
+    Promise.all([listPineStrategies(), listStrategyInstances(), getPineConversionConfig(), listPineConversions()]).then(([scripts, rows, config, conversions]) => {
       setStrategies(scripts)
       setInstances(rows.filter((row) => row.execution_mode !== 'real_orders'))
       setStrategyId((current) => current || scripts[0]?.id || '')
       setConversionConfig(config)
+      setConversionHistory(conversions)
     }).catch((reason) => setError(messageOf(reason)))
   }, [])
   useEffect(() => {
@@ -171,6 +176,16 @@ function OwnerWorkspace() {
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url)
   }
 
+  async function withdrawStrategy() {
+    if (!strategyId) return
+    if (!window.confirm('Withdraw this script? Every draft version on it is removed. This cannot be undone.')) return
+    await run('Withdraw script', async () => {
+      await deletePineStrategy(strategyId)
+      setStrategyId(''); setVersions([]); setVersionId('')
+      await refreshList()
+    })
+  }
+
   async function manualPackage(download = false) {
     if (!selected) return
     const result = await generatePineConversionPackage(strategyId, selected.id)
@@ -190,10 +205,17 @@ function OwnerWorkspace() {
         <label>Script<select value={strategyId} onChange={(e) => { const id = e.target.value; setStrategyId(id); if (!id) { setVersions([]); setVersionId('') } }}><option value="">New script</option>{strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
         <label>Version<select value={versionId} disabled={!strategyId} onChange={(e) => setVersionId(e.target.value)}>{versions.map((v) => <option key={v.id} value={v.id}>{v.version} · {v.status}</option>)}</select></label>
         <label>New script name<input value={name} maxLength={160} onChange={(e) => setName(e.target.value)} placeholder="My NIFTY Pine strategy" /></label>
+        {strategyId ? <button className="ps-danger" type="button" disabled={!!busy} onClick={() => void withdrawStrategy()}><Trash2 size={14} /> Withdraw script</button> : null}
       </div>
       <div className="pine-grid">
         <section className="ps-card pine-editor-card">
           <div className="ps-card-head"><div><span>Private source</span><h2>{selected ? `Immutable version ${selected.version}` : 'Paste or upload Pine'}</h2></div><span className="ps-status">{selected?.status ?? 'new'}</span></div>
+          {rejectionNote ? (
+            <div className="ps-message error" role="alert">
+              <strong>{rejectionNote.decision === 'rejected' ? 'Rejected by admin review' : 'Changes requested by admin review'}</strong>
+              <span>{rejectionNote.note || 'No reason was recorded. Create a new version to address the review.'}</span>
+            </div>
+          ) : null}
           <div className="pine-file-row"><label className="secondary-button"><Upload size={14} /> Upload .pine/.txt<input className="pine-file-input" type="file" accept=".pine,.txt,text/plain" onChange={(e) => void readFile(e.target.files?.[0])} /></label><input aria-label="Source filename" value={filename} maxLength={120} onChange={(e) => { setFilename(e.target.value); setDirty(true) }} /></div>
           <textarea ref={sourceRef} className="pine-source" aria-label="Pine source" spellCheck={false} value={source} onChange={(e) => { setSource(e.target.value); setDirty(true) }} />
           <label className="pine-changelog">Version note<input value={changelog} maxLength={1000} onChange={(e) => setChangelog(e.target.value)} placeholder="What changed?" /></label>
@@ -217,7 +239,20 @@ function OwnerWorkspace() {
           {findings.length ? findings.map((finding, index) => <button type="button" key={`${finding.code}-${index}`} className={`pine-finding ${finding.severity.toLowerCase()}`} onClick={() => jumpTo(finding)}><span>{finding.severity} · {finding.code}{finding.line ? ` · line ${finding.line}` : ''}</span><strong>{finding.title}</strong><small>{finding.explanation}</small><em>{finding.remediation}</em></button>) : <div className="ps-empty-small"><FileCode2 size={22} /><strong>No validation report</strong><span>Run deterministic static validation for this exact version.</span></div>}
         </aside>
       </div>
-      {conversion ? <ConversionReview conversion={conversion} busy={busy} onAccept={() => run('Candidate acceptance', async () => { const result = await acceptPineConversion(conversion.id); setConversion(result.conversion); await reloadStrategy(strategyId, result.conversion.candidate_version_id ?? undefined) })} onReject={() => run('Candidate rejection', async () => setConversion((await rejectPineConversion(conversion.id)).conversion))} onRetry={() => run('Conversion retry', async () => setConversion((await retryPineConversion(conversion.id)).conversion))} /> : null}
+      {conversion ? <ConversionReview conversion={conversion} busy={busy} onAccept={() => run('Candidate acceptance', async () => { const result = await acceptPineConversion(conversion.id); setConversion(result.conversion); await reloadStrategy(strategyId, result.conversion.candidate_version_id ?? undefined); setConversionHistory(await listPineConversions()) })} onReject={() => run('Candidate rejection', async () => { setConversion((await rejectPineConversion(conversion.id)).conversion); setConversionHistory(await listPineConversions()) })} onRetry={() => run('Conversion retry', async () => { setConversion((await retryPineConversion(conversion.id)).conversion); setConversionHistory(await listPineConversions()) })} /> : null}
+      {strategyId && conversionHistory.some((row) => row.strategy_id === strategyId) ? (
+        <section className="ps-card pine-conversion-history">
+          <div className="ps-card-head"><div><span>All attempts for this script</span><h2>Conversion history</h2></div></div>
+          <div className="ps-list">
+            {conversionHistory.filter((row) => row.strategy_id === strategyId).map((row) => (
+              <div className="ps-list-item" key={row.id}>
+                <strong>{row.provider} · {row.model}</strong>
+                <span>{row.status}{row.safe_error_code ? ` · ${row.safe_error_code.replaceAll('_', ' ').toLowerCase()}` : ''}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
       {selected?.status === 'approved' ? <section className="ps-card pine-link"><div><span>Stage 6 of 9 · TradingView setup</span><h2>Link approved version and choose setup path</h2><p className="ps-note">Paper-only. NOVA never compiles or executes Pine.</p></div><select aria-label="Personal strategy instance" value={instanceId} onChange={(e) => { setInstanceId(e.target.value); setTvSetup(null) }}><option value="">Choose an instance</option>{instances.map((i) => <option key={i.id} value={i.id}>{i.label} · {i.execution_mode}</option>)}</select><fieldset><legend>TradingView setup type</legend><label className="ps-check"><input type="radio" name="tv-setup" checked={setupType === 'USER_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('USER_MANAGED_TRADINGVIEW')} />I have TradingView Premium</label><small>You manage this strategy in your TradingView account.</small><label className="ps-check"><input type="radio" name="tv-setup" checked={setupType === 'NOVA_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('NOVA_MANAGED_TRADINGVIEW')} />I need NOVA-managed TradingView setup</label><small>NOVA-managed TradingView setup requested; installation remains a manual admin task.</small></fieldset><button className="ps-primary" type="button" disabled={!instanceId || !!busy} onClick={() => void run('TradingView setup', async () => { await linkPineVersion(instanceId, strategyId, selected.id); setTvSetup(await createTradingViewSetup(instanceId, setupType)) })}>Save setup path</button>{tvSetup ? <div className={`ps-message ${tvSetup.ready_for_paper ? 'success' : ''}`} role="status"><strong>{tvSetup.ready_for_paper ? 'READY FOR PAPER USE' : tvSetup.status.replaceAll('_', ' ')}</strong><span>{tvSetup.ready_for_paper ? 'All server-observed paper gates passed.' : `Pending: ${tvSetup.blocking_step ?? 'manual review'}. Next: ${tvSetup.who_acts_next}.`}</span>{tvSetup.blocking_reason ? <span>{tvSetup.blocking_reason}</span> : null}</div> : null}</section> : null}
     </>
   )

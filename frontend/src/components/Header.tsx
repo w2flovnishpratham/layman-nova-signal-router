@@ -162,9 +162,9 @@ export function Header({
         </div>
 
         <div className="header-actions relative flex items-center gap-2">
-          <div className={`mode-badge mode-badge-${engineMode ?? 'unset'}`}>
-            <MotionPing className={status === 'live' ? 'mode-status-ok' : 'mode-status-warn'} />
-            {modeBadgeText(engineMode)}{engineLive ? ` - ${statusLabel(status, setupState)}` : ''}
+          <div className={`mode-badge mode-badge-${engineMode ?? 'unset'}${engineLive ? '' : ' mode-badge-stopped'}`}>
+            <MotionPing className={status === 'live' && engineLive ? 'mode-status-ok' : 'mode-status-warn'} />
+            {modeBadgeText(engineMode)} - {engineLive ? statusLabel(status, setupState) : 'Stopped'}
           </div>
 
           <button

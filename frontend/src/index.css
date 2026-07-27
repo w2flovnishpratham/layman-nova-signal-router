@@ -254,6 +254,12 @@ code {
   color: var(--warning);
 }
 
+.mode-badge-stopped {
+  border-color: color-mix(in srgb, var(--warning) 42%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  color: var(--warning);
+}
+
 .mode-verified {
   border-color: color-mix(in srgb, var(--accent) 38%, transparent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -1109,7 +1115,7 @@ code {
 }
 
 .trade-edit-panel.quantity-edit-panel {
-  grid-template-columns: minmax(0, 1fr) 34px 34px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .trade-edit-panel label {
@@ -1125,7 +1131,8 @@ code {
   text-transform: uppercase;
 }
 
-.trade-edit-panel input {
+.trade-edit-panel input,
+.trade-edit-panel select {
   min-width: 0;
   height: 34px;
   border: 1px solid var(--border);
@@ -1135,6 +1142,10 @@ code {
   padding: 0 9px;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+
+.trade-edit-panel select {
+  color-scheme: dark;
 }
 
 .trade-edit-panel button {
@@ -1151,6 +1162,22 @@ code {
   border-color: color-mix(in srgb, var(--success) 38%, transparent);
   background: color-mix(in srgb, var(--success) 12%, transparent);
   color: var(--success);
+}
+
+.trade-edit-panel.exit-lot-options {
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+}
+
+.trade-edit-panel.exit-lot-options button {
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+.trade-edit-panel.exit-lot-options button.is-danger {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
 }
 
 .trade-edit-status {
@@ -3396,6 +3423,32 @@ code {
   letter-spacing: 0.04em;
 }
 
+.nifty-chart-timeframes {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(8, 9, 14, 0.72);
+}
+
+.nifty-chart-timeframes button {
+  min-width: 34px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.nifty-chart-timeframes button.is-active {
+  background: rgba(47, 107, 237, 0.22);
+  color: #8fb5ff;
+}
+
 .nifty-chart-meta {
   color: var(--text-3);
   font-size: 10px;
@@ -4471,6 +4524,20 @@ code {
 .conv-edit:hover { opacity: 1; }
 .conv-review { display: flex; flex-direction: column; gap: 8px; }
 .conv-saved-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #52e6a4; }
+.conv-live-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 184, 77, 0.38);
+  border-radius: 10px;
+  color: #f5d39a;
+  background: rgba(255, 164, 36, 0.08);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.conv-live-ack input { margin-top: 2px; accent-color: #f5b73b; }
 
 /* --- NOVA conversation mode selection ------------------------------------ */
 .conv-mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 4px 0; }
@@ -4942,6 +5009,22 @@ code {
   background: rgba(47,107,237,.06);
 }
 
+.terminal-table tbody tr.is-focused {
+  background: rgba(47,107,237,.14);
+  outline: 1px solid rgba(47,107,237,.55);
+  outline-offset: -1px;
+}
+
+.terminal-copy {
+  margin-left: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--nova-blue);
+  padding: 0;
+  font: inherit;
+  font-size: 9px;
+}
+
 .terminal-feed-state {
   margin: 0;
   padding: 24px;
@@ -4954,7 +5037,8 @@ code {
 }
 
 .terminal-feed-state button,
-.terminal-alert-actions button {
+.terminal-alert-summary button,
+.terminal-log-paused button {
   margin-left: 10px;
   border: 1px solid var(--nova-border);
   border-radius: 7px;
@@ -4963,11 +5047,71 @@ code {
   padding: 5px 9px;
 }
 
-.terminal-alert-actions {
+.terminal-alert-summary,
+.terminal-log-paused {
   display: flex;
+  align-items: center;
+  gap: 12px;
   justify-content: flex-end;
   border-bottom: 1px solid var(--nova-border);
   padding: 8px 12px;
+  color: var(--nova-text-muted);
+  font-size: 11px;
+}
+
+.terminal-log-paused {
+  justify-content: center;
+  color: var(--nova-warning);
+}
+
+.terminal-notification-state {
+  margin: 0;
+  border-bottom: 1px solid var(--nova-border);
+  padding: 7px 14px;
+  color: var(--nova-warning);
+  font-size: 11px;
+}
+
+.terminal-lifecycle-drawer {
+  border-top: 1px solid var(--nova-border);
+  background: var(--nova-surface);
+  padding: 14px 16px;
+}
+
+.terminal-lifecycle-drawer > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.terminal-lifecycle-drawer > div button {
+  border: 1px solid var(--nova-border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--nova-text-secondary);
+  padding: 4px 9px;
+}
+
+.terminal-lifecycle-drawer > p {
+  margin: 4px 0 12px;
+  color: var(--nova-text-muted);
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 10px;
+}
+
+.terminal-lifecycle-drawer article {
+  display: grid;
+  grid-template-columns: 86px minmax(120px, .6fr) 1fr;
+  gap: 10px;
+  border-left: 2px solid var(--nova-blue);
+  padding: 6px 10px;
+  color: var(--nova-text-secondary);
+  font-size: 11px;
+}
+
+.terminal-lifecycle-drawer article span,
+.terminal-lifecycle-drawer article small {
+  color: var(--nova-text-muted);
 }
 
 .terminal-automation {
@@ -5200,6 +5344,11 @@ code {
 .nova-auto-edit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 .nova-auto-edit input { width: 130px; background: var(--nova-bg); border: 1px solid var(--nova-border); border-radius: 8px; color: var(--nova-text); padding: 7px 10px; font-size: 13px; color-scheme: dark; }
 .nova-auto-unit { font-size: 12px; color: var(--nova-text-muted); }
+.nova-auto-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 14px; }
+.nova-auto-review { margin-top: 14px; padding: 14px; border: 1px solid var(--nova-blue); border-radius: 10px; background: color-mix(in srgb, var(--nova-blue) 5%, var(--nova-bg)); }
+.nova-auto-review ul { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 8px; }
+.nova-auto-review li { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12.5px; color: var(--nova-text-secondary); }
+.nova-auto-review li strong { color: var(--nova-text); }
 .nova-auto-protected { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 11px; }
 .nova-auto-protected li { border-left: 2px solid var(--nova-border); padding-left: 11px; }
 .nova-auto-protected p { margin: 4px 0 2px; font-size: 12.5px; }

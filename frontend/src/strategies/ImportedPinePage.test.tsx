@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   createSetup: vi.fn(), getSetup: vi.fn(),
   managedSetups: vi.fn(), recordInstallation: vi.fn(), managedCredential: vi.fn(),
   adminConversions: vi.fn(), adminConversion: vi.fn(),
+  deleteStrategy: vi.fn(), conversionHistory: vi.fn(),
 }))
 vi.mock('../api', () => ({
   listPineStrategies: api.list, getPineStrategy: api.get, createPineStrategy: api.create,
@@ -26,6 +27,7 @@ vi.mock('../api', () => ({
   submitAdminPineConversion: vi.fn(), runAdminPineConversion: vi.fn(),
   getAdminPineManualPackage: vi.fn(), submitAdminPineManualResponse: vi.fn(),
   approveAdminPineConversion: vi.fn(), rejectAdminPineConversion: vi.fn(),
+  deletePineStrategy: api.deleteStrategy, listPineConversions: api.conversionHistory,
 }))
 
 const MANAGED_TOKEN = 'nwk_MANAGED_SENTINEL_CREDENTIAL_0987654321'
@@ -46,6 +48,8 @@ beforeEach(() => {
   api.getSetup.mockRejectedValue(new Error('not configured'))
   api.managedSetups.mockResolvedValue([])
   api.adminConversions.mockResolvedValue([])
+  api.conversionHistory.mockResolvedValue([])
+  api.deleteStrategy.mockResolvedValue({ deleted: true, strategy_id: 's1' })
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
 afterEach(() => cleanup())
@@ -164,6 +168,46 @@ describe('ImportedPinePage', () => {
     await waitFor(() => expect(api.createSetup).toHaveBeenCalledWith('i1', 'NOVA_MANAGED_TRADINGVIEW'))
     expect(await screen.findByText(/Pending: TradingView installation/i)).toBeInTheDocument()
     expect(screen.queryByText('READY FOR PAPER USE')).not.toBeInTheDocument()
+  })
+
+  it('shows the admin rejection reason on the version the user submitted', async () => {
+    const rejected = {
+      ...version, status: 'rejected',
+      review_history: [{ decision: 'rejected', note: 'Missing stop-loss handling.', previous_status: 'under_review', new_status: 'rejected', reviewed_at: '2026-07-27T10:00:00Z' }],
+    }
+    api.get.mockResolvedValue({ strategy, versions: [rejected] })
+    render(<ImportedPinePage />)
+    expect(await screen.findByText(/Rejected by admin review/i)).toBeInTheDocument()
+    expect(screen.getByText('Missing stop-loss handling.')).toBeInTheDocument()
+  })
+
+  it('withdraws a script after confirmation and refreshes the list', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    api.list.mockResolvedValueOnce([strategy]).mockResolvedValue([])
+    render(<ImportedPinePage />)
+    await user.click(await screen.findByRole('button', { name: /withdraw script/i }))
+    await waitFor(() => expect(api.deleteStrategy).toHaveBeenCalledWith('s1'))
+    expect(await screen.findByRole('status')).toHaveTextContent('Withdraw script completed')
+  })
+
+  it('does not withdraw when the confirmation is declined', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<ImportedPinePage />)
+    await user.click(await screen.findByRole('button', { name: /withdraw script/i }))
+    expect(api.deleteStrategy).not.toHaveBeenCalled()
+  })
+
+  it('shows conversion history filtered to the current script', async () => {
+    api.conversionHistory.mockResolvedValue([
+      { id: 'c1', strategy_id: 's1', input_version_id: 'v1', status: 'succeeded', provider: 'nova-ai', model: 'pine-model', prompt_version: 'v1', consent_at: 'now', candidate_version_id: 'v2', conversion_summary: null, assumptions: [], unsupported_features: [], warnings: [], action_mapping: {}, safe_error_code: null },
+      { id: 'c2', strategy_id: 's-other', input_version_id: 'v9', status: 'provider_failed', provider: 'nova-ai', model: 'pine-model', prompt_version: 'v1', consent_at: 'now', candidate_version_id: null, conversion_summary: null, assumptions: [], unsupported_features: [], warnings: [], action_mapping: {}, safe_error_code: 'PROVIDER_ERROR' },
+    ])
+    render(<ImportedPinePage />)
+    expect(await screen.findByText('Conversion history')).toBeInTheDocument()
+    expect(screen.getByText('nova-ai · pine-model')).toBeInTheDocument()
+    expect(screen.queryByText(/provider_failed/i)).not.toBeInTheDocument()
   })
 
   it('lets an admin provision a one-time managed credential, masked until revealed', async () => {
