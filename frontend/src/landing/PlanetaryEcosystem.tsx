@@ -50,8 +50,7 @@ const MODULES: ModuleItem[] = [
   },
 ]
 
-export function PlanetaryEcosystem() {
-  const [activeNodeId, setActiveNodeId] = useState<string>('Signals')
+export function PlanetaryEcosystem({ onEnterApp }: { onEnterApp?: () => void }) {
   const [, setHoveredIndex] = useState<number | null>(null)
 
   const systemRef = useRef<HTMLDivElement>(null)
@@ -66,7 +65,6 @@ export function PlanetaryEcosystem() {
   const cardContentRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   const lastActiveIndexRef = useRef<number>(-1)
-  const activeModule = MODULES.find((m) => m.id === activeNodeId) || MODULES[0]
 
   useEffect(() => {
     const isMobile = window.innerWidth < 768
@@ -205,9 +203,6 @@ export function PlanetaryEcosystem() {
             }
           )
         }
-
-        // Update active module state so side panel updates
-        setActiveNodeId(MODULES[activeIdx].id)
       }
 
       // 6. CONTINUOUS ANGLE CALCULATIONS VIA GSAP TICKER
@@ -329,14 +324,10 @@ export function PlanetaryEcosystem() {
     }
   }
 
-  const handleCardClick = (index: number) => {
-    setActiveNodeId(MODULES[index].id)
-  }
-
   return (
     <div
       data-component-version="planetary-review-v1"
-      className="flex flex-col lg:flex-row items-center justify-center gap-18 lg:gap-28 w-full max-w-7xl mx-auto"
+      className="flex items-center justify-center w-full max-w-7xl mx-auto"
     >
       {/* ----------------- PLANETARY SYSTEM DIAGRAM CONTAINER ----------------- */}
       <div
@@ -390,7 +381,6 @@ export function PlanetaryEcosystem() {
                           cardContentRefs.current[index] = el
                         }}
                         type="button"
-                        onClick={() => handleCardClick(index)}
                         onMouseEnter={() => handleCardMouseEnter(index)}
                         onMouseLeave={handleCardMouseLeave}
                         onFocus={() => handleCardMouseEnter(index)}
@@ -432,29 +422,26 @@ export function PlanetaryEcosystem() {
           ref={coreMagneticRef}
           className="core-magnetic-wrapper relative z-30 pointer-events-auto will-change-transform"
         >
-          <div ref={corePulseRef} className="core-pulse-wrapper will-change-transform">
-            <div className="nova-core w-36 h-36 sm:w-44 sm:h-44 rounded-full bg-[#06070B] border border-white/20 hover:border-[#2F6BED] transition-colors duration-300 flex flex-col items-center justify-center text-center p-4 shadow-[0_0_30px_rgba(0,0,0,0.8),inset_0_0_20px_rgba(47,107,237,0.05)] cursor-pointer">
+          <div ref={corePulseRef} className="core-pulse-wrapper relative will-change-transform">
+            {/* Attention ring: continuously expands and fades to invite the click */}
+            <span
+              className="absolute inset-0 rounded-full bg-[#2F6BED]/25 animate-ping pointer-events-none"
+              aria-hidden="true"
+            />
+            <button
+              type="button"
+              onClick={onEnterApp}
+              className="nova-core nova-core-bounce relative !rounded-full !border !border-[#2F6BED]/60 hover:!border-[#2F6BED] w-36 h-36 sm:w-44 sm:h-44 !bg-[#06070B] transition-colors duration-300 flex flex-col items-center justify-center text-center p-4 shadow-[0_0_30px_rgba(47,107,237,0.35),inset_0_0_20px_rgba(47,107,237,0.08)] cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#2F6BED]"
+            >
               <span className="text-[10px] uppercase font-medium text-white/50 tracking-wider">
-                CORE SYSTEM
+                Click to begin
               </span>
-              <strong className="text-xs sm:text-sm font-extr-mfont-medium text-[#2F6BED] mt-1 leading-tight">
-                NOVA Signal Engine
+              <strong className="text-sm sm:text-base font-semibold text-[#2F6BED] mt-1 leading-tight">
+                Try NOVA Yourself
               </strong>
-            </div>
+            </button>
           </div>
         </div>
-      </div>
-
-      {/* ----------------- DYNAMIC ACTIVE PILLAR INFO CARD ----------------- */}
-      <div className="w-full max-w-md bg-white/3 border border-white/10 rounded-2xl p-8 backdrop-blur-md ">
-
-        <h3 className="text-2xl font-medium text-white mb-3">
-          {activeModule.label}
-        </h3>
-        <p className="text-sm text-white/70 leading-relaxed mb-6">
-          {activeModule.fullDesc}
-        </p>
-
       </div>
     </div>
   )

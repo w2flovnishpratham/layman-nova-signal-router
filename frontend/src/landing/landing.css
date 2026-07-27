@@ -55,6 +55,19 @@
   }
 }
 
+@keyframes novaCoreBounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.nova-core-bounce {
+  animation: novaCoreBounce 2.4s ease-in-out infinite;
+}
+
 .nova-landing .animate-logo-marquee {
   display: flex;
   width: max-content;
