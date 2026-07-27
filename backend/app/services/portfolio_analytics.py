@@ -414,6 +414,68 @@ def _persist_best_effort(trades: list[dict[str, Any]], wallet: dict[str, Any], k
         logger.debug("Portfolio persistence skipped: %s", exc)
 
 
+def persist_paper_trade(closed_trade: dict[str, Any]) -> None:
+    """Best-effort durable record of one closed Paper trade, so /api/reports
+    (mode=paper) reflects real history instead of always reading back empty.
+    Mirrors _persist_best_effort's live path; idempotent on exit_order_id;
+    never raises.
+    """
+    try:
+        from app.db.engine import database_configured, session_scope
+        from app.db.models import PortfolioTrade
+        from app.services.execution_context import current_execution_user
+    except Exception:
+        return
+    if not database_configured():
+        return
+    user = current_execution_user()
+    if user is None or user.is_dev:
+        return
+    exit_id = closed_trade.get("exit_order_id")
+    if not exit_id:
+        return
+    try:
+        with session_scope() as session:
+            exists = (
+                session.query(PortfolioTrade.id)
+                .filter(
+                    PortfolioTrade.user_id == user.id,
+                    PortfolioTrade.exit_order_id == str(exit_id),
+                )
+                .first()
+            )
+            if exists:
+                return
+            symbol = str(closed_trade.get("symbol") or "") or None
+            option_side = (
+                "CE" if symbol and symbol.endswith("CE") else "PE" if symbol and symbol.endswith("PE") else None
+            )
+            entry_charges = float(closed_trade.get("entry_charges") or 0.0)
+            exit_charges = float(closed_trade.get("exit_charges") or 0.0)
+            realized = float(closed_trade.get("realized_pnl") or 0.0)
+            session.add(
+                PortfolioTrade(
+                    user_id=user.id,
+                    mode="paper",
+                    symbol=symbol,
+                    option_side=option_side,
+                    qty=int(closed_trade.get("qty") or 0),
+                    entry_price=closed_trade.get("entry_price"),
+                    exit_price=closed_trade.get("exit_price"),
+                    entry_charges=entry_charges,
+                    exit_charges=exit_charges,
+                    gross_pnl=round(realized + entry_charges + exit_charges, 2),
+                    realized_pnl=realized,
+                    entry_order_id=closed_trade.get("entry_order_id"),
+                    exit_order_id=str(exit_id),
+                    opened_at=_parse_ts(closed_trade.get("opened_at")) if closed_trade.get("opened_at") else None,
+                    closed_at=_parse_ts(closed_trade.get("closed_at")) if closed_trade.get("closed_at") else None,
+                )
+            )
+    except Exception as exc:  # pragma: no cover - persistence is best effort
+        logger.debug("Paper trade persistence skipped: %s", exc)
+
+
 def build_portfolio_analytics(persist: bool = True) -> dict[str, Any]:
     # LIVE-only: paper trades and the resettable paper wallet are excluded.
     events = read_jsonl("order", limit=_ORDER_LOG_LIMIT)

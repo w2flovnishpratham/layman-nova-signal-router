@@ -1,40 +1,53 @@
 from __future__ import annotations
 
+# Reconciliation boundaries intentionally convert uncertain I/O failures into
+# durable, user-visible operation states instead of leaking provider errors.
+# ruff: noqa: BLE001
 import time
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.services.audit_logger import read_jsonl
-from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_PRODUCT_TYPE, DEFAULT_ORDER_TYPE, settings
+from app.config import (
+    DEFAULT_EXCHANGE_SEGMENT,
+    DEFAULT_ORDER_TYPE,
+    DEFAULT_PRODUCT_TYPE,
+    settings,
+)
 from app.routers.setup import current_nifty_lot_size
 from app.schemas.signal import NormalizedSignal
-from app.services.atm_ltp_service import get_atm_option_snapshot
-from app.services.credential_vault import get_webhook_secret
 from app.services import entitlements, order_idempotency
+from app.services.atm_ltp_service import get_atm_option_snapshot
+from app.services.audit_logger import read_jsonl
+from app.services.credential_vault import get_webhook_secret
 from app.services.execution_context import current_execution_user
 from app.services.execution_router import route_signal
 from app.services.normalized_errors import classify_failure
-from app.services.paper_broker import _simulated_charges
+from app.services.paper_broker import confirm_position_adjustment_fill
 from app.services.paper_portfolio import (
     apply_paper_add_fill,
     apply_paper_partial_exit,
+    get_paper_portfolio,
     paper_wallet_snapshot,
 )
+from app.services.portfolio_analytics import persist_paper_trade
 from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import _market_is_open
-from app.services.security_id_resolver import resolve_security_id, suggest_option_contract
+from app.services.security_id_resolver import (
+    resolve_security_id,
+    suggest_option_contract,
+)
 from app.services.state_store import (
     ensure_open_position_identity,
     get_app_state,
     get_engine_mode,
     get_open_position,
+    get_runtime_settings,
     patch_open_position_cas,
     utc_now,
 )
-
 
 router = APIRouter()
 
@@ -59,9 +72,10 @@ class ManualReverseRequest(BaseModel):
 
 
 class ExitLevelsRequest(BaseModel):
-    stopLossPrice: float = Field(gt=0)
-    targetPrice: float = Field(gt=0)
-    expectedPositionVersion: int | None = Field(default=None, ge=1)
+    unit: Literal["PERCENTAGE", "POINTS", "ABSOLUTE_TRIGGER"]
+    stopLossValue: float = Field(gt=0)
+    targetValue: float = Field(gt=0)
+    expectedPositionVersion: int = Field(ge=1)
 
 
 class QuantityRequest(BaseModel):
@@ -71,11 +85,13 @@ class QuantityRequest(BaseModel):
 class AddLotsRequest(BaseModel):
     lots: int = Field(ge=1, le=20)
     expectedPositionVersion: int = Field(ge=1)
+    protectionMode: Literal["KEEP_EXISTING", "RECALCULATE_FROM_AVERAGE", "CUSTOM"]
+    customStopLossPrice: float | None = Field(default=None, gt=0)
+    customTargetPrice: float | None = Field(default=None, gt=0)
 
 
 class PartialExitRequest(BaseModel):
-    lots: int | None = Field(default=None, ge=1, le=20)
-    percentage: int | None = Field(default=None)
+    lots: int = Field(ge=1, le=20)
     expectedPositionVersion: int = Field(ge=1)
 
 
@@ -86,6 +102,19 @@ class QuoteRequest(BaseModel):
     expiry: str | None = None
     securityId: str | None = None
     tradingSymbol: str | None = None
+
+
+def _missing_position_operation_key(request: Request) -> JSONResponse | None:
+    if str(request.headers.get("Idempotency-Key") or "").strip():
+        return None
+    return JSONResponse(
+        status_code=400,
+        content={
+            "ok": False,
+            "operationState": "REJECTED",
+            "message": "Idempotency-Key header is required for position operations.",
+        },
+    )
 
 
 @router.get("/orders")
@@ -273,6 +302,9 @@ def update_active_position_quantity(body: QuantityRequest) -> dict[str, Any]:
 
 @router.post("/orders/active-position/add-lots")
 def add_active_position_lots(request: Request, body: AddLotsRequest) -> Any:
+    missing_key = _missing_position_operation_key(request)
+    if missing_key is not None:
+        return missing_key
     return _run_manual_operation(
         request=request,
         operation="ADD_LOTS",
@@ -280,20 +312,20 @@ def add_active_position_lots(request: Request, body: AddLotsRequest) -> Any:
         execute=lambda: _apply_paper_position_adjustment(
             operation="add",
             lots=body.lots,
-            percentage=None,
             expected_version=body.expectedPositionVersion,
-            operation_id=str(request.headers.get("Idempotency-Key") or f"PAPER-ADD-{int(time.time() * 1000)}"),
+            operation_id=str(request.headers["Idempotency-Key"]),
+            protection_mode=body.protectionMode,
+            custom_stop_loss=body.customStopLossPrice,
+            custom_target=body.customTargetPrice,
         ),
     )
 
 
 @router.post("/orders/active-position/partial-exit")
 def partial_exit_active_position(request: Request, body: PartialExitRequest) -> Any:
-    if body.lots is None and body.percentage not in {25, 50, 75}:
-        return JSONResponse(
-            status_code=422,
-            content={"ok": False, "message": "Choose 25%, 50%, 75%, or a whole-lot quantity."},
-        )
+    missing_key = _missing_position_operation_key(request)
+    if missing_key is not None:
+        return missing_key
     return _run_manual_operation(
         request=request,
         operation="PARTIAL_EXIT",
@@ -301,9 +333,11 @@ def partial_exit_active_position(request: Request, body: PartialExitRequest) -> 
         execute=lambda: _apply_paper_position_adjustment(
             operation="partial_exit",
             lots=body.lots,
-            percentage=body.percentage,
             expected_version=body.expectedPositionVersion,
-            operation_id=str(request.headers.get("Idempotency-Key") or f"PAPER-PARTIAL-{int(time.time() * 1000)}"),
+            operation_id=str(request.headers["Idempotency-Key"]),
+            protection_mode=None,
+            custom_stop_loss=None,
+            custom_target=None,
         ),
     )
 
@@ -312,19 +346,18 @@ def _apply_paper_position_adjustment(
     *,
     operation: str,
     lots: int | None,
-    percentage: int | None,
     expected_version: int,
     operation_id: str,
+    protection_mode: str | None,
+    custom_stop_loss: float | None,
+    custom_target: float | None,
 ) -> dict[str, Any]:
     mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
     if mode != "paper":
         return {
             "ok": False,
             "operationState": "REJECTED",
-            "message": (
-                "Live add/partial-exit is unavailable until the broker-confirmed "
-                "order flow can preserve one-position and CAS guarantees."
-            ),
+            "message": "Unavailable until broker verification",
         }
     position = ensure_open_position_identity()
     if not position.get("has_open_position"):
@@ -342,56 +375,119 @@ def _apply_paper_position_adjustment(
 
     lot_size = max(int(current_nifty_lot_size() or 1), 1)
     current_qty = int(position.get("qty") or 0)
+    if current_qty <= 0 or current_qty % lot_size:
+        return {
+            "ok": False,
+            "operationState": "REJECTED",
+            "message": "The tracked position is not a whole-lot position.",
+        }
     current_lots = current_qty // lot_size
     live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
-    fill_price = _number(live_pnl.get("ltp") or position.get("entry_price"))
-    if fill_price is None or fill_price <= 0:
+    change_lots = int(lots or 0)
+    if change_lots <= 0:
+        return {"ok": False, "operationState": "REJECTED", "message": "Choose at least one lot."}
+    if operation == "add" and current_lots + change_lots > 20:
+        return {"ok": False, "operationState": "REJECTED", "message": "A position cannot exceed 20 lots."}
+    if operation == "partial_exit" and change_lots >= current_lots:
+        return {
+            "ok": False,
+            "operationState": "REJECTED",
+            "message": "Partial exit must leave at least one whole lot open. Use Exit All to close the position.",
+        }
+    change_qty = change_lots * lot_size
+    portfolio = get_paper_portfolio()
+    open_trade = dict(portfolio.open_trade or {})
+    if not open_trade or int(open_trade.get("qty") or 0) != current_qty:
+        return {
+            "ok": False,
+            "operationState": "RECONCILIATION_REQUIRED",
+            "message": "The Paper ledger does not match the tracked position.",
+        }
+    tracked_contract = str(position.get("trading_symbol") or position.get("security_id") or "")
+    ledger_contract = str(open_trade.get("symbol") or "")
+    if tracked_contract and ledger_contract and tracked_contract != ledger_contract:
+        return {
+            "ok": False,
+            "operationState": "RECONCILIATION_REQUIRED",
+            "message": "The Paper ledger contract does not match the tracked position.",
+        }
+    if operation == "add":
+        risk_error = _paper_add_risk_error(change_qty=change_qty)
+        if risk_error:
+            return {"ok": False, "operationState": "REJECTED", "message": risk_error}
+    fill = confirm_position_adjustment_fill(
+        position=position,
+        qty=change_qty,
+        transaction_type="BUY" if operation == "add" else "SELL",
+        operation_id=operation_id,
+    )
+    if not fill.get("success") or fill.get("status") != "TRADED":
         return {
             "ok": False,
             "operationState": "REJECTED_NO_FRESH_QUOTE",
-            "message": "A retained valid LTP is required before changing position size.",
+            "message": str(fill.get("error") or "A confirmed simulated market fill is unavailable."),
         }
-
+    fill_price = float(fill["fill_price"])
+    charges = float(fill["charges"])
+    fill_order_id = str(fill["order_id"])
     if operation == "add":
-        change_lots = int(lots or 0)
-        change_qty = change_lots * lot_size
-        charges = _simulated_charges(change_qty, fill_price, "BUY")
-        portfolio = paper_wallet_snapshot()
         required = change_qty * fill_price + charges
-        if required > float(portfolio.get("available_balance") or 0):
+        if required > float(portfolio.available_balance or 0):
             return {"ok": False, "operationState": "REJECTED", "message": "Insufficient virtual balance."}
-        entry_price = float(position.get("entry_price") or fill_price)
-        new_qty = current_qty + change_qty
-        new_entry_price = round(((entry_price * current_qty) + (fill_price * change_qty)) / new_qty, 4)
-        event = {
-            "operation_id": operation_id,
-            "type": "ADD_LOTS",
-            "qty": change_qty,
-            "fill_price": fill_price,
-            "accepted_at": utc_now(),
-        }
-    else:
-        if lots is not None:
-            change_lots = int(lots)
-        else:
-            change_lots = max(1, int(current_lots * int(percentage or 0) / 100))
-        if change_lots >= current_lots:
+        entry_price = float(open_trade.get("entry_price") or 0)
+        if entry_price <= 0:
             return {
                 "ok": False,
-                "operationState": "REJECTED",
-                "message": "Partial exit must leave at least one whole lot open. Use Exit Position to close all.",
+                "operationState": "RECONCILIATION_REQUIRED",
+                "message": "The original confirmed entry fill is unavailable.",
             }
-        change_qty = change_lots * lot_size
-        charges = _simulated_charges(change_qty, fill_price, "SELL")
+        tracked_entry_price = _number(position.get("entry_price"))
+        if tracked_entry_price is None or abs(tracked_entry_price - entry_price) > 0.0001:
+            return {
+                "ok": False,
+                "operationState": "RECONCILIATION_REQUIRED",
+                "message": "The Paper ledger average does not match the tracked confirmed entry.",
+            }
+        new_qty = current_qty + change_qty
+        new_entry_price = round(
+            ((entry_price * current_qty) + (fill_price * change_qty)) / new_qty,
+            4,
+        )
+        levels = _add_lots_protection(
+            position=position,
+            live_pnl=live_pnl,
+            mode=str(protection_mode or ""),
+            new_average=new_entry_price,
+            confirmed_fill=fill_price,
+            custom_stop=custom_stop_loss,
+            custom_target=custom_target,
+        )
+        if isinstance(levels, str):
+            return {"ok": False, "operationState": "REJECTED", "message": levels}
+    else:
         new_qty = current_qty - change_qty
-        new_entry_price = float(position.get("entry_price") or fill_price)
-        event = {
-            "operation_id": operation_id,
-            "type": "PARTIAL_EXIT",
-            "qty": change_qty,
-            "fill_price": fill_price,
-            "accepted_at": utc_now(),
+        new_entry_price = float(position.get("entry_price") or open_trade.get("entry_price") or 0)
+        levels = position.get("active_exit_levels")
+
+    if not _mark_adjustment_stage(
+        operation_id,
+        "FILL_CONFIRMED",
+        {"fill_order_id": fill_order_id, "fill_price": fill_price, "filled_qty": change_qty},
+    ):
+        return {
+            "ok": False,
+            "operationState": "RECONCILIATION_REQUIRED",
+            "message": "The fill was confirmed but its durable operation stage could not be recorded.",
         }
+    event = {
+        "operation_id": operation_id,
+        "fill_order_id": fill_order_id,
+        "type": "ADD_LOTS" if operation == "add" else "PARTIAL_EXIT",
+        "qty": change_qty,
+        "fill_price": fill_price,
+        "fill_status": "TRADED",
+        "accepted_at": utc_now(),
+    }
 
     new_live_pnl = dict(live_pnl)
     new_live_pnl["qty"] = new_qty
@@ -402,26 +498,41 @@ def _apply_paper_position_adjustment(
         round(float(new_live_pnl["unrealized_pnl"]) / exposure * 100, 2) if exposure else 0.0
     )
     new_live_pnl["last_checked_at"] = utc_now()
+    position_patch: dict[str, Any] = {
+        "qty": new_qty,
+        "requested_qty": new_qty,
+        "filled_qty": new_qty,
+        "entry_price": new_entry_price,
+        "live_pnl": new_live_pnl,
+        "last_position_operation": event,
+    }
+    if operation == "add" and isinstance(levels, dict):
+        position_patch["active_exit_levels"] = levels
+        new_live_pnl["sl_price"] = levels["stopLossPrice"]
+        new_live_pnl["tp_price"] = levels["targetPrice"]
     applied, updated = patch_open_position_cas(
         position_id=str(position["position_id"]),
         position_version=current_version,
-        patch={
-            "qty": new_qty,
-            "requested_qty": new_qty,
-            "filled_qty": new_qty,
-            "entry_price": new_entry_price,
-            "live_pnl": new_live_pnl,
-            "last_position_operation": event,
-        },
+        patch=position_patch,
         reject_when_exit_pending=True,
     )
     if not applied:
+        _mark_adjustment_stage(
+            operation_id,
+            "RECONCILIATION_REQUIRED",
+            {"reason": "position_cas_conflict"},
+        )
         return {
             "ok": False,
-            "operationState": "POSITION_CHANGED",
-            "message": "The position changed before the operation could be applied.",
+            "operationState": "RECONCILIATION_REQUIRED",
+            "message": "The fill was confirmed but the position changed before it could be applied.",
             "positionVersion": int(updated.get("position_version") or 0),
         }
+    _mark_adjustment_stage(
+        operation_id,
+        "POSITION_APPLIED",
+        {"position_version": int(updated.get("position_version") or 0)},
+    )
 
     try:
         if operation == "add":
@@ -429,33 +540,196 @@ def _apply_paper_position_adjustment(
                 qty=change_qty,
                 fill_price=fill_price,
                 charges=charges,
-                order_id=operation_id,
+                order_id=fill_order_id,
             )
         else:
-            apply_paper_partial_exit(
+            portfolio = apply_paper_partial_exit(
                 qty=change_qty,
                 exit_price=fill_price,
                 charges=charges,
                 symbol=str(position.get("trading_symbol") or position.get("symbol") or "NIFTY"),
-                order_id=operation_id,
+                order_id=fill_order_id,
             )
+            if portfolio.closed_trades:
+                persist_paper_trade(portfolio.closed_trades[-1])
     except Exception:
+        _mark_adjustment_stage(
+            operation_id,
+            "RECONCILIATION_REQUIRED",
+            {"reason": "paper_ledger_write_failed"},
+        )
         return {
             "ok": False,
             "operationState": "RECONCILIATION_REQUIRED",
             "message": "Position state changed, but the Paper ledger requires reconciliation.",
             "positionVersion": int(updated.get("position_version") or 0),
         }
+    _mark_adjustment_stage(operation_id, "LEDGER_APPLIED", {"fill_order_id": fill_order_id})
     return {
         "ok": True,
         "operationState": "POSITION_UPDATED",
+        "status": "TRADED",
         "message": "Lots added." if operation == "add" else "Partial exit completed.",
         "qty": new_qty,
         "lots": new_qty // lot_size,
         "positionVersion": int(updated.get("position_version") or 0),
         "fillPrice": fill_price,
+        "entryPrice": new_entry_price,
+        "fillOrderId": fill_order_id,
+        "activeExitLevels": levels if isinstance(levels, dict) else None,
         "portfolio": paper_wallet_snapshot(),
     }
+
+
+def _paper_add_risk_error(*, change_qty: int) -> str | None:
+    runtime = get_runtime_settings()
+    app_state = get_app_state()
+    if bool(runtime.get("emergency_stop") or app_state.get("emergency_stop")):
+        return "Add Lots is blocked while Emergency Stop is active."
+    if bool(runtime.get("global_kill_switch") or app_state.get("global_kill_switch")):
+        return "Add Lots is blocked while the global kill switch is active."
+    max_qty = int(runtime.get("max_qty_per_order") or 0)
+    if max_qty > 0 and change_qty > max_qty:
+        return f"Add Lots exceeds the configured maximum order quantity of {max_qty}."
+    max_daily_loss = float(runtime.get("max_daily_loss") or 0)
+    session_pnl = paper_wallet_snapshot().get("session_pnl")
+    if (
+        max_daily_loss > 0
+        and isinstance(session_pnl, (int, float))
+        and float(session_pnl) <= -max_daily_loss
+    ):
+        return "Add Lots is blocked because the daily loss cap has been reached."
+    return None
+
+
+def _existing_protection(
+    position: dict[str, Any],
+    live_pnl: dict[str, Any],
+) -> tuple[float | None, float | None, str]:
+    active = (
+        position.get("active_exit_levels")
+        if isinstance(position.get("active_exit_levels"), dict)
+        else {}
+    )
+    stop = _number(
+        active.get("stopLossPrice")
+        or live_pnl.get("sl_price")
+        or position.get("broker_sl_price")
+    )
+    target = _number(
+        active.get("targetPrice")
+        or live_pnl.get("tp_price")
+        or position.get("broker_tp_price")
+    )
+    return stop, target, str(active.get("source") or "existing")
+
+
+def _add_lots_protection(
+    *,
+    position: dict[str, Any],
+    live_pnl: dict[str, Any],
+    mode: str,
+    new_average: float,
+    confirmed_fill: float,
+    custom_stop: float | None,
+    custom_target: float | None,
+) -> dict[str, Any] | str:
+    old_stop, old_target, old_source = _existing_protection(position, live_pnl)
+    source = ""
+    if mode == "KEEP_EXISTING":
+        stop, target, source = old_stop, old_target, old_source
+        if stop is None or target is None:
+            return "Existing SL/TP triggers are unavailable. Choose recalculate or custom protection."
+    elif mode == "RECALCULATE_FROM_AVERAGE":
+        old_average = _number(position.get("entry_price") or live_pnl.get("entry_price"))
+        stop_percent = _number(
+            position.get("stop_loss_percent")
+            or live_pnl.get("stop_loss_percent")
+        )
+        target_percent = _number(
+            position.get("take_profit_percent")
+            or live_pnl.get("take_profit_percent")
+        )
+        if stop_percent is None and old_average and old_stop:
+            stop_percent = max((old_average - old_stop) / old_average * 100, 0)
+        if target_percent is None and old_average and old_target:
+            target_percent = max((old_target - old_average) / old_average * 100, 0)
+        if not stop_percent or not target_percent:
+            return "Saved SL/TP percentages are unavailable. Choose custom protection."
+        stop = round(new_average * (1 - stop_percent / 100), 2)
+        target = round(new_average * (1 + target_percent / 100), 2)
+        source = "add_lots_recalculated"
+    elif mode == "CUSTOM":
+        stop = _number(custom_stop)
+        target = _number(custom_target)
+        source = "add_lots_custom"
+        if stop is None or target is None:
+            return "Custom protection requires both SL and TP trigger prices."
+    else:
+        return "Choose how SL/TP protection should apply after adding lots."
+    if stop is None or target is None or stop <= 0 or target <= 0 or stop >= target:
+        return "Protection requires a positive SL below a positive TP."
+    if stop >= confirmed_fill or target <= confirmed_fill:
+        return "Protection would trigger immediately at the confirmed fill price."
+    return {
+        "source": source,
+        "stopLossPrice": round(stop, 2),
+        "targetPrice": round(target, 2),
+        "acceptedAt": utc_now(),
+        "referenceAverage": new_average,
+    }
+
+
+def _mark_adjustment_stage(
+    operation_id: str,
+    stage: str,
+    metadata: dict[str, Any] | None = None,
+) -> bool:
+    user = current_execution_user()
+    if user is None:
+        # Direct service tests have no request-bound owner. HTTP operations
+        # cannot reach this point without owner-scoped durable idempotency.
+        return True
+    try:
+        order_idempotency.mark_order_intent_stage(
+            user_id=user.id,
+            scope="manual_paper_operation",
+            idempotency_key=operation_id,
+            stage=stage,
+            metadata=metadata,
+        )
+    except (order_idempotency.OrderIdempotencyUnavailable, ValueError):
+        return False
+    return True
+
+
+def _normalize_exit_levels(
+    *,
+    unit: str,
+    stop_value: float,
+    target_value: float,
+    reference_price: float,
+) -> tuple[float, float] | str:
+    if reference_price <= 0 or stop_value <= 0 or target_value <= 0:
+        return "SL/TP values and the confirmed entry price must be positive."
+    if unit == "PERCENTAGE":
+        if stop_value >= 100:
+            return "Stop-loss percentage must be below 100%."
+        stop = reference_price * (1 - stop_value / 100)
+        target = reference_price * (1 + target_value / 100)
+    elif unit == "POINTS":
+        stop = reference_price - stop_value
+        target = reference_price + target_value
+    elif unit == "ABSOLUTE_TRIGGER":
+        stop = stop_value
+        target = target_value
+    else:
+        return "SL/TP unit must be Percentage, Points, or Absolute Trigger."
+    stop = round(stop, 2)
+    target = round(target, 2)
+    if stop <= 0 or not stop < reference_price < target:
+        return "Normalized SL must be below the confirmed entry and TP must be above it."
+    return stop, target
 
 
 @router.patch("/orders/active-position/exit-levels")
@@ -473,26 +747,41 @@ def update_active_position_exit_levels(body: ExitLevelsRequest) -> dict[str, Any
 
     mode = get_engine_mode(legacy_fallback=False) or get_engine_mode()
     current_version = int(position.get("position_version") or 0)
-    if body.expectedPositionVersion is not None and current_version != body.expectedPositionVersion:
+    if current_version != body.expectedPositionVersion:
         return {
             "ok": False,
             "message": "The position changed. Refresh before editing SL/TP.",
             "operationState": "POSITION_CHANGED",
             "positionVersion": current_version,
         }
-    stop_loss = round(float(body.stopLossPrice), 2)
-    target = round(float(body.targetPrice), 2)
     live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
     entry_price = _number(position.get("entry_price") or live_pnl.get("entry_price"))
-    ltp = _number(live_pnl.get("ltp") or entry_price)
-    if stop_loss >= target:
-        return _exit_level_error("Stop loss must be below target price.", mode=mode)
+    if entry_price is None or entry_price <= 0:
+        return _exit_level_error("The confirmed entry price is unavailable.", mode=mode)
+    normalized = _normalize_exit_levels(
+        unit=body.unit,
+        stop_value=body.stopLossValue,
+        target_value=body.targetValue,
+        reference_price=entry_price,
+    )
+    if isinstance(normalized, str):
+        return _exit_level_error(normalized, mode=mode)
+    stop_loss, target = normalized
+    ltp = _number(live_pnl.get("ltp"))
     if ltp is not None and (stop_loss >= ltp or target <= ltp):
-        return _exit_level_error("SL must be below current LTP and TP must be above current LTP.", mode=mode)
+        return _exit_level_error(
+            "SL must be below current LTP and TP must be above current LTP.",
+            mode=mode,
+        )
 
-    # Live Dhan Super Order: push the new SL/TP to the broker legs. Paper and
-    # server-managed positions are handled locally below (no broker call).
-    if str(position.get("exit_management") or "").upper() == "DHAN_SUPER":
+    exit_management = str(position.get("exit_management") or "").upper()
+    if mode == "live" and exit_management != "DHAN_SUPER":
+        return _exit_level_error(
+            "Live SL/TP changes require a confirmed Dhan Super Order.",
+            mode=mode,
+        )
+    # Live display changes only after Dhan confirms both Super Order legs.
+    if mode == "live":
         from app.services.execution_router import apply_manual_super_order_exit_levels
 
         broker_update = apply_manual_super_order_exit_levels(
@@ -506,10 +795,22 @@ def update_active_position_exit_levels(body: ExitLevelsRequest) -> dict[str, Any
                 order_sent_to_broker=False,
                 money_at_risk=mode == "live",
             )
-            return {"ok": False, "message": error["userMessage"], "normalizedError": error}
+            return {
+                "ok": False,
+                "message": error["userMessage"],
+                "operationState": (
+                    "RECONCILIATION_REQUIRED"
+                    if broker_update.get("reconciliation_required")
+                    else "REJECTED"
+                ),
+                "normalizedError": error,
+            }
 
     levels = {
         "source": "manual",
+        "requestUnit": body.unit,
+        "stopLossValue": body.stopLossValue,
+        "targetValue": body.targetValue,
         "stopLossPrice": stop_loss,
         "targetPrice": target,
         "acceptedAt": utc_now(),
@@ -519,7 +820,7 @@ def update_active_position_exit_levels(body: ExitLevelsRequest) -> dict[str, Any
         {
             "sl_price": stop_loss,
             "tp_price": target,
-            "exit_management": str(position.get("exit_management") or "SERVER").upper(),
+            "exit_management": exit_management or "SERVER",
             "message": "Manual SL/TP levels are armed.",
             "last_checked_at": utc_now(),
         }

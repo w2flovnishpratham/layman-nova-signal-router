@@ -242,6 +242,52 @@ def test_admin_review_exact_report_decisions_and_link_are_paper_only(mu_db):
     }).status_code == 404
 
 
+def test_owner_sees_the_rejection_reason_but_not_the_reviewers_identity(mu_db):
+    owner = make_user("pine-reject-owner@example.com")
+    admin = make_user("pine-reject-admin@example.com", is_admin=True)
+    client, admin_client = _client(owner), _client(admin)
+    created = _create(client)
+    strategy_id, version_id = created["strategy"]["id"], created["version"]["id"]
+    client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/validate")
+    client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/submit", json=_acceptance(version_id))
+    admin_client.post(f"/api/admin/pine-reviews/{version_id}/start", json={})
+    rejected = admin_client.post(f"/api/admin/pine-reviews/{version_id}/reject", json={"note": "Unsupported repainting indicator."})
+    assert rejected.status_code == 200
+
+    view = client.get(f"/api/personal-pine-strategies/{strategy_id}").json()
+    history = view["versions"][0]["review_history"]
+    assert [event["decision"] for event in history] == ["started", "rejected"]
+    assert history[-1]["note"] == "Unsupported repainting indicator."
+    assert "reviewer_user_id" not in history[-1]
+    assert str(admin.id) not in str(history)
+
+
+def test_owner_can_withdraw_a_draft_but_not_an_approved_strategy(mu_db):
+    owner = make_user("pine-withdraw-owner@example.com")
+    admin = make_user("pine-withdraw-admin@example.com", is_admin=True)
+    client, admin_client = _client(owner), _client(admin)
+
+    draft = _create(client, name="Draft to withdraw")
+    draft_id = draft["strategy"]["id"]
+    foreign = _client(make_user("pine-withdraw-foreign@example.com"))
+    assert foreign.delete(f"/api/personal-pine-strategies/{draft_id}").status_code == 404
+    withdrawn = client.delete(f"/api/personal-pine-strategies/{draft_id}")
+    assert withdrawn.status_code == 200
+    assert withdrawn.json()["deleted"] is True
+    assert client.get(f"/api/personal-pine-strategies/{draft_id}").status_code == 404
+
+    approved_strategy = _create(client, name="Approved, not withdrawable")
+    strategy_id, version_id = approved_strategy["strategy"]["id"], approved_strategy["version"]["id"]
+    client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/validate")
+    client.post(f"/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/submit", json=_acceptance(version_id))
+    admin_client.post(f"/api/admin/pine-reviews/{version_id}/start", json={})
+    admin_client.post(f"/api/admin/pine-reviews/{version_id}/approve", json={"acknowledge_warnings": True})
+    blocked = client.delete(f"/api/personal-pine-strategies/{strategy_id}")
+    assert blocked.status_code == 409
+    assert blocked.json()["reason"] == "APPROVED_VERSION_EXISTS"
+    assert client.get(f"/api/personal-pine-strategies/{strategy_id}").status_code == 200
+
+
 def test_failing_version_cannot_submit_and_changes_require_new_version(mu_db):
     owner = make_user("pine-changes@example.com")
     admin = make_user("pine-changes-admin@example.com", is_admin=True)

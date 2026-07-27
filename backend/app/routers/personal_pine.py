@@ -66,6 +66,14 @@ def get_strategy(strategy_id: uuid.UUID, user: CurrentUser = Depends(get_current
         return _error(exc)
 
 
+@router.delete("/{strategy_id}")
+def delete_strategy(strategy_id: uuid.UUID, user: CurrentUser = Depends(get_current_user)):
+    try:
+        return {"ok": True, **service.delete_strategy(user.id, strategy_id)}
+    except Exception as exc:
+        return _error(exc)
+
+
 @router.post("/{strategy_id}/versions")
 def create_version(
     strategy_id: uuid.UUID,

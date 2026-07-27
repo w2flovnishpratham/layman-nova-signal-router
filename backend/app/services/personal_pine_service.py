@@ -268,15 +268,35 @@ def list_strategies(user_id: uuid.UUID, *, limit: int = 50, offset: int = 0):
         return {"strategies": payload, "total": total, "limit": limit, "offset": offset}
 
 
+def _review_history(db, version_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Owner-facing review decisions: the decision and reviewer's note, never
+    the reviewer's identity or the admin-only source/audit-read surface."""
+    events = db.scalars(select(models.StrategyAdminReview).where(
+        models.StrategyAdminReview.strategy_version_id == version_id
+    ).order_by(models.StrategyAdminReview.reviewed_at.asc())).all()
+    return [{
+        "decision": event.decision,
+        "note": event.notes,
+        "previous_status": event.previous_status,
+        "new_status": event.new_status,
+        "reviewed_at": event.reviewed_at.isoformat() if event.reviewed_at else None,
+    } for event in events]
+
+
 def get_strategy(user_id: uuid.UUID, strategy_id):
     with session_scope() as db:
         strategy = _owned_strategy(db, user_id, strategy_id)
         versions = db.scalars(select(models.StrategyVersion).where(
             models.StrategyVersion.strategy_id == strategy.id
         ).order_by(models.StrategyVersion.created_at.desc())).all()
+        version_payloads = []
+        for version in versions:
+            payload = _version_public(version, _latest_report(db, version.id))
+            payload["review_history"] = _review_history(db, version.id)
+            version_payloads.append(payload)
         return {
             "strategy": _strategy_public(strategy, latest=versions[0] if versions else None, version_count=len(versions)),
-            "versions": [_version_public(version, _latest_report(db, version.id)) for version in versions],
+            "versions": version_payloads,
         }
 
 
@@ -286,6 +306,7 @@ def get_version(user_id: uuid.UUID, strategy_id, version_id):
         artifact = _artifact(db, version.id)
         payload = _version_public(version, _latest_report(db, version.id))
         payload["filename"] = artifact.original_filename
+        payload["review_history"] = _review_history(db, version.id)
         return payload
 
 
@@ -450,6 +471,38 @@ def submit_version(user_id: uuid.UUID, strategy_id, version_id):
         version.updated_at = _now()
         _audit(db, user_id, "PERSONAL_PINE_SUBMITTED", strategy_id=str(strategy_id), version_id=str(version.id), report_id=str(report.id), source_sha256=version.source_sha256)
         return {"version": _version_public(version, report)}
+
+
+def delete_strategy(user_id: uuid.UUID, strategy_id):
+    """Withdraw an owned strategy and every draft version on it.
+
+    Only reachable while no version has ever been approved and no trading
+    instance links to it — an approved/linked strategy is not a "draft" and
+    must never be deletable out from under a running setup.
+    """
+    with session_scope() as db:
+        strategy = _owned_strategy(db, user_id, strategy_id, lock=True)
+        versions = db.scalars(select(models.StrategyVersion).where(
+            models.StrategyVersion.strategy_id == strategy.id
+        )).all()
+        if any(v.status == "approved" for v in versions):
+            raise PineWorkflowError(
+                "A strategy with an approved version cannot be withdrawn.",
+                409,
+                "APPROVED_VERSION_EXISTS",
+            )
+        linked = db.scalar(select(models.StrategyInstance.id).where(
+            models.StrategyInstance.strategy_id == strategy.id
+        ))
+        if linked is not None:
+            raise PineWorkflowError(
+                "This strategy is linked to a trading instance and cannot be withdrawn.",
+                409,
+                "INSTANCE_LINKED",
+            )
+        _audit(db, user_id, "PERSONAL_PINE_STRATEGY_DELETED", strategy_id=str(strategy.id))
+        db.delete(strategy)
+        return {"deleted": True, "strategy_id": str(strategy.id)}
 
 
 def list_reviews(*, limit: int = 50, offset: int = 0):

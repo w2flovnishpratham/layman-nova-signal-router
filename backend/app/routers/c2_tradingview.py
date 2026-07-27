@@ -289,3 +289,37 @@ def admin_suspend_installation(
         }
     except Exception as exc:  # noqa: BLE001
         return _error(exc)
+
+
+@admin_router.post("/strategy-installations/{installation_id}/promote-paper-verification")
+def admin_promote_paper_verification(
+    installation_id: uuid.UUID,
+    admin: CurrentUser = Depends(require_admin),
+):
+    """Admin-only graduation of a HOLD-verified C2 installation into executable
+    Paper Verification. The only transition that lifts the HOLD-only wall."""
+    try:
+        return {
+            "ok": True,
+            "installation": service.admin_promote_c2_to_paper_verification(
+                admin.id, installation_id
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return _error(exc)
+
+
+@admin_router.post("/strategy-installations/{installation_id}/mark-ready")
+def admin_mark_ready(
+    installation_id: uuid.UUID,
+    admin: CurrentUser = Depends(require_admin),
+):
+    """Admin-only finalization: a verified C2 installation (HOLD + paper entry +
+    paper exit observed) becomes READY for normal automated Paper execution."""
+    try:
+        return {
+            "ok": True,
+            "installation": service.admin_mark_c2_ready(admin.id, installation_id),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return _error(exc)

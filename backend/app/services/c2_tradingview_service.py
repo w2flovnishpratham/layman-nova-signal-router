@@ -35,6 +35,10 @@ SETUP_TO_MODE = {value: key for key, value in MODE_TO_SETUP.items()}
 WEBHOOK_PATH = "/api/webhooks/private"
 PLACEHOLDER = "{{ONE_TIME_CREDENTIAL}}"
 SAFE_MODES = {"signal_only", "paper_live_data"}
+# A C2 installation is inert (HOLD-only) until an admin deliberately promotes it.
+# Only these two setup statuses lift the HOLD-only wall in validate_webhook_hold;
+# the provenance binding (pine_conversion_request_id) is preserved throughout.
+C2_EXECUTABLE_STATUSES = {"PAPER_VERIFICATION", "READY"}
 
 class C2Error(ValueError):
     def __init__(self, message: str, status_code: int = 400, code: str | None = None) -> None:
@@ -651,7 +655,11 @@ def _installation_public(
         "source_sha256": setup.approved_source_sha256,
         "mode": SETUP_TO_MODE.get(setup.setup_type),
         "status": (
-            "PAPER_ELIGIBLE"
+            # A promoted C2 (PAPER_VERIFICATION / READY) reports its real
+            # lifecycle; it must not be masked by the hold-verified display.
+            setup.status
+            if setup.status in C2_EXECUTABLE_STATUSES
+            else "PAPER_ELIGIBLE"
             if readiness["paper_eligible"]
             else "FEATURE_DISABLED"
             if not readiness["gates"]["feature_enabled"]
@@ -1052,6 +1060,89 @@ def suspend_installation(admin_id, installation_id, reason: str) -> dict[str, An
         )
 
 
+def admin_promote_c2_to_paper_verification(admin_id, installation_id) -> dict[str, Any]:
+    """Admin-only, audited graduation of ONE exact C2 version into executable
+    Paper Verification. This is the ONLY transition that lifts the C2 HOLD-only
+    wall; every un-promoted installation stays inert. Live is never enabled, the
+    provenance binding is preserved, and re-promoting is a safe no-op.
+    """
+    _require_enabled()
+    if settings.ENABLE_LIVE_ORDERS or settings.PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED:
+        raise C2Error(
+            "Live execution is enabled; promotion is refused for safety.",
+            409, "LIVE_EXECUTION_SAFETY_BLOCK",
+        )
+    with session_scope() as db:
+        setup = _get_setup(db, installation_id, lock=True)
+        if setup.pine_conversion_request_id is None:
+            raise C2Error("This installation is not a C2 (admin-converted) strategy.", 409, "NOT_C2_INSTALLATION")
+        if setup.status in C2_EXECUTABLE_STATUSES:  # idempotent
+            return _installation_public(db, setup, include_admin=True, include_source=True)
+        if setup.suspended_at is not None or setup.status in {"INSTALLATION_SUSPENDED", "BLOCKED", "RETIRED"}:
+            raise C2Error("This installation is suspended or blocked.", 409, "SETUP_BLOCKED")
+        if setup.hold_verified_at is None or setup.status != "PAPER_ELIGIBLE":
+            raise C2Error("A verified HOLD (PAPER_ELIGIBLE) is required before promotion.", 409, "HOLD_NOT_VERIFIED")
+        # Reaching PAPER_ELIGIBLE is only possible via a real HOLD, which already
+        # ran validate_webhook_hold's full integrity chain (exact approved version
+        # binding, compile evidence, candidate SHA). So the version is proven; we
+        # just require the record still exists (immutable, never overwritten).
+        if db.get(models.StrategyVersion, setup.approved_version_id) is None:
+            raise C2Error("The approved Pine version is missing.", 409, "PINE_VERSION_MISSING")
+        credential = _active_credential(db, setup.strategy_instance_id)
+        if credential is None or credential.id != setup.current_credential_id:
+            raise C2Error("An active private webhook credential is required.", 409, "CREDENTIAL_INACTIVE")
+        instance = db.get(models.StrategyInstance, setup.strategy_instance_id)
+        if instance is None:
+            raise C2Error("Strategy instance not found.", 404, "INSTANCE_NOT_FOUND")
+        if int(instance.current_lots or 0) < 1:
+            raise C2Error("Set a valid lot count before promotion.", 409, "INVALID_LOTS")
+        # Graduate into controlled paper verification. paper_live_data + a live
+        # posture check make a real order impossible; the binding is untouched.
+        instance.execution_mode = "paper_live_data"
+        instance.verification_mode = True
+        instance.verification_started_at = _now()
+        instance.verification_completed_at = None
+        instance.updated_at = _now()
+        setup.status = "PAPER_VERIFICATION"
+        setup.updated_at = _now()
+        crud.add_audit_log(db, user_id=admin_id, action="C2_PROMOTED_TO_PAPER_VERIFICATION", metadata={
+            "actor_user_id": str(admin_id), "owner_user_id": str(setup.user_id),
+            "installation_id": str(setup.id), "instance_id": str(instance.id),
+            "version_id": str(setup.approved_version_id), "new_status": setup.status,
+        })
+        return _installation_public(db, setup, include_admin=True, include_source=True)
+
+
+def admin_mark_c2_ready(admin_id, installation_id) -> dict[str, Any]:
+    """Admin-only, audited finalization: a C2 installation that passed Paper
+    Verification (HOLD + paper entry + paper exit observed) becomes READY. Only
+    READY versions may be selected for normal automated Paper execution. Live is
+    never enabled here; re-marking is a safe no-op."""
+    _require_enabled()
+    from app.domain.strategy_instance_state_machine import InstanceState
+    with session_scope() as db:
+        setup = _get_setup(db, installation_id, lock=True)
+        if setup.status == "READY":  # idempotent
+            return _installation_public(db, setup, include_admin=True, include_source=True)
+        if setup.status != "PAPER_VERIFICATION":
+            raise C2Error("Only a strategy in Paper Verification can be marked Ready.", 409, "NOT_IN_VERIFICATION")
+        instance = db.get(models.StrategyInstance, setup.strategy_instance_id)
+        if instance is None:
+            raise C2Error("Strategy instance not found.", 404, "INSTANCE_NOT_FOUND")
+        instance.verification_mode = False
+        instance.verification_completed_at = _now()
+        instance.status = InstanceState.ACTIVE.value
+        instance.updated_at = _now()
+        setup.status = "READY"
+        setup.updated_at = _now()
+        crud.add_audit_log(db, user_id=admin_id, action="C2_MARKED_READY", metadata={
+            "actor_user_id": str(admin_id), "owner_user_id": str(setup.user_id),
+            "installation_id": str(setup.id), "instance_id": str(instance.id),
+            "version_id": str(setup.approved_version_id),
+        })
+        return _installation_public(db, setup, include_admin=True, include_source=True)
+
+
 def list_installations(
     actor_id: uuid.UUID,
     *,
@@ -1118,6 +1209,13 @@ def validate_webhook_hold(auth: dict[str, Any], action: str | None) -> bool:
         setup = c2_setup_for_instance(db, auth["instance_id"])
         if setup is None:
             return False
+        if setup.status in C2_EXECUTABLE_STATUSES:
+            # An admin has deliberately promoted this exact C2 version (see
+            # admin_promote_c2_to_paper_verification). The provenance binding is
+            # preserved; we simply defer to the normal paper-verification
+            # lifecycle, which executes paper BUY/SELL. Every un-promoted C2
+            # installation below still gets the HOLD-only wall.
+            return False
         if not settings.C2_TRADINGVIEW_INSTALLATION_ENABLED:
             raise C2Error(
                 "TradingView installation is disabled.",
@@ -1125,10 +1223,14 @@ def validate_webhook_hold(auth: dict[str, Any], action: str | None) -> bool:
                 "C2_FEATURE_DISABLED",
             )
         if action != "HOLD":
+            # Intentional wall: a C2 installation is inert until an admin
+            # promotes it. The structured code lets logs and UI identify the
+            # exact next administrative action instead of a bare 409.
             raise C2Error(
-                "C2 installation accepts HOLD verification only.",
+                "This strategy is not executable yet. An administrator must "
+                "promote this C2 version to Paper Verification before it can trade.",
                 409,
-                "C2_HOLD_ONLY",
+                "STRATEGY_NOT_EXECUTABLE",
             )
         if (
             setup.user_id != uuid.UUID(auth["user_id"])

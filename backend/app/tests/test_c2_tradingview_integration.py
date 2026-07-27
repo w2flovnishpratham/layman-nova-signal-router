@@ -510,7 +510,9 @@ def test_non_hold_wrong_and_revoked_credentials_never_verify(c2_app):
         json=_hold(target_credential["token"], action="BUY_CE"),
     )
     assert buy.status_code == 409
-    assert buy.json()["reason"] == "C2_HOLD_ONLY"
+    # Un-promoted C2 is inert: a BUY/SELL is rejected with the structured code so
+    # logs/UI can name the required admin action instead of a bare 409.
+    assert buy.json()["reason"] == "STRATEGY_NOT_EXECUTABLE"
 
     # A foreign credential resolves only its own server-side instance and cannot
     # mark the target installation.
@@ -630,3 +632,69 @@ def test_candidate_mutation_after_compile_fails_closed_everywhere(c2_app):
         assert db.query(models.StrategyExecutionJob).count() == 0
         assert db.query(models.LiveOrderIntent).count() == 0
         assert db.query(models.StrategyInstancePosition).count() == 0
+
+
+def _promote(client, iid):
+    return client.post(f"/api/admin/strategy-installations/{iid}/promote-paper-verification")
+
+
+def test_c2_admin_promotion_lifts_the_gate_only_after_hold_and_only_by_admin(c2_app):
+    client, current, admin, owner, _ = c2_app
+    approved = _approved(client)
+    _compile(client, approved)
+    installation = _install(client, approved, owner.id)
+    iid = installation["id"]
+    current["user"] = owner
+    issued = _credential(client, iid, admin=False)
+
+    # Promotion before a verified HOLD is refused.
+    current["user"] = admin
+    early = _promote(client, iid)
+    assert early.status_code == 409
+    assert early.json()["reason"] == "HOLD_NOT_VERIFIED"
+
+    # Verify routing with a real HOLD -> PAPER_ELIGIBLE.
+    current["user"] = owner
+    assert client.post("/api/webhooks/private", json=_hold(issued["token"])).status_code == 202
+
+    # Still inert: a BUY is rejected with the structured code.
+    buy = client.post("/api/webhooks/private", json=_hold(issued["token"], action="BUY_CE", signal_id="c2-buy-pre"))
+    assert buy.status_code == 409 and buy.json()["reason"] == "STRATEGY_NOT_EXECUTABLE"
+
+    # Non-admin cannot promote.
+    denied = _promote(client, iid)
+    assert denied.status_code in (401, 403)
+
+    # Admin promotes -> PAPER_VERIFICATION, and it is idempotent.
+    current["user"] = admin
+    promoted = _promote(client, iid)
+    assert promoted.status_code == 200, promoted.text
+    assert promoted.json()["installation"]["status"] == "PAPER_VERIFICATION"
+    assert promoted.json()["installation"]["execution_mode"] == "paper_live_data"
+    again = _promote(client, iid)
+    assert again.status_code == 200 and again.json()["installation"]["status"] == "PAPER_VERIFICATION"
+
+    # The C2 gate no longer blocks a BUY (it now reaches the paper lifecycle).
+    current["user"] = owner
+    buy2 = client.post("/api/webhooks/private", json=_hold(issued["token"], action="BUY_CE", signal_id="c2-buy-post"))
+    assert buy2.json().get("reason") != "STRATEGY_NOT_EXECUTABLE"
+
+    # Admin marks the verified version READY.
+    current["user"] = admin
+    ready = client.post(f"/api/admin/strategy-installations/{iid}/mark-ready")
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["installation"]["status"] == "READY"
+
+
+def test_c2_mark_ready_requires_paper_verification_first(c2_app):
+    client, current, admin, owner, _ = c2_app
+    approved = _approved(client)
+    _compile(client, approved)
+    installation = _install(client, approved, owner.id)
+    iid = installation["id"]
+    current["user"] = owner
+    _credential(client, iid, admin=False)
+    # Not promoted yet -> mark-ready refused.
+    current["user"] = admin
+    r = client.post(f"/api/admin/strategy-installations/{iid}/mark-ready")
+    assert r.status_code == 409 and r.json()["reason"] == "NOT_IN_VERIFICATION"

@@ -5,7 +5,10 @@ logic, so they pass regardless of when CI runs.
 """
 from __future__ import annotations
 
+from datetime import date
+
 from app.services import portfolio_analytics as pa
+from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 
 
 def test_payload_is_live_only_and_well_formed():
@@ -81,3 +84,39 @@ def test_empty_when_no_live_trades():
     trades, open_entry = pa._pair_round_trips([paper])
     assert trades == []
     assert open_entry is None
+
+
+def test_paper_exit_persists_a_row_reports_can_read_back(mu_db):
+    """The gap this closes: a closed Paper trade used to vanish into a JSON
+    file the Reports API never reads, so /api/reports(mode=paper) always
+    showed zero trades regardless of real activity."""
+    from app.services import reports_service
+    from app.services.execution_context import bind_user_execution_context
+    from app.services.user_context import current_user_from_model
+
+    user = make_user("paper-persist@example.com")
+    current = current_user_from_model(user)
+    closed_trade = {
+        "symbol": "NIFTY 25000 CE",
+        "qty": 75,
+        "entry_price": 100.0,
+        "exit_price": 110.0,
+        "entry_charges": 5.0,
+        "exit_charges": 5.0,
+        "realized_pnl": 740.0,
+        "entry_order_id": "PAPER-ENTRY-1",
+        "exit_order_id": "PAPER-EXIT-1",
+        "opened_at": "2026-07-27T09:20:00+00:00",
+        "closed_at": "2026-07-27T09:25:00+00:00",
+    }
+    with bind_user_execution_context(current):
+        pa.persist_paper_trade(closed_trade)
+        pa.persist_paper_trade(closed_trade)  # idempotent: must not duplicate
+
+    report = reports_service.build_report(
+        user.id, start=date(2026, 7, 27), end=date(2026, 7, 27), mode="paper"
+    )
+    assert report["totals"]["trades"] == 1
+    assert report["totals"]["net_pnl"] == 740.0
+    assert report["trades"][0]["option_side"] == "CE"
+    assert report["trades"][0]["symbol"] == "NIFTY 25000 CE"

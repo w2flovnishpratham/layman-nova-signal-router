@@ -15,7 +15,12 @@ from app.services.dhan_client import (
     DhanValidationResult,
     RealDhanClient,
 )
-from app.services.paper_portfolio import apply_paper_entry, apply_paper_exit, paper_wallet_snapshot
+from app.services.paper_portfolio import (
+    apply_paper_entry,
+    apply_paper_exit,
+    paper_wallet_snapshot,
+)
+from app.services.portfolio_analytics import persist_paper_trade
 from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import (
@@ -28,7 +33,6 @@ from app.services.state_store import (
     scoped_runtime_path,
     utc_now,
 )
-
 
 _ORDER_LOCK = threading.RLock()
 _ORDERS: list[dict[str, Any]] = []
@@ -113,6 +117,86 @@ def _record_order(order: dict[str, Any]) -> None:
             handle.write(json.dumps({"timestamp": utc_now(), **order}, separators=(",", ":")) + "\n")
 
 
+def confirm_position_adjustment_fill(
+    *,
+    position: dict[str, Any],
+    qty: int,
+    transaction_type: str,
+    operation_id: str,
+) -> dict[str, Any]:
+    """Confirm a market-only Paper fill without mutating the portfolio ledger.
+
+    Add/partial-exit orchestration persists the authoritative JSON position and
+    Paper ledger under its own durable operation. This function contributes
+    only a real-source quote, configured slippage, charges, and a confirmed
+    simulated fill identity.
+    """
+    transaction = str(transaction_type or "").upper()
+    if transaction not in {"BUY", "SELL"} or qty <= 0:
+        return {"success": False, "status": "REJECTED", "error": "Invalid Paper adjustment order."}
+    payload = {
+        "exchangeSegment": str(position.get("exchange_segment") or "NSE_FNO"),
+        "securityId": str(position.get("security_id") or ""),
+        "tradingSymbol": str(
+            position.get("trading_symbol")
+            or position.get("symbol")
+            or "NIFTY option"
+        ),
+    }
+    if not payload["securityId"]:
+        return {
+            "success": False,
+            "status": "REJECTED",
+            "error": "Paper adjustment requires the confirmed position security ID.",
+        }
+    quote = PaperBroker()._ltp(client_id="", access_token="", payload=payload)
+    if not quote.success or quote.ltp is None:
+        return {
+            "success": False,
+            "status": "REJECTED",
+            "error": quote.message or quote.error or "Authoritative option LTP is unavailable.",
+            "quote": quote.raw_response,
+        }
+    runtime = get_runtime_settings()
+    raw_slippage = runtime.get("paper_slippage_percent")
+    slippage_percent = 0.10 if raw_slippage in (None, "") else float(raw_slippage)
+    slippage = max(slippage_percent, 0.0) / 100
+    multiplier = 1 + slippage if transaction == "BUY" else 1 - slippage
+    fill_price = _round_tick(float(quote.ltp) * multiplier)
+    charges = _simulated_charges(qty, fill_price, transaction)
+    order_id = f"PAPER-ADJ-{operation_id[:48]}"
+    fill = {
+        "orderId": order_id,
+        "operationId": operation_id,
+        "orderStatus": "TRADED",
+        "avgPrice": fill_price,
+        "quantity": qty,
+        "filledQty": qty,
+        "remainingQuantity": 0,
+        "transactionType": transaction,
+        "tradingSymbol": payload["tradingSymbol"],
+        "securityId": payload["securityId"],
+        "exchangeSegment": payload["exchangeSegment"],
+        "paper": True,
+        "mode": "paper",
+        "simulatedCharges": charges,
+        "sourceLtp": quote.ltp,
+        "slippagePercent": slippage * 100,
+        "confirmedAdjustmentFill": True,
+    }
+    _record_order(fill)
+    log_order_event({"event": "PAPER_POSITION_ADJUSTMENT_FILLED", **fill})
+    return {
+        "success": True,
+        "status": "TRADED",
+        "order_id": order_id,
+        "fill_price": fill_price,
+        "filled_qty": qty,
+        "charges": charges,
+        "source_ltp": quote.ltp,
+    }
+
+
 class PaperBroker:
     """High-fidelity paper broker. It never calls a Dhan order endpoint."""
 
@@ -159,7 +243,11 @@ class PaperBroker:
             if transaction == "BUY":
                 apply_paper_entry(qty=qty, price=fill_price, charges=charges, symbol=symbol, order_id=order_id)
             else:
-                apply_paper_exit(qty=qty, exit_price=fill_price, charges=charges, symbol=symbol, order_id=order_id)
+                portfolio = apply_paper_exit(
+                    qty=qty, exit_price=fill_price, charges=charges, symbol=symbol, order_id=order_id
+                )
+                if portfolio.closed_trades:
+                    persist_paper_trade(portfolio.closed_trades[-1])
         except ValueError as exc:
             return DhanOrderResult(
                 success=False,
