@@ -179,6 +179,7 @@ def default_daily_risk() -> dict[str, Any]:
         "date_ist": datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat(),
         "entry_count": 0,
         "last_entry_signal_id": None,
+        "last_loss_exit_at": None,
         "updated_at": utc_now(),
     }
 
@@ -795,6 +796,16 @@ def record_entry_trade(signal_id: str) -> dict[str, Any]:
     data = get_daily_risk()
     data["entry_count"] = int(data.get("entry_count") or 0) + 1
     data["last_entry_signal_id"] = signal_id
+    data["updated_at"] = utc_now()
+    return _write_json(_daily_risk_file(), data)
+
+
+def record_losing_exit(realized_pnl: float) -> dict[str, Any]:
+    """Stamp the last losing exit. A break-even or profitable exit is a no-op."""
+    if realized_pnl >= 0:
+        return get_daily_risk()
+    data = get_daily_risk()
+    data["last_loss_exit_at"] = utc_now()
     data["updated_at"] = utc_now()
     return _write_json(_daily_risk_file(), data)
 
