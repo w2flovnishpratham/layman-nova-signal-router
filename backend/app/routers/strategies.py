@@ -389,6 +389,12 @@ def trading_bootstrap(user: CurrentUser = Depends(get_current_user)):
     )
     selected_configuration = setup_configuration.selected_configuration(user.id, mode)
     return {
+        # Every field runtime_status() produces (pnl, config, account, safety,
+        # exit, owner_user_id) belongs in this response too: RuntimeStatus is
+        # the frontend's shared contract for both /api/runtime/status and this
+        # endpoint, and every consumer (Header, EngineConfigCard, ...) trusts
+        # it's always complete.
+        **runtime,
         "ok": True,
         "mode": mode,
         "setup_state": catalog.get("setup_progress"),
