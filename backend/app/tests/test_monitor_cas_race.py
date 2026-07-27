@@ -175,8 +175,9 @@ def test_real_monitor_iteration_patches_when_position_unchanged(tmp_path, monkey
     _base_runtime(monkeypatch)
     opened = _open_identified_position()
 
-    # No exit during quote resolution: the healthy quote must update live_pnl and
-    # bump the position version via compare-and-set.
+    # No exit during quote resolution: the healthy quote must update live_pnl via
+    # compare-and-set, but a cosmetic tick must NOT advance position_version (or
+    # it would invalidate a user's pending Add Lots / Partial Exit / Edit SL-TP).
     monkeypatch.setattr(
         option_position_monitor, "_authoritative_quote", lambda **_k: _quote(140.0)
     )
@@ -185,7 +186,7 @@ def test_real_monitor_iteration_patches_when_position_unchanged(tmp_path, monkey
     final = state_store.get_open_position()
     assert final["has_open_position"] is True
     assert final["position_id"] == opened["position_id"]
-    assert final["position_version"] == opened["position_version"] + 1
+    assert final["position_version"] == opened["position_version"]
     assert final["live_pnl"]["ltp"] == 140.0
 
 

@@ -280,6 +280,10 @@ def _patch_monitor_fields(
         position_version=int(position_version or 0),
         patch=patch,
         reject_when_exit_pending=True,
+        # Cosmetic LTP/live_pnl tick: keep the anti-resurrection CAS guard but do
+        # NOT advance the version, or every tick would break the user's pending
+        # Add Lots / Partial Exit / Edit SL-TP operation.
+        bump_version=False,
     )
     if not applied:
         log_order_event(

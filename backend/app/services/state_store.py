@@ -1,3 +1,4 @@
+# ruff: noqa: BLE001
 """
 File-backed runtime state for the deployable MVP.
 
@@ -9,14 +10,19 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.config import DEFAULT_RUNTIME_SETTINGS, RUNTIME_LOG_DIR, RUNTIME_STATE_DIR, settings
-
+from app.config import (
+    DEFAULT_RUNTIME_SETTINGS,
+    RUNTIME_LOG_DIR,
+    RUNTIME_STATE_DIR,
+    settings,
+)
 
 _LOCK = threading.RLock()
 
@@ -173,8 +179,6 @@ def default_daily_risk() -> dict[str, Any]:
         "date_ist": datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat(),
         "entry_count": 0,
         "last_entry_signal_id": None,
-        # Set only by a losing exit; drives the cooldown-after-loss gate.
-        "last_loss_exit_at": None,
         "updated_at": utc_now(),
     }
 
@@ -481,9 +485,18 @@ def patch_open_position_cas(
     position_version: int,
     patch: dict[str, Any],
     reject_when_exit_pending: bool = False,
+    bump_version: bool = True,
 ) -> tuple[bool, dict[str, Any]]:
     """Merge a field-level patch onto the open position only if identity+version
-    still match. Bumps position_version on success. Returns (applied, position)."""
+    still match. Returns (applied, position).
+
+    ``bump_version`` bumps position_version on success (structural changes).
+    The live-P&L monitor passes ``bump_version=False`` for cosmetic LTP/live_pnl
+    ticks: the CAS still rejects a stale write after an exit/close (the
+    anti-resurrection guard), but it must NOT advance the version — otherwise
+    every quote tick invalidates the user's cached version and blocks Add
+    Lots / Partial Exit / Edit SL-TP with "The position changed. Refresh.".
+    """
     with _LOCK:
         current = get_open_position()
         if not _cas_matches(current, position_id, position_version):
@@ -498,7 +511,7 @@ def patch_open_position_cas(
         merged = {**current, **patch}
         merged["has_open_position"] = True
         merged["position_id"] = position_id
-        merged["position_version"] = int(position_version) + 1
+        merged["position_version"] = int(position_version) + (1 if bump_version else 0)
         return True, set_open_position(merged)
 
 
@@ -782,16 +795,6 @@ def record_entry_trade(signal_id: str) -> dict[str, Any]:
     data = get_daily_risk()
     data["entry_count"] = int(data.get("entry_count") or 0) + 1
     data["last_entry_signal_id"] = signal_id
-    data["updated_at"] = utc_now()
-    return _write_json(_daily_risk_file(), data)
-
-
-def record_losing_exit(realized_pnl: float) -> dict[str, Any]:
-    """Stamp the last losing exit. A break-even or profitable exit is a no-op."""
-    if realized_pnl >= 0:
-        return get_daily_risk()
-    data = get_daily_risk()
-    data["last_loss_exit_at"] = utc_now()
     data["updated_at"] = utc_now()
     return _write_json(_daily_risk_file(), data)
 
