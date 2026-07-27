@@ -239,6 +239,17 @@ export interface TradingBootstrap extends RuntimeStatus {
   }
 }
 
+// A 200 response that parses as JSON is not proof it has the shape every
+// consumer trusts (engine/pnl/config/position, unguarded, throughout the
+// app). Reject an incomplete snapshot here, once, so it surfaces through the
+// error handling every caller already has instead of crashing a render deep
+// in some component that assumed the contract always holds.
+function assertRuntimeShape<T extends RuntimeStatus>(body: T | null, context: string): asserts body is T {
+  if (!body?.engine || !body.pnl || !body.config || !body.position) {
+    throw new Error(`${context} response was incomplete.`)
+  }
+}
+
 async function runtimeCall(
   path: `/${string}`,
   method = 'GET',
@@ -263,6 +274,7 @@ async function runtimeCall(
     throw new Error(message || body?.message || `Runtime request failed: ${response.status}`)
   }
   if (!body) throw new Error('Runtime response was empty.')
+  assertRuntimeShape(body, 'Runtime status')
   return body
 }
 
@@ -277,6 +289,7 @@ export async function getTradingBootstrap(): Promise<TradingBootstrap> {
     throw new Error(body?.detail || body?.message || `Trading bootstrap failed: ${response.status}`)
   }
   if (!body) throw new Error('Trading bootstrap response was empty.')
+  assertRuntimeShape(body, 'Trading bootstrap')
   return body
 }
 export const startSelectedEngine = (

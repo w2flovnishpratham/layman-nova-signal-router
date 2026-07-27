@@ -22,8 +22,11 @@ const LIME_RGB = /rgba?\(\s*(192\s*,\s*245\s*,\s*61|177\s*,\s*228\s*,\s*57|160\s
 
 describe('landing palette', () => {
   it('covers every landing source file', () => {
-    expect(sources.length).toBeGreaterThanOrEqual(4)
-    expect(sources.map((s) => s.name).join(' ')).toContain('components/')
+    // The landing page was reduced to just the orbiting diagram: LandingPage
+    // (the shell) and PlanetaryEcosystem (the diagram itself). No components/
+    // subdirectory remains.
+    expect(sources.length).toBeGreaterThanOrEqual(2)
+    expect(sources.map((s) => s.name).join(' ')).toContain('PlanetaryEcosystem')
   })
 
   it('no longer uses lime in hex form', () => {
@@ -42,14 +45,18 @@ describe('landing palette', () => {
 
   it('uses electric blue as the primary accent', () => {
     expect(combined).toContain(ELECTRIC_BLUE)
-    // It replaced the accent wholesale, not just in one spot.
-    expect(combined.split(ELECTRIC_BLUE).length - 1).toBeGreaterThan(20)
+    // It's the accent throughout the diagram, not just one spot. The
+    // threshold is scaled to the simplified page (just the orbiting diagram),
+    // not the old multi-section marketing page.
+    expect(combined.split(ELECTRIC_BLUE).length - 1).toBeGreaterThan(10)
   })
 
-  it('reserves purple for the editorial NOVA voice', () => {
-    expect(combined).toContain(PURPLE)
-    // Every purple use is an italic emphasis, never a button or a border.
-    for (const match of combined.matchAll(/class(?:Name)?="([^"]*#9B5CFF[^"]*)"/g)) {
+  it('never uses purple outside of an italic editorial emphasis', () => {
+    // The editorial-voice hero copy that used purple was removed along with
+    // the rest of the marketing page; purple is no longer required to be
+    // present, but if it ever returns it must stay an italic emphasis, never
+    // a button or a border.
+    for (const match of combined.matchAll(new RegExp(`class(?:Name)?="([^"]*${PURPLE}[^"]*)"`, 'g'))) {
       expect(match[1]).toMatch(/italic/)
     }
   })
@@ -73,6 +80,6 @@ describe('landing palette', () => {
   it('keeps the CTA that enters the authenticated app', () => {
     // The CTA is a callback the router turns into /app navigation, not a raw href.
     expect(combined).toContain('onEnterApp')
-    expect(combined).toContain('Launch Trading Platform')
+    expect(combined).toContain('Try NOVA Yourself')
   })
 })

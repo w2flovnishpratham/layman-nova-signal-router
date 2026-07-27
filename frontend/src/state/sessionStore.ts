@@ -194,6 +194,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       || event.type === 'trade.exit'
       || event.type === 'position.update'
       || event.type === 'session.eod'
+      || event.type === 'session.error'
+      || event.type === 'order.rejected'
+      || event.type === 'system.event'
       || event.type === 'bot.message'
     )) {
       window.dispatchEvent(new CustomEvent('nova:terminal-delta', { detail: event }))
@@ -250,6 +253,10 @@ export function applyManualOrderHydration(response: ManualOrderResponse): void {
 
 /** Merge the owner-scoped runtime poll without overwriting a newer push. */
 export function applyRuntimeHydration(status: RuntimeStatus, requestStartedAt = Date.now()): void {
+  // Defense in depth: the API layer already rejects an incomplete snapshot
+  // before it reaches any caller, but never trust an external object's shape
+  // twice removed from its own type declaration.
+  if (!status?.engine || !status.pnl || !status.config || !status.position) return
   const current = useSessionStore.getState()
   const engineMode = status.engine.mode
   const setupState: SetupState = status.engine.state === 'RUNNING'

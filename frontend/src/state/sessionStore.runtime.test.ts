@@ -48,6 +48,20 @@ beforeEach(() => {
 })
 
 describe('runtime REST hydration failover', () => {
+  it('ignores an incomplete snapshot instead of crashing on a missing pnl/config', () => {
+    applyRuntimeHydration(runtime(), 100)
+    const before = useSessionStore.getState()
+
+    const incomplete = runtime()
+    // @ts-expect-error -- simulating a malformed network response, not a valid RuntimeStatus
+    delete incomplete.pnl
+    expect(() => applyRuntimeHydration(incomplete, 200)).not.toThrow()
+
+    const after = useSessionStore.getState()
+    expect(after.wallet).toBe(before.wallet)
+    expect(after.marginUtilized).toBe(before.marginUtilized)
+  })
+
   it('hydrates lifecycle, LTP, P&L, and server-managed risk from REST', () => {
     applyRuntimeHydration(runtime(), 100)
     const state = useSessionStore.getState()
