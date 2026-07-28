@@ -21,7 +21,7 @@ export interface Preferences {
 }
 
 export const TABLE_DENSITIES = ['comfortable', 'compact'] as const
-export const CHART_TIMEFRAMES = ['1m', '3m', '5m', '15m', '1h', '1d'] as const
+export const CHART_TIMEFRAMES = ['1m', '5m', '15m'] as const
 
 export async function getPreferences(): Promise<Preferences> {
   const response = await fetch(backendHttpUrl('/api/preferences'), { credentials: 'include', cache: 'no-store' })

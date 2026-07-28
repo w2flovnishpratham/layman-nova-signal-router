@@ -11,19 +11,22 @@ import { AutomationsPage } from './AutomationsPage'
 
 const overview = (over: Record<string, unknown> = {}) => ({
   ok: true,
-  storage: 'runtime_settings',
+  storage: 'configuration_revision',
+  configuration_id: 'config-1',
+  configuration_revision: 4,
+  mode: 'paper',
   editable: [
     {
-      key: 'cooldown_after_loss_minutes', label: 'Cooldown after a losing trade', value: 30,
-      unit: 'minutes', minimum: 0, maximum: 390, zero_means: 'no cooldown',
-      basis: 'Measured from the exit that booked a negative realised P&L.',
+      key: 'max_trades_per_day', label: 'Maximum trades per day', value: 3,
+      unit: 'entries', minimum: 0, maximum: 50, zero_means: 'no cap',
+      basis: 'Counts entries recorded for the current IST trading day.',
       effect: 'Applies to next entry', requires_restart: false, affects_open_position: false,
     },
     {
       key: 'max_daily_loss', label: 'Daily loss cap', value: 25000,
       unit: 'rupees', minimum: 0, maximum: 10000000, zero_means: 'no cap',
-      basis: 'Compared against the session P&L; hitting it hard-stops and squares off.',
-      effect: 'Applies immediately', requires_restart: false, affects_open_position: true,
+      basis: 'Compared against session P&L.',
+      effect: 'Applies to next entry', requires_restart: false, affects_open_position: false,
     },
   ],
   protected: [
@@ -43,7 +46,11 @@ const overview = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
-afterEach(() => { cleanup(); apiMocks.getAutomations.mockReset(); apiMocks.saveAutomations.mockReset() })
+afterEach(() => {
+  cleanup()
+  apiMocks.getAutomations.mockReset()
+  apiMocks.saveAutomations.mockReset()
+})
 
 describe('AutomationsPage', () => {
   it('offers no way to disable a protected rule', async () => {
@@ -51,61 +58,65 @@ describe('AutomationsPage', () => {
     render(<AutomationsPage />)
     const section = within(await screen.findByRole('region', { name: 'Protected rules' }))
     expect(section.getByText('Duplicate-exit protection')).toBeInTheDocument()
-    expect(section.getByText('Confirmed-flat handling')).toBeInTheDocument()
-    // No control of any kind inside the protected section.
     expect(section.queryByRole('checkbox')).toBeNull()
     expect(section.queryByRole('button')).toBeNull()
     expect(section.queryByRole('textbox')).toBeNull()
   })
 
-  it('labels when each editable rule takes effect', async () => {
+  it('labels every editable rule as future-entry only', async () => {
     apiMocks.getAutomations.mockResolvedValue(overview())
     render(<AutomationsPage />)
-    expect(await screen.findByText('Applies to next entry')).toBeInTheDocument()
-    expect(screen.getByText('Applies immediately')).toBeInTheDocument()
-    expect(screen.getAllByText('Protected system rule')).toHaveLength(2)
+    expect(await screen.findAllByText('Applies to next entry')).toHaveLength(2)
+    expect(screen.getAllByText(/does not touch the position that is open now/i)).toHaveLength(2)
   })
 
-  it('says whether a rule can act on the position that is open now', async () => {
+  it('reviews multiple draft changes and confirms exactly one revision', async () => {
     apiMocks.getAutomations.mockResolvedValue(overview())
+    apiMocks.saveAutomations.mockResolvedValue(overview({
+      configuration_id: 'config-2',
+      configuration_revision: 5,
+      editable: [
+        { ...overview().editable[0], value: 6 },
+        { ...overview().editable[1], value: 10000 },
+      ],
+    }))
     render(<AutomationsPage />)
-    expect(await screen.findByText(/can act on the position that is open now/i)).toBeInTheDocument()
-    expect(screen.getByText(/does not touch the position that is open now/i)).toBeInTheDocument()
+
+    fireEvent.change(await screen.findByLabelText('Maximum trades per day'), { target: { value: '6' } })
+    fireEvent.change(screen.getByLabelText('Daily loss cap'), { target: { value: '10000' } })
+    expect(apiMocks.saveAutomations).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review Changes' }))
+    const review = screen.getByRole('region', { name: 'Review automation changes' })
+    expect(within(review).getByText(/revision 4/i)).toBeInTheDocument()
+    expect(within(review).getByText('25000 → 10000')).toBeInTheDocument()
+    fireEvent.click(within(review).getByRole('button', { name: 'Confirm Update' }))
+
+    await waitFor(() => expect(apiMocks.saveAutomations).toHaveBeenCalledTimes(1))
+    expect(apiMocks.saveAutomations).toHaveBeenCalledWith(
+      'config-1',
+      4,
+      { max_trades_per_day: 6, max_daily_loss: 10000 },
+    )
   })
 
-  it('saves a cooldown change', async () => {
+  it('canceling review persists nothing', async () => {
     apiMocks.getAutomations.mockResolvedValue(overview())
-    apiMocks.saveAutomations.mockResolvedValue(overview())
     render(<AutomationsPage />)
-
-    fireEvent.change(await screen.findByLabelText('Cooldown after a losing trade'), { target: { value: '45' } })
-    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
-    await waitFor(() => expect(apiMocks.saveAutomations).toHaveBeenCalledWith({ cooldown_after_loss_minutes: 45 }))
-  })
-
-  it('saves a daily limit change', async () => {
-    apiMocks.getAutomations.mockResolvedValue(overview())
-    apiMocks.saveAutomations.mockResolvedValue(overview())
-    render(<AutomationsPage />)
-
     fireEvent.change(await screen.findByLabelText('Daily loss cap'), { target: { value: '10000' } })
-    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[1])
-    await waitFor(() => expect(apiMocks.saveAutomations).toHaveBeenCalledWith({ max_daily_loss: 10000 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Review Changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('region', { name: 'Review automation changes' })).toBeNull()
+    expect(apiMocks.saveAutomations).not.toHaveBeenCalled()
   })
 
-  it('surfaces a rejected out-of-bounds value from the server', async () => {
+  it('surfaces a stale confirmation conflict', async () => {
     apiMocks.getAutomations.mockResolvedValue(overview())
-    apiMocks.saveAutomations.mockRejectedValue(new Error('Cooldown after a losing trade must be between 0 and 390 minutes.'))
+    apiMocks.saveAutomations.mockRejectedValue(new Error('This configuration was changed elsewhere.'))
     render(<AutomationsPage />)
-
-    fireEvent.change(await screen.findByLabelText('Cooldown after a losing trade'), { target: { value: '5000' } })
-    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
-    expect(await screen.findByRole('alert')).toHaveTextContent(/between 0 and 390 minutes/i)
-  })
-
-  it('states that no separate rules engine backs these controls', async () => {
-    apiMocks.getAutomations.mockResolvedValue(overview())
-    render(<AutomationsPage />)
-    expect(await screen.findByText(/there is no separate rules engine/i)).toBeInTheDocument()
+    fireEvent.change(await screen.findByLabelText('Daily loss cap'), { target: { value: '10000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Review Changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Update' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/changed elsewhere/i)
   })
 })

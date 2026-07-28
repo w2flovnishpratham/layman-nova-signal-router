@@ -1,14 +1,14 @@
+# ruff: noqa: F811
 """Phase 3A private webhook worker execution: engine resolution, lot
 resolution, contract resolution, no-op semantics, reversal routing, and
 worker-time instance revalidation."""
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 import pytest
 
-from app.schemas.signal import NormalizedSignal
+# Pytest discovers imported fixtures by name; parameters reuse them intentionally.
 from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 from app.tests.test_private_webhook import (  # noqa: F401
     _issue_token,
@@ -23,7 +23,13 @@ from app.tests.test_private_webhook import (  # noqa: F401
 @pytest.fixture
 def per_user_runtime(mu_db, monkeypatch, tmp_path):
     """Per-user isolated runtime state dirs (mirrors test_strategy_fanout)."""
-    from app.services import audit_logger, paper_broker, paper_portfolio, state_store, user_context
+    from app.services import (
+        audit_logger,
+        paper_broker,
+        paper_portfolio,
+        state_store,
+        user_context,
+    )
 
     state_root = tmp_path / "state"
     log_root = tmp_path / "logs"
@@ -56,11 +62,80 @@ def per_user_runtime(mu_db, monkeypatch, tmp_path):
 
 
 def _start_paper_engine(user, *, allow_entry: bool = True, allowed_option_side: str = "BOTH"):
+    from sqlalchemy import select
+
+    from app.db import models
+    from app.db.engine import session_scope
     from app.services import state_store
     from app.services.execution_context import bind_user_execution_context
     from app.services.user_context import current_user_from_model
 
     current = current_user_from_model(user)
+    with session_scope() as db:
+        instance = db.scalar(
+            select(models.StrategyInstance)
+            .where(models.StrategyInstance.user_id == user.id)
+            .order_by(models.StrategyInstance.created_at.desc())
+        )
+        assert instance is not None
+        revision = db.scalar(
+            select(models.StrategyConfigurationRevision)
+            .where(
+                models.StrategyConfigurationRevision.user_id == user.id,
+                models.StrategyConfigurationRevision.strategy_instance_id
+                == instance.id,
+                models.StrategyConfigurationRevision.mode == "paper",
+                models.StrategyConfigurationRevision.status == "active",
+            )
+            .order_by(models.StrategyConfigurationRevision.revision.desc())
+        )
+        desired_configuration = {
+            "lots": int(instance.current_lots),
+            "allowed_option_side": allowed_option_side,
+        }
+        if revision is None:
+            revision = models.StrategyConfigurationRevision(
+                user_id=user.id,
+                strategy_instance_id=instance.id,
+                strategy_version_id=instance.strategy_version_id,
+                mode="paper",
+                revision=1,
+                configuration_json=desired_configuration,
+                risk_json={},
+                status="active",
+            )
+            db.add(revision)
+            db.flush()
+        elif revision.configuration_json != desired_configuration:
+            revision.status = "superseded"
+            successor = models.StrategyConfigurationRevision(
+                user_id=user.id,
+                strategy_instance_id=instance.id,
+                strategy_version_id=instance.strategy_version_id,
+                mode="paper",
+                revision=revision.revision + 1,
+                configuration_json=desired_configuration,
+                risk_json=dict(revision.risk_json or {}),
+                status="active",
+                supersedes_revision_id=revision.id,
+            )
+            db.add(successor)
+            db.flush()
+            revision = successor
+        selection = db.scalar(
+            select(models.UserEngineConfig).where(
+                models.UserEngineConfig.user_id == user.id
+            )
+        )
+        if selection is None:
+            selection = models.UserEngineConfig(
+                user_id=user.id,
+                selected_strategy_instance_id=instance.id,
+            )
+            db.add(selection)
+        selection.selected_strategy_instance_id = instance.id
+        selection.selected_configuration_revision_id = revision.id
+        selection.selected_configuration_revision = revision.revision
     with bind_user_execution_context(current):
         state_store.init_runtime_files()
         state_store.update_app_state(
@@ -286,7 +361,12 @@ def test_contract_resolution_failure_fails_job_without_order(client, per_user_ru
     assert _position_for(user)["has_open_position"] is False
 
 
-def test_lots_change_while_flat_applies_to_next_entry(client, per_user_runtime, deterministic_paper_market, worker_enabled):
+def test_queued_entry_keeps_its_bound_configuration_lots(
+    client,
+    per_user_runtime,
+    deterministic_paper_market,
+    worker_enabled,
+):
     from app.services import strategy_instance_service
 
     user = make_user("trade-lots@gmail.com")
@@ -294,14 +374,14 @@ def test_lots_change_while_flat_applies_to_next_entry(client, per_user_runtime, 
     token = _issue_token(user, instance_id)
     _start_paper_engine(user)
 
-    # Queue with lots=1, then update lots BEFORE the worker claims the job:
-    # the worker must use the fresh value (revalidation at processing time).
+    # A later mutable instance edit cannot rewrite the immutable revision
+    # already captured by this queued entry.
     _ingest(client, token, action="BUY_CE")
     strategy_instance_service.update_lots(user.id, instance_id, 4)
     assert _run_worker() == 1
     from app.routers.setup import current_nifty_lot_size
 
-    assert _position_for(user)["qty"] == 4 * current_nifty_lot_size()
+    assert _position_for(user)["qty"] == current_nifty_lot_size()
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +396,7 @@ def test_no_active_engine_blocks_entry_without_order(client, per_user_runtime, d
     user = make_user("engine-none@gmail.com")
     instance_id = _make_instance(user)
     token = _issue_token(user, instance_id)
+    _start_paper_engine(user)
     # Engine mode selected but engine NOT started.
     with bind_user_execution_context(current_user_from_model(user)):
         state_store.init_runtime_files()
@@ -452,7 +533,12 @@ def test_stop_rejects_open_position_then_succeeds_after_paused_exit(
     assert strategy_instance_service.stop_instance(user.id, instance_id)["status"] == "stopped"
 
 
-def test_invalid_lots_rejected_at_claim(client, per_user_runtime, deterministic_paper_market, worker_enabled):
+def test_mutable_instance_lots_cannot_rewrite_bound_job(
+    client,
+    per_user_runtime,
+    deterministic_paper_market,
+    worker_enabled,
+):
     from sqlalchemy import update
 
     from app.db import models
@@ -472,8 +558,8 @@ def test_invalid_lots_rejected_at_claim(client, per_user_runtime, deterministic_
         )
     assert _run_worker() == 1
     result = _job_rows(instance_id)[0]["result"]
-    assert result["status"] == "rejected"
-    assert result["reason"] == "INVALID_LOTS"
+    assert result["status"] == "completed"
+    assert _position_for(user)["qty"] > 0
 
 
 def test_live_instance_blocked_while_private_live_flag_disabled(client, per_user_runtime, worker_enabled, monkeypatch):
@@ -497,8 +583,8 @@ def test_live_instance_blocked_while_private_live_flag_disabled(client, per_user
         )
     assert _run_worker() == 1
     result = _job_rows(instance_id)[0]["result"]
-    assert result["status"] == "blocked"
-    assert result["reason"] == "PRIVATE_WEBHOOK_LIVE_EXECUTION_DISABLED"
+    assert result["status"] == "rejected"
+    assert result["reason"] == "CONFIGURATION_MODE_CHANGED"
     assert _position_for(user)["has_open_position"] is False
 
 

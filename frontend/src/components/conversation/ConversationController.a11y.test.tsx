@@ -90,7 +90,7 @@ describe('ConversationController — keyboard-only operation', () => {
     const save = await screen.findByRole('button', { name: /save setup/i })
     save.focus()
     await user.keyboard('{Enter}')
-    const start = await screen.findByRole('button', { name: /start engine/i })
+    const start = await screen.findByRole('button', { name: /start paper/i })
     start.focus()
     await user.keyboard('{Enter}')
     expect(onSave).toHaveBeenCalledTimes(1)

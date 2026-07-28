@@ -4,7 +4,9 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.domain.trading_constants import DEFAULT_EXCHANGE_SEGMENT  # noqa: F401 - compatibility re-export
+from app.domain.trading_constants import (
+    DEFAULT_EXCHANGE_SEGMENT,  # noqa: F401 - compatibility re-export
+)
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -42,9 +44,6 @@ DEFAULT_RUNTIME_SETTINGS = {
     "configured_lots": 1,
     "max_trades_per_day": 0,
     "max_daily_loss": 0.0,
-    # Minutes to block new entries after a losing exit. 0 disables the
-    # cooldown entirely; it never blocks exits, only entries.
-    "cooldown_after_loss_minutes": 0,
     # No new entries after this IST time ("HH:MM"). Empty disables the cutoff.
     # It never blocks exits, so an open position can always be closed.
     "entry_cutoff_ist": "",

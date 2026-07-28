@@ -1,13 +1,16 @@
+# ruff: noqa: B008
 """Signals read endpoint - owner-scoped list of inbound webhook signal events."""
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_user, get_execution_scoped_user
 from app.services import (
     automations_overview,
     credentials_overview,
@@ -133,12 +136,11 @@ def write_preferences(payload: PreferencesPayload, user: CurrentUser = Depends(g
 
 
 class AutomationsPayload(BaseModel):
-    """Only the four approved editable rules; anything else is refused."""
+    """One reviewed batch against one exact selected configuration revision."""
 
-    cooldown_after_loss_minutes: int | None = None
-    max_trades_per_day: int | None = None
-    max_daily_loss: float | None = None
-    entry_cutoff_ist: str | None = None
+    configuration_id: uuid.UUID
+    expected_revision: int
+    changes: dict[str, Any]
 
 
 class AlertAcknowledgementPayload(BaseModel):
@@ -147,36 +149,69 @@ class AlertAcknowledgementPayload(BaseModel):
 
 @router.get("/trading/activity")
 def trading_activity(
+    mode: str | None = Query(None, pattern="^(paper|live)$"),
+    run_id: str | None = Query(None),
+    cursor: str | None = Query(None),
     limit: int = Query(100, ge=1, le=200),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_execution_scoped_user),
 ):
-    return terminal_feeds.activity(user.id, limit=limit)
+    return terminal_feeds.activity(
+        user.id,
+        mode=mode,
+        run_id=run_id,
+        cursor=cursor,
+        limit=limit,
+    )
 
 
 @router.get("/trading/engine-log")
 def trading_engine_log(
+    mode: str | None = Query(None, pattern="^(paper|live)$"),
+    run_id: str | None = Query(None),
+    cursor: str | None = Query(None),
     limit: int = Query(100, ge=1, le=200),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_execution_scoped_user),
 ):
-    return terminal_feeds.engine_log(limit=limit)
+    return terminal_feeds.engine_log(
+        user.id,
+        mode=mode,
+        run_id=run_id,
+        cursor=cursor,
+        limit=limit,
+    )
 
 
 @router.get("/trading/executions")
 def trading_executions(
+    mode: str | None = Query(None, pattern="^(paper|live)$"),
+    run_id: str | None = Query(None),
+    cursor: str | None = Query(None),
     limit: int = Query(100, ge=1, le=200),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_execution_scoped_user),
 ):
-    return terminal_feeds.executions(limit=limit)
+    return terminal_feeds.executions(
+        user.id,
+        mode=mode,
+        run_id=run_id,
+        cursor=cursor,
+        limit=limit,
+    )
 
 
 @router.get("/trading/alerts")
 def trading_alerts(
+    mode: str | None = Query(None, pattern="^(paper|live)$"),
+    run_id: str | None = Query(None),
+    cursor: str | None = Query(None),
     limit: int = Query(100, ge=1, le=200),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_execution_scoped_user),
 ):
     return terminal_feeds.alerts(
         user.id,
         runtime=runtime_reliability.runtime_status(user),
+        mode=mode,
+        run_id=run_id,
+        cursor=cursor,
         limit=limit,
     )
 
@@ -184,28 +219,61 @@ def trading_alerts(
 @router.post("/trading/alerts/acknowledge-visible")
 def acknowledge_visible_alerts(
     payload: AlertAcknowledgementPayload,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_execution_scoped_user),
 ):
-    return {"ok": True, "acknowledged": terminal_feeds.acknowledge(user.id, payload.event_ids)}
+    runtime = runtime_reliability.runtime_status(user)
+    try:
+        acknowledged = terminal_feeds.acknowledge(
+            user.id,
+            payload.event_ids,
+            runtime=runtime,
+        )
+    except terminal_feeds.ActiveAlertAcknowledgementError as exc:
+        return JSONResponse(
+            status_code=409,
+            content={"ok": False, "error": str(exc), "acknowledged": 0},
+        )
+    return {"ok": True, "acknowledged": acknowledged}
 
 
 @router.get("/automations")
 def read_automations(user: CurrentUser = Depends(get_current_user)):
     """Editable risk controls plus the protected policies, which have no toggle."""
-    return automations_overview.build_automations_overview()
+    return automations_overview.build_automations_overview(user.id)
 
 
 @router.put("/automations")
 def write_automations(payload: AutomationsPayload, user: CurrentUser = Depends(get_current_user)):
-    from app.routers.setup import _save_risk_settings
-
-    values = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
-    if not values:
-        return {"ok": True, **automations_overview.build_automations_overview()}
     try:
-        clean = automations_overview.validate_automation_changes(values)
+        clean = automations_overview.validate_automation_changes(payload.changes)
     except automations_overview.AutomationError as exc:
         return JSONResponse(status_code=422, content={"ok": False, "error": str(exc)})
-    # Written through the existing risk-settings save, which audits the change.
-    _save_risk_settings(clean)
-    return {"ok": True, **automations_overview.build_automations_overview()}
+    if not clean:
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "error": "No automation changes were supplied."},
+        )
+    from app.services import setup_configuration
+
+    try:
+        revision = setup_configuration.revise_automation_configuration(
+            user.id,
+            configuration_id=payload.configuration_id,
+            expected_revision=payload.expected_revision,
+            changes=clean,
+        )
+    except setup_configuration.ConfigurationConflict as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error": exc.message,
+                "code": exc.code,
+                "expected_revision": exc.expected,
+                "current_revision": exc.current,
+            },
+        )
+    return {
+        **automations_overview.build_automations_overview(user.id),
+        "confirmed_revision": revision,
+    }

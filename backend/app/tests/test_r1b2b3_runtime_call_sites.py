@@ -66,7 +66,7 @@ def test_outcome_and_rejection_writers_remain_disconnected():
         ] == []
 
 
-def test_trading_ingress_guard_is_fresh_non_duplicate_trading_only():
+def test_trading_ingress_guard_is_fresh_claimant_trading_only():
     tree = ast.parse(INGRESS.read_text(encoding="utf-8"))
     calls = [
         node
@@ -85,7 +85,10 @@ def test_trading_ingress_guard_is_fresh_non_duplicate_trading_only():
     combined = " && ".join(guards)
     assert "status == 'fresh'" in combined
     assert "TRADING_DECISION_ACTIONS" in combined
-    assert "result.get('duplicate')" in combined
+    # The event-claim winner must still write evidence if another in-flight
+    # request wins the job-row insert race. Later replays have status
+    # "duplicate" and remain excluded by the fresh-claim guard.
+    assert "result.get('duplicate')" not in combined
 
 
 def test_trading_helper_imports_no_execution_machinery():

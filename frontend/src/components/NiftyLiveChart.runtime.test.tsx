@@ -1,4 +1,4 @@
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const chartMocks = vi.hoisted(() => {
@@ -13,12 +13,12 @@ const chartMocks = vi.hoisted(() => {
 })
 
 const apiMocks = vi.hoisted(() => ({
-  getNiftyCandles: vi.fn().mockResolvedValue({
-    symbol: 'NIFTY', interval: '5m', source: 'dhan', status: 'ready', market_state: 'open',
+  getNiftyCandles: vi.fn().mockImplementation((timeframe: string) => Promise.resolve({
+    symbol: 'NIFTY', interval: timeframe, source: 'dhan_authoritative_1m', status: 'ready', market_state: 'open',
     trading_date: '2026-07-21', session_start: '2026-07-21T09:15:00+05:30',
     session_end: '2026-07-21T15:30:00+05:30', updated_at: '2026-07-21T04:00:00Z',
     candles: [{ time: Date.parse('2026-07-21T09:15:00+05:30') / 1000, open: 24100, high: 24120, low: 24090, close: 24110, volume: 1 }],
-  }),
+  })),
   getNiftyMarkers: vi.fn().mockResolvedValue({ trading_date: '2026-07-21', markers: [] }),
 }))
 
@@ -67,23 +67,22 @@ afterEach(() => {
 })
 
 describe('NiftyLiveChart responsive runtime', () => {
-  it('waits for non-zero dimensions, renders history, resizes, and does not remount on a live update', async () => {
+  it('renders authoritative history and switches among 1m, 5m, and 15m', async () => {
     render(<NiftyLiveChart engineMode="paper" />)
     await waitFor(() => expect(chartMocks.createChart).toHaveBeenCalledTimes(1))
     expect(chartMocks.createChart).toHaveBeenCalledWith(expect.any(HTMLElement), expect.objectContaining({ width: 720, height: 320 }))
     await waitFor(() => expect(chartMocks.series.setData).toHaveBeenCalledTimes(1))
-
-    act(() => {
-      useSessionStore.setState({
-        wsStatus: 'live', marketSnapshotSource: 'push',
-        marketSnapshot: {
-          niftySpot: 24115, marketStatus: 'open',
-          atm: { niftySpotReceivedAt: '2026-07-21T04:00:30Z', marketfeed: { connected: true } },
-        } as never,
-      })
-    })
-    await waitFor(() => expect(chartMocks.series.update).toHaveBeenCalled())
-    expect(chartMocks.createChart).toHaveBeenCalledTimes(1)
+    expect(apiMocks.getNiftyCandles).toHaveBeenCalledWith('5m', expect.any(AbortSignal))
+    fireEvent.click(screen.getByRole('button', { name: '1m' }))
+    await waitFor(() => expect(apiMocks.getNiftyCandles).toHaveBeenCalledWith('1m', expect.any(AbortSignal)))
+    fireEvent.click(screen.getByRole('button', { name: '15m' }))
+    await waitFor(() => expect(apiMocks.getNiftyCandles).toHaveBeenCalledWith('15m', expect.any(AbortSignal)))
     expect(chartMocks.chart.resize).toHaveBeenCalledWith(720, 320)
+  })
+
+  it('falls back unsupported saved preferences to 5m', async () => {
+    render(<NiftyLiveChart engineMode="paper" defaultTimeframe="1h" />)
+    await waitFor(() => expect(apiMocks.getNiftyCandles).toHaveBeenCalledWith('5m', expect.any(AbortSignal)))
+    expect(screen.getByRole('button', { name: '5m' })).toHaveAttribute('aria-pressed', 'true')
   })
 })

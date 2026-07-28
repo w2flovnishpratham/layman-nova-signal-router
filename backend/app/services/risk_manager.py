@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.config import (
@@ -19,7 +19,6 @@ from app.services.state_store import (
     get_runtime_settings,
     get_wallet_snapshot,
 )
-
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -100,10 +99,6 @@ def _entry_limit_checks(payload: NormalizedSignal, runtime: dict) -> RiskDecisio
     if max_daily_loss > 0 and isinstance(session_pnl, (int, float)) and float(session_pnl) <= -max_daily_loss:
         return RiskDecision(False, "Trade blocked: maximum daily loss reached.")
 
-    cooldown = _cooldown_after_loss_check(runtime)
-    if cooldown:
-        return cooldown
-
     cutoff = _entry_cutoff_check(runtime)
     if cutoff:
         return cutoff
@@ -126,32 +121,6 @@ def _entry_cutoff_check(runtime: dict) -> RiskDecision | None:
     if now_ist < cutoff:
         return None
     return RiskDecision(False, f"Trade blocked: entries are closed after {raw} IST.")
-
-
-def _cooldown_after_loss_check(runtime: dict) -> RiskDecision | None:
-    """Block entries for N minutes after a losing exit. Never blocks exits."""
-    minutes = _setting_int(runtime, "cooldown_after_loss_minutes", 0)
-    if minutes <= 0:
-        return None
-    last_loss = get_daily_risk().get("last_loss_exit_at")
-    if not last_loss:
-        return None
-    try:
-        stamped = datetime.fromisoformat(str(last_loss).replace("Z", "+00:00"))
-    except ValueError:
-        # An unparseable stamp must not silently disable the gate, but it also
-        # must not wedge entries forever; treat it as "no cooldown recorded".
-        return None
-    if stamped.tzinfo is None:
-        stamped = stamped.replace(tzinfo=UTC)
-    remaining = (stamped + timedelta(minutes=minutes)) - datetime.now(UTC)
-    if remaining.total_seconds() <= 0:
-        return None
-    mins_left = max(1, int(remaining.total_seconds() // 60) + 1)
-    return RiskDecision(
-        False,
-        f"Trade blocked: cooldown after a losing trade is active for another {mins_left} min.",
-    )
 
 
 def evaluate_entry(payload: NormalizedSignal, runtime: dict | None = None) -> RiskDecision:
@@ -249,9 +218,8 @@ def evaluate_exit(payload: NormalizedSignal, runtime: dict | None = None) -> Ris
     if not _setting_bool(runtime, "allow_exit", True):
         return RiskDecision(False, "Exit blocked: ALLOW_EXIT=false.")
 
-    if _setting_bool(runtime, "global_kill_switch", False):
-        if GLOBAL_KILL_SWITCH_BLOCKS_EXITS:
-            return RiskDecision(False, "Exit blocked: GLOBAL_KILL_SWITCH=true and exits are blocked.")
+    if _setting_bool(runtime, "global_kill_switch", False) and GLOBAL_KILL_SWITCH_BLOCKS_EXITS:
+        return RiskDecision(False, "Exit blocked: GLOBAL_KILL_SWITCH=true and exits are blocked.")
 
     open_position = get_open_position()
     if not open_position.get("has_open_position"):

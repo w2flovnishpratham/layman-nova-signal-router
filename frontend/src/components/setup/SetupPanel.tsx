@@ -33,7 +33,7 @@ interface Props {
     risk: Record<string, string | number>,
   ) => Promise<void>
   onSelectStrategy: (strategyKey: string) => Promise<void>
-  onStartStrategy: (instanceId: string) => Promise<void>
+  onStartStrategy: (instanceId: string, liveAcknowledged: boolean) => Promise<void>
   onRetryRuntime: () => void
   onSend: (command: ClientCommand) => void
   onUserReply: (text: string) => void

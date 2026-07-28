@@ -16,9 +16,10 @@ from app.config import (
     DEFAULT_PRODUCT_TYPE,
     settings,
 )
+from app.db.engine import database_configured
 from app.routers.setup import current_nifty_lot_size
 from app.schemas.signal import NormalizedSignal
-from app.services import entitlements, order_idempotency
+from app.services import entitlements, order_idempotency, setup_configuration
 from app.services.atm_ltp_service import get_atm_option_snapshot
 from app.services.audit_logger import read_jsonl
 from app.services.credential_vault import get_webhook_secret
@@ -285,7 +286,10 @@ def manual_reverse(request: Request, body: ManualReverseRequest) -> Any:
         request=request,
         operation="REVERSE",
         payload=body.model_dump(),
-        execute=lambda: _manual_response(route_signal(signal), operation="REVERSE"),
+        execute=lambda: _manual_response(
+            route_signal(signal, runtime=_selected_manual_entry_runtime()),
+            operation="REVERSE",
+        ),
     )
 
 
@@ -1255,11 +1259,41 @@ def _route_manual_entry(signal: NormalizedSignal) -> dict[str, Any]:
             "portfolio": paper_wallet_snapshot() if get_engine_mode(legacy_fallback=False) == "paper" else None,
         }
     try:
-        return _manual_response(route_signal(signal), operation="ENTRY")
+        return _manual_response(
+            route_signal(signal, runtime=_selected_manual_entry_runtime()),
+            operation="ENTRY",
+        )
     except Exception:
         return _manual_reconciliation_response(
             "Paper order state is uncertain because position persistence did not complete."
         )
+
+
+def _selected_manual_entry_runtime() -> dict[str, Any]:
+    """Use the latest confirmed owner revision for the next manual entry.
+
+    This does not rewrite the current position. Exits continue to use the
+    protection and quantity already persisted on that position.
+    """
+    runtime = get_runtime_settings()
+    user = current_execution_user()
+    mode = get_engine_mode(legacy_fallback=False)
+    if (
+        user is None
+        or mode not in {"paper", "live"}
+        or not database_configured()
+    ):
+        return runtime
+    configuration = setup_configuration.selected_configuration(user.id, mode)
+    if configuration is None:
+        return runtime
+    return {
+        **runtime,
+        **dict(configuration.get("risk") or {}),
+        **dict(configuration.get("configuration") or {}),
+        "configuration_revision_id": configuration["id"],
+        "configuration_revision": int(configuration["revision"]),
+    }
 
 
 def _run_manual_operation(

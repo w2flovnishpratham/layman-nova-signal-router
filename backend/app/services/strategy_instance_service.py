@@ -67,7 +67,9 @@ _BLOCKER_CODES = {
 }
 
 
-def _first_blocker(readiness: dict[str, Any], setup: "models.TradingViewSetup | None") -> str | None:
+def _first_blocker(
+    readiness: dict[str, Any], setup: models.TradingViewSetup | None
+) -> str | None:
     if setup is not None and setup.status in {"BLOCKED", "RETIRED"}:
         return "SETUP_BLOCKED"
     for key, ready in readiness.items():
@@ -164,7 +166,11 @@ def _decorate_personal_instance(db, row: models.StrategyInstance, payload: dict[
         c2_readiness = c2.readiness_for_setup(db, setup)
         readiness = {
             **c2_readiness["gates"],
-            "can_activate": bool(c2_readiness["paper_eligible"]),
+            "can_activate": bool(
+                c2_readiness["live_eligible"]
+                if row.execution_mode == "real_orders"
+                else c2_readiness["paper_eligible"]
+            ),
         }
     elif is_personal_pine:
         version = db.get(models.StrategyVersion, row.strategy_version_id)
@@ -207,7 +213,13 @@ def _decorate_personal_instance(db, row: models.StrategyInstance, payload: dict[
             "setup_type": setup.setup_type if setup else None,
             "requires_managed_setup": bool(setup and setup.setup_type == "NOVA_MANAGED_TRADINGVIEW"),
             "paper_eligible": bool(readiness["can_activate"]),
-            "live_eligible": False,
+            "live_eligible": bool(
+                c2_readiness["live_eligible"]
+                if is_personal_pine
+                and setup is not None
+                and setup.pine_conversion_request_id is not None
+                else False
+            ),
             "installation_status": setup.status if setup else None,
             "lot_size": lot_size,
             "estimated_quantity": row.current_lots * lot_size,
@@ -545,6 +557,117 @@ def _position_is_open(user_id: uuid.UUID, execution_mode: str) -> bool:
 
 def activate_instance(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
     return _set_status(user_id, instance_id, InstanceState.ACTIVE)
+
+
+def configure_and_activate_for_engine_start(
+    user_id: uuid.UUID,
+    instance_id: uuid.UUID | str,
+    *,
+    execution_mode: str,
+    lots: int,
+) -> dict[str, Any]:
+    """Atomically bind a selected instance to the new run and make it executable.
+
+    Selection readiness intentionally allows a stopped personal instance so a
+    saved setup can be resumed. The worker, however, executes only ACTIVE
+    instances. Engine start is therefore the authority boundary that must copy
+    the confirmed mode/lots and walk STOPPED -> READY -> ACTIVE in one
+    transaction before accepting TradingView work.
+    """
+    from app.services import live_engine
+
+    if execution_mode not in live_engine.EXECUTION_MODES:
+        raise InstanceError("Invalid execution_mode.")
+    if not MIN_LOTS <= int(lots) <= MAX_LOTS:
+        raise InstanceError(f"lots must be between {MIN_LOTS} and {MAX_LOTS}.")
+    if execution_mode == "real_orders":
+        from app.services import entitlements
+
+        entitlements.require_live_entitlement_for_user(user_id)
+        entitlements.require_strategy_entitlement_for_user(user_id)
+
+    with session_scope() as db:
+        row = _owned_instance(db, user_id, instance_id, for_update=True)
+        if row.status == InstanceState.ARCHIVED.value:
+            raise InstanceError("Archived instances cannot be started.", status_code=409)
+
+        previous_status = row.status
+        previous_mode = row.execution_mode
+        previous_lots = row.current_lots
+        row.execution_mode = execution_mode
+        row.current_lots = int(lots)
+
+        if row.source_journey == "PERSONAL_TRADINGVIEW":
+            if row.verification_mode:
+                from app.services import c2_tradingview_service as c2
+
+                setup = c2.c2_setup_for_instance(db, row.id)
+                if (
+                    setup is None
+                    or setup.status != "PAPER_VERIFICATION"
+                    or execution_mode != "paper_live_data"
+                ):
+                    raise InstanceError(
+                        "Controlled verification is not authorized for this strategy.",
+                        status_code=409,
+                        code="VERIFICATION_NOT_AUTHORIZED",
+                    )
+            else:
+                decorated = _decorate_personal_instance(db, row, {})
+                readiness = decorated["readiness"]
+                if not readiness["can_activate"]:
+                    missing = [
+                        key.replace("_", " ")
+                        for key, ready in readiness.items()
+                        if key != "can_activate" and not ready
+                    ]
+                    raise InstanceError(
+                        f"Personal strategy is not ready: {', '.join(missing)}.",
+                        status_code=409,
+                        code=decorated.get("blocking_code"),
+                    )
+
+        if not row.verification_mode and row.status != InstanceState.ACTIVE.value:
+            path = _PATHS_TO_ACTIVE.get(row.status)
+            if path is None:
+                raise InstanceError(
+                    f"Strategy instance cannot be started from '{row.status}'.",
+                    status_code=409,
+                )
+            for step in path:
+                _apply_status(row, step)
+
+        mirrored = (
+            None
+            if row.verification_mode
+            else _mirror_lifecycle_to_subscription(db, row, InstanceState.ACTIVE)
+        )
+        if row.legacy_subscription_id is not None:
+            subscription = db.get(models.StrategySubscription, row.legacy_subscription_id)
+            if subscription is not None:
+                subscription.execution_mode = execution_mode
+                subscription.lots = int(lots)
+                subscription.updated_at = _now()
+
+        row.status_reason = None
+        row.updated_at = _now()
+        _audit(
+            db,
+            user_id,
+            "STRATEGY_INSTANCE_ENGINE_STARTED",
+            {
+                "instance_id": str(row.id),
+                "status_from": previous_status,
+                "status_to": row.status,
+                "execution_mode_from": previous_mode,
+                "execution_mode_to": execution_mode,
+                "lots_from": previous_lots,
+                "lots_to": int(lots),
+                "subscription_sync": mirrored,
+            },
+        )
+        strategy = db.get(models.StrategyCatalog, row.strategy_id)
+        return _instance_public(row, strategy=strategy)
 
 
 def pause_instance(user_id: uuid.UUID, instance_id: uuid.UUID | str, *, reason: str | None = None) -> dict[str, Any]:
@@ -955,7 +1078,7 @@ def _engine_entry(
         "mode": "paper" if paper_mode else "live",
         "execution_mode": row.execution_mode,
         "paper_eligible": selectable and paper_mode,
-        "live_eligible": False,
+        "live_eligible": bool(decorated.get("live_eligible")),
         "readiness": decorated.get("readiness"),
         "lots": row.current_lots,
         "credential_status": decorated.get("credential_status") or "not_required",
@@ -1008,12 +1131,8 @@ def _enter_verification(db, instance: models.StrategyInstance, setup: models.Tra
     Live orders are impossible — paper mode is required and the live posture is
     checked. The instance stays READY; the private webhook path executes paper
     signals while verification_mode is set."""
-    from app.config import settings
-
     if instance.execution_mode != "paper_live_data":
         raise InstanceError("Verification runs in paper mode only.", status_code=409, code="PAPER_EXECUTION_DISABLED")
-    if settings.ENABLE_LIVE_ORDERS or settings.PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED:
-        raise InstanceError("Live execution is enabled; verification is refused for safety.", status_code=409, code="LIVE_EXECUTION_SAFETY_BLOCK")
     if not MIN_LOTS <= instance.current_lots <= MAX_LOTS:
         raise InstanceError("Set a valid lot count before verification.", status_code=409, code="INVALID_LOTS")
     version = db.get(models.StrategyVersion, instance.strategy_version_id)
@@ -1177,6 +1296,28 @@ def require_selected_engine_strategy(user_id: uuid.UUID) -> dict[str, Any]:
             status_code=409,
             code=state["selection_issue"] or "STRATEGY_NOT_SELECTED",
         )
+    if selected.get("source_type") == "PERSONAL_TRADINGVIEW":
+        from app.services import c2_tradingview_service as c2
+
+        with session_scope() as db:
+            setup = c2.c2_setup_for_instance(db, selected["instance_id"])
+            if (
+                setup is not None
+                and setup.status not in c2.C2_EXECUTABLE_STATUSES
+            ):
+                raise InstanceError(
+                    "This converted strategy is routing-verified but not executable yet. "
+                    "An administrator must promote it to Paper Verification.",
+                    status_code=409,
+                    code="ADMIN_PROMOTION_REQUIRED",
+                )
+            if (
+                setup is not None
+                and setup.status == "PAPER_VERIFICATION"
+                and selected.get("verification_mode")
+                and selected.get("execution_mode") == "paper_live_data"
+            ):
+                return selected
     if not selected["selectable"] or not selected["paper_eligible"]:
         raise InstanceError(
             "The selected strategy is no longer Paper-ready.",

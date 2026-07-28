@@ -11,6 +11,7 @@ from app.config import (
     settings,
 )
 from app.schemas.signal import NormalizedSignal
+from app.services import order_idempotency, position_operations
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.chat_event_publisher import publish_chat_result_from_sync
 from app.services.credential_vault import dhan_token_age_metadata, get_dhan_credentials
@@ -21,8 +22,11 @@ from app.services.dhan_client import (
     RealDhanClient,
     get_broker_client,
 )
-from app.services.execution_context import LiveEgressGuardError, current_execution_user, require_verified_live_egress
-from app.services import order_idempotency
+from app.services.execution_context import (
+    LiveEgressGuardError,
+    current_execution_user,
+    require_verified_live_egress,
+)
 from app.services.normalized_errors import classify_failure, order_journey
 from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import (
@@ -34,7 +38,6 @@ from app.services.risk_manager import (
     option_side_is_allowed,
 )
 from app.services.security_id_resolver import resolve_security_id
-from app.services import position_operations
 from app.services.state_store import (
     claim_exit_operation,
     clear_open_position,
@@ -280,7 +283,7 @@ def _claim_live_order_intent_or_result(
                 "identity_hash": payload_hash,
             },
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - fail closed on any idempotency backend failure
         if settings.is_production:
             return _blocked(
                 "BLOCKED",
@@ -357,7 +360,7 @@ def _lookup_existing_live_order_intent_result(
             idempotency_key=key,
             payload_hash=order_idempotency.stable_payload_hash(identity_payload),
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - lookup failure yields no reusable result
         return None
     if lookup.status == "missing":
         return None
@@ -741,10 +744,64 @@ def apply_manual_super_order_exit_levels(
         "stop_result": stop_snap,
     }
     if not ok:
+        previous = (
+            position.get("active_exit_levels")
+            if isinstance(position.get("active_exit_levels"), dict)
+            else {}
+        )
+        live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
+        previous_target = _number(previous.get("targetPrice") or live_pnl.get("tp_price"))
+        previous_stop = _number(previous.get("stopLossPrice") or live_pnl.get("sl_price"))
+        rollback_attempted = False
+        rollback_ok = True
+        rollback_results: dict[str, Any] = {}
+        if target_snap.get("success"):
+            rollback_attempted = True
+            if previous_target is None:
+                rollback_ok = False
+            else:
+                rollback = client.modify_super_order(
+                    client_id=client_id,
+                    access_token=access_token,
+                    order_id=order_id,
+                    payload={
+                        "dhanClientId": client_id,
+                        "orderId": order_id,
+                        "legName": "TARGET_LEG",
+                        "targetPrice": round(previous_target, 2),
+                    },
+                )
+                rollback_results["target"] = _order_result_snapshot(rollback)
+                rollback_ok = rollback_ok and bool(rollback_results["target"].get("success"))
+        if stop_snap.get("success"):
+            rollback_attempted = True
+            if previous_stop is None:
+                rollback_ok = False
+            else:
+                rollback = client.modify_super_order(
+                    client_id=client_id,
+                    access_token=access_token,
+                    order_id=order_id,
+                    payload={
+                        "dhanClientId": client_id,
+                        "orderId": order_id,
+                        "legName": "STOP_LOSS_LEG",
+                        "stopLossPrice": round(previous_stop, 2),
+                        "trailingJump": 0,
+                    },
+                )
+                rollback_results["stop"] = _order_result_snapshot(rollback)
+                rollback_ok = rollback_ok and bool(rollback_results["stop"].get("success"))
+        summary["rollback_attempted"] = rollback_attempted
+        summary["rollback_confirmed"] = bool(rollback_attempted and rollback_ok)
+        summary["rollback_results"] = rollback_results
+        summary["reconciliation_required"] = bool(rollback_attempted and not rollback_ok)
         summary["message"] = (
-            target_snap.get("error")
+            "Dhan accepted only part of the protection update and rollback could not be confirmed."
+            if summary["reconciliation_required"]
+            else target_snap.get("error")
             or stop_snap.get("error")
-            or "Dhan rejected the SL/TP modification."
+            or "Dhan rejected the SL/TP modification; previous confirmed protection remains active."
         )
     log_order_event(
         {
@@ -1492,7 +1549,7 @@ def _place_order(
                 order_intent_id,
                 broker_correlation_id=str(request_payload.get("correlationId") or "") or None,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - durable intent uncertainty must fail closed
             return _blocked(
                 "BLOCKED",
                 "Live order idempotency store unavailable; refusing to submit.",
@@ -1581,7 +1638,7 @@ def _place_order(
     super_order_post_fill_update: dict[str, Any] | None = None
     active_super_order_levels = super_order_levels
 
-    if result.success and result.order_id:
+    if result.success and result.order_id:  # noqa: SIM102 - keeps broker poll flow readable
         # Status from placement response may be TRANSIT/PENDING — poll for confirmation.
         if result.status not in DHAN_TERMINAL_STATUSES or final_avg_price is None:
             poll = client.poll_order_status(
@@ -1757,7 +1814,7 @@ def _place_order(
                 order_intent_id,
                 result_summary=result_payload,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - post-submit audit failure must be recorded
             log_error_event(
                 "LIVE_ORDER_INTENT_UPDATE_FAILED",
                 "Live order was submitted but idempotency result update failed; retries will fail closed.",
@@ -1771,7 +1828,14 @@ def _place_order(
     return result_payload
 
 
-def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty: int) -> dict[str, Any]:
+def _entry_position(
+    signal: NormalizedSignal,
+    order_result: dict[str, Any],
+    qty: int,
+    *,
+    runtime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    runtime = runtime or {}
     entry_price = order_result.get("avg_price")
     exit_management = order_result.get("exit_management") or "SERVER"
     broker_sl_price = order_result.get("broker_sl_price")
@@ -1807,6 +1871,8 @@ def _entry_position(signal: NormalizedSignal, order_result: dict[str, Any], qty:
         "partial_fill": partial_fill,
         "entry_order_id": order_result.get("order_id"),
         "entry_price": entry_price,
+        "configuration_revision_id": runtime.get("configuration_revision_id"),
+        "configuration_revision": runtime.get("configuration_revision"),
         "exit_management": exit_management,
         "broker_sl_price": broker_sl_price,
         "broker_tp_price": broker_tp_price,
@@ -2101,7 +2167,12 @@ def route_reversal_signal(
 
     if entry_result.get("success"):
         refresh_wallet_snapshot(force=True, log_event=True)
-        position = _entry_position(signal, entry_result, _entry_filled_qty(entry_result, reversal_decision.final_qty))
+        position = _entry_position(
+            signal,
+            entry_result,
+            _entry_filled_qty(entry_result, reversal_decision.final_qty),
+            runtime=runtime,
+        )
         entry_result["sr_suggestion"] = position.get("sr_suggestion")
         entry_result["active_exit_levels"] = position.get("active_exit_levels")
         set_open_position(position)
@@ -2254,7 +2325,12 @@ def route_entry_signal(
 
     if order_result.get("success"):
         refresh_wallet_snapshot(force=True, log_event=True)
-        position = _entry_position(signal, order_result, _entry_filled_qty(order_result, decision.final_qty))
+        position = _entry_position(
+            signal,
+            order_result,
+            _entry_filled_qty(order_result, decision.final_qty),
+            runtime=runtime,
+        )
         order_result["sr_suggestion"] = position.get("sr_suggestion")
         order_result["active_exit_levels"] = position.get("active_exit_levels")
         set_open_position(position)
@@ -2473,12 +2549,16 @@ def route_exit_signal(
     return {**order_result, "blocked": False, "status": _failed_order_status(order_result), "reason": reason}
 
 
-def route_signal(signal: NormalizedSignal) -> dict[str, Any]:
+def route_signal(
+    signal: NormalizedSignal,
+    *,
+    runtime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     # C11 — Settings snapshot per signal. Capture runtime once at the
     # absolute earliest point in the pipeline so two near-simultaneous
     # signals can't end up using different SL%/TP%/max_qty/etc. just
     # because a user clicked Save between them.
-    runtime = get_runtime_settings()
+    runtime = dict(runtime) if runtime is not None else get_runtime_settings()
     update_app_state(
         last_signal={
             "signalId": signal.signal_id,

@@ -29,9 +29,9 @@ import { getConfigurationState, saveConfiguration } from './setup/configurationA
 import {
   getCurrentUser,
   getMarketSnapshot,
-  getRuntimeStatus,
   getSession,
   getSystemHealth,
+  getTradingBootstrap,
   googleLoginUrl,
   logout,
   prepareReconfigure,
@@ -185,7 +185,7 @@ function App() {
 
     const poll = () => {
       const requestStartedAt = Date.now()
-      Promise.allSettled([getMarketSnapshot(), getSystemHealth(), getRuntimeStatus()]).then(([market, health, runtime]) => {
+      Promise.allSettled([getMarketSnapshot(), getSystemHealth(), getTradingBootstrap()]).then(([market, health, runtime]) => {
         if (!mounted) return
         if (market.status === 'fulfilled') applyRestMarketSnapshot(market.value, requestStartedAt)
         if (health.status === 'fulfilled') setSystemHealth(health.value)
@@ -244,8 +244,9 @@ function App() {
 
   async function retryRuntime() {
     try {
-      const status = await getRuntimeStatus()
+      const status = await getTradingBootstrap()
       setRuntimeStatus(status)
+      applyRuntimeHydration(status)
       setRuntimeError('')
     } catch (err) {
       setRuntimeError(err instanceof Error ? err.message : 'Could not load strategy state.')
@@ -256,8 +257,9 @@ function App() {
     setBootError('')
     try {
       await prepareReconfigure()
-      const status = await getRuntimeStatus()
+      const status = await getTradingBootstrap()
       setRuntimeStatus(status)
+      applyRuntimeHydration(status)
       setRuntimeError('')
       if (status.position.has_open_position) {
         setBootError('Engine stopped. Configuration changes remain blocked until the tracked position is flat.')
@@ -292,7 +294,7 @@ function App() {
     setBootError('')
     try {
       await action()
-      const latest = await getRuntimeStatus()
+      const latest = await getTradingBootstrap()
       setRuntimeStatus(latest)
       applyRuntimeHydration(latest)
       setRuntimeError('')
@@ -303,7 +305,9 @@ function App() {
 
   async function selectTradingStrategy(strategyKey: string) {
     await selectCatalogStrategy(strategyKey)
-    setRuntimeStatus(await getRuntimeStatus())
+    const latest = await getTradingBootstrap()
+    setRuntimeStatus(latest)
+    applyRuntimeHydration(latest)
     setRuntimeError('')
   }
 
@@ -315,21 +319,27 @@ function App() {
     if (runtimeStatus?.strategy_catalog?.selected_strategy_key !== strategyKey) {
       throw new Error('The selected strategy changed. Refresh before saving settings.')
     }
+    const mode = runtimeStatus?.engine.mode
+    if (!mode) {
+      throw new Error('Choose Paper or Live before saving a configuration.')
+    }
     // Strategy setup and risk settings commit as one revision; a partial save
     // could leave new limits paired with old sizing.
-    const state = await getConfigurationState('paper')
+    const state = await getConfigurationState(mode)
     await saveConfiguration({
       strategyKey,
-      mode: 'paper',
+      mode,
       setup: values,
       risk,
       expectedRevision: state.revision,
     })
-    setRuntimeStatus(await getRuntimeStatus())
+    const latest = await getTradingBootstrap()
+    setRuntimeStatus(latest)
+    applyRuntimeHydration(latest)
     setRuntimeError('')
   }
 
-  async function startTradingStrategy(instanceId: string) {
+  async function startTradingStrategy(instanceId: string, liveAcknowledged: boolean) {
     if (runtimeStatus?.selected_strategy?.instance_id !== instanceId) {
       throw new Error('The selected strategy changed. Refresh before starting.')
     }
@@ -339,9 +349,11 @@ function App() {
     }
     const latest = await startSelectedEngine(
       instanceId,
+      selectedConfiguration.strategy_version_id,
       selectedConfiguration.id,
       selectedConfiguration.revision,
       selectedConfiguration.mode,
+      liveAcknowledged,
     )
     setRuntimeStatus(latest)
     applyRuntimeHydration(latest)
@@ -359,7 +371,7 @@ function App() {
     )
   }
 
-  const sessionEngineLive = runtimeStatus?.engine.running ?? (setupState === 'LIVE' || setupState === 'PAUSED')
+  const sessionEngineLive = runtimeStatus?.engine.running ?? false
   const runtimeEntriesBlocked = sessionEngineLive && systemHealth?.engine === 'paused'
   const effectiveSetupState = runtimeEntriesBlocked || setupState === 'PAUSED' ? 'PAUSED' : setupState
   const engineLive = sessionEngineLive
@@ -456,8 +468,9 @@ function App() {
           const result = await refreshRuntimeAccount()
           const message = String(result.message || result.status || 'Account refresh completed.')
           setBootError(result.ok === false ? message : '')
-          const latest = await getRuntimeStatus()
-          setRuntimeStatus(latest)
+           const latest = await getTradingBootstrap()
+           setRuntimeStatus(latest)
+           applyRuntimeHydration(latest)
         }}
       />
 
@@ -586,8 +599,11 @@ function App() {
           ) : (
             <>
               <div className="live-engine-stack">
-                <NiftyLiveChart engineMode={engineMode} />
-                <TradingActivityTabs />
+                <NiftyLiveChart
+                  engineMode={engineMode}
+                  defaultTimeframe={runtimeStatus?.chart_preferences?.default_timeframe}
+                />
+                <TradingActivityTabs mode={engineMode} />
               </div>
 
               {/* Mobile-only inline active position & routing controls below main chat */}

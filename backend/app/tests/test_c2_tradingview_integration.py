@@ -43,7 +43,12 @@ plot(slow)
 @pytest.fixture
 def c2_app(mu_db, monkeypatch):
     from app.auth.dependencies import get_current_user
-    from app.routers import c2_tradingview, pine_conversion, private_webhook, strategy_instances
+    from app.routers import (
+        c2_tradingview,
+        pine_conversion,
+        private_webhook,
+        strategy_instances,
+    )
     from app.services.user_context import current_user_from_model
 
     admin = make_user("c2-admin@example.com", is_admin=True)
@@ -638,7 +643,74 @@ def _promote(client, iid):
     return client.post(f"/api/admin/strategy-installations/{iid}/promote-paper-verification")
 
 
-def test_c2_admin_promotion_lifts_the_gate_only_after_hold_and_only_by_admin(c2_app):
+def _complete_c2_paper_job(instance_id: str, signal_id: str, action: str) -> None:
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import c2_tradingview_service
+
+    with session_scope() as db:
+        job = db.scalar(
+            select(models.StrategyExecutionJob).where(
+                models.StrategyExecutionJob.strategy_name
+                == f"instance:{instance_id}",
+                models.StrategyExecutionJob.signal_id == signal_id,
+            )
+        )
+        if job is None:
+            instance = db.get(models.StrategyInstance, uuid.UUID(instance_id))
+            assert instance is not None
+            signal = db.scalar(
+                select(models.StrategySignal).where(
+                    models.StrategySignal.strategy_name
+                    == f"instance:{instance_id}",
+                    models.StrategySignal.signal_id == signal_id,
+                )
+            )
+            if signal is None:
+                signal = models.StrategySignal(
+                    strategy_name=f"instance:{instance_id}",
+                    signal_id=signal_id,
+                    status="completed",
+                )
+                db.add(signal)
+                db.flush()
+            job = models.StrategyExecutionJob(
+                strategy_signal_id=signal.id,
+                user_id=instance.user_id,
+                strategy_name=f"instance:{instance_id}",
+                signal_id=signal_id,
+                signal_payload={"action": action},
+                lots=1,
+                execution_mode="paper_live_data",
+                status="completed",
+            )
+            db.add(job)
+            db.flush()
+        job.status = "completed"
+        job.signal_payload = {"action": action}
+        job.result_summary = {
+            "status": "completed",
+            "execution_result": {
+                "success": True,
+                "status": "ORDER_PLACED",
+                "order_id": f"PAPER-{signal_id}",
+            },
+        }
+        job.completed_at = datetime.now(timezone.utc)
+        job.updated_at = datetime.now(timezone.utc)
+        job_id = job.id
+    evidence = c2_tradingview_service.record_paper_execution_evidence_from_job(
+        job_id
+    )
+    assert evidence is not None
+    assert evidence["recorded"] is True
+    assert evidence["kind"] == f"PAPER_{action}"
+
+
+def test_c2_admin_promotion_lifts_the_gate_only_after_hold_and_only_by_admin(
+    c2_app,
+    monkeypatch,
+):
     client, current, admin, owner, _ = c2_app
     approved = _approved(client)
     _compile(client, approved)
@@ -656,6 +728,15 @@ def test_c2_admin_promotion_lifts_the_gate_only_after_hold_and_only_by_admin(c2_
     # Verify routing with a real HOLD -> PAPER_ELIGIBLE.
     current["user"] = owner
     assert client.post("/api/webhooks/private", json=_hold(issued["token"])).status_code == 202
+    from app.services import strategy_instance_service
+
+    strategy_instance_service.set_engine_selection(
+        owner.id,
+        installation["strategy_instance_id"],
+    )
+    with pytest.raises(strategy_instance_service.InstanceError) as blocked_start:
+        strategy_instance_service.require_selected_engine_strategy(owner.id)
+    assert blocked_start.value.code == "ADMIN_PROMOTION_REQUIRED"
 
     # Still inert: a BUY is rejected with the structured code.
     buy = client.post("/api/webhooks/private", json=_hold(issued["token"], action="BUY_CE", signal_id="c2-buy-pre"))
@@ -676,14 +757,114 @@ def test_c2_admin_promotion_lifts_the_gate_only_after_hold_and_only_by_admin(c2_
 
     # The C2 gate no longer blocks a BUY (it now reaches the paper lifecycle).
     current["user"] = owner
-    buy2 = client.post("/api/webhooks/private", json=_hold(issued["token"], action="BUY_CE", signal_id="c2-buy-post"))
+    assert (
+        strategy_instance_service.require_selected_engine_strategy(owner.id)[
+            "instance_id"
+        ]
+        == installation["strategy_instance_id"]
+    )
+    buy_signal_id = "c2-buy-post"
+    buy2 = client.post("/api/webhooks/private", json=_hold(issued["token"], action="BUY_CE", signal_id=buy_signal_id))
     assert buy2.json().get("reason") != "STRATEGY_NOT_EXECUTABLE"
 
-    # Admin marks the verified version READY.
+    # Admin cannot mark READY until confirmed Paper entry and exit jobs exist.
+    current["user"] = admin
+    missing_evidence = client.post(
+        f"/api/admin/strategy-installations/{iid}/mark-ready"
+    )
+    assert missing_evidence.status_code == 409
+    assert (
+        missing_evidence.json()["reason"]
+        == "PAPER_EXECUTION_EVIDENCE_REQUIRED"
+    )
+
+    _complete_c2_paper_job(
+        installation["strategy_instance_id"],
+        buy_signal_id,
+        "ENTRY",
+    )
+    current["user"] = owner
+    exit_signal_id = "c2-exit-post"
+    exit_response = client.post(
+        "/api/webhooks/private",
+        json=_hold(
+            issued["token"],
+            action="EXIT",
+            signal_id=exit_signal_id,
+        ),
+    )
+    assert exit_response.status_code == 202, exit_response.text
+    _complete_c2_paper_job(
+        installation["strategy_instance_id"],
+        exit_signal_id,
+        "EXIT",
+    )
+
+    # Admin marks the exact Paper-verified version READY.
     current["user"] = admin
     ready = client.post(f"/api/admin/strategy-installations/{iid}/mark-ready")
     assert ready.status_code == 200, ready.text
     assert ready.json()["installation"]["status"] == "READY"
+    assert ready.json()["installation"]["paper_entry_verified_at"] is not None
+    assert ready.json()["installation"]["paper_exit_verified_at"] is not None
+
+    # A READY personal strategy may use the normal Live start path, but only
+    # when every owner/environment authority is present.
+    from app.services import entitlements, strategy_fanout, user_credential_vault
+
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
+    monkeypatch.setattr(
+        settings,
+        "PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED",
+        True,
+    )
+    monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+    monkeypatch.setattr(settings, "DHAN_READ_ONLY_REAL_DATA", False)
+    monkeypatch.setattr(
+        entitlements,
+        "has_live_entitlement_for_user",
+        lambda _user_id: True,
+    )
+    monkeypatch.setattr(
+        entitlements,
+        "has_strategy_entitlement_for_user",
+        lambda _user_id: True,
+    )
+    monkeypatch.setattr(
+        entitlements,
+        "require_live_entitlement_for_user",
+        lambda _user_id: None,
+    )
+    monkeypatch.setattr(
+        entitlements,
+        "require_strategy_entitlement_for_user",
+        lambda _user_id: None,
+    )
+    monkeypatch.setattr(
+        user_credential_vault,
+        "get_user_dhan_credentials",
+        lambda _user_id: object(),
+    )
+    monkeypatch.setattr(
+        strategy_fanout,
+        "user_egress_status",
+        lambda _user_id: {
+            "active": True,
+            "has_proxy": True,
+            "verified": True,
+        },
+    )
+    configured = strategy_instance_service.configure_and_activate_for_engine_start(
+        owner.id,
+        installation["strategy_instance_id"],
+        execution_mode="real_orders",
+        lots=1,
+    )
+    assert configured["execution_mode"] == "real_orders"
+    live_detail = client.get(
+        f"/api/admin/strategy-installations/{iid}"
+    ).json()["installation"]
+    assert live_detail["live_eligible"] is True
 
 
 def test_c2_mark_ready_requires_paper_verification_first(c2_app):

@@ -133,7 +133,7 @@ export function AdminPineConversionWorkspace() {
 
       <div className="c1-conversion-grid">
         <aside className="ps-list" aria-label="Conversion list">
-          {items.map((item) => <button type="button" className={`ps-list-item${selected?.id === item.id ? ' active' : ''}`} key={item.id} onClick={() => void open(item.id)}><strong>{item.strategy_name}</strong><span>{item.source_sha256.slice(0, 12)}… · {item.analysis_status}</span><span>{item.conversion_status.replaceAll('_', ' ')}</span><span>{item.provider_mode ?? 'No provider used'}</span></button>)}
+          {items.map((item) => <button type="button" className={`ps-list-item${selected?.id === item.id ? ' active' : ''}`} key={item.id} onClick={() => void open(item.id)}><strong>{item.strategy_name}</strong><span>Owner {item.owner_user_id.slice(0, 8)} · {item.source_sha256.slice(0, 12)}…</span><span>{item.conversion_status.replaceAll('_', ' ')}</span><span>{item.provider_mode ?? 'No provider used'}</span></button>)}
           {!items.length ? <div className="ps-empty-small"><FileCode2 size={20} /><strong>No conversion submissions</strong></div> : null}
         </aside>
         <main className="c1-detail">

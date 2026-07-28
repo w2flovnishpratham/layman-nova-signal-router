@@ -50,6 +50,15 @@ class AdminConversionOptions(BaseModel):
     intended_timeframe: str = Field(default="5", min_length=1, max_length=20)
 
 
+class OwnerClaudeConversionPayload(BaseModel):
+    """Explicit owner consent and deterministic C1 installation intent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    consent: Literal[True]
+    options: AdminConversionOptions = Field(default_factory=AdminConversionOptions)
+
+
 class AdminPineSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

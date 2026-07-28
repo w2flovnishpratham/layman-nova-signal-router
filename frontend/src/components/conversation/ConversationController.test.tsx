@@ -86,6 +86,51 @@ describe('ConversationController — mode selection in the machine', () => {
   })
 })
 
+describe('ConversationController Live start acknowledgement', () => {
+  it('requires a fresh acknowledgement before every Live start attempt', async () => {
+    const runtime = runtimeNoMode() as unknown as {
+      strategy_catalog: {
+        strategies: Array<{
+          live_eligible: boolean
+          saved_setup: Record<string, Record<string, unknown>>
+        }>
+      }
+    }
+    runtime.strategy_catalog.strategies[0].live_eligible = true
+    runtime.strategy_catalog.strategies[0].saved_setup.live = {
+      direction: 'CE',
+      lots: 2,
+      max_daily_loss: 25000,
+      max_trades_per_day: 6,
+      entry_cutoff_ist: '15:15',
+    }
+    const onStart = vi.fn(noop)
+    render(
+      <ConversationController
+        {...props({
+          runtime: runtime as unknown as RuntimeStatus,
+          liveAvailable: true,
+          onStart,
+        })}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /configure live/i }))
+    fireEvent.click(screen.getByRole('button', { name: /supertrend/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
+    act(() => vi.advanceTimersByTime(700))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save setup/i }))
+    })
+    const start = screen.getByRole('button', { name: /start live/i })
+    expect(start).toBeDisabled()
+    fireEvent.click(screen.getByRole('checkbox'))
+    expect(start).toBeEnabled()
+    await act(async () => fireEvent.click(start))
+    expect(onStart).toHaveBeenCalledWith('inst-1', true)
+    expect(screen.getByRole('checkbox')).not.toBeChecked()
+  })
+})
+
 describe('ConversationController — error recovery', () => {
   it('shows a catalog error with a working Retry and no strategies', () => {
     const onRetry = vi.fn()
@@ -123,13 +168,13 @@ describe('ConversationController — edit answer & async safety', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700)) // review
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
-    expect(screen.getByRole('button', { name: /start engine/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /start paper/i })).toBeInTheDocument()
     // Edit the direction field.
     fireEvent.click(screen.getByRole('button', { name: /edit direction/i }))
     act(() => vi.advanceTimersByTime(700))
     // Its current value is prefilled (CE pressed) and Start engine is gone.
     expect(screen.getByRole('button', { name: 'CE' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /start paper/i })).toBeNull()
   })
 
   it('ignores a save that resolves after the user edited (no stale saved state)', async () => {
@@ -143,11 +188,48 @@ describe('ConversationController — edit answer & async safety', () => {
     fireEvent.click(screen.getByRole('button', { name: /edit direction/i })) // generation bumps
     await act(async () => { resolveSave?.() }) // stale resolution
     act(() => vi.advanceTimersByTime(700))
-    expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull() // not exposed by stale save
+    expect(screen.queryByRole('button', { name: /start paper/i })).toBeNull() // not exposed by stale save
   })
 })
 
 describe('ConversationController — saved setup decision', () => {
+  it('hydrates the complete canonical revision, including risk fields', () => {
+    const runtime = runtimeWith({
+      direction: 'BOTH',
+      lots: 1,
+      stop_loss_percent: 10,
+      take_profit_percent: 20,
+    }) as RuntimeStatus & { mode: 'paper' }
+    runtime.mode = 'paper'
+    runtime.engine = { mode: 'paper' } as RuntimeStatus['engine']
+    runtime.selected_configuration = {
+      id: 'config-1',
+      strategy_instance_id: 'inst-1',
+      strategy_version_id: 'version-1',
+      mode: 'paper',
+      revision: 7,
+      status: 'active',
+      configuration: {
+        direction: 'BOTH',
+        lots: 1,
+        stop_loss_percent: 10,
+        take_profit_percent: 20,
+      },
+      risk: {
+        max_daily_loss: 25_000,
+        max_trades_per_day: 6,
+        entry_cutoff_ist: '15:15',
+      },
+      committed_at: '2026-07-28T10:00:00Z',
+    }
+
+    render(<ConversationController {...props({ runtime })} />)
+
+    expect(screen.getByText("What's your maximum loss for one day? The engine hard-stops and squares off if it's hit.")).toBeInTheDocument()
+    expect(screen.getByText('25000')).toBeInTheDocument()
+    expect(screen.getByText('15:15')).toBeInTheDocument()
+  })
+
   it('shows the saved-setup decision with Resume / Review / Start New, not answer bubbles', () => {
     const p = props()
     render(<ConversationController {...p} />)
@@ -219,7 +301,7 @@ describe('ConversationController — sequential questions & save/start', () => {
     choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
-    expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull() // not before save
+    expect(screen.queryByRole('button', { name: /start paper/i })).toBeNull() // not before save
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
     // Both halves travel in one call, so they commit as one revision.
     expect(onSave).toHaveBeenCalledWith(
@@ -227,9 +309,9 @@ describe('ConversationController — sequential questions & save/start', () => {
       { direction: 'CE', lots: 2 },
       { max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' },
     )
-    expect(screen.getByRole('button', { name: /start engine/i })).toBeInTheDocument()
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /start engine/i })) })
-    expect(onStart).toHaveBeenCalledWith('inst-1')
+    expect(screen.getByRole('button', { name: /start paper/i })).toBeInTheDocument()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /start paper/i })) })
+    expect(onStart).toHaveBeenCalledWith('inst-1', false)
   })
 
   it('a rapid double-click on Save produces exactly one save request', async () => {
@@ -252,6 +334,6 @@ describe('ConversationController — sequential questions & save/start', () => {
     act(() => vi.advanceTimersByTime(700))
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
     expect(screen.getByRole('alert')).toHaveTextContent('save rejected')
-    expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /start paper/i })).toBeNull()
   })
 })

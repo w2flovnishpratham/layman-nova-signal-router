@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
-import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -12,14 +12,27 @@ from app.config import settings
 from app.db import models
 from app.db.engine import database_configured, session_scope
 from app.routers.setup import setup_readiness, setup_status_payload
+from app.services import (
+    engine_start_operations,
+    live_engine,
+    runtime_reliability,
+    setup_configuration,
+    strategy_catalog_service,
+    strategy_fanout,
+    strategy_instance_service,
+)
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import dhan_token_age_metadata
 from app.services.dhan_debugger import get_outgoing_ip
-from app.services.paper_portfolio import get_paper_portfolio
-from app.services.state_store import get_app_state, get_engine_mode, set_engine_mode, update_app_state
 from app.services.execution_context import current_execution_user
-from app.services import runtime_reliability, setup_configuration, strategy_catalog_service, strategy_fanout, strategy_instance_service
-
+from app.services.paper_portfolio import get_paper_portfolio
+from app.services.state_store import (
+    get_app_state,
+    get_engine_mode,
+    set_engine_mode,
+    update_app_state,
+    update_runtime_settings,
+)
 
 router = APIRouter()
 
@@ -46,9 +59,11 @@ class PaperResetRequest(BaseModel):
 
 class StartSelectedRequest(BaseModel):
     strategy_instance_id: str = Field(min_length=1, max_length=64)
+    strategy_version_id: str = Field(min_length=1, max_length=64)
     configuration_revision_id: str = Field(min_length=1, max_length=64)
     configuration_revision: int = Field(ge=1)
     mode: Literal["paper", "live"]
+    live_acknowledged: bool = False
 
 
 def _execution_user():
@@ -111,9 +126,48 @@ def _deactivate_selected_builtin(user) -> None:
         strategy_fanout.set_subscription_active(user.id, "supertrend", False)
 
 
-def _record_configuration_run(user, selected: dict[str, Any], configuration: dict[str, Any]) -> None:
+def _pause_selected_personal(user, *, reason: str) -> None:
+    """Block new private-webhook entries when the owner's engine is stopped.
+
+    PAUSED is deliberate: the worker may still accept a protective EXIT for an
+    already-open position, while BUY/reversal entries remain blocked.
+    """
     if not database_configured():
         return
+    selected = strategy_instance_service.get_engine_selection(user.id).get("selected")
+    if (
+        not selected
+        or selected.get("source_type")
+        not in {"NOVA_HOSTED_PERSONAL", "PERSONAL_TRADINGVIEW"}
+        or selected.get("instance_status") != "active"
+    ):
+        return
+    try:
+        strategy_instance_service.pause_instance(
+            user.id,
+            selected["instance_id"],
+            reason=reason,
+        )
+    except strategy_instance_service.InstanceError as exc:
+        log_audit_event(
+            "PERSONAL_STRATEGY_PAUSE_FAILED",
+            "Engine stopped, but the selected personal strategy lifecycle could not be paused.",
+            severity="WARNING",
+            metadata={
+                "strategy_instance_id": selected.get("instance_id"),
+                "reason": reason,
+                "error_code": exc.code,
+            },
+        )
+
+
+def _record_configuration_run(
+    user,
+    selected: dict[str, Any],
+    configuration: dict[str, Any],
+) -> uuid.UUID | None:
+    if not database_configured():
+        return None
     with session_scope() as db:
         active = db.scalars(
             select(models.UserRun).where(
@@ -125,8 +179,7 @@ def _record_configuration_run(user, selected: dict[str, Any], configuration: dic
         for run in active:
             run.status = "stopped"
             run.stopped_at = now
-        db.add(
-            models.UserRun(
+        run = models.UserRun(
                 user_id=user.id,
                 run_type=configuration["mode"],
                 strategy_name=selected.get("display_name") or selected.get("label"),
@@ -140,8 +193,10 @@ def _record_configuration_run(user, selected: dict[str, Any], configuration: dic
                 configuration_revision=int(configuration["revision"]),
                 strategy_version_id=uuid.UUID(configuration["strategy_version_id"]),
                 started_at=now,
-            )
         )
+        db.add(run)
+        db.flush()
+        return run.id
 
 
 def _stop_recorded_runs(user) -> None:
@@ -179,12 +234,21 @@ def _build_engine_readiness_checks(
         "severity": "ok" if engine_mode else "error",
     })
 
-    # 1. Dhan connected
-    creds_ok = "Dhan credentials are not connected." not in readiness.get("issues", [])
+    # 1. Dhan connected. Personal broker credentials are deliberately not a
+    # Paper prerequisite; Paper uses server-owned market-data authority and
+    # never routes an order through the user's Dhan account.
+    paper_mode = engine_mode == "paper"
+    creds_ok = paper_mode or "Dhan credentials are not connected." not in readiness.get("issues", [])
     checks.append({
         "name": "dhan_connected",
         "ok": creds_ok,
-        "message": "Dhan credentials connected." if creds_ok else "Dhan credentials are not connected.",
+        "message": (
+            "Not required for Paper."
+            if paper_mode
+            else "Dhan credentials connected."
+            if creds_ok
+            else "Dhan credentials are not connected."
+        ),
         "severity": "ok" if creds_ok else "error",
     })
 
@@ -202,7 +266,11 @@ def _build_engine_readiness_checks(
     token_expired = token_meta.get("token_expired")
     token_warn = token_meta.get("token_warn")
     age_minutes = token_meta.get("token_age_minutes")
-    if token_expired is True:
+    if paper_mode:
+        age_msg = "Personal Dhan token is not required for Paper."
+        token_age_ok = True
+        token_age_severity = "ok"
+    elif token_expired is True:
         age_msg = f"Token is expired (age: {age_minutes} min). Reconnect Dhan before starting."
         token_age_ok = False
         token_age_severity = "error"
@@ -228,11 +296,17 @@ def _build_engine_readiness_checks(
     })
 
     # 4. Webhook secret
-    secret_ok = "Webhook secret is not set." not in readiness.get("issues", [])
+    secret_ok = paper_mode or "Webhook secret is not set." not in readiness.get("issues", [])
     checks.append({
         "name": "webhook_secret_set",
         "ok": secret_ok,
-        "message": "Webhook secret configured." if secret_ok else "Webhook secret is not set.",
+        "message": (
+            "Personal webhook secret is not required for Paper."
+            if paper_mode
+            else "Webhook secret configured."
+            if secret_ok
+            else "Webhook secret is not set."
+        ),
         "severity": "ok" if secret_ok else "error",
     })
 
@@ -352,17 +426,12 @@ def start_engine(body: StartEngineRequest | None = None) -> dict[str, Any]:
     if engine_mode is None:
         raise HTTPException(status_code=400, detail={"message": "Select Paper or Live mode before starting the engine."})
 
-    from app.services.shared_market_data import shared_market_data_configured
-
-    # Paper mode on the shared market-data account needs no per-user Dhan token,
-    # so the user's (possibly stale) token must not gate paper start.
-    paper_uses_shared_data = engine_mode == "paper" and shared_market_data_configured()
-
     # Gather token age metadata
     token_meta = dhan_token_age_metadata()
 
-    # Hard-block on expired token (not for paper on the shared data feed).
-    if not paper_uses_shared_data and token_meta.get("token_expired") is True:
+    # Paper never places an order through the user's Dhan account, so even a
+    # saved-but-expired personal token cannot block a Paper start.
+    if engine_mode == "live" and token_meta.get("token_expired") is True:
         age_minutes = token_meta.get("token_age_minutes")
         raise HTTPException(
             status_code=400,
@@ -446,6 +515,7 @@ def stop_engine() -> dict[str, Any]:
     user = _execution_user()
     status = runtime_reliability.stop_engine(user)
     _deactivate_selected_builtin(user)
+    _pause_selected_personal(user, reason="engine_stopped")
     _stop_recorded_runs(user)
     _sync_runtime_sessions(user, status)
     return {
@@ -461,6 +531,7 @@ def prepare_reconfigure() -> dict[str, Any]:
     user = _execution_user()
     status = runtime_reliability.stop_engine(user, reason="reconfigure")
     _deactivate_selected_builtin(user)
+    _pause_selected_personal(user, reason="engine_reconfigure")
     _stop_recorded_runs(user)
     _sync_runtime_sessions(user, status)
     position_open = bool(status["position"]["has_open_position"])
@@ -500,9 +571,18 @@ def hydrated_runtime_status() -> dict[str, Any]:
     return _hydrated_runtime_status()
 
 
-@router.post("/runtime/start-selected")
-def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
-    user = _execution_user()
+def _runtime_start_selected_once(
+    body: StartSelectedRequest,
+    user,
+) -> tuple[dict[str, Any], uuid.UUID | None]:
+    if body.mode == "live" and not body.live_acknowledged:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "A fresh acknowledgement is required for every Live start attempt.",
+                "reason": "LIVE_ACKNOWLEDGEMENT_REQUIRED",
+            },
+        )
     try:
         selected = strategy_instance_service.require_selected_engine_strategy(user.id)
     except strategy_instance_service.InstanceError as exc:
@@ -516,6 +596,14 @@ def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
             detail={
                 "message": "The selected strategy changed. Review and confirm the current strategy before starting.",
                 "reason": "STRATEGY_CONFIRMATION_MISMATCH",
+            },
+        )
+    if str(selected.get("strategy_version_id")) != body.strategy_version_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "The selected strategy version changed. Review the current version before starting.",
+                "reason": "STRATEGY_VERSION_CONFIRMATION_MISMATCH",
             },
         )
     try:
@@ -538,6 +626,18 @@ def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
                 "reason": "CONFIGURATION_CONFIRMATION_MISMATCH",
             },
         )
+    current_configuration = setup_configuration.selected_configuration(user.id, body.mode)
+    if (
+        current_configuration is None
+        or current_configuration["id"] != body.configuration_revision_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "The configuration is not the owner's currently selected revision.",
+                "reason": "CONFIGURATION_SELECTION_CHANGED",
+            },
+        )
     if str(selected.get("strategy_version_id")) != selected_configuration["strategy_version_id"]:
         raise HTTPException(
             status_code=409,
@@ -555,6 +655,29 @@ def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
             status_code=409,
             detail="A tracked position is open. Confirm it is flat before starting the selected strategy.",
         )
+    if status["exit"]["state"] in {"EXIT_PENDING", "RECONCILIATION_REQUIRED"}:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "An exit or reconciliation operation must finish before the engine can start.",
+                "reason": "CONFLICTING_POSITION_OPERATION",
+            },
+        )
+    if body.mode == "live":
+        readiness = live_engine.evaluate_live_readiness(
+            user,
+            "real_orders",
+            uses_webhook=True,
+        )
+        if not readiness.get("ready"):
+            raise HTTPException(
+                status_code=412,
+                detail={
+                    "message": "Live start is blocked by authoritative readiness checks.",
+                    "reason": "LIVE_READINESS_FAILED",
+                    "readiness": readiness,
+                },
+            )
     try:
         runtime_reliability.configure_mode(
             user,
@@ -564,10 +687,29 @@ def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
             target_profit_percent=float(saved_setup["take_profit_percent"]),
             direction=str(saved_setup["direction"]),
         )
+        # A confirmed automation update creates a new immutable revision but
+        # deliberately does not mutate the running engine or its open
+        # position. Load the exact selected revision only when a new run
+        # starts; signal fan-out separately stamps this revision on each job.
+        update_runtime_settings(
+            **dict(selected_configuration.get("risk") or {}),
+            configuration_revision=int(selected_configuration["revision"]),
+        )
         if selected.get("source_type") in {"NOVA_HOSTED_PERSONAL", "PERSONAL_TRADINGVIEW"}:
             strategy_fanout.set_subscription_active(user.id, "supertrend", False)
-        start_engine(StartEngineRequest(engine_mode=body.mode, confirm_live_orders=body.mode == "live"))
-        if selected.get("source_type") == "NOVA_SHARED":
+        if selected.get("source_type") in {
+            "NOVA_HOSTED_PERSONAL",
+            "PERSONAL_TRADINGVIEW",
+        }:
+            strategy_instance_service.configure_and_activate_for_engine_start(
+                user.id,
+                selected["instance_id"],
+                execution_mode=(
+                    "paper_live_data" if body.mode == "paper" else "real_orders"
+                ),
+                lots=int(saved_setup["lots"]),
+            )
+        elif selected.get("source_type") == "NOVA_SHARED":
             if selected.get("strategy_code") != "supertrend":
                 raise ValueError("The selected built-in strategy has no supported execution adapter.")
             strategy_fanout.subscribe_user(
@@ -576,13 +718,128 @@ def runtime_start_selected(body: StartSelectedRequest) -> dict[str, Any]:
                 lots=int(saved_setup["lots"]),
                 execution_mode="paper_live_data" if body.mode == "paper" else "real_orders",
             )
-        _record_configuration_run(user, selected, selected_configuration)
+        start_engine(
+            StartEngineRequest(
+                engine_mode=body.mode,
+                confirm_live_orders=body.live_acknowledged,
+            )
+        )
+        run_id = _record_configuration_run(user, selected, selected_configuration)
     except Exception:
         failed = runtime_reliability.stop_engine(user, reason="selected_strategy_start_failed")
+        _pause_selected_personal(user, reason="selected_strategy_start_failed")
         _sync_runtime_sessions(user, failed)
         raise
     result = _hydrated_runtime_status()
     _sync_runtime_sessions(user, result)
+    return result, run_id
+
+
+@router.post("/runtime/start-selected")
+def runtime_start_selected(
+    body: StartSelectedRequest,
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=255,
+    ),
+) -> dict[str, Any]:
+    user = _execution_user()
+    if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+        raise HTTPException(status_code=400, detail="Idempotency-Key header is required.")
+    payload = body.model_dump(mode="json")
+    try:
+        claim = engine_start_operations.claim(
+            user_id=user.id,
+            idempotency_key=idempotency_key,
+            payload=payload,
+        )
+    except engine_start_operations.IdempotencyConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Durable engine-start idempotency is unavailable.",
+        ) from exc
+
+    if claim.status == "succeeded" and claim.result is not None:
+        return claim.result
+    if claim.status == "failed":
+        stored = claim.result or {}
+        raise HTTPException(
+            status_code=int(stored.get("status_code") or 409),
+            detail=stored.get("detail") or claim.error_message or "Engine start failed.",
+        )
+    if claim.status == "pending":
+        raise HTTPException(
+            status_code=409,
+            detail="An identical engine-start operation is already in progress.",
+        )
+    if body.mode == "live" and not body.live_acknowledged:
+        detail = {
+            "message": "A fresh acknowledgement is required for every Live start attempt.",
+            "reason": "LIVE_ACKNOWLEDGEMENT_REQUIRED",
+        }
+        engine_start_operations.fail(
+            claim.operation_id,
+            status_code=409,
+            error_code="LIVE_ACKNOWLEDGEMENT_REQUIRED",
+            message=detail["message"],
+            detail=detail,
+        )
+        raise HTTPException(status_code=409, detail=detail)
+
+    try:
+        with engine_start_operations.owner_start_lock(user.id):
+            result, run_id = _runtime_start_selected_once(body, user)
+    except HTTPException as exc:
+        detail = exc.detail
+        reason = detail.get("reason") if isinstance(detail, dict) else None
+        message = (
+            str(detail.get("message") or reason or "Engine start rejected.")
+            if isinstance(detail, dict)
+            else str(detail)
+        )
+        engine_start_operations.fail(
+            claim.operation_id,
+            status_code=exc.status_code,
+            error_code=str(reason or "START_REJECTED"),
+            message=message,
+            detail=detail,
+        )
+        raise
+    except Exception:
+        engine_start_operations.fail(
+            claim.operation_id,
+            status_code=500,
+            error_code="START_FAILED",
+            message="Engine start failed after validation.",
+        )
+        raise
+
+    result = {**result, "start_operation_id": str(claim.operation_id)}
+    engine_start_operations.succeed(
+        claim.operation_id,
+        result=result,
+        run_id=run_id,
+    )
+    log_audit_event(
+        "ENGINE_START_OPERATION_SUCCEEDED",
+        "Selected strategy engine start completed.",
+        severity="WARNING" if body.mode == "live" else "INFO",
+        metadata={
+            "operation_id": str(claim.operation_id),
+            "strategy_instance_id": body.strategy_instance_id,
+            "strategy_version_id": body.strategy_version_id,
+            "configuration_revision_id": body.configuration_revision_id,
+            "configuration_revision": body.configuration_revision,
+            "mode": body.mode,
+            "live_acknowledged": body.live_acknowledged,
+        },
+    )
     return result
 
 
@@ -591,6 +848,7 @@ def runtime_stop() -> dict[str, Any]:
     user = _execution_user()
     status = runtime_reliability.stop_engine(user)
     _deactivate_selected_builtin(user)
+    _pause_selected_personal(user, reason="runtime_stopped")
     _stop_recorded_runs(user)
     _sync_runtime_sessions(user, status)
     return _hydrated_runtime_status()
@@ -600,6 +858,8 @@ def runtime_stop() -> dict[str, Any]:
 def runtime_square_off() -> dict[str, Any]:
     user = _execution_user()
     result = runtime_reliability.square_off(user)
+    _deactivate_selected_builtin(user)
+    _pause_selected_personal(user, reason="runtime_square_off")
     _stop_recorded_runs(user)
     _sync_runtime_sessions(user, result)
     return result

@@ -1,5 +1,6 @@
 """Phase 3A private strategy-instance webhook: ingestion, credentials,
 payload contract, idempotency, tenant isolation, and status API."""
+# ruff: noqa: DTZ005, F811
 from __future__ import annotations
 
 import json
@@ -11,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 
@@ -94,6 +96,36 @@ def _make_instance(
         )
         db.add(instance)
         db.flush()
+        mode = "live" if execution_mode == "real_orders" else "paper"
+        revision = models.StrategyConfigurationRevision(
+            user_id=user.id,
+            strategy_instance_id=instance.id,
+            strategy_version_id=version.id,
+            mode=mode,
+            revision=1,
+            configuration_json={
+                "lots": lots,
+                "allowed_option_side": "BOTH",
+            },
+            risk_json={},
+            status="active",
+        )
+        db.add(revision)
+        db.flush()
+        selection = db.scalar(
+            select(models.UserEngineConfig).where(
+                models.UserEngineConfig.user_id == user.id
+            )
+        )
+        if selection is None:
+            db.add(
+                models.UserEngineConfig(
+                    user_id=user.id,
+                    selected_strategy_instance_id=instance.id,
+                    selected_configuration_revision_id=revision.id,
+                    selected_configuration_revision=revision.revision,
+                )
+            )
         return str(instance.id)
 
 

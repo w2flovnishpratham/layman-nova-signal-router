@@ -30,10 +30,15 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+)
+from sqlalchemy import (
     false as sa_false,
+)
+from sqlalchemy import (
     text as sa_text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import CHAR, JSON, TypeDecorator
 
@@ -101,13 +106,13 @@ class User(Base):
     )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    sessions: Mapped[list["UserSession"]] = relationship(
+    sessions: Mapped[list[UserSession]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
-    credential_vault: Mapped["UserCredentialVault | None"] = relationship(
+    credential_vault: Mapped[UserCredentialVault | None] = relationship(
         back_populates="user", cascade="all, delete-orphan", uselist=False
     )
-    runs: Mapped[list["UserRun"]] = relationship(
+    runs: Mapped[list[UserRun]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -124,7 +129,7 @@ class UserSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     session_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
 
-    user: Mapped["User"] = relationship(back_populates="sessions")
+    user: Mapped[User] = relationship(back_populates="sessions")
 
 
 class UserCredentialVault(Base):
@@ -149,7 +154,7 @@ class UserCredentialVault(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    user: Mapped["User"] = relationship(back_populates="credential_vault")
+    user: Mapped[User] = relationship(back_populates="credential_vault")
 
 
 class UserRun(Base):
@@ -181,7 +186,7 @@ class UserRun(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    user: Mapped["User"] = relationship(back_populates="runs")
+    user: Mapped[User] = relationship(back_populates="runs")
 
 
 class AuditLog(Base):
@@ -490,6 +495,13 @@ class StrategyExecutionJob(Base):
     signal_payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
     lots: Mapped[int] = mapped_column(Integer, nullable=False)
     execution_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    configuration_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
@@ -532,6 +544,54 @@ class LiveOrderIntent(Base):
     broker_correlation_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     intent_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class EngineStartOperation(Base):
+    """Owner-scoped durable idempotency and consent record for engine starts."""
+
+    __tablename__ = "engine_start_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "idempotency_key",
+            name="uq_engine_start_operation_user_key",
+        ),
+        Index("ix_engine_start_operations_user_created", "user_id", "created_at"),
+        Index("ix_engine_start_operations_status_updated", "status", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_instances.id", ondelete="RESTRICT"), nullable=False
+    )
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    configuration_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("strategy_configuration_revisions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    live_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    started_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("user_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
@@ -596,6 +656,13 @@ class PortfolioTrade(Base):
     entry_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     exit_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    configuration_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -639,7 +706,7 @@ class StrategyCatalog(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    versions: Mapped[list["StrategyVersion"]] = relationship(
+    versions: Mapped[list[StrategyVersion]] = relationship(
         back_populates="strategy", cascade="all, delete-orphan"
     )
 
@@ -699,7 +766,7 @@ class StrategyVersion(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    strategy: Mapped["StrategyCatalog"] = relationship(back_populates="versions")
+    strategy: Mapped[StrategyCatalog] = relationship(back_populates="versions")
 
 
 class StrategySourceArtifact(Base):
@@ -1096,7 +1163,7 @@ class StrategyInstance(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    webhook_credentials: Mapped[list["StrategyInstanceWebhookCredential"]] = relationship(
+    webhook_credentials: Mapped[list[StrategyInstanceWebhookCredential]] = relationship(
         back_populates="instance", cascade="all, delete-orphan"
     )
 
@@ -1137,7 +1204,7 @@ class StrategyInstanceWebhookCredential(Base):
     revoked_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
     replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
 
-    instance: Mapped["StrategyInstance"] = relationship(back_populates="webhook_credentials")
+    instance: Mapped[StrategyInstance] = relationship(back_populates="webhook_credentials")
 
 
 class UserEngineConfig(Base):
@@ -1531,7 +1598,7 @@ class CanonicalSignalDecision(Base):
     backfill_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
-    outcomes: Mapped[list["CanonicalSignalOutcome"]] = relationship(
+    outcomes: Mapped[list[CanonicalSignalOutcome]] = relationship(
         back_populates="decision", lazy="select", passive_deletes=True
     )
 
@@ -1602,7 +1669,7 @@ class CanonicalSignalOutcome(Base):
     idempotency_key: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
-    decision: Mapped["CanonicalSignalDecision"] = relationship(
+    decision: Mapped[CanonicalSignalDecision] = relationship(
         back_populates="outcomes", lazy="select"
     )
 

@@ -22,7 +22,7 @@ const prefs = (over: Record<string, unknown> = {}) => ({
   revision: 1,
   stored: true,
   channels: [
-    { key: 'entry_exit', label: 'Entry and exit fills', available: false, reason: 'No delivery channel is configured yet; this preference is stored only.' },
+    { key: 'entry_exit', label: 'Entry and exit fills', available: true, reason: 'Delivered by this browser when notification permission is granted.' },
   ],
   ...over,
 })
@@ -53,10 +53,11 @@ describe('SettingsPage', () => {
     expect((screen.getByLabelText('Default chart timeframe') as HTMLSelectElement).value).toBe('15m')
   })
 
-  it('admits that notification channels deliver nothing yet', async () => {
+  it('describes browser-controlled notification delivery truthfully', async () => {
     apiMocks.getPreferences.mockResolvedValue(prefs())
     render(<SettingsPage />)
-    expect(await screen.findByText(/no delivery channel is configured yet/i)).toBeInTheDocument()
+    expect(await screen.findByText(/delivered by this browser/i)).toBeInTheDocument()
+    expect(screen.getByText(/browser permission:/i)).toBeInTheDocument()
   })
 
   it('requires confirmation before resetting Paper', async () => {

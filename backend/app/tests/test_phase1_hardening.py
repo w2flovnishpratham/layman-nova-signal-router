@@ -1,3 +1,4 @@
+# ruff: noqa: F811
 from __future__ import annotations
 
 import asyncio
@@ -88,11 +89,11 @@ def _signal(signal_id: str = "phase1-signal"):
 def test_alembic_baseline_creates_current_schema(tmp_path, monkeypatch):
     from alembic import command
     from alembic.config import Config
+    from scripts.init_db import EXPECTED_TABLES
     from sqlalchemy import create_engine, inspect
 
     from app.config import settings
     from app.db import engine as db_engine
-    from scripts.init_db import EXPECTED_TABLES
 
     db_path = tmp_path / "alembic-baseline.db"
     monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{db_path}", raising=False)
@@ -174,9 +175,17 @@ def test_duplicate_strategy_signal_creates_one_job_and_one_execution(mu_db, monk
     monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
     user = make_user("phase1-duplicate-user@gmail.com")
     strategy_fanout.subscribe_user(user.id, "supertrend", lots=1, execution_mode="paper_live_data")
+    from app.tests.test_strategy_fanout import _bind_paper_configuration
+
+    _bind_paper_configuration(user, lots=1)
 
     calls = []
-    monkeypatch.setattr(strategy_fanout, "route_signal", lambda signal: calls.append(signal.signal_id) or {"success": True})
+    monkeypatch.setattr(
+        strategy_fanout,
+        "route_signal",
+        lambda signal, **_kwargs: calls.append(signal.signal_id)
+        or {"success": True},
+    )
     monkeypatch.setattr(strategy_fanout, "init_runtime_files", lambda: None)
 
     app = FastAPI()
@@ -203,7 +212,13 @@ def test_duplicate_strategy_signal_creates_one_job_and_one_execution(mu_db, monk
 
 
 def test_paper_order_path_never_calls_real_dhan_order_api(tmp_path, monkeypatch):
-    from app.services import credential_vault, execution_router, paper_broker, paper_portfolio, state_store
+    from app.services import (
+        credential_vault,
+        execution_router,
+        paper_broker,
+        paper_portfolio,
+        state_store,
+    )
     from app.services.credential_vault import DhanCredentials
     from app.services.dhan_client import DhanLtpResult
     from app.services.shared_market_data import shared_market_data_status

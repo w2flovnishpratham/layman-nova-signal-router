@@ -1,3 +1,4 @@
+# ruff: noqa: F811
 """Tests for the live-only portfolio analytics that powers the dashboard.
 
 These are deterministic and clock-independent: they do not touch market-hours
@@ -120,3 +121,54 @@ def test_paper_exit_persists_a_row_reports_can_read_back(mu_db):
     assert report["totals"]["net_pnl"] == 740.0
     assert report["trades"][0]["option_side"] == "CE"
     assert report["trades"][0]["symbol"] == "NIFTY 25000 CE"
+
+
+def test_paper_wallet_writes_owner_snapshot_and_audits_reset(
+    mu_db,
+    tmp_path,
+    monkeypatch,
+):
+    from sqlalchemy import select
+
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import paper_portfolio, state_store
+    from app.services.execution_context import bind_user_execution_context
+    from app.services.user_context import current_user_from_model
+
+    portfolio_path = tmp_path / "paper_portfolio.json"
+    monkeypatch.setattr(state_store, "PAPER_PORTFOLIO_FILE", portfolio_path)
+    monkeypatch.setattr(paper_portfolio, "PAPER_PORTFOLIO_FILE", portfolio_path)
+    current = current_user_from_model(make_user("paper-snapshot@example.com"))
+
+    with bind_user_execution_context(current):
+        paper_portfolio.reset_paper_portfolio(1_000_000)
+        paper_portfolio.apply_paper_entry(
+            qty=75,
+            price=100.0,
+            charges=5.0,
+            symbol="NIFTY TEST CE",
+            order_id="PAPER-SNAPSHOT-ENTRY",
+        )
+
+    with session_scope() as db:
+        snapshots = db.scalars(
+            select(models.PortfolioSnapshot)
+            .where(
+                models.PortfolioSnapshot.user_id == current.id,
+                models.PortfolioSnapshot.mode == "paper",
+            )
+            .order_by(models.PortfolioSnapshot.captured_at.asc())
+        ).all()
+        reset_audit = db.scalar(
+            select(models.AuditLog).where(
+                models.AuditLog.user_id == current.id,
+                models.AuditLog.action == "PAPER_PORTFOLIO_RESET",
+            )
+        )
+
+    assert len(snapshots) == 2
+    assert snapshots[-1].available_balance == 992_495.0
+    assert snapshots[-1].utilized_amount == 7_500.0
+    assert reset_audit is not None
+    assert reset_audit.audit_metadata["starting_balance"] == 1_000_000.0

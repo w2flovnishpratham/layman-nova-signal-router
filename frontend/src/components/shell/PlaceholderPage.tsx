@@ -9,7 +9,7 @@ const SOURCES: Partial<Record<AppRoute, string[]>> = {
     'Routing outcome per signal (routed, blocked, duplicate) and ingest latency',
   ],
   automations: [
-    'Server-side guardrails that already run (daily loss cap, cooldown, square-off)',
+    'Server-side guardrails that already run (daily loss cap and square-off)',
     'Scheduled jobs the backend already executes',
   ],
   webhooks: [

@@ -12,21 +12,28 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import select
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.config import settings
-from app.db.engine import database_configured
-from app.services import entitlements, live_engine, runtime_reliability, strategy_fanout
-from app.services import setup_configuration
-from app.services import strategy_catalog_service, strategy_instance_service
+from app.db import models
+from app.db.engine import database_configured, session_scope
+from app.services import (
+    entitlements,
+    live_engine,
+    runtime_reliability,
+    setup_configuration,
+    strategy_catalog_service,
+    strategy_fanout,
+    strategy_instance_service,
+    strategy_risk,
+    webhook_replay_store,
+)
 from app.services.execution_context import bind_user_execution_context
-from app.services import webhook_replay_store
-from app.services import strategy_risk
 from app.services.signal_parser import PayloadParseError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
 from app.services.user_context import CurrentUser
 from app.workers.strategy_job_worker import wake_strategy_job_worker
-
 
 router = APIRouter(tags=["Strategies"])
 _WEBHOOK_REQUESTS: dict[str, list[float]] = {}
@@ -376,18 +383,115 @@ def read_trading_configuration(
     return {"ok": True, "configuration": configuration}
 
 
+def _manual_defaults(user_id: uuid.UUID) -> dict[str, dict[str, Any]]:
+    defaults: dict[str, dict[str, Any]] = {}
+    for mode in ("paper", "live"):
+        revision = setup_configuration.selected_configuration(user_id, mode)
+        values = dict(revision.get("configuration") or {}) if revision else {}
+        defaults[mode] = {
+            "available": revision is not None,
+            "lots": values.get("lots"),
+            "stop_loss_percent": values.get("stop_loss_percent"),
+            "take_profit_percent": values.get("take_profit_percent"),
+            "order_type": "MARKET" if revision is not None else None,
+            "configuration_revision_id": revision.get("id") if revision else None,
+            "configuration_revision": revision.get("revision") if revision else None,
+        }
+    return defaults
+
+
 @router.get("/api/trading/bootstrap")
 def trading_bootstrap(user: CurrentUser = Depends(get_current_user)):
     """One owner-scoped read model for setup restoration and terminal startup."""
     from app.services import automations_overview, risk_overview, user_preferences
 
     runtime = _owner_runtime(user)
-    mode = runtime["engine"].get("mode")
+    selected_configuration = setup_configuration.selected_configuration(user.id)
+    mode = (
+        selected_configuration["mode"]
+        if selected_configuration is not None
+        else None
+    )
+
     catalog = strategy_catalog_service.get_catalog(
         user.id,
         runtime_state=runtime["engine"]["state"],
     )
-    selected_configuration = setup_configuration.selected_configuration(user.id, mode)
+    selection = strategy_instance_service.trading_selection_state(user.id)
+    current_run = None
+    pending_operation = None
+    if database_configured():
+        with session_scope() as db:
+            run = db.scalar(
+                select(models.UserRun)
+                .where(models.UserRun.user_id == user.id)
+                .order_by(models.UserRun.created_at.desc())
+            )
+            if run is not None:
+                current_run = {
+                    "id": str(run.id),
+                    "status": run.status,
+                    "mode": run.run_type,
+                    "execution_mode": run.execution_mode,
+                    "strategy_name": run.strategy_name,
+                    "strategy_version_id": (
+                        str(run.strategy_version_id)
+                        if run.strategy_version_id
+                        else None
+                    ),
+                    "configuration_revision_id": (
+                        str(run.configuration_revision_id)
+                        if run.configuration_revision_id
+                        else None
+                    ),
+                    "configuration_revision": run.configuration_revision,
+                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "stopped_at": run.stopped_at.isoformat() if run.stopped_at else None,
+                }
+            operation = db.scalar(
+                select(models.EngineStartOperation)
+                .where(
+                    models.EngineStartOperation.user_id == user.id,
+                    models.EngineStartOperation.status == "pending",
+                )
+                .order_by(models.EngineStartOperation.created_at.desc())
+            )
+            if operation is not None:
+                pending_operation = {
+                    "id": str(operation.id),
+                    "type": "engine_start",
+                    "status": operation.status,
+                    "mode": operation.mode,
+                    "configuration_revision_id": str(
+                        operation.configuration_revision_id
+                    ),
+                    "configuration_revision": operation.configuration_revision,
+                    "created_at": operation.created_at.isoformat(),
+                }
+
+    if (
+        mode is None
+        and current_run is not None
+        and current_run["status"] == "running"
+        and current_run["mode"] in {"paper", "live"}
+    ):
+        mode = current_run["mode"]
+    if (
+        mode is None
+        and (
+            runtime["engine"]["state"] != "STOPPED"
+            or runtime["position"].get("has_open_position")
+        )
+    ):
+        runtime_mode = runtime["engine"].get("mode")
+        mode = runtime_mode if runtime_mode in {"paper", "live"} else None
+
+    preferences = user_preferences.get_preferences(user.id)
+    setup_state = catalog.get("setup_progress")
+    position_version = runtime["position"].get(
+        "position_version",
+        runtime["position"].get("version"),
+    )
     return {
         # Every field runtime_status() produces (pnl, config, account, safety,
         # exit, owner_user_id) belongs in this response too: RuntimeStatus is
@@ -395,20 +499,48 @@ def trading_bootstrap(user: CurrentUser = Depends(get_current_user)):
         # endpoint, and every consumer (Header, EngineConfigCard, ...) trusts
         # it's always complete.
         **runtime,
+        # strategy_catalog/eligible_strategies/selected_strategy: the setup
+        # conversation's strategy-picker step reads these directly off the
+        # bootstrap payload; without them the strategy list silently renders
+        # empty. Mirrors _hydrated_runtime_status's already-correct pattern.
+        **selection,
+        "strategy_catalog": catalog,
         "ok": True,
         "mode": mode,
-        "setup_state": catalog.get("setup_progress"),
+        "setup": {
+            "state": setup_state,
+            "saved_complete": selected_configuration is not None,
+            "mode_selected": mode in {"paper", "live"},
+        },
+        "setup_state": setup_state,
+        "selected_strategy_key": catalog.get("selected_strategy_key"),
         "compatible_configurations": setup_configuration.list_configurations(user.id, mode=mode),
         "selected_configuration": selected_configuration,
+        "current_run": current_run,
+        "live_readiness": live_engine.evaluate_live_readiness(
+            user,
+            "real_orders",
+            uses_webhook=True,
+        ),
+        "pending_operation": pending_operation,
         "engine": runtime["engine"],
         "position": runtime["position"],
         "risk_usage": risk_overview.build_risk_overview(user.id),
-        "manual_defaults": {
-            "paper": {"lots": 1, "stop_loss_percent": 10, "take_profit_percent": 20, "order_type": "MARKET"},
-            "live": {"lots": 1, "stop_loss_percent": 10, "take_profit_percent": 20, "order_type": "MARKET"},
+        "manual_defaults": _manual_defaults(user.id),
+        "automation_settings": automations_overview.build_automations_overview(
+            user.id
+        ),
+        "notification_preferences": preferences.get("notification_preferences", {}),
+        "chart_preferences": {
+            "default_timeframe": preferences.get("default_chart_timeframe", "5m"),
         },
-        "automation_settings": automations_overview.build_automations_overview(),
-        "notification_preferences": user_preferences.get_preferences(user.id).get("notification_preferences", {}),
+        "terminal_state": {
+            "engine_state": runtime["engine"]["state"],
+            "position_version": position_version,
+            "reconciliation_status": (
+                "pending" if pending_operation is not None else "resolved"
+            ),
+        },
         "terminal_capabilities": {
             "max_open_positions": 1,
             "paper_add_quantity": True,

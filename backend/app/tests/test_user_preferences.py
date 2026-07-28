@@ -50,13 +50,14 @@ def test_unsupported_values_are_rejected(mu_db):
             user_preferences.save_preferences(user.id, bad)
 
 
-def test_notification_channels_admit_they_deliver_nothing(mu_db):
+def test_notification_channels_describe_browser_controlled_delivery(mu_db):
     user = make_user("pref-notify@example.com")
     channels = user_preferences.get_preferences(user.id)["channels"]
     assert channels, "channels must be declared so the page cannot invent its own"
     for channel in channels:
-        assert channel["available"] is False
-        assert "stored only" in channel["reason"]
+        assert channel["available"] is True
+        assert "browser" in channel["reason"].lower()
+        assert "permission" in channel["reason"].lower()
 
 
 def test_one_owner_never_reads_another(mu_db):

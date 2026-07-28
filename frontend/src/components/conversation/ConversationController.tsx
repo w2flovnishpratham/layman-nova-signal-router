@@ -26,8 +26,13 @@ interface Props {
   ) => Promise<void>
   /** Reports machine state so the setup rail and configuration panel can
       project from the same source rather than tracking their own copy. */
-  onStateChange?: (snapshot: { state: ConversationState; strategyName: string | null; strategyVersion: string | null }) => void
-  onStart: (instanceId: string) => Promise<void>
+  onStateChange?: (snapshot: {
+    state: ConversationState
+    strategyName: string | null
+    strategyVersion: string | null
+    savedComplete: boolean
+  }) => void
+  onStart: (instanceId: string, liveAcknowledged: boolean) => Promise<void>
   onUserReply: (text: string) => void
   /** Sync the backend when the machine picks a mode (setup.mode command + draft). */
   onModeSelect?: (mode: EngineMode, paperStartingBalance: number) => void
@@ -108,14 +113,20 @@ function ActiveQuestion({ field, currentValue, onCommit }: { field: StrategySetu
   )
 }
 
-function StrategyGroup({ title, strategies, onPick }: { title: string; strategies: CatalogStrategy[]; onPick: (s: CatalogStrategy) => void }) {
+function StrategyGroup({ title, strategies, mode, onPick }: {
+  title: string
+  strategies: CatalogStrategy[]
+  mode: EngineMode
+  onPick: (s: CatalogStrategy) => void
+}) {
   if (strategies.length === 0) return null
   return (
     <section className="conv-strategy-group">
       <h3 className="conv-group-title">{title}</h3>
       <div className="conv-strategy-row">
         {strategies.map((s) => {
-          const usable = s.availability === 'READY' && s.paper_eligible
+          const usable = s.availability === 'READY'
+            && (mode === 'live' ? s.live_eligible : s.paper_eligible)
           return (
             <button
               key={s.strategy_key}
@@ -146,11 +157,24 @@ export function ConversationController({
   const { state } = conv
 
   const catalog = runtime?.strategy_catalog
-  const mode: EngineMode = state.mode ?? 'paper'
+  const mode = state.mode
   const strategies = useMemo(() => catalog?.strategies ?? [], [catalog])
   const selectedStrategy = useMemo(
     () => strategies.find((s) => s.strategy_key === state.strategyKey) ?? null,
     [strategies, state.strategyKey],
+  )
+
+  const [pending, setPending] = useState<'idle' | 'saving' | 'starting'>('idle')
+  const [saveError, setSaveError] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const [liveAcknowledged, setLiveAcknowledged] = useState(false)
+  const restoredRevisionRef = useRef<string | null>(null)
+  const setupSaved = saved || Boolean(
+    !dirty
+    && runtime?.selected_configuration
+    && state.strategyKey
+    && state.mode === runtime?.selected_configuration?.mode,
   )
 
   useEffect(() => {
@@ -158,12 +182,39 @@ export function ConversationController({
       state,
       strategyName: selectedStrategy?.name ?? null,
       strategyVersion: selectedStrategy?.version ?? null,
+      savedComplete: setupSaved,
     })
-  }, [state, selectedStrategy, onStateChange])
+  }, [state, selectedStrategy, setupSaved, onStateChange])
 
-  const [pending, setPending] = useState<'idle' | 'saving' | 'starting'>('idle')
-  const [saveError, setSaveError] = useState('')
-  const [saved, setSaved] = useState(false)
+  useEffect(() => {
+    const selectedConfiguration = runtime?.selected_configuration
+    const bootstrapMode = (runtime as RuntimeStatus & { mode?: EngineMode | null } | null)?.mode
+    const authoritativeMode = bootstrapMode
+      ?? selectedConfiguration?.mode
+      ?? runtime?.engine?.mode
+    if (!authoritativeMode || !selectedConfiguration) return
+    if (selectedConfiguration.mode !== authoritativeMode) return
+    if (!state.mode) {
+      conv.selectMode(authoritativeMode)
+      return
+    }
+    if (state.mode !== authoritativeMode || state.strategyKey) return
+    const revisionKey = `${selectedConfiguration.id}:${selectedConfiguration.revision}`
+    if (restoredRevisionRef.current === revisionKey) return
+    const strategyKey = catalog?.selected_strategy_key
+    const strategy = strategies.find((item) => item.strategy_key === strategyKey)
+    if (!strategy) return
+    restoredRevisionRef.current = revisionKey
+    conv.selectStrategy(
+      strategy.strategy_key,
+      withRiskFields(strategy.setup_schema.fields),
+      {
+        ...(strategy.saved_setup?.[authoritativeMode] ?? {}),
+        ...selectedConfiguration.configuration,
+        ...selectedConfiguration.risk,
+      },
+    )
+  }, [catalog?.selected_strategy_key, conv, runtime, state.mode, state.strategyKey, strategies])
   // Synchronous guard so two rapid clicks (before the disabled state re-renders)
   // cannot fire a second save/start network request.
   const inFlightRef = useRef(false)
@@ -179,6 +230,10 @@ export function ConversationController({
 
   function pickMode(m: EngineMode) {
     if (m === 'live' && !liveAvailable) return // never advance when Live is blocked
+    restoredRevisionRef.current = null
+    setDirty(true)
+    setSaved(false)
+    setLiveAcknowledged(false)
     conv.selectMode(m)
     onModeSelect?.(m, 1_000_000)
   }
@@ -208,6 +263,11 @@ export function ConversationController({
   const setupBlocked = !!state.strategyKey && (strategyUnavailable || schemaMissing)
 
   async function pickStrategy(s: CatalogStrategy) {
+    if (!mode) return
+    restoredRevisionRef.current = null
+    setDirty(true)
+    setSaved(false)
+    setLiveAcknowledged(false)
     conv.selectStrategy(s.strategy_key, withRiskFields(s.setup_schema.fields), s.saved_setup?.[mode] ?? {})
     try {
       await onSelect(s.strategy_key)
@@ -237,6 +297,7 @@ export function ConversationController({
       // leave new limits applied to old sizing, or the reverse.
       await onSave(selectedStrategy.strategy_key, toSaveValues(strategy), toSaveValues(risk))
       if (isStale(gen, strategyKey)) return // conversation moved on — ignore result
+      setDirty(false)
       setSaved(true)
     } catch (e) {
       if (isStale(gen, strategyKey)) return
@@ -249,13 +310,14 @@ export function ConversationController({
   }
 
   async function startEngine() {
-    if (!selectedStrategy?.strategy_instance_id || !saved || inFlightRef.current) return
+    if (!selectedStrategy?.strategy_instance_id || !setupSaved || inFlightRef.current) return
+    if (mode === 'live' && !liveAcknowledged) return
     const gen = state.generation
     const strategyKey = state.strategyKey
     inFlightRef.current = true
     setPending('starting')
     try {
-      await onStart(selectedStrategy.strategy_instance_id)
+      await onStart(selectedStrategy.strategy_instance_id, liveAcknowledged)
       if (isStale(gen, strategyKey)) return // stale start cannot fabricate running state
       conv.startEngine()
     } catch (e) {
@@ -264,6 +326,7 @@ export function ConversationController({
     } finally {
       inFlightRef.current = false
       setPending('idle')
+      if (mode === 'live') setLiveAcknowledged(false)
     }
   }
 
@@ -301,8 +364,8 @@ export function ConversationController({
       {state.mode && (state.phase === 'STRATEGY_SELECTION' || !state.strategyKey) ? (
         <>
           <BotBubble showAvatar>Which strategy should NOVA run?</BotBubble>
-          <StrategyGroup title="NOVA Strategies" strategies={strategies.filter((s) => s.source_type === 'BUILT_IN')} onPick={pickStrategy} />
-          <StrategyGroup title="My Strategies" strategies={strategies.filter((s) => s.source_type === 'IMPORTED')} onPick={pickStrategy} />
+          <StrategyGroup title="NOVA Strategies" mode={state.mode} strategies={strategies.filter((s) => s.source_type === 'BUILT_IN')} onPick={pickStrategy} />
+          <StrategyGroup title="My Strategies" mode={state.mode} strategies={strategies.filter((s) => s.source_type === 'IMPORTED')} onPick={pickStrategy} />
         </>
       ) : null}
 
@@ -314,7 +377,7 @@ export function ConversationController({
               : (selectedStrategy?.disabled_reason ?? 'This strategy is currently unavailable, so setup is paused.')}
           </BotBubble>
           <div className="conv-actions">
-            <button type="button" className="conv-pill" onClick={() => conv.selectMode(mode)}>Choose another strategy</button>
+            <button type="button" className="conv-pill" onClick={() => { if (state.mode) conv.selectMode(state.mode) }}>Choose another strategy</button>
           </div>
         </div>
       ) : null}
@@ -330,7 +393,19 @@ export function ConversationController({
           <div className="conv-actions">
             <button type="button" className="conv-pill conv-pill--primary" onClick={conv.resume}>Resume</button>
             <button type="button" className="conv-pill" onClick={conv.review}>Review</button>
-            <button type="button" className="conv-pill" onClick={conv.startNew}>Start New Setup</button>
+            <button
+              type="button"
+              className="conv-pill"
+              onClick={() => {
+                restoredRevisionRef.current = null
+                setDirty(true)
+                setSaved(false)
+                setLiveAcknowledged(false)
+                conv.startNew()
+              }}
+            >
+              Start New Setup
+            </button>
           </div>
         </>
       ) : null}
@@ -364,24 +439,39 @@ export function ConversationController({
               <div key={f.key} className="conv-summary-row">
                 <span>{f.label}</span>
                 <strong>{String(state.draft[f.key])}</strong>
-                <button type="button" className="conv-edit" aria-label={`Edit ${f.label}`} onClick={() => { setSaved(false); conv.editAnswer(f.key) }}>
+                <button type="button" className="conv-edit" aria-label={`Edit ${f.label}`} onClick={() => { restoredRevisionRef.current = null; setDirty(true); setSaved(false); conv.editAnswer(f.key) }}>
                   <Pencil size={13} />
                 </button>
               </div>
             ))}
           </div>
           {saveError ? <p className="conv-error" role="alert">{saveError}</p> : null}
+          {setupSaved && mode === 'live' ? (
+            <label className="conv-live-ack">
+              <input
+                type="checkbox"
+                checked={liveAcknowledged}
+                onChange={(event) => setLiveAcknowledged(event.target.checked)}
+              />
+              <span>I understand this will place real orders through my Dhan account</span>
+            </label>
+          ) : null}
           <div className="conv-actions">
-            {!saved ? (
+            {!setupSaved ? (
               <button type="button" className="conv-pill conv-pill--primary" disabled={pending !== 'idle'} onClick={saveSetup}>
                 {pending === 'saving' ? 'Saving…' : 'Save setup'}
               </button>
             ) : (
-              <button type="button" className="conv-pill conv-pill--primary" disabled={pending !== 'idle'} onClick={startEngine}>
-                {pending === 'starting' ? 'Starting…' : 'Start engine'}
+              <button
+                type="button"
+                className="conv-pill conv-pill--primary"
+                disabled={pending !== 'idle' || (mode === 'live' && !liveAcknowledged)}
+                onClick={startEngine}
+              >
+                {pending === 'starting' ? 'Starting…' : mode === 'live' ? 'Start Live' : 'Start Paper'}
               </button>
             )}
-            {saved ? <span className="conv-saved-badge"><Check size={14} /> Setup saved</span> : null}
+            {setupSaved ? <span className="conv-saved-badge"><Check size={14} /> Setup saved</span> : null}
           </div>
         </div>
       ) : null}

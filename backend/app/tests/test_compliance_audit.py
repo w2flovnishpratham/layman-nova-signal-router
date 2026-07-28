@@ -1431,8 +1431,8 @@ class TestDhanPayloadCompliance:
 # ===========================================================================
 
 class TestEngineStartReadiness:
-    def test_engine_start_fails_if_dhan_not_connected(self, tmp_path, monkeypatch):
-        """Engine start must fail when Dhan is not connected."""
+    def test_live_engine_start_fails_if_dhan_not_connected(self, tmp_path, monkeypatch):
+        """Live start must fail when the owner's Dhan account is not connected."""
         state_dir = tmp_path / "runtime_state"
         log_dir = tmp_path / "runtime_logs"
         monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
@@ -1451,19 +1451,23 @@ class TestEngineStartReadiness:
         monkeypatch.setattr(state_store, "LOG_FILES", log_files)
         monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
         monkeypatch.setattr(settings, "APP_ENV", "local")
-        monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
         monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
 
         from app.main import app
         with TestClient(app) as c:
             # Set webhook secret but NOT Dhan credentials
-            state_store.set_engine_mode("paper")
+            state_store.set_engine_mode("live")
             c.post("/api/setup/webhook-secret", json={"webhook_secret": TEST_WEBHOOK_SECRET})
             c.post("/api/setup/risk", json={
                 "max_qty_per_order": 1,
                 "allow_entry": True, "allow_exit": True,
             })
-            response = c.post("/api/engine/start", json={})
+            response = c.post(
+                "/api/engine/start",
+                json={"engine_mode": "live", "confirm_live_orders": True},
+            )
         assert response.status_code == 400
         body = response.json()
         detail = body.get("detail", body)
@@ -1471,8 +1475,8 @@ class TestEngineStartReadiness:
         issues = readiness.get("issues", [])
         assert any("Dhan" in i or "credentials" in i.lower() for i in issues)
 
-    def test_engine_start_fails_if_webhook_secret_not_set(self, tmp_path, monkeypatch):
-        """Engine start must fail when webhook secret is not configured."""
+    def test_live_engine_start_fails_if_webhook_secret_not_set(self, tmp_path, monkeypatch):
+        """Live start must fail when the owner's webhook secret is not configured."""
         state_dir = tmp_path / "runtime_state"
         log_dir = tmp_path / "runtime_logs"
         monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
@@ -1491,7 +1495,8 @@ class TestEngineStartReadiness:
         monkeypatch.setattr(state_store, "LOG_FILES", log_files)
         monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
         monkeypatch.setattr(settings, "APP_ENV", "local")
-        monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
         monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
         monkeypatch.setattr(
             setup_router,
@@ -1502,20 +1507,23 @@ class TestEngineStartReadiness:
         with TestClient(app) as c:
             # Dhan connected (mock), but no webhook secret
             c.post("/api/setup/dhan/connect", json={"client_id": "1000000001", "access_token": "testtoken"})
-            state_store.set_engine_mode("paper")
+            state_store.set_engine_mode("live")
             c.post("/api/setup/risk", json={
                 "max_qty_per_order": 1,
                 "allow_entry": True, "allow_exit": True,
             })
-            response = c.post("/api/engine/start", json={})
+            response = c.post(
+                "/api/engine/start",
+                json={"engine_mode": "live", "confirm_live_orders": True},
+            )
         assert response.status_code == 400
         detail = response.json().get("detail", response.json())
         readiness = detail.get("readiness", {})
         issues = readiness.get("issues", [])
         assert any("Webhook" in i or "secret" in i.lower() for i in issues)
 
-    def test_engine_start_fails_if_token_expired(self, tmp_path, monkeypatch):
-        """Engine start must fail when Dhan token is expired (age >= TOKEN_MAX_AGE_HOURS)."""
+    def test_live_engine_start_fails_if_token_expired(self, tmp_path, monkeypatch):
+        """Live start must fail when the Dhan token is expired."""
         state_dir = tmp_path / "runtime_state"
         log_dir = tmp_path / "runtime_logs"
         monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
@@ -1541,18 +1549,42 @@ class TestEngineStartReadiness:
         monkeypatch.setattr(state_store, "LOG_FILES", log_files)
         monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
         monkeypatch.setattr(settings, "APP_ENV", "local")
-        monkeypatch.setattr(settings, "DHAN_MODE", "MOCK")
+        monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
+        monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
         monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", "")
         monkeypatch.setattr(settings, "TOKEN_MAX_AGE_HOURS", 24)
+        monkeypatch.setattr(
+            "app.routers.engine.dhan_token_age_metadata",
+            lambda: {
+                "token_saved_at": old_time,
+                "token_age_minutes": 25 * 60,
+                "token_estimated_expiry_at": None,
+                "token_expired": True,
+                "token_warn": True,
+            },
+        )
+        monkeypatch.setattr(
+            setup_router,
+            "get_dhan_credentials",
+            lambda: DhanCredentials("1000000001", "old-token", old_time),
+        )
+        monkeypatch.setattr(
+            setup_router,
+            "get_webhook_secret",
+            lambda: TEST_WEBHOOK_SECRET,
+        )
 
         from app.main import app
         with TestClient(app) as c:
-            c.post("/api/setup/mode", json={"engine_mode": "paper", "paper_starting_balance": 1000000})
+            state_store.set_engine_mode("live")
             c.post("/api/setup/risk", json={
                 "max_qty_per_order": 1,
                 "allow_entry": True, "allow_exit": True,
             })
-            response = c.post("/api/engine/start", json={})
+            response = c.post(
+                "/api/engine/start",
+                json={"engine_mode": "live", "confirm_live_orders": True},
+            )
         assert response.status_code == 400
         detail = response.json().get("detail", response.json())
         msg = str(detail.get("message", "")).lower()

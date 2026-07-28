@@ -224,7 +224,11 @@ def test_builtin_explicit_start_uses_supertrend_adapter(mu_db, runtime, monkeypa
     monkeypatch.setattr(
         engine.runtime_reliability,
         "runtime_status",
-        lambda _user: {"engine": {"state": "STOPPED"}, "position": {"has_open_position": False}},
+        lambda _user: {
+            "engine": {"state": "STOPPED"},
+            "position": {"has_open_position": False},
+            "exit": {"state": "NONE"},
+        },
     )
     monkeypatch.setattr(engine.runtime_reliability, "configure_mode", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(engine, "start_engine", lambda *_args, **_kwargs: {"success": True})
@@ -235,15 +239,19 @@ def test_builtin_explicit_start_uses_supertrend_adapter(mu_db, runtime, monkeypa
     )
     monkeypatch.setattr(engine, "_hydrated_runtime_status", lambda: {"ok": True})
 
-    selected_id = strategy_instance_service.trading_selection_state(current.id)["selected_strategy"]["instance_id"]
-    assert engine.runtime_start_selected(
+    selected = strategy_instance_service.trading_selection_state(current.id)["selected_strategy"]
+    result = engine.runtime_start_selected(
         engine.StartSelectedRequest(
-            strategy_instance_id=selected_id,
+            strategy_instance_id=selected["instance_id"],
+            strategy_version_id=selected["strategy_version_id"],
             configuration_revision_id=saved_configuration["configuration_revision_id"],
             configuration_revision=saved_configuration["configuration_revision"],
             mode="paper",
-        )
-    ) == {"ok": True}
+        ),
+        idempotency_key="catalog-selected-start",
+    )
+    assert result["ok"] is True
+    assert result["start_operation_id"]
     assert calls == [("supertrend", 3, "paper_live_data")]
 
 

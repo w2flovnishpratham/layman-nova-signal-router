@@ -1,19 +1,34 @@
 """Phase 4G-pre correction: controlled paper verification mode (deadlock fix)
 and persisted engine strategy selection."""
+# ruff: noqa: F811
 from __future__ import annotations
 
 import uuid
 
 from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 from app.tests.test_private_webhook import (  # noqa: F401
-    _issue_token, _make_instance, _payload, _post, client, webhook_enabled,
+    _issue_token,
+    _make_instance,
+    _payload,
+    _post,
+    client,
+    webhook_enabled,
 )
 from app.tests.test_private_webhook_execution import (  # noqa: F401
-    _ingest, _job_rows, _position_for, _run_worker, _start_paper_engine,
-    deterministic_paper_market, per_user_runtime, worker_enabled,
+    _ingest,
+    _job_rows,
+    _position_for,
+    _run_worker,
+    _start_paper_engine,
+    deterministic_paper_market,
+    per_user_runtime,
+    worker_enabled,
 )
 from app.tests.test_readiness_unification import _full_client
-from app.tests.test_tradingview_setup import _approved_personal_instance, _paper_evidence
+from app.tests.test_tradingview_setup import (
+    _approved_personal_instance,
+    _paper_evidence,
+)
 
 
 def _set_verification(instance_id: str, on: bool = True) -> None:
@@ -154,6 +169,7 @@ def test_managed_verification_is_admin_only(mu_db):
 
 def _version_install(admin_client, setup_id, instance_id):
     from datetime import datetime, timezone
+
     from app.db import models
     from app.db.engine import session_scope
     with session_scope() as db:
@@ -167,7 +183,9 @@ def _version_install(admin_client, setup_id, instance_id):
     })
 
 
-def test_verification_refused_when_live_globally_enabled(mu_db, monkeypatch):
+def test_paper_verification_remains_owner_safe_when_live_is_globally_enabled(
+    mu_db, monkeypatch
+):
     owner = make_user("live-block@example.com")
     admin = make_user("live-block-admin@example.com", is_admin=True)
     client, _, instance_id, _ = _approved_personal_instance(owner, admin)
@@ -175,8 +193,11 @@ def test_verification_refused_when_live_globally_enabled(mu_db, monkeypatch):
     client.post(f"/api/strategy-instances/{instance_id}/webhook-credential")
     from app.config import settings
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", True)
-    blocked = client.post(f"/api/strategy-instances/{instance_id}/verification-mode")
-    assert blocked.status_code == 409 and blocked.json()["reason"] == "LIVE_EXECUTION_SAFETY_BLOCK"
+    started = client.post(f"/api/strategy-instances/{instance_id}/verification-mode")
+    assert started.status_code == 200, started.text
+    instance = started.json()["instance"]
+    assert instance["execution_mode"] == "paper_live_data"
+    assert instance["verification_mode"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +205,6 @@ def test_verification_refused_when_live_globally_enabled(mu_db, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _drive_to_ready(client, owner, instance_id):
-    from app.config import settings
     client.post(f"/api/strategy-instances/{instance_id}/tradingview-setup", json={"setup_type": "USER_MANAGED_TRADINGVIEW"})
     client.post(f"/api/strategy-instances/{instance_id}/webhook-credential")
     client.post(f"/api/strategy-instances/{instance_id}/verification-mode")
@@ -245,6 +265,44 @@ def test_cannot_select_foreign_but_can_select_ready_stopped_personal_instance(mu
     assert _status(instance_id) == "stopped"
 
 
+def test_engine_start_binding_reactivates_stopped_personal_instance(mu_db, monkeypatch):
+    from app.config import settings
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import strategy_instance_service
+
+    monkeypatch.setattr(
+        settings,
+        "PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED",
+        True,
+    )
+    owner = make_user("start-binding-owner@example.com")
+    admin = make_user("start-binding-admin@example.com", is_admin=True)
+    client, _, instance_id, _ = _approved_personal_instance(owner, admin)
+    _drive_to_ready(client, owner, instance_id)
+    client.post(f"/api/strategy-instances/{instance_id}/activate")
+    client.post(
+        f"/api/strategy-instances/{instance_id}/stop",
+        json={"reason": "engine stopped"},
+    )
+
+    started = strategy_instance_service.configure_and_activate_for_engine_start(
+        owner.id,
+        instance_id,
+        execution_mode="paper_live_data",
+        lots=3,
+    )
+
+    assert started["status"] == "active"
+    assert started["execution_mode"] == "paper_live_data"
+    assert started["current_lots"] == 3
+    with session_scope() as db:
+        row = db.get(models.StrategyInstance, uuid.UUID(instance_id))
+        assert row.status == "active"
+        assert row.execution_mode == "paper_live_data"
+        assert row.current_lots == 3
+
+
 def test_selection_never_reroutes_webhook_signals(client, per_user_runtime, deterministic_paper_market, worker_enabled):
     """The private credential is execution authority: a signal for A's credential
     executes as A even when the engine selection points at B."""
@@ -254,11 +312,29 @@ def test_selection_never_reroutes_webhook_signals(client, per_user_runtime, dete
     token_a = _issue_token(user, a)
     _start_paper_engine(user)
     # Point the persisted engine selection at B.
-    from app.services import strategy_instance_service
+    from sqlalchemy import select
+
     from app.db import models
     from app.db.engine import session_scope
+
     with session_scope() as db:
-        db.add(models.UserEngineConfig(user_id=user.id, selected_strategy_instance_id=uuid.UUID(b)))
+        selection = db.scalar(
+            select(models.UserEngineConfig).where(
+                models.UserEngineConfig.user_id == user.id
+            )
+        )
+        revision = db.scalar(
+            select(models.StrategyConfigurationRevision).where(
+                models.StrategyConfigurationRevision.user_id == user.id,
+                models.StrategyConfigurationRevision.strategy_instance_id
+                == uuid.UUID(b),
+                models.StrategyConfigurationRevision.status == "active",
+            )
+        )
+        assert selection is not None and revision is not None
+        selection.selected_strategy_instance_id = uuid.UUID(b)
+        selection.selected_configuration_revision_id = revision.id
+        selection.selected_configuration_revision = revision.revision
 
     _ingest(client, token_a, action="BUY_CE")
     assert _run_worker() == 1

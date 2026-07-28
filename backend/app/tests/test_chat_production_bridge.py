@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# This long-standing integration module imports the multi-user fixture for
+# pytest discovery and contains legacy string fixtures outside this phase.
+# ruff: noqa: F811, FLY002
 import asyncio
 import hashlib
 import hmac
@@ -12,23 +15,29 @@ from fastapi.testclient import TestClient
 
 from app.api import ws as ws_router
 from app.api.ws import _apply_production_command, _error
+from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.db import models
 from app.db.engine import session_scope
-from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.state_machine import SetupState, validate_command
 from app.routers import orders as orders_router
 from app.routers import setup as setup_router
 from app.routers.webhook import _safe_raw_body_for_log, _valid_webhook_signature
 from app.schemas.signal import NormalizedSignal
-from app.services import audit_logger, credential_vault, paper_broker, paper_portfolio, shared_market_data, state_store
+from app.services import (
+    audit_logger,
+    credential_vault,
+    paper_broker,
+    paper_portfolio,
+    shared_market_data,
+    state_store,
+)
 from app.services.chat_event_publisher import publish_chat_result
 from app.services.credential_vault import DhanCredentials
-from app.services.dhan_client import RealDhanClient
-from app.services.dhan_client import DhanLtpResult
+from app.services.dhan_client import DhanLtpResult, RealDhanClient
 from app.services.execution_router import _broker_exit_levels, route_entry_signal
 from app.services.user_context import current_user_from_model
-from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 from app.store.redis_session import session_store
+from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 
 
 def _isolate_runtime(tmp_path, monkeypatch) -> None:
@@ -710,8 +719,14 @@ def test_active_position_exit_levels_can_be_updated_for_server_managed_position(
         }
     )
 
+    opened = state_store.ensure_open_position_identity()
     result = orders_router.update_active_position_exit_levels(
-        orders_router.ExitLevelsRequest(stopLossPrice=95.0, targetPrice=125.0)
+        orders_router.ExitLevelsRequest(
+            unit="ABSOLUTE_TRIGGER",
+            stopLossValue=95.0,
+            targetValue=125.0,
+            expectedPositionVersion=opened["position_version"],
+        )
     )
     position = state_store.get_open_position()
 
@@ -741,8 +756,14 @@ def test_active_position_exit_levels_rejects_display_only_dhan_super_position(tm
         }
     )
 
+    opened = state_store.ensure_open_position_identity()
     result = orders_router.update_active_position_exit_levels(
-        orders_router.ExitLevelsRequest(stopLossPrice=95.0, targetPrice=125.0)
+        orders_router.ExitLevelsRequest(
+            unit="ABSOLUTE_TRIGGER",
+            stopLossValue=95.0,
+            targetValue=125.0,
+            expectedPositionVersion=opened["position_version"],
+        )
     )
 
     assert result["ok"] is False
@@ -753,6 +774,18 @@ def test_paper_add_and_partial_exit_use_versioned_operations(tmp_path, monkeypat
     _isolate_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("paper")
     monkeypatch.setattr(orders_router, "current_nifty_lot_size", lambda: 65)
+    monkeypatch.setattr(
+        orders_router,
+        "confirm_position_adjustment_fill",
+        lambda **kwargs: {
+            "success": True,
+            "status": "TRADED",
+            "order_id": f"FILL-{kwargs['operation_id']}",
+            "fill_price": 110.0,
+            "filled_qty": kwargs["qty"],
+            "charges": 0.0,
+        },
+    )
     state_store.update_runtime_settings(max_qty_per_order=130)
     paper_portfolio.reset_paper_portfolio(100000)
     portfolio = paper_portfolio.get_paper_portfolio()
@@ -771,11 +804,23 @@ def test_paper_add_and_partial_exit_use_versioned_operations(tmp_path, monkeypat
             "has_open_position": True,
             "symbol": "NIFTY",
             "trading_symbol": "NIFTY 2026-06-23 24100 CE",
+            "security_id": "12345",
             "option_side": "CE",
             "qty": 65,
             "entry_price": 100.0,
             "exit_management": "SERVER",
-            "live_pnl": {"entry_price": 100.0, "ltp": 110.0, "qty": 65},
+            "active_exit_levels": {
+                "source": "manual",
+                "stopLossPrice": 90.0,
+                "targetPrice": 120.0,
+            },
+            "live_pnl": {
+                "entry_price": 100.0,
+                "ltp": 110.0,
+                "qty": 65,
+                "stop_loss_percent": 10.0,
+                "take_profit_percent": 20.0,
+            },
         }
     )
 
@@ -783,9 +828,11 @@ def test_paper_add_and_partial_exit_use_versioned_operations(tmp_path, monkeypat
     result = orders_router._apply_paper_position_adjustment(
         operation="add",
         lots=1,
-        percentage=None,
         expected_version=opened["position_version"],
         operation_id="ADD-ONE",
+        protection_mode="KEEP_EXISTING",
+        custom_stop_loss=None,
+        custom_target=None,
     )
     position = state_store.get_open_position()
     resized = paper_portfolio.get_paper_portfolio()
@@ -804,9 +851,11 @@ def test_paper_add_and_partial_exit_use_versioned_operations(tmp_path, monkeypat
     partial = orders_router._apply_paper_position_adjustment(
         operation="partial_exit",
         lots=1,
-        percentage=None,
         expected_version=position["position_version"],
         operation_id="EXIT-ONE",
+        protection_mode=None,
+        custom_stop_loss=None,
+        custom_target=None,
     )
     remaining = state_store.get_open_position()
     portfolio_after_exit = paper_portfolio.get_paper_portfolio()
@@ -1191,24 +1240,9 @@ def test_duplicate_risk_command_is_idempotent_before_exits():
     assert patch["risk"] == data
 
 
-def test_confirm_live_hydrates_runtime_risk_from_session_config(tmp_path, monkeypatch):
+def test_confirm_live_requires_durable_explicit_start_operation(tmp_path, monkeypatch):
     _isolate_runtime(tmp_path, monkeypatch)
     state_store.set_engine_mode("live")
-    calls = []
-
-    def fake_start_engine(body):
-        calls.append(body)
-        runtime = state_store.get_runtime_settings()
-        assert runtime["allowed_option_side"] == "PE"
-        assert runtime["max_trades_per_day"] == 5
-        assert runtime["max_daily_loss"] == 3000
-        assert runtime["option_exit_mode"] == "DHAN_SUPER"
-        assert runtime["option_disable_sl"] is False
-        assert runtime["option_sl_percent"] == 10
-        assert runtime["option_tp_percent"] == 21
-        return {"success": True}
-
-    monkeypatch.setattr(ws_router, "start_engine", fake_start_engine)
     session = SimpleNamespace(
         config={
             "strategy": "supertrend",
@@ -1217,11 +1251,10 @@ def test_confirm_live_hydrates_runtime_risk_from_session_config(tmp_path, monkey
         }
     )
 
-    asyncio.run(ws_router._apply_production_command("setup.confirm_live", {}, session=session))
+    with pytest.raises(ValueError, match="durable /api/runtime/start-selected"):
+        asyncio.run(ws_router._apply_production_command("setup.confirm_live", {}, session=session))
 
-    assert len(calls) == 1
-    assert calls[0].engine_mode == "live"
-    assert calls[0].confirm_live_orders is True
+    assert state_store.get_app_state().get("engine_status", "stopped") == "stopped"
 
 
 def test_successful_server_exit_publishes_exact_trade_exit_event(tmp_path, monkeypatch):

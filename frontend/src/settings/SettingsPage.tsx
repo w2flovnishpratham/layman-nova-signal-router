@@ -8,6 +8,11 @@ import {
   savePreferences,
   type Preferences,
 } from './settingsApi'
+import {
+  browserNotificationState,
+  requestBrowserNotificationPermission,
+  type BrowserNotificationState,
+} from '../trading/browserNotifications'
 
 const TIMEZONES = ['Asia/Kolkata', 'UTC', 'America/New_York', 'Europe/London', 'Asia/Singapore']
 
@@ -18,6 +23,9 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetMessage, setResetMessage] = useState('')
+  const [notificationState, setNotificationState] = useState<BrowserNotificationState>(
+    browserNotificationState,
+  )
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -56,6 +64,20 @@ export function SettingsPage() {
     } catch (e) {
       setResetMessage(e instanceof Error ? e.message : 'Paper reset failed.')
     }
+  }
+
+  async function updateNotification(key: string, enabled: boolean) {
+    if (enabled) {
+      const permission = await requestBrowserNotificationPermission()
+      setNotificationState(permission)
+      if (permission !== 'granted') return
+    }
+    await update({
+      notification_preferences: {
+        ...(prefs?.notification_preferences ?? {}),
+        [key]: enabled,
+      },
+    })
   }
 
   return (
@@ -111,18 +133,19 @@ export function SettingsPage() {
 
           <section className="nova-hooks-card" aria-label="Notifications">
             <div className="nova-hooks-card-head"><strong>Notifications</strong></div>
+            <p>
+              Browser permission: <strong>{notificationState}</strong>. Notifications open the
+              matching event in Trading and never alter engine behavior.
+            </p>
             {prefs.channels.map((channel) => (
               <label key={channel.key} className="nova-set-toggle">
                 <input
                   type="checkbox"
                   checked={Boolean(prefs.notification_preferences[channel.key])}
-                  onChange={(e) => void update({
-                    notification_preferences: { ...prefs.notification_preferences, [channel.key]: e.target.checked },
-                  })}
+                  onChange={(e) => void updateNotification(channel.key, e.target.checked)}
                 />
                 {channel.label}
-                {/* Stated plainly: the preference is stored, nothing is delivered. */}
-                {!channel.available ? <small>{channel.reason}</small> : null}
+                <small>{channel.reason}</small>
               </label>
             ))}
           </section>

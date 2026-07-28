@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import get_current_user, require_admin
+from app.config import settings
 from app.schemas.pine_conversion import (
     AdminManualResponsePayload,
     AdminPineDecisionPayload,
     AdminPineSubmission,
     CreateConversionPayload,
+    OwnerClaudeConversionPayload,
     RejectConversionPayload,
     RetryConversionPayload,
 )
@@ -57,6 +59,89 @@ def convert(strategy_id: uuid.UUID, version_id: uuid.UUID, payload: CreateConver
         wake_pine_conversion_worker()
         return {"ok": True, **result}
     except Exception as exc: return _error(exc)
+
+
+@router.get("/api/personal-pine-claude-conversions/config")
+def owner_claude_config(user: CurrentUser = Depends(get_current_user)):
+    del user
+    return {
+        "ok": True,
+        "enabled": bool(
+            settings.CLAUDE_CONVERSION_ENABLED
+            and settings.ANTHROPIC_API_KEY
+            and settings.CLAUDE_CONVERSION_MODEL
+        ),
+        "provider": admin_service.PROVIDER,
+        "model": settings.CLAUDE_CONVERSION_MODEL or None,
+        "prompt_version": "v3.1",
+        "transport_version": service.TRANSPORT_V2_VERSION,
+        "admin_review_required": True,
+        "paper_verification_required": True,
+        "live_eligible": False,
+    }
+
+
+@router.post(
+    "/api/personal-pine-strategies/{strategy_id}/versions/{version_id}/claude-conversion",
+    status_code=202,
+)
+def owner_claude_convert(
+    strategy_id: uuid.UUID,
+    version_id: uuid.UUID,
+    payload: OwnerClaudeConversionPayload,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        created = admin_service.submit_owner_source(
+            user.id, strategy_id, version_id, payload.options
+        )
+        conversion = created["conversion"]
+        if conversion["conversion_status"] in {
+            "READY_FOR_CONVERSION",
+            "AI_FAILED_RETRYABLE",
+        }:
+            converted = admin_service.convert_owner_request(
+                user.id, conversion["id"]
+            )
+            conversion = converted["conversion"]
+        return {
+            "ok": True,
+            "conversion": conversion,
+            "reused": created["reused"],
+        }
+    except Exception as exc:
+        return _error(exc)
+
+
+@router.get("/api/personal-pine-claude-conversions")
+def owner_claude_list(
+    limit: int = 50,
+    offset: int = 0,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return {
+            "ok": True,
+            **admin_service.list_owner_conversions(
+                user.id, limit=limit, offset=offset
+            ),
+        }
+    except Exception as exc:
+        return _error(exc)
+
+
+@router.get("/api/personal-pine-claude-conversions/{conversion_id}")
+def owner_claude_detail(
+    conversion_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return {
+            "ok": True,
+            **admin_service.get_owner_conversion(user.id, conversion_id),
+        }
+    except Exception as exc:
+        return _error(exc)
 
 
 @router.get("/api/pine-conversions")

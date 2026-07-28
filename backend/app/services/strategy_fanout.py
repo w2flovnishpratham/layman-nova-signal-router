@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,15 +19,23 @@ from app.config import DEFAULT_STRATEGY_CODE, settings
 from app.db import crud, models
 from app.db.engine import database_configured, session_scope
 from app.schemas.signal import NormalizedSignal
-from app.services import entitlements, live_engine, strategy_risk, user_credential_vault as vault
+from app.services import (
+    entitlements,
+    live_engine,
+    setup_configuration,
+    strategy_risk,
+)
+from app.services import (
+    user_credential_vault as vault,
+)
 from app.services.execution_context import bind_execution_context
 from app.services.execution_router import route_signal
-from app.services.state_store import init_runtime_files
+from app.services.state_store import get_runtime_settings, init_runtime_files
 from app.services.user_context import CurrentUser, current_user_from_model
-
 
 _STRATEGY_LOCKS: dict[str, threading.Lock] = {}
 _STRATEGY_LOCKS_GUARD = threading.RLock()
+logger = logging.getLogger("nova_signal_router.strategy_fanout")
 
 
 def _now() -> datetime:
@@ -85,7 +94,9 @@ def subscribe_user(
         # Same-transaction strategy-instance mirror (lots/mode/lifecycle). A
         # sync failure rolls back this subscription write too — success is
         # never returned with divergent effective settings.
-        from app.services.strategy_instance_service import sync_instance_from_subscription
+        from app.services.strategy_instance_service import (
+            sync_instance_from_subscription,
+        )
 
         sync_instance_from_subscription(db, row)
         return _sub_public(row)
@@ -111,7 +122,9 @@ def set_subscription_active(
         db.flush()
         # Same-transaction lifecycle mirror onto the strategy instance; a
         # failure rolls back this subscription change too (no silent drift).
-        from app.services.strategy_instance_service import sync_instance_from_subscription
+        from app.services.strategy_instance_service import (
+            sync_instance_from_subscription,
+        )
 
         sync_instance_from_subscription(db, row)
         return True
@@ -237,7 +250,58 @@ def enqueue_strategy_signal(
             signal_payload = signal.model_copy(
                 update={"secret": "", "raw_payload": raw_payload}
             ).model_dump(mode="json")
+            queued_count = 0
+            blocked_results: list[dict[str, Any]] = []
             for subscription in subscriptions:
+                configuration_mode = setup_configuration.configuration_mode_for_execution(
+                    subscription.execution_mode
+                )
+                strategy_instance_id = db.scalar(
+                    select(models.StrategyInstance.id).where(
+                        models.StrategyInstance.legacy_subscription_id
+                        == subscription.id
+                    )
+                )
+                configuration = (
+                    setup_configuration.configuration_for_instance_row(
+                        db,
+                        subscription.user_id,
+                        strategy_instance_id,
+                        configuration_mode,
+                        lock=True,
+                    )
+                    if configuration_mode is not None
+                    and strategy_instance_id is not None
+                    else None
+                )
+                if configuration_mode is not None and configuration is None:
+                    blocked_results.append(
+                        {
+                            "user_id": str(subscription.user_id),
+                            "status": "failed",
+                            "reason": "CONFIGURATION_REVISION_REQUIRED",
+                        }
+                    )
+                    db.add(
+                        models.StrategyExecutionJob(
+                            strategy_signal_id=signal_row.id,
+                            user_id=subscription.user_id,
+                            strategy_name=strategy_name,
+                            signal_id=signal.signal_id,
+                            signal_payload=signal_payload,
+                            lots=subscription.lots,
+                            execution_mode=subscription.execution_mode,
+                            status="failed",
+                            completed_at=_now(),
+                            last_error="CONFIGURATION_REVISION_REQUIRED",
+                        )
+                    )
+                    continue
+                configured_lots = (
+                    int((configuration.configuration_json or {}).get("lots") or 0)
+                    if configuration is not None
+                    else subscription.lots
+                )
                 db.add(
                     models.StrategyExecutionJob(
                         strategy_signal_id=signal_row.id,
@@ -245,11 +309,18 @@ def enqueue_strategy_signal(
                         strategy_name=strategy_name,
                         signal_id=signal.signal_id,
                         signal_payload=signal_payload,
-                        lots=subscription.lots,
+                        lots=configured_lots,
                         execution_mode=subscription.execution_mode,
+                        configuration_revision_id=(
+                            configuration.id if configuration is not None else None
+                        ),
+                        configuration_revision=(
+                            configuration.revision if configuration is not None else None
+                        ),
                         status="queued",
                     )
                 )
+                queued_count += 1
 
             if not subscriptions:
                 signal_row.status = "completed"
@@ -258,6 +329,14 @@ def enqueue_strategy_signal(
                     "signal_id": signal.signal_id,
                     "subscriber_count": 0,
                     "results": [],
+                }
+            elif queued_count == 0:
+                signal_row.status = "completed_with_errors"
+                signal_row.result_summary = {
+                    "strategy_name": strategy_name,
+                    "signal_id": signal.signal_id,
+                    "subscriber_count": len(subscriptions),
+                    "results": blocked_results,
                 }
             db.flush()
             return {
@@ -344,13 +423,13 @@ def _configured_legacy_manual_egress_nodes() -> list[dict[str, Any]]:
     except json.JSONDecodeError as exc:
         raise ValueError("EGRESS_NODES_JSON is not valid JSON.") from exc
     if not isinstance(raw_nodes, list):
-        raise ValueError("EGRESS_NODES_JSON must contain a JSON list.")
+        raise TypeError("EGRESS_NODES_JSON must contain a JSON list.")
 
     nodes: list[dict[str, str]] = []
     seen_ips: set[str] = set()
     for raw_node in raw_nodes:
         if not isinstance(raw_node, dict):
-            raise ValueError("Each egress node must be a JSON object.")
+            raise TypeError("Each egress node must be a JSON object.")
         public_ip = _validated_public_ip(str(raw_node.get("public_ip") or ""))
         proxy_url = _validated_proxy_url(str(raw_node.get("proxy_url") or ""))
         if public_ip in seen_ips:
@@ -619,7 +698,7 @@ def verify_user_egress(user_id: uuid.UUID, *, timeout: float = 8.0) -> dict[str,
             response = client.get("https://api.ipify.org?format=json")
             response.raise_for_status()
             observed_ip = str(response.json().get("ip") or "").strip()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - network verification must fail closed
         result = {
             "ok": False,
             "error": str(exc),
@@ -710,7 +789,7 @@ def _process_signal_serialized(
         for future in as_completed(futures):
             try:
                 results.append(future.result())
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - isolate one subscriber failure
                 results.append(
                     {
                         "status": "error",
@@ -757,6 +836,7 @@ def dispatch_signal_job(
     execution_mode: str,
     signal: NormalizedSignal,
     signal_enricher: Any | None = None,
+    configuration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute one immutable user job using only that user's state and proxy.
 
@@ -778,6 +858,12 @@ def dispatch_signal_job(
         "user_id": user.id_str,
         "execution_mode": mode,
         "signal_id": signal.signal_id,
+        "configuration_revision_id": (
+            configuration.get("id") if configuration is not None else None
+        ),
+        "configuration_revision": (
+            configuration.get("revision") if configuration is not None else None
+        ),
     }
     if mode == "signal_only":
         return {**base, "status": "accepted"}
@@ -817,7 +903,7 @@ def dispatch_signal_job(
             signal=signal,
             execution_mode=mode,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - risk service failure blocks execution
         return {
             **base,
             "status": "blocked",
@@ -840,9 +926,18 @@ def dispatch_signal_job(
             run_type="live" if mode == "real_orders" else "paper",
             strategy_name=strategy_name,
             execution_mode=mode,
-            mode_config={"lots": lots, "signal_id": signal.signal_id},
+            mode_config={
+                "lots": lots,
+                "signal_id": signal.signal_id,
+                "configuration_revision_id": base["configuration_revision_id"],
+                "configuration_revision": base["configuration_revision"],
+            },
             status="running",
         )
+        if configuration is not None:
+            run.configuration_revision_id = uuid.UUID(str(configuration["id"]))
+            run.configuration_revision = int(configuration["revision"])
+            run.strategy_version_id = uuid.UUID(str(configuration["strategy_version_id"]))
         crud.add_audit_log(
             db,
             user_id=user.id,
@@ -869,14 +964,27 @@ def dispatch_signal_job(
             egress_last_verified_at=egress.get("last_verified_at") if egress else None,
         ):
             init_runtime_files()
+            execution_runtime = get_runtime_settings()
+            if configuration is not None:
+                execution_runtime = {
+                    **execution_runtime,
+                    **dict(configuration.get("risk") or {}),
+                    **dict(configuration.get("configuration") or {}),
+                    "configuration_revision_id": configuration["id"],
+                    "configuration_revision": int(configuration["revision"]),
+                }
             prepared = signal_enricher(per_user_signal) if signal_enricher else per_user_signal
             if isinstance(prepared, dict):
                 # Enricher short-circuited (idempotent no-op / safe failure):
                 # no broker call is made for this job.
                 execution_result = prepared
             else:
-                execution_result = route_signal(prepared)
-    except Exception as exc:
+                execution_result = (
+                    route_signal(prepared, runtime=execution_runtime)
+                    if configuration is not None
+                    else route_signal(prepared)
+                )
+    except Exception as exc:  # noqa: BLE001 - execution boundary returns safe failure
         _update_run(run_id, "error", str(exc))
         return {**base, "run_id": run_id, "status": "error", "reason": str(exc)}
 
@@ -888,7 +996,7 @@ def dispatch_signal_job(
             execution_result=execution_result,
         )
     except Exception:
-        pass
+        logger.exception("Strategy risk result accounting failed.")
     _update_run(
         run_id,
         "error" if failed else "completed",

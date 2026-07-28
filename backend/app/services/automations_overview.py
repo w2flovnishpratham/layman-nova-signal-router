@@ -1,10 +1,10 @@
 """Approved risk controls and protected safety policies.
 
 The audit that preceded this module found every editable value already has a
-home in the engine's runtime settings, so **no automation table was created**
-and no generic rule-builder model exists. The four editable rules are:
+home in the selected immutable configuration revision, so **no automation
+table was created** and no generic rule-builder model exists. The editable
+rules are:
 
-* ``cooldown_after_loss_minutes``
 * ``max_trades_per_day``
 * ``max_daily_loss``
 * ``entry_cutoff_ist``
@@ -24,7 +24,6 @@ from typing import Any
 
 from app.services.state_store import get_runtime_settings
 
-APPLIES_IMMEDIATELY = "Applies immediately"
 APPLIES_NEXT_ENTRY = "Applies to next entry"
 REQUIRES_RESTART = "Requires engine restart"
 PROTECTED = "Protected system rule"
@@ -32,19 +31,6 @@ PROTECTED = "Protected system rule"
 
 def _editable_rules(settings: dict[str, Any]) -> list[dict[str, Any]]:
     return [
-        {
-            "key": "cooldown_after_loss_minutes",
-            "label": "Cooldown after a losing trade",
-            "value": int(settings.get("cooldown_after_loss_minutes") or 0),
-            "unit": "minutes",
-            "minimum": 0,
-            "maximum": 390,
-            "zero_means": "no cooldown",
-            "basis": "Measured from the exit that booked a negative realised P&L.",
-            "effect": APPLIES_NEXT_ENTRY,
-            "requires_restart": False,
-            "affects_open_position": False,
-        },
         {
             "key": "max_trades_per_day",
             "label": "Maximum trades per day",
@@ -67,11 +53,9 @@ def _editable_rules(settings: dict[str, Any]) -> list[dict[str, Any]]:
             "maximum": 10_000_000,
             "zero_means": "no cap",
             "basis": "Compared against the session P&L; hitting it hard-stops and squares off.",
-            "effect": APPLIES_IMMEDIATELY,
+            "effect": APPLIES_NEXT_ENTRY,
             "requires_restart": False,
-            # The breaker acts on the live session, so a tighter cap can close
-            # the current position. Say so rather than implying it is inert.
-            "affects_open_position": True,
+            "affects_open_position": False,
         },
         {
             "key": "entry_cutoff_ist",
@@ -130,7 +114,6 @@ PROTECTED_RULES: tuple[dict[str, Any], ...] = (
 )
 
 EDITABLE_KEYS = frozenset({
-    "cooldown_after_loss_minutes",
     "max_trades_per_day",
     "max_daily_loss",
     "entry_cutoff_ist",
@@ -141,19 +124,32 @@ class AutomationError(ValueError):
     """A value outside the declared bounds, or an attempt to edit a protected rule."""
 
 
-def build_automations_overview() -> dict[str, Any]:
-    settings = get_runtime_settings()
+def build_automations_overview(user_id=None) -> dict[str, Any]:
+    configuration = None
+    if user_id is not None:
+        from app.services import setup_configuration
+
+        configuration = setup_configuration.selected_configuration(user_id)
+    settings = (
+        dict(configuration.get("risk") or {})
+        if configuration is not None
+        else get_runtime_settings()
+    )
     return {
         "ok": True,
         "editable": _editable_rules(settings),
         "protected": list(PROTECTED_RULES),
-        # No automation table exists; these are the engine's own settings.
-        "storage": "runtime_settings",
+        "configuration_id": configuration.get("id") if configuration else None,
+        "configuration_revision": (
+            configuration.get("revision") if configuration else None
+        ),
+        "mode": configuration.get("mode") if configuration else None,
+        "storage": "configuration_revision",
     }
 
 
 def validate_automation_changes(values: dict[str, Any]) -> dict[str, Any]:
-    """Bounds-check the four editable rules. Anything else is refused."""
+    """Bounds-check the three editable rules. Anything else is refused."""
     unknown = set(values) - EDITABLE_KEYS
     if unknown:
         raise AutomationError(

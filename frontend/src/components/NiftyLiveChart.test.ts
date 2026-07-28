@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { NiftyTradeMarker } from '../api'
 import {
-  applyLiveTick,
   chartConnectionLabel,
   istFiveMinuteBucket,
+  istTimeframeBucket,
   markerCandleIndex,
   markerStyle,
   sessionOnly,
@@ -42,21 +42,18 @@ describe('TradingView chart helpers', () => {
     expect(candles.map((item) => item.time)).toEqual([start, start + 600])
   })
 
-  it('updates one forming candle and rejects out-of-order ticks', () => {
-    const start = Date.parse('2026-07-15T09:20:00+05:30') / 1000
-    const initial = [{ time: start, open: 100, high: 101, low: 99, close: 100, volume: 0 }]
-    const updated = applyLiveTick(initial, 102, start + 30)
-    expect(updated).toMatchObject({ appended: false, candle: { open: 100, high: 102, low: 99, close: 102 } })
-    const next = applyLiveTick(updated!.candles, 103, start + 300)
-    expect(next).toMatchObject({ appended: true, candle: { open: 103, high: 103, low: 103, close: 103 } })
-    expect(applyLiveTick(next!.candles, 98, start + 60)).toBeNull()
-    expect(applyLiveTick(next!.candles, 104, start + 340, start + 340)).toBeNull()
+  it('aligns only the supported presentation timeframes to the IST session', () => {
+    const start = Date.parse('2026-07-15T09:15:00+05:30') / 1000
+    expect(istTimeframeBucket(start + 155, '1m')).toBe(start + 120)
+    expect(istTimeframeBucket(start + 155, '5m')).toBe(start)
+    expect(istTimeframeBucket(start + 755, '15m')).toBe(start)
   })
 
-  it('places markers only in the exact shared five-minute bucket', () => {
+  it('places markers in the selected presentation bucket', () => {
     const start = Date.parse('2026-07-15T09:20:00+05:30') / 1000
     expect(istFiveMinuteBucket(start + 155)).toBe(start)
     expect(markerCandleIndex([candle(start)], start + 155)).toBe(0)
+    expect(markerCandleIndex([candle(start)], start + 155, '15m')).toBeNull()
   })
 
   it('labels stale, disconnected, closed, and unavailable data honestly', () => {

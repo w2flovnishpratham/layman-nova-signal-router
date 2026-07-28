@@ -16,7 +16,7 @@ from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 from app.tests.test_runtime_reliability import runtime  # noqa: F401
 
 SETUP = {"direction": "BOTH", "lots": 2, "stop_loss_percent": 8.5, "take_profit_percent": 17}
-RISK = {"max_daily_loss": 10000, "max_trades_per_day": 3, "cooldown_after_loss_minutes": 30}
+RISK = {"max_daily_loss": 10000, "max_trades_per_day": 3}
 
 
 def _client(user) -> TestClient:
@@ -93,8 +93,8 @@ def test_strategy_validation_failure_changes_nothing(mu_db, runtime):
 def test_risk_validation_failure_changes_nothing(mu_db, runtime):
     _, client = _ready("atomic-bad-risk@example.com")
 
-    # Beyond the 390-minute cap: a typo must not commit the strategy half.
-    response = _save(client, risk={**RISK, "cooldown_after_loss_minutes": 5000}, revision=0)
+    # A malformed cutoff must not commit the strategy half.
+    response = _save(client, risk={**RISK, "entry_cutoff_ist": "25:00"}, revision=0)
     assert response.status_code == 422, response.text
 
     assert _saved_setup(client) == {}
@@ -125,7 +125,7 @@ def test_a_commit_failure_after_the_settings_write_is_compensated(mu_db, runtime
 
     monkeypatch.setattr(setup_configuration, "session_scope", failing_commit)
 
-    loose = {"max_daily_loss": 25000, "max_trades_per_day": 8, "cooldown_after_loss_minutes": 5}
+    loose = {"max_daily_loss": 25000, "max_trades_per_day": 8}
     with pytest.raises(RuntimeError):
         setup_configuration.save_configuration(
             user.id,
@@ -140,7 +140,6 @@ def test_a_commit_failure_after_the_settings_write_is_compensated(mu_db, runtime
     after = state_store.get_runtime_settings()
     assert after["max_daily_loss"] == 10000, "a failed save must not loosen the daily loss cap"
     assert after["max_trades_per_day"] == 3
-    assert after["cooldown_after_loss_minutes"] == 30
     assert after["configuration_revision"] == 1
 
 
@@ -228,6 +227,7 @@ def test_a_runtime_file_write_failure_rolls_the_database_back(mu_db, runtime, mo
     def exploding_write(_data):
         raise OSError("simulated runtime-settings write failure")
 
+    original_write = setup_configuration.set_runtime_settings
     monkeypatch.setattr(setup_configuration, "set_runtime_settings", exploding_write)
 
     with pytest.raises(OSError):
@@ -241,7 +241,7 @@ def test_a_runtime_file_write_failure_rolls_the_database_back(mu_db, runtime, mo
             normalize_risk=normalize_risk_values,
         )
 
-    monkeypatch.undo()
+    monkeypatch.setattr(setup_configuration, "set_runtime_settings", original_write)
     assert _saved_setup(client) == {}, "the strategy half must not survive a failed settings write"
     assert state_store.get_runtime_settings()["configuration_revision"] == 0
 
@@ -255,6 +255,7 @@ def test_a_database_failure_before_the_settings_write_changes_nothing(mu_db, run
     def exploding_now():
         raise RuntimeError("simulated mid-transaction database failure")
 
+    original_now = setup_configuration.strategy_catalog_service._now
     monkeypatch.setattr(setup_configuration.strategy_catalog_service, "_now", exploding_now)
 
     with pytest.raises(RuntimeError):
@@ -268,7 +269,7 @@ def test_a_database_failure_before_the_settings_write_changes_nothing(mu_db, run
             normalize_risk=normalize_risk_values,
         )
 
-    monkeypatch.undo()
+    monkeypatch.setattr(setup_configuration.strategy_catalog_service, "_now", original_now)
     after = state_store.get_runtime_settings()
     assert after["configuration_revision"] == before["configuration_revision"] == 0
     assert after["max_daily_loss"] == before["max_daily_loss"]
@@ -291,13 +292,17 @@ def test_a_failed_compensating_restore_is_audited_and_still_raises(mu_db, runtim
 
     real_scope = setup_configuration.session_scope
     real_set = setup_configuration.set_runtime_settings
+    real_log = setup_configuration.log_audit_event
     audited: list[str] = []
 
     @contextlib.contextmanager
     def failing_commit():
         with real_scope() as db:
             yield db
-        raise RuntimeError("simulated commit failure")
+            # Raise before the real session scope exits so its rollback path
+            # runs. Raising after this block would simulate a post-commit
+            # caller failure, not a failed commit.
+            raise RuntimeError("simulated commit failure")
 
     calls = {"n": 0}
 
@@ -318,13 +323,18 @@ def test_a_failed_compensating_restore_is_audited_and_still_raises(mu_db, runtim
             strategy_key="nova-supertrend",
             mode="paper",
             setup_values={**SETUP, "lots": 4},
-            risk_values={"max_daily_loss": 25000, "max_trades_per_day": 8, "cooldown_after_loss_minutes": 5},
+            risk_values={"max_daily_loss": 25000, "max_trades_per_day": 8},
             expected_revision=1,
             normalize_risk=normalize_risk_values,
         )
 
     assert "CONFIGURATION_ROLLBACK_FAILED" in audited
-    monkeypatch.undo()
+    # Restore only this test's service patches. ``monkeypatch.undo()`` would
+    # also tear down the database/runtime isolation supplied by the fixtures,
+    # causing the coherence assertion below to inspect unrelated stores.
+    monkeypatch.setattr(setup_configuration, "session_scope", real_scope)
+    monkeypatch.setattr(setup_configuration, "set_runtime_settings", real_set)
+    monkeypatch.setattr(setup_configuration, "log_audit_event", real_log)
     # The resulting state is torn, and that is exactly what the gate detects.
     state = setup_configuration.current_revision(user.id)
     assert state["coherent"] is False

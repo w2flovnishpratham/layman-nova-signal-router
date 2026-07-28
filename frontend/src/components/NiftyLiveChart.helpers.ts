@@ -1,35 +1,27 @@
-import type { NiftyCandle, NiftyCandleSeries, NiftyTradeMarker } from '../api'
+import type { ChartTimeframe, NiftyCandle, NiftyCandleSeries, NiftyTradeMarker } from '../api'
 
 export const FIVE_MINUTE_SECONDS = 5 * 60
+export const TIMEFRAME_SECONDS: Record<ChartTimeframe, number> = {
+  '1m': 60,
+  '5m': FIVE_MINUTE_SECONDS,
+  '15m': 15 * 60,
+}
 const IST_OFFSET_SECONDS = 5.5 * 60 * 60
 const SESSION_OPEN_SECONDS = 9 * 60 * 60 + 15 * 60
 const SESSION_CLOSE_SECONDS = 15 * 60 * 60 + 30 * 60
 export const STALE_AFTER_MS = 45_000
 
-export function istFiveMinuteBucket(epoch: number): number | null {
+export function istTimeframeBucket(epoch: number, timeframe: ChartTimeframe): number | null {
   if (!Number.isFinite(epoch)) return null
   const shifted = Math.floor(epoch) + IST_OFFSET_SECONDS
   const secondsOfDay = ((shifted % 86_400) + 86_400) % 86_400
   if (secondsOfDay < SESSION_OPEN_SECONDS || secondsOfDay >= SESSION_CLOSE_SECONDS) return null
-  return Math.floor(shifted / FIVE_MINUTE_SECONDS) * FIVE_MINUTE_SECONDS - IST_OFFSET_SECONDS
+  const seconds = TIMEFRAME_SECONDS[timeframe]
+  return Math.floor(shifted / seconds) * seconds - IST_OFFSET_SECONDS
 }
 
-export function applyLiveTick(
-  candles: NiftyCandle[],
-  price: number,
-  epoch: number,
-  lastTickEpoch?: number | null,
-): { candle: NiftyCandle; candles: NiftyCandle[]; appended: boolean } | null {
-  const bucket = istFiveMinuteBucket(epoch)
-  if (bucket === null || !Number.isFinite(price) || price <= 0 || candles.length === 0 || (lastTickEpoch != null && epoch <= lastTickEpoch)) return null
-  const last = candles[candles.length - 1]
-  if (bucket < last.time) return null
-  if (bucket === last.time) {
-    const candle = { ...last, high: Math.max(last.high, price), low: Math.min(last.low, price), close: price }
-    return { candle, candles: [...candles.slice(0, -1), candle], appended: false }
-  }
-  const candle = { time: bucket, open: price, high: price, low: price, close: price, volume: 0 }
-  return { candle, candles: [...candles, candle], appended: true }
+export function istFiveMinuteBucket(epoch: number): number | null {
+  return istTimeframeBucket(epoch, '5m')
 }
 
 export function chartConnectionLabel(args: {
@@ -53,13 +45,13 @@ export function chartConnectionLabel(args: {
   return 'Live'
 }
 
-function validCandle(candle: NiftyCandle): boolean {
+function validCandle(candle: NiftyCandle, timeframe: ChartTimeframe): boolean {
   const values = [candle.time, candle.open, candle.high, candle.low, candle.close]
   return values.every(Number.isFinite)
     && candle.open > 0 && candle.high > 0 && candle.low > 0 && candle.close > 0
     && candle.high >= Math.max(candle.open, candle.low, candle.close)
     && candle.low <= Math.min(candle.open, candle.high, candle.close)
-    && istFiveMinuteBucket(candle.time) === candle.time
+    && istTimeframeBucket(candle.time, timeframe) === candle.time
 }
 
 export function sameCandles(left: NiftyCandle[], right: NiftyCandle[]): boolean {
@@ -71,11 +63,14 @@ export function sameCandles(left: NiftyCandle[], right: NiftyCandle[]): boolean 
 }
 
 export function sessionOnly(series: NiftyCandleSeries): NiftyCandle[] {
+  const timeframe: ChartTimeframe = (
+    series.interval === '1m' || series.interval === '15m' ? series.interval : '5m'
+  )
   const start = series.session_start ? Math.floor(new Date(series.session_start).getTime() / 1000) : null
   const end = series.session_end ? Math.floor(new Date(series.session_end).getTime() / 1000) : null
   const seen = new Set<number>()
   return (series.candles ?? []).filter((candle) => {
-    if (!validCandle(candle)) return false
+    if (!validCandle(candle, timeframe)) return false
     if (start !== null && candle.time < start) return false
     if (end !== null && candle.time >= end) return false
     if (seen.has(candle.time)) return false
@@ -84,8 +79,12 @@ export function sessionOnly(series: NiftyCandleSeries): NiftyCandle[] {
   }).sort((left, right) => left.time - right.time)
 }
 
-export function markerCandleIndex(candles: NiftyCandle[], time: number): number | null {
-  const bucket = istFiveMinuteBucket(time)
+export function markerCandleIndex(
+  candles: NiftyCandle[],
+  time: number,
+  timeframe: ChartTimeframe = '5m',
+): number | null {
+  const bucket = istTimeframeBucket(time, timeframe)
   if (bucket === null) return null
   const index = candles.findIndex((candle) => candle.time === bucket)
   return index < 0 ? null : index

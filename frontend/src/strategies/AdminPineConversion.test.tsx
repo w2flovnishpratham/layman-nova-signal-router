@@ -44,7 +44,7 @@ const ready = {
   id: 'c1', strategy_id: 's1', strategy_name: 'Legend MACD', input_version_id: 'v1',
   candidate_version_id: 'v2', source_sha256: 'a'.repeat(64), candidate_sha256: 'b'.repeat(64),
   strategy_layer_sha256: 'c'.repeat(64), submitted_at: '2026-07-18T10:00:00Z',
-  analysis_status: 'ANALYZED', conversion_status: 'READY_FOR_ADMIN_REVIEW',
+  owner_user_id: 'owner-1', analysis_status: 'ANALYZED', conversion_status: 'READY_FOR_ADMIN_REVIEW',
   provider: 'anthropic_claude', model: 'claude-test', provider_mode: 'CLAUDE_API',
   validation_status: 'PASSED', review_status: 'PENDING', safe_error_code: null,
   analysis: {

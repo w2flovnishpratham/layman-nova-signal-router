@@ -1,9 +1,21 @@
-import { AlertTriangle, Loader2, Lock } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
-import { getAutomations, saveAutomations, type AutomationsOverview, type EditableRule } from './automationsApi'
+import { AlertTriangle, Check, Loader2, Lock } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  getAutomations,
+  saveAutomations,
+  type AutomationsOverview,
+  type EditableRule,
+} from './automationsApi'
 
-function RuleEditor({ rule, onSave }: { rule: EditableRule; onSave: (value: number | string) => void }) {
-  const [draft, setDraft] = useState(String(rule.value))
+function RuleEditor({
+  rule,
+  value,
+  onChange,
+}: {
+  rule: EditableRule
+  value: string
+  onChange: (value: string) => void
+}) {
   const isTime = rule.key === 'entry_cutoff_ist'
 
   return (
@@ -18,26 +30,17 @@ function RuleEditor({ rule, onSave }: { rule: EditableRule; onSave: (value: numb
         <input
           id={`rule-${rule.key}`}
           type={isTime ? 'time' : 'number'}
-          value={draft}
+          value={value}
           min={rule.minimum ?? undefined}
           max={rule.maximum ?? undefined}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(event) => onChange(event.target.value)}
         />
         <span className="nova-auto-unit">{rule.unit}</span>
-        <button
-          type="button"
-          className="conv-pill conv-pill--primary"
-          disabled={draft === String(rule.value)}
-          onClick={() => onSave(isTime ? draft : Number(draft))}
-        >
-          Save
-        </button>
       </div>
       <p className="nova-risk-note">
         {isTime
           ? `Empty means ${rule.zero_means.replace('empty means ', '')}.`
-          : `0 means ${rule.zero_means}.`}
-        {' '}
+          : `0 means ${rule.zero_means}.`}{' '}
         {rule.affects_open_position
           ? 'Can act on the position that is open now.'
           : 'Does not touch the position that is open now.'}
@@ -49,32 +52,55 @@ function RuleEditor({ rule, onSave }: { rule: EditableRule; onSave: (value: numb
 
 export function AutomationsPage() {
   const [data, setData] = useState<AutomationsOverview | null>(null)
+  const [draft, setDraft] = useState<Record<string, string>>({})
+  const [reviewing, setReviewing] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+
+  const hydrate = useCallback((next: AutomationsOverview) => {
+    setData(next)
+    setDraft(Object.fromEntries(next.editable.map((rule) => [rule.key, String(rule.value)])))
+    setReviewing(false)
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      setData(await getAutomations())
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load automations.')
+      hydrate(await getAutomations())
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : 'Could not load automations.')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [hydrate])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load()
   }, [load])
 
-  async function save(key: string, value: number | string) {
+  const changed = useMemo(() => {
+    if (!data) return {}
+    return Object.fromEntries(data.editable.flatMap((rule) => {
+      const value = draft[rule.key] ?? String(rule.value)
+      if (value === String(rule.value)) return []
+      return [[rule.key, rule.key === 'entry_cutoff_ist' ? value : Number(value)]]
+    }))
+  }, [data, draft])
+  const changedKeys = Object.keys(changed)
+
+  async function confirmUpdate() {
+    if (!data?.configuration_id || data.configuration_revision == null || changedKeys.length === 0) return
     setError('')
+    setSaving(true)
     try {
-      setData(await saveAutomations({ [key]: value }))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save.')
+      hydrate(await saveAutomations(data.configuration_id, data.configuration_revision, changed))
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : 'Could not save.')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -84,8 +110,8 @@ export function AutomationsPage() {
         <div>
           <h1>Automations</h1>
           <p>
-            The risk controls you can change, and the safety policies you cannot.
-            These are the engine&apos;s own settings — there is no separate rules engine.
+            Confirmed changes create one revision and apply only to future automated entries.
+            Protected safety policies remain enforced by the engine.
           </p>
         </div>
       </header>
@@ -102,10 +128,79 @@ export function AutomationsPage() {
           {error ? <p className="nova-signals-state" role="alert"><AlertTriangle size={16} /> {error}</p> : null}
 
           <section className="nova-hooks-card" aria-label="Editable rules">
-            <div className="nova-hooks-card-head"><strong>Editable risk controls</strong></div>
+            <div className="nova-hooks-card-head">
+              <strong>Editable risk controls</strong>
+              {data.configuration_revision != null ? <span>Revision {data.configuration_revision}</span> : null}
+            </div>
             {data.editable.map((rule) => (
-              <RuleEditor key={rule.key} rule={rule} onSave={(value) => void save(rule.key, value)} />
+              <RuleEditor
+                key={rule.key}
+                rule={rule}
+                value={draft[rule.key] ?? String(rule.value)}
+                onChange={(value) => {
+                  setDraft((current) => ({ ...current, [rule.key]: value }))
+                  setReviewing(false)
+                }}
+              />
             ))}
+            {!data.configuration_id ? (
+              <p className="nova-signals-state" role="alert">
+                Save a Trading setup before editing Automation Settings.
+              </p>
+            ) : null}
+            <div className="nova-auto-actions">
+              <button
+                type="button"
+                className="conv-pill conv-pill--primary"
+                disabled={!data.configuration_id || changedKeys.length === 0}
+                onClick={() => setReviewing(true)}
+              >
+                Review Changes
+              </button>
+            </div>
+
+            {reviewing ? (
+              <div className="nova-auto-review" role="region" aria-label="Review automation changes">
+                <div className="nova-hooks-card-head">
+                  <strong>Review Changes</strong>
+                  <span>Revision {data.configuration_revision} → {Number(data.configuration_revision) + 1}</span>
+                </div>
+                <ul>
+                  {changedKeys.map((key) => {
+                    const rule = data.editable.find((candidate) => candidate.key === key)
+                    return (
+                      <li key={key}>
+                        <span>{rule?.label ?? key}</span>
+                        <strong>{String(rule?.value)} → {String(changed[key])}</strong>
+                      </li>
+                    )
+                  })}
+                </ul>
+                <p className="nova-risk-note">
+                  This revision applies only to future automated entries. It will not change the
+                  current open position, confirmed SL/TP, protection state, orders, or trade history.
+                </p>
+                <div className="nova-auto-actions">
+                  <button
+                    type="button"
+                    className="conv-pill"
+                    disabled={saving}
+                    onClick={() => setReviewing(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="conv-pill conv-pill--primary"
+                    disabled={saving}
+                    onClick={() => void confirmUpdate()}
+                  >
+                    {saving ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
+                    Confirm Update
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <section className="nova-hooks-card" aria-label="Protected rules">

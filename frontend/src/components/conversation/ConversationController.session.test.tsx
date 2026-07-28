@@ -77,7 +77,7 @@ describe('ConversationController — session isolation & logout', () => {
     choosePaperAndStrategy()
     await act(async () => { resolveA?.() }) // A's stale save resolves after logout
     // B is unaffected: no Start engine fabricated, B is at its own decision/questions.
-    expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /start (paper|live)/i })).toBeNull()
   })
 
   it('an auth-expiry style save rejection keeps setup unsaved and never exposes Start engine', async () => {
@@ -89,7 +89,7 @@ describe('ConversationController — session isolation & logout', () => {
     act(() => vi.advanceTimersByTime(700))
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
     expect(screen.getByRole('alert')).toHaveTextContent(/session expired/i)
-    expect(screen.queryByRole('button', { name: /start engine/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /start (paper|live)/i })).toBeNull()
     expect(onStart).not.toHaveBeenCalled() // no start on an expired save
   })
 

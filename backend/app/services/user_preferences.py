@@ -1,9 +1,8 @@
 """Per-user presentation preferences.
 
-Only settings NOVA can actually honour are exposed. Notification channels are
-declared as *preferences*, not as delivery promises: NOVA has no notification
-transport today, so every channel is reported with ``available: false`` and the
-page says so rather than implying a message will arrive.
+Only settings NOVA can actually honour are exposed. Notification channels use
+the browser Notification API; permission and delivery remain browser-controlled
+and never affect trading execution.
 
 Nothing here touches the engine's runtime settings, so a preference save can
 never affect a trading decision or bump the configuration revision.
@@ -19,28 +18,27 @@ from app.db import models
 from app.db.engine import database_configured, session_scope
 
 TABLE_DENSITIES = ("comfortable", "compact")
-CHART_TIMEFRAMES = ("1m", "3m", "5m", "15m", "1h", "1d")
+CHART_TIMEFRAMES = ("1m", "5m", "15m")
 
-# Channels the product may notify through. `available` says whether a delivery
-# path exists; none does yet, so a preference is stored but nothing is sent.
+# Channels that may create local browser notifications while Trading is open.
 NOTIFICATION_CHANNELS: tuple[dict[str, Any], ...] = (
     {
         "key": "entry_exit",
         "label": "Entry and exit fills",
-        "available": False,
-        "reason": "No delivery channel is configured yet; this preference is stored only.",
+        "available": True,
+        "reason": "Delivered by this browser when notification permission is granted.",
     },
     {
         "key": "risk_breach",
         "label": "Risk limit reached",
-        "available": False,
-        "reason": "No delivery channel is configured yet; this preference is stored only.",
+        "available": True,
+        "reason": "Delivered by this browser when notification permission is granted.",
     },
     {
         "key": "engine_state",
         "label": "Engine started or stopped",
-        "available": False,
-        "reason": "No delivery channel is configured yet; this preference is stored only.",
+        "available": True,
+        "reason": "Delivered by this browser when notification permission is granted.",
     },
 )
 
@@ -65,7 +63,7 @@ def _validate(values: dict[str, Any]) -> dict[str, Any]:
             from zoneinfo import ZoneInfo
 
             ZoneInfo(tz)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise PreferenceError(f"Unknown timezone: {tz}.") from exc
         clean["timezone"] = tz
     if "reduced_motion" in values:
@@ -99,7 +97,13 @@ def _public(row: models.UserPreference | None) -> dict[str, Any]:
         "timezone": row.timezone,
         "reduced_motion": bool(row.reduced_motion),
         "table_density": row.table_density,
-        "default_chart_timeframe": row.default_chart_timeframe,
+        # Old rows may contain a previously supported presentation interval.
+        # Fall back without rewriting history or requiring a migration.
+        "default_chart_timeframe": (
+            row.default_chart_timeframe
+            if row.default_chart_timeframe in CHART_TIMEFRAMES
+            else "5m"
+        ),
         "notification_preferences": dict(row.notification_preferences or {}),
         "revision": int(row.revision or 0),
         "stored": True,

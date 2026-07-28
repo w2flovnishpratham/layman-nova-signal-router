@@ -9,6 +9,7 @@ export interface SetupSnapshot {
   state: ConversationState
   strategyName: string | null
   strategyVersion: string | null
+  savedComplete: boolean
 }
 
 /** The /app/setup screen: step rail, the setup conversation, and a live
@@ -38,9 +39,17 @@ export function SetupPage({ conversation, snapshot }: { conversation: ReactNode;
     strategyVersion: snapshot?.strategyVersion ?? null,
     mode: snapshot?.state.mode ?? null,
     fields: snapshot?.state.fields ?? [],
-    draft: snapshot?.state.draft ?? {},
+    // A restored immutable revision lives in `saved` until the user chooses
+    // Resume/Review. Project that authoritative data immediately so a fully
+    // saved setup cannot render as half-complete after refresh. Once the user
+    // starts or edits a draft, savedComplete becomes false and only the draft
+    // drives progress.
+    draft: snapshot?.savedComplete && Object.keys(snapshot.state.draft).length === 0
+      ? snapshot.state.saved
+      : snapshot?.state.draft ?? {},
     activeKey: snapshot?.state.activeQuestionKey ?? null,
     reviewing: snapshot?.state.phase === 'SETUP_REVIEW' || snapshot?.state.phase === 'ENGINE_READY',
+    savedComplete: snapshot?.savedComplete ?? false,
   }), [broker, snapshot])
 
   const mode = snapshot?.state.mode ?? null

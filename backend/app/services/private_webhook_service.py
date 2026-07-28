@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -27,14 +28,15 @@ from sqlalchemy.exc import IntegrityError
 from app.config import DEFAULT_EXCHANGE_SEGMENT, RUNTIME_STATE_DIR, settings
 from app.db import crud, models
 from app.db.engine import database_configured, session_scope
+from app.domain.strategy_instance_state_machine import InstanceState
 from app.schemas.signal import NormalizedSignal
 from app.services import (
     hold_canonical_decision_evidence,
+    setup_configuration,
     trading_canonical_decision_evidence,
     webhook_replay_store,
 )
 from app.services.audit_logger import log_audit_event, log_error_event
-from app.domain.strategy_instance_state_machine import InstanceState
 
 PRIVATE_STRATEGY_PREFIX = "instance:"
 PRIVATE_WEBHOOK_SOURCE = "PRIVATE_TRADINGVIEW_WEBHOOK"
@@ -44,6 +46,7 @@ PRIVATE_WEBHOOK_SOURCE = "PRIVATE_TRADINGVIEW_WEBHOOK"
 NORMALIZED_ACTIONS = {"BUY_CE", "BUY_PE", "EXIT", "HOLD"}
 _AUTH_FAILURE_FILE = RUNTIME_STATE_DIR / "private_webhook_auth_failures.json"
 _AUTH_FAILURE_LOCK = threading.RLock()
+logger = logging.getLogger("nova_signal_router.private_webhook")
 
 
 class PrivateWebhookError(Exception):
@@ -387,11 +390,14 @@ def _shadow_compare_canonical(
             log_error_event(event, message, metadata=metadata)
         except Exception:
             # Observability in a non-authoritative shadow cannot reject a webhook.
-            pass
+            logger.debug("Shadow diagnostic logging failed.", exc_info=True)
 
     try:
         from app.domain.canonical_signal import CanonicalEventType, DesiredPositionState
-        from app.domain.legacy_signal_adapter import adapt_legacy_action, canonical_to_normalized_signal
+        from app.domain.legacy_signal_adapter import (
+            adapt_legacy_action,
+            canonical_to_normalized_signal,
+        )
 
         event = adapt_legacy_action(
             action,
@@ -434,7 +440,7 @@ def _shadow_compare_canonical(
             },
         )
         return False
-    except Exception:
+    except Exception:  # noqa: BLE001 - canonical shadow is explicitly non-authoritative
         # Shadow mode must never alter the accepted request or reveal payload data.
         log_diagnostic(
             "CANONICAL_SIGNAL_SHADOW_ERROR",
@@ -529,24 +535,25 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
                     strategy_instance_id=auth["instance_id"],
                     owner_user_id=auth["user_id"],
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - evidence cannot alter committed HOLD
                 # Evidence cannot alter a committed HOLD or its HTTP result.
                 try:
                     hold_canonical_decision_evidence.record_hold_decision_failure(
                         "PERSISTENCE_UNAVAILABLE"
                     )
                 except Exception:
-                    pass
+                    logger.debug("HOLD failure evidence could not be stored.", exc_info=True)
     else:
         result = _persist_execution_job(auth, payload, action, strategy_name, received_at)
         # R1B-2B3: optional post-commit trading-intent evidence. Runs only
         # after the signal/job transaction inside _persist_execution_job has
-        # committed and only for the fresh, non-duplicate path. Evidence can
+        # committed and only for the request that won the durable event claim.
+        # That claimant still writes evidence if it lost a concurrent job-row
+        # insert race; a later replay never backfills evidence. Evidence can
         # never alter the committed rows or this HTTP result.
         if (
             status == "fresh"
             and action in trading_canonical_decision_evidence.TRADING_DECISION_ACTIONS
-            and not result.get("duplicate")
         ):
             try:
                 trading_canonical_decision_evidence.persist_trading_decision_best_effort(
@@ -554,13 +561,13 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
                     strategy_instance_id=auth["instance_id"],
                     owner_user_id=auth["user_id"],
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - evidence cannot alter committed execution
                 try:
                     trading_canonical_decision_evidence.record_trading_decision_failure(
                         "PERSISTENCE_UNAVAILABLE"
                     )
                 except Exception:
-                    pass
+                    logger.debug("Trading failure evidence could not be stored.", exc_info=True)
     _audit_signal(auth, payload.signal_id, result["status"], action)
     return result
 
@@ -580,7 +587,7 @@ def _record_c2_hold(
             signal_id=signal_id,
             webhook_event_id=webhook_event_id,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - readiness evidence degrades to unavailable
         # The committed HOLD remains a valid no-op. C2 eligibility remains
         # false and can be recovered idempotently by replaying the same HOLD.
         return {"verified": False, "reason": "C2_VERIFICATION_UNAVAILABLE"}
@@ -588,7 +595,10 @@ def _record_c2_hold(
 
 def test_connection(user_id: uuid.UUID, instance_id: uuid.UUID | str) -> dict[str, Any]:
     """Owner-authenticated HOLD through the durable webhook ingestion path."""
-    from app.services.strategy_instance_service import _active_credential, _owned_instance
+    from app.services.strategy_instance_service import (
+        _active_credential,
+        _owned_instance,
+    )
 
     if not settings.PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED:
         raise PrivateWebhookError(
@@ -700,6 +710,37 @@ def _persist_execution_job(
     signal = build_normalized_signal(auth, payload, action, received_at=received_at)
     try:
         with session_scope() as db:
+            configuration_mode = setup_configuration.configuration_mode_for_execution(
+                auth["execution_mode"]
+            )
+            configuration = (
+                setup_configuration.configuration_for_instance_row(
+                    db,
+                    uuid.UUID(auth["user_id"]),
+                    uuid.UUID(auth["instance_id"]),
+                    configuration_mode,
+                    lock=True,
+                )
+                if configuration_mode is not None
+                else None
+            )
+            if (
+                configuration_mode is not None
+                and (
+                    configuration is None
+                )
+            ):
+                return {
+                    "ok": False,
+                    "signal_id": payload.signal_id,
+                    "status": "BLOCKED",
+                    "reason": "CONFIGURATION_REVISION_REQUIRED",
+                }
+            configured_lots = (
+                int((configuration.configuration_json or {}).get("lots") or 0)
+                if configuration is not None
+                else auth["current_lots"]
+            )
             signal_row = models.StrategySignal(
                 strategy_name=strategy_name,
                 signal_id=payload.signal_id,
@@ -721,8 +762,14 @@ def _persist_execution_job(
                     signal_payload=signal.model_dump(mode="json"),
                     # Snapshot only — the worker re-reads instance lots/mode at
                     # claim time (revalidation), these are audit values.
-                    lots=auth["current_lots"],
+                    lots=configured_lots,
                     execution_mode=auth["execution_mode"],
+                    configuration_revision_id=(
+                        configuration.id if configuration is not None else None
+                    ),
+                    configuration_revision=(
+                        configuration.revision if configuration is not None else None
+                    ),
                     status="queued",
                 )
             )
@@ -793,7 +840,7 @@ def _audit_signal(auth: dict[str, Any], signal_id: str, status: str, detail: str
                 },
             )
     except Exception:
-        pass
+        logger.debug("Private webhook audit logging failed.", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

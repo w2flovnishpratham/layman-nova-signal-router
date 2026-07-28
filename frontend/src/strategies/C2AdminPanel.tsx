@@ -8,6 +8,8 @@ import {
   getC2Config,
   listAdminC2Installations,
   listAdminUsers,
+  markAdminC2Ready,
+  promoteAdminC2PaperVerification,
   recordC2CompileFailure,
   recordC2CompileSuccess,
   revokeAdminC2Credential,
@@ -153,15 +155,19 @@ export function C2AdminPanel({ conversion }: { conversion: AdminPineConversion }
 
       {compiled ? (
         <>
-          <div className="c1-submit-grid">
-            <label>Installation mode<select aria-label="C2 installation mode" value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}><option value="SELF">SELF</option><option value="MANAGED">MANAGED</option></select></label>
-            <label>Owner<select aria-label="C2 installation owner" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>{users.map((user) => <option key={user.id} value={user.id}>{user.name ?? user.email} · {user.email}</option>)}</select></label>
-            <label>Instance label<input aria-label="C2 instance label" value={label} maxLength={120} onChange={(event) => setLabel(event.target.value)} /></label>
-          </div>
-          <button className="ps-primary" type="button" disabled={!ownerId || !label.trim() || !!busy} onClick={() => void run('Installation creation', async () => {
-            const created = await createC2Installation({ conversion_id: conversion.id, owner_user_id: ownerId, mode, instance_label: label })
-            setSelectedId(created.installation.id)
-          })}>Create Installation</button>
+          {!installations.length ? (
+            <>
+              <div className="c1-submit-grid">
+                <label>Installation mode<select aria-label="C2 installation mode" value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}><option value="SELF">SELF</option><option value="MANAGED">MANAGED</option></select></label>
+                <label>Owner<select aria-label="C2 installation owner" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>{users.map((user) => <option key={user.id} value={user.id}>{user.name ?? user.email} · {user.email}</option>)}</select></label>
+                <label>Instance label<input aria-label="C2 instance label" value={label} maxLength={120} onChange={(event) => setLabel(event.target.value)} /></label>
+              </div>
+              <button className="ps-primary" type="button" disabled={!ownerId || !label.trim() || !!busy} onClick={() => void run('Installation creation', async () => {
+                const created = await createC2Installation({ conversion_id: conversion.id, owner_user_id: ownerId, mode, instance_label: label })
+                setSelectedId(created.installation.id)
+              })}>Create Installation</button>
+            </>
+          ) : <div className="ps-message success">The approved conversion is installed for its bound owner. Continue with credential and HOLD verification.</div>}
 
           {installations.length ? (
             <div className="pine-managed-grid">
@@ -170,10 +176,14 @@ export function C2AdminPanel({ conversion }: { conversion: AdminPineConversion }
                 <p><strong>Owner:</strong> {selected.owner_user_id}</p>
                 <p><strong>Instance:</strong> {selected.strategy_instance_id}</p>
                 <p><strong>Paper:</strong> {selected.paper_eligible ? 'Eligible' : selected.blocking_reasons.join(', ')}</p>
-                <p><strong>Live:</strong> Unavailable</p>
+                <p><strong>Execution gate:</strong> {selected.status.replaceAll('_', ' ')}</p>
+                <p><strong>Paper evidence:</strong> {selected.paper_entry_verified_at ? 'Entry confirmed' : 'Entry pending'} · {selected.paper_exit_verified_at ? 'Exit confirmed' : 'Exit pending'}</p>
+                <p><strong>Live:</strong> {selected.live_eligible ? 'Eligible after explicit Live start confirmation' : 'Complete Ready status and owner Live readiness first'}</p>
                 <div className="ps-actions">
                   {selected.credential_status !== 'ACTIVE' ? <button className="secondary-button" type="button" onClick={() => void run('Credential generation', async () => issue('generate'))}><KeyRound size={14} /> Generate Credential</button> : <button className="secondary-button" type="button" onClick={() => { if (window.confirm('Rotate this credential and require a new HOLD?')) void run('Credential rotation', async () => issue('rotate')) }}><RotateCw size={14} /> Rotate Credential</button>}
                   {selected.credential_status === 'ACTIVE' ? <button className="ps-danger" type="button" onClick={() => { if (window.confirm('Revoke this credential and remove Paper eligibility?')) void run('Credential revocation', async () => { await revokeAdminC2Credential(selected.id) }) }}><ShieldOff size={14} /> Revoke Credential</button> : null}
+                  {selected.status === 'PAPER_ELIGIBLE' && selected.hold_status === 'VERIFIED' ? <button className="ps-primary" disabled={!!busy} type="button" onClick={() => void run('Paper verification promotion', async () => { await promoteAdminC2PaperVerification(selected.id) })}><Check size={14} /> Start Controlled Paper Verification</button> : null}
+                  {selected.status === 'PAPER_VERIFICATION' ? <button className="ps-primary" disabled={!!busy || !selected.paper_entry_verified_at || !selected.paper_exit_verified_at} type="button" onClick={() => void run('Ready approval', async () => { await markAdminC2Ready(selected.id) })}><Check size={14} /> Mark Ready After Evidence</button> : null}
                   {!selected.suspended_at ? <button className="ps-danger" type="button" onClick={() => { if (window.confirm('Suspend this installation?')) void run('Installation suspension', async () => { await suspendAdminC2Installation(selected.id, 'Suspended by administrator') }) }}>Suspend Installation</button> : null}
                 </div>
               </div> : null}

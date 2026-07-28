@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   config: vi.fn(), detail: vi.fn(), installations: vi.fn(), users: vi.fn(),
   compileSuccess: vi.fn(), compileFailure: vi.fn(), download: vi.fn(), create: vi.fn(),
   generate: vi.fn(), rotate: vi.fn(), revoke: vi.fn(), suspend: vi.fn(),
+  promote: vi.fn(), markReady: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
@@ -22,6 +23,8 @@ vi.mock('../api', () => ({
   rotateAdminC2Credential: api.rotate,
   revokeAdminC2Credential: api.revoke,
   suspendAdminC2Installation: api.suspend,
+  promoteAdminC2PaperVerification: api.promote,
+  markAdminC2Ready: api.markReady,
 }))
 
 const conversion = {
@@ -29,7 +32,7 @@ const conversion = {
   input_version_id: 'input-1', candidate_version_id: 'candidate-1',
   source_sha256: 'a'.repeat(64), candidate_sha256: 'b'.repeat(64),
   strategy_layer_sha256: 'c'.repeat(64), submitted_at: '2026-07-19T10:00:00Z',
-  analysis_status: 'ANALYZED', conversion_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE',
+  owner_user_id: 'owner-1', analysis_status: 'ANALYZED', conversion_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE',
   provider: 'anthropic_claude', model: 'test', provider_mode: 'MANUAL_ADMIN_COPY_PASTE',
   validation_status: 'PASSED', review_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE',
   safe_error_code: null, analysis: {
@@ -66,7 +69,9 @@ const installation = {
   strategy_instance_id: 'instance-1', instance_label: 'Legend Paper', instance_status: 'ready',
   execution_mode: 'signal_only' as const, credential_status: 'NOT_GENERATED' as const,
   credential: null, hold_status: 'AWAITING_HOLD' as const, hold_verified_at: null,
-  paper_eligible: false, paper_eligible_at: null, live_eligible: false as const,
+  paper_eligible: false, paper_eligible_at: null,
+  paper_entry_verified_at: null, paper_exit_verified_at: null,
+  live_eligible: false, live_gates: {},
   gates: {}, blocking_reasons: ['Credential not generated'], suspended_at: null,
   created_at: '2026-07-19T10:00:00Z', updated_at: '2026-07-19T10:00:00Z',
 }
@@ -98,6 +103,8 @@ beforeEach(() => {
   api.rotate.mockResolvedValue({ credential: { ...issued, id: 'cred-2', token: 'nwk_ROTATED' } })
   api.revoke.mockResolvedValue({ installation: { ...installation, credential_status: 'REVOKED' } })
   api.suspend.mockResolvedValue({ installation: { ...installation, status: 'INSTALLATION_SUSPENDED' } })
+  api.promote.mockResolvedValue({ installation: { ...installation, status: 'PAPER_VERIFICATION' } })
+  api.markReady.mockResolvedValue({ installation: { ...installation, status: 'READY' } })
 })
 
 afterEach(() => cleanup())
@@ -152,5 +159,39 @@ describe('C2AdminPanel', () => {
     expect(screen.queryByText(issued.token)).not.toBeInTheDocument()
     expect(localStorage.length).toBe(0)
     expect(sessionStorage.length).toBe(0)
+  })
+
+  it('exposes the two explicit admin execution gates', async () => {
+    const user = userEvent.setup()
+    api.detail.mockResolvedValue({ enabled: true, compile, candidate })
+    const eligible = {
+      installations: [{
+        ...installation,
+        status: 'PAPER_ELIGIBLE',
+        credential_status: 'ACTIVE',
+        hold_status: 'VERIFIED',
+        paper_eligible: true,
+      }],
+    }
+    const verification = {
+      installations: [{
+        ...installation,
+        status: 'PAPER_VERIFICATION',
+        credential_status: 'ACTIVE',
+        hold_status: 'VERIFIED',
+        paper_eligible: true,
+        paper_entry_verified_at: '2026-07-19T10:05:00Z',
+        paper_exit_verified_at: '2026-07-19T10:06:00Z',
+      }],
+    }
+    api.installations
+      .mockResolvedValue(verification)
+      .mockResolvedValueOnce(eligible)
+    render(<C2AdminPanel conversion={conversion as never} />)
+    await user.click(await screen.findByRole('button', { name: /Start Controlled Paper Verification/i }))
+    await waitFor(() => expect(api.promote).toHaveBeenCalledWith('install-1'))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Mark Ready After Evidence/i })).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /Mark Ready After Evidence/i }))
+    await waitFor(() => expect(api.markReady).toHaveBeenCalledWith('install-1'))
   })
 })

@@ -11,6 +11,8 @@ const api = vi.hoisted(() => ({
   managedSetups: vi.fn(), recordInstallation: vi.fn(), managedCredential: vi.fn(),
   adminConversions: vi.fn(), adminConversion: vi.fn(),
   deleteStrategy: vi.fn(), conversionHistory: vi.fn(),
+  ownerClaudeConfig: vi.fn(), ownerClaudeCreate: vi.fn(),
+  ownerClaudeList: vi.fn(), ownerClaudeGet: vi.fn(),
 }))
 vi.mock('../api', () => ({
   listPineStrategies: api.list, getPineStrategy: api.get, createPineStrategy: api.create,
@@ -28,6 +30,10 @@ vi.mock('../api', () => ({
   getAdminPineManualPackage: vi.fn(), submitAdminPineManualResponse: vi.fn(),
   approveAdminPineConversion: vi.fn(), rejectAdminPineConversion: vi.fn(),
   deletePineStrategy: api.deleteStrategy, listPineConversions: api.conversionHistory,
+  getOwnerClaudeConversionConfig: api.ownerClaudeConfig,
+  createOwnerClaudeConversion: api.ownerClaudeCreate,
+  listOwnerClaudeConversions: api.ownerClaudeList,
+  getOwnerClaudeConversion: api.ownerClaudeGet,
 }))
 
 const MANAGED_TOKEN = 'nwk_MANAGED_SENTINEL_CREDENTIAL_0987654321'
@@ -49,6 +55,13 @@ beforeEach(() => {
   api.managedSetups.mockResolvedValue([])
   api.adminConversions.mockResolvedValue([])
   api.conversionHistory.mockResolvedValue([])
+  api.ownerClaudeConfig.mockResolvedValue({
+    enabled: false, provider: 'anthropic_claude', model: null,
+    prompt_version: 'v3.1', transport_version: 'pine_transport_v2',
+    admin_review_required: true, paper_verification_required: true,
+    live_eligible: false,
+  })
+  api.ownerClaudeList.mockResolvedValue([])
   api.deleteStrategy.mockResolvedValue({ deleted: true, strategy_id: 's1' })
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
@@ -140,15 +153,36 @@ describe('ImportedPinePage', () => {
     expect(screen.queryByLabelText(/Conversion assumptions/i)).not.toBeInTheDocument()
   })
 
-  it('requires unselected consent before sending the exact version', async () => {
+  it('requires unselected consent before sending the exact owner-bound version to Claude', async () => {
     const user = userEvent.setup()
-    api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: true, provider: 'configured', model: 'pine-model', prompt_version: 'v1', contract_version: 1, daily_limit: 10 })
-    api.convert.mockResolvedValue({ conversion: { id: 'c1', strategy_id: 's1', input_version_id: 'v1', status: 'queued', provider: 'configured', model: 'pine-model', prompt_version: 'v1', consent_at: 'now', candidate_version_id: null, conversion_summary: null, assumptions: [], unsupported_features: [], warnings: [], action_mapping: {}, safe_error_code: null }, reused: false })
+    api.ownerClaudeConfig.mockResolvedValue({
+      enabled: true, provider: 'anthropic_claude', model: 'claude-test',
+      prompt_version: 'v3.1', transport_version: 'pine_transport_v2',
+      admin_review_required: true, paper_verification_required: true,
+      live_eligible: false,
+    })
+    api.ownerClaudeCreate.mockResolvedValue({ conversion: {
+      id: 'c1', owner_user_id: 'u1', strategy_id: 's1', strategy_name: 'Private script',
+      input_version_id: 'v1', candidate_version_id: 'v2', source_sha256: 'abc',
+      candidate_sha256: 'def', strategy_layer_sha256: 'ghi', submitted_at: 'now',
+      analysis_status: 'ANALYZED', conversion_status: 'READY_FOR_ADMIN_REVIEW',
+      provider: 'anthropic_claude', model: 'claude-test', provider_mode: 'CLAUDE_API',
+      validation_status: 'PASSED', review_status: 'PENDING', safe_error_code: null,
+      analysis: { analyzer_version: '1', registry_version: '1', registry_sha256: 'a', source_sha256: 'abc', matched_capabilities: [], unsupported_capabilities: [], warnings: [], blockers: [], admin_review_points: [], effective_capability_level: 'L1', confidence: 'HIGH' },
+      provenance: {}, validation, conversion_summary: 'Converted', warnings: [],
+      unsupported_features: [], action_mapping: {},
+    }, reused: false })
     render(<ImportedPinePage />); await waitFor(() => expect((screen.getByLabelText('Pine source') as HTMLTextAreaElement).value).toBe(SOURCE))
-    const send = screen.getByRole('button', { name: /send source for conversion/i })
+    const send = screen.getByRole('button', { name: /convert and send for admin review/i })
     expect(send).toBeDisabled()
-    await user.click(screen.getByRole('checkbox', { name: /i consent/i })); await user.click(send)
-    await waitFor(() => expect(api.convert).toHaveBeenCalledWith('s1', 'v1'))
+    await user.click(screen.getByRole('checkbox', { name: /private pine version to claude/i })); await user.click(send)
+    await waitFor(() => expect(api.ownerClaudeCreate).toHaveBeenCalledWith('s1', 'v1', {
+      requested_setup_type: 'USER_MANAGED_TRADINGVIEW',
+      intended_symbol: 'NIFTY',
+      intended_timeframe: '5',
+    }))
+    expect(await screen.findByText(/Claude conversion for Private script/i)).toBeInTheDocument()
+    expect(screen.getByText(/admin must now review/i)).toBeInTheDocument()
     expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0)
   })
 

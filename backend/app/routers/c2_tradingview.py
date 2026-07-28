@@ -146,10 +146,9 @@ def compile_success(
     try:
         return {
             "ok": True,
-            "compile": service.record_compile(
+            **service.record_compile_success_for_origin(
                 admin.id,
                 conversion_id,
-                succeeded=True,
                 setup_notes=payload.setup_notes,
             ),
         }

@@ -32,6 +32,10 @@ def test_trading_bootstrap_includes_every_runtime_status_field(mu_db):
     response = _client(user).get("/api/trading/bootstrap")
     assert response.status_code == 200, response.text
     body = response.json()
-    for key in ("engine", "exit", "position", "pnl", "config", "account", "safety"):
+    for key in ("engine", "exit", "position", "pnl", "config", "account", "safety", "strategy_catalog"):
         assert key in body, f"missing key: {key}"
         assert body[key], f"empty/falsy value for key: {key}"
+    # eligible_strategies/selected_strategy/selection_issue can legitimately be
+    # empty/None for a fresh user -- only presence matters, not truthiness.
+    for key in ("eligible_strategies", "selected_strategy", "selection_issue"):
+        assert key in body, f"missing key: {key}"

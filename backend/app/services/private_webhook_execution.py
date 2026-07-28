@@ -56,7 +56,12 @@ def _failed(reason: str, message: str) -> dict[str, Any]:
 
 
 @contextmanager
-def _revalidate_instance(instance_id: uuid.UUID, job_user_id: Any, action: str):
+def _revalidate_instance(
+    instance_id: uuid.UUID,
+    job_user_id: Any,
+    action: str,
+    expected_execution_mode: str,
+):
     """Fresh instance state at claim time — lots/mode changes since enqueue
     apply; paused entries and all stopped/archived actions fail closed."""
     with session_scope() as db:
@@ -87,11 +92,10 @@ def _revalidate_instance(instance_id: uuid.UUID, job_user_id: Any, action: str):
             # a verification signal. This is the hard guarantee against live orders.
             yield {"error": _result("rejected", "LIVE_EXECUTION_SAFETY_BLOCK")}
             return
-        lots = int(instance.current_lots or 0)
-        if lots < 1:
-            yield {"error": _result("rejected", "INVALID_LOTS")}
+        if instance.execution_mode != expected_execution_mode:
+            yield {"error": _result("rejected", "CONFIGURATION_MODE_CHANGED")}
             return
-        yield {"lots": lots, "execution_mode": instance.execution_mode}
+        yield {}
 
 
 def _resolve_entry_contract(option_side: str, lots: int) -> dict[str, Any] | None:
@@ -164,7 +168,12 @@ def _make_enricher(lots: int):
     return enrich
 
 
-def execute_private_job(job: dict[str, Any], signal: NormalizedSignal) -> dict[str, Any]:
+def execute_private_job(
+    job: dict[str, Any],
+    signal: NormalizedSignal,
+    *,
+    configuration: dict[str, Any] | None,
+) -> dict[str, Any]:
     from app.services import strategy_fanout
     from app.services.execution_context import bind_user_execution_context
     from app.services.state_store import get_open_position, init_runtime_files
@@ -174,11 +183,19 @@ def execute_private_job(job: dict[str, Any], signal: NormalizedSignal) -> dict[s
     except (ValueError, TypeError):
         return _result("rejected", "INACTIVE_INSTANCE")
 
-    with _revalidate_instance(instance_id, job["user_id"], signal.action) as revalidated:
+    execution_mode = str(job["execution_mode"])
+    lots = int(job["lots"])
+    if lots < 1:
+        return _result("rejected", "INVALID_LOTS")
+
+    with _revalidate_instance(
+        instance_id,
+        job["user_id"],
+        signal.action,
+        execution_mode,
+    ) as revalidated:
         if "error" in revalidated:
             return revalidated["error"]
-        lots = revalidated["lots"]
-        execution_mode = revalidated["execution_mode"]
 
         if (
             execution_mode == "real_orders"
@@ -211,4 +228,5 @@ def execute_private_job(job: dict[str, Any], signal: NormalizedSignal) -> dict[s
             execution_mode=execution_mode,
             signal=signal,
             signal_enricher=_make_enricher(lots),
+            configuration=configuration,
         )

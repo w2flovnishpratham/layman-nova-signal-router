@@ -1,8 +1,8 @@
 import { backendHttpUrl } from '../lib/backend'
 
-// Mirrors backend/app/services/automations_overview.py.
-// No automation table exists: the editable rules are the engine's own runtime
-// settings, and the protected rules are code paths with nothing to write.
+// Mirrors backend/app/services/automations_overview.py. Editable values belong
+// to the owner's selected immutable configuration revision. Protected rules
+// are code paths with no toggle or separate rules-engine table.
 export interface EditableRule {
   key: string
   label: string
@@ -29,7 +29,14 @@ export interface AutomationsOverview {
   ok: boolean
   editable: EditableRule[]
   protected: ProtectedRule[]
+  configuration_id: string | null
+  configuration_revision: number | null
+  mode: 'paper' | 'live' | null
   storage: string
+  confirmed_revision?: {
+    id: string
+    revision: number
+  }
 }
 
 export async function getAutomations(): Promise<AutomationsOverview> {
@@ -38,12 +45,20 @@ export async function getAutomations(): Promise<AutomationsOverview> {
   return response.json() as Promise<AutomationsOverview>
 }
 
-export async function saveAutomations(values: Record<string, number | string>): Promise<AutomationsOverview> {
+export async function saveAutomations(
+  configurationId: string,
+  expectedRevision: number,
+  changes: Record<string, number | string>,
+): Promise<AutomationsOverview> {
   const response = await fetch(backendHttpUrl('/api/automations'), {
     method: 'PUT',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(values),
+    body: JSON.stringify({
+      configuration_id: configurationId,
+      expected_revision: expectedRevision,
+      changes,
+    }),
   })
   const body = await response.json().catch(() => ({})) as Record<string, unknown>
   if (!response.ok || body.ok === false) throw new Error(String(body.error ?? `Could not save: ${response.status}`))

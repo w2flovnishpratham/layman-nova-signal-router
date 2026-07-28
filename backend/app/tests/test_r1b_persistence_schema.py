@@ -50,9 +50,10 @@ def test_migration_metadata_is_exact():
 
     script = ScriptDirectory.from_config(_alembic_config())
     r1b = script.get_revision("0015_r1b_persistence")
-    assert script.get_heads() == ["0019_trading_config_revisions"]
+    assert script.get_heads() == ["0020_engine_start_entry"]
     assert r1b.down_revision == "0014_verify_select"
-    assert len(r1b.revision) == 20 <= 32
+    assert len(r1b.revision) == 20
+    assert len(r1b.revision) <= 32
 
 
 def test_migration_adds_no_column_no_backfill_and_cycles_on_sqlite(tmp_path, monkeypatch):
@@ -237,9 +238,8 @@ def fk_session(mu_db):  # noqa: F811
 
 def _rejects(db, row):
     # Savepoint-scoped so a rejected row never rolls back the seeded fixture data.
-    with pytest.raises(IntegrityError):
-        with db.begin_nested():
-            db.add(row)
+    with pytest.raises(IntegrityError), db.begin_nested():
+        db.add(row)
 
 
 def test_decision_uniqueness_and_consistency_constraints(fk_session):
@@ -528,10 +528,12 @@ def test_evidence_rows_are_immutable_via_orm(mu_db):  # noqa: F811
         ]
 
     for model_name, row_id, field, value in targets:
-        with pytest.raises(ValueError, match="immutable R1B evidence"):
-            with session_scope() as db:
-                row = db.get(getattr(models, model_name), row_id)
-                setattr(row, field, value)
+        with (
+            pytest.raises(ValueError, match="immutable R1B evidence"),
+            session_scope() as db,
+        ):
+            row = db.get(getattr(models, model_name), row_id)
+            setattr(row, field, value)
         # The rejected update never reached the database.
         with session_scope() as db:
             row = db.get(getattr(models, model_name), row_id)

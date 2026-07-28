@@ -1220,6 +1220,7 @@ export interface AdminPineAnalysis {
 
 export interface AdminPineConversion {
   id: string
+  owner_user_id: string
   strategy_id: string
   strategy_name: string
   input_version_id: string
@@ -1249,6 +1250,17 @@ export interface AdminPineConversion {
   transport_source?: string | null
   diff?: AdminPineDiffLine[]
   approval_integrity?: boolean | null
+}
+
+export interface OwnerClaudeConversionConfig {
+  enabled: boolean
+  provider: 'anthropic_claude'
+  model: string | null
+  prompt_version: 'v3.1'
+  transport_version: string
+  admin_review_required: true
+  paper_verification_required: true
+  live_eligible: false
 }
 
 export interface AdminPineSubmissionPayload {
@@ -1293,6 +1305,32 @@ export const rejectAdminPineConversion = async (id: string, reason: string) =>
     `/api/admin/pine-conversions/${id}/reject` as `/${string}`,
     'POST',
     { reason },
+  )).conversion
+
+export const getOwnerClaudeConversionConfig = () =>
+  pineCall<OwnerClaudeConversionConfig>('/api/personal-pine-claude-conversions/config')
+
+export const createOwnerClaudeConversion = (
+  strategyId: string,
+  versionId: string,
+  options: {
+    requested_setup_type: 'USER_MANAGED_TRADINGVIEW' | 'NOVA_MANAGED_TRADINGVIEW'
+    intended_symbol: string
+    intended_timeframe: string
+  },
+) =>
+  pineCall<{ conversion: AdminPineConversion; reused: boolean }>(
+    `/api/personal-pine-strategies/${strategyId}/versions/${versionId}/claude-conversion` as `/${string}`,
+    'POST',
+    { consent: true, options },
+  )
+
+export const listOwnerClaudeConversions = async () =>
+  (await pineCall<{ conversions: AdminPineConversion[] }>('/api/personal-pine-claude-conversions')).conversions
+
+export const getOwnerClaudeConversion = async (id: string) =>
+  (await pineCall<{ conversion: AdminPineConversion }>(
+    `/api/personal-pine-claude-conversions/${id}` as `/${string}`,
   )).conversion
 
 export interface C2Config {
@@ -1348,7 +1386,7 @@ export interface C2Installation {
   strategy_instance_id: string
   instance_label: string
   instance_status: string
-  execution_mode: 'signal_only' | 'paper_live_data'
+  execution_mode: 'signal_only' | 'paper_live_data' | 'real_orders'
   credential_status: 'ACTIVE' | 'REVOKED' | 'NOT_GENERATED'
   credential: {
     id: string
@@ -1360,7 +1398,10 @@ export interface C2Installation {
   hold_verified_at: string | null
   paper_eligible: boolean
   paper_eligible_at: string | null
-  live_eligible: false
+  paper_entry_verified_at: string | null
+  paper_exit_verified_at: string | null
+  live_eligible: boolean
+  live_gates: Record<string, boolean>
   gates: Record<string, boolean>
   blocking_reasons: string[]
   suspended_at: string | null
@@ -1483,6 +1524,18 @@ export const suspendAdminC2Installation = (installationId: string, reason: strin
     `/api/admin/strategy-installations/${installationId}/suspend` as `/${string}`,
     'POST',
     { reason },
+  )
+
+export const promoteAdminC2PaperVerification = (installationId: string) =>
+  c2Call<{ installation: C2Installation }>(
+    `/api/admin/strategy-installations/${installationId}/promote-paper-verification` as `/${string}`,
+    'POST',
+  )
+
+export const markAdminC2Ready = (installationId: string) =>
+  c2Call<{ installation: C2Installation }>(
+    `/api/admin/strategy-installations/${installationId}/mark-ready` as `/${string}`,
+    'POST',
   )
 
 export const listMyC2Installations = async () =>

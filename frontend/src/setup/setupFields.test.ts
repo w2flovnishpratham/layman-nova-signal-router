@@ -50,7 +50,7 @@ describe('setup fields', () => {
 })
 
 describe('step derivation', () => {
-  it('shows the complete seven-stage journey before mode or strategy selection', () => {
+  it('shows the six Paper-capable stages before mode selection without a broker step', () => {
     const steps = deriveSteps({
       ...base,
       brokerConnected: false,
@@ -62,7 +62,6 @@ describe('step derivation', () => {
     })
     expect(steps.map((step) => step.id)).toEqual([
       'mode',
-      'broker',
       'strategy',
       'sizing',
       'exits',
@@ -83,6 +82,13 @@ describe('step derivation', () => {
     expect(broker?.summary).toMatch(/not connected/i)
   })
 
+  it('adds Dhan readiness only for Live and keeps the chosen-mode step count stable', () => {
+    const paper = deriveSteps({ ...base, mode: 'paper' })
+    const live = deriveSteps({ ...base, mode: 'live', brokerConnected: false })
+    expect(paper.map((step) => step.id)).toEqual(['mode', 'strategy', 'sizing', 'exits', 'safety', 'review'])
+    expect(live.map((step) => step.id)).toEqual(['mode', 'broker', 'strategy', 'sizing', 'exits', 'safety', 'review'])
+  })
+
   it('marks the step holding the active question', () => {
     const steps = deriveSteps({ ...base, activeKey: 'entry_cutoff_ist' })
     const cutoff = steps.find((s) => s.id === 'safety')
@@ -101,10 +107,11 @@ describe('step derivation', () => {
     expect(steps.find((s) => s.id === 'safety')?.summary).toBe('no entry cutoff')
   })
 
-  it('gives an unknown backend field its own step instead of hiding it', () => {
+  it('keeps the locked rail stable when a strategy adds another question', () => {
     const extra: StrategySetupField = { key: 'trail_percent', type: 'decimal', label: 'Trail %', minimum: 0, maximum: 100, required: true }
     const steps = deriveSteps({ ...base, fields: [...schema, extra] })
-    expect(steps.some((s) => s.id === 'trail_percent')).toBe(true)
+    expect(steps.some((s) => s.id === 'trail_percent')).toBe(false)
+    expect(steps).toHaveLength(6)
   })
 
   it('reports progress from answered steps only', () => {
@@ -113,5 +120,22 @@ describe('step derivation', () => {
     const partial = deriveSteps({ ...base, draft: { direction: 'BOTH', lots: 1 } })
     expect(setupProgress(partial)).toBeGreaterThan(0)
     expect(setupProgress(partial)).toBeLessThan(100)
+  })
+
+  it('reports 100% after the complete revision is saved', () => {
+    const steps = deriveSteps({
+      ...base,
+      savedComplete: true,
+      draft: {
+        direction: 'BOTH',
+        lots: 1,
+        stop_loss_percent: 10,
+        take_profit_percent: 20,
+        max_daily_loss: 25000,
+        max_trades_per_day: 6,
+        entry_cutoff_ist: '15:15',
+      },
+    })
+    expect(setupProgress(steps)).toBe(100)
   })
 })

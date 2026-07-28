@@ -24,7 +24,6 @@ from app.services import personal_pine_service as pine
 from app.services import pine_conversion_service as frozen
 from app.services.untrusted_text_sanitizer import sanitize_untrusted_operator_text
 
-
 SELF = "SELF"
 MANAGED = "MANAGED"
 MODE_TO_SETUP = {
@@ -64,7 +63,12 @@ def public_config() -> dict[str, Any]:
     return {
         "enabled": bool(settings.C2_TRADINGVIEW_INSTALLATION_ENABLED),
         "webhook_path": WEBHOOK_PATH,
-        "live_eligibility": False,
+        "live_eligibility": bool(
+            settings.ENABLE_LIVE_ORDERS
+            and settings.PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED
+            and settings.DHAN_MODE.upper() == "REAL"
+            and not settings.DHAN_READ_ONLY_REAL_DATA
+        ),
         "browser_automation": False,
     }
 
@@ -99,7 +103,7 @@ def _approved_context(
             "C1_APPROVAL_REQUIRED",
         )
 
-    source, source_error = c1._verified_current_source_artifact(  # noqa: SLF001
+    source, source_error = c1._verified_current_source_artifact(
         db, conversion, lock=lock
     )
     candidate_version = _query_one(
@@ -323,6 +327,68 @@ def record_compile(
         return _compile_public(row)
 
 
+def record_compile_success_for_origin(
+    admin_id: uuid.UUID,
+    conversion_id: uuid.UUID | str,
+    *,
+    setup_notes: str | None = None,
+) -> dict[str, Any]:
+    """Record compile evidence and install owner-submitted C1 into that owner.
+
+    Legacy admin-created conversions retain the explicit target-owner workflow.
+    Owner-submitted conversions cannot be redirected to another user.
+    """
+    compile_result = record_compile(
+        admin_id,
+        conversion_id,
+        succeeded=True,
+        setup_notes=setup_notes,
+    )
+    with session_scope() as db:
+        conversion = _query_one(
+            db,
+            models.PineConversionRequest,
+            models.PineConversionRequest.id == uuid.UUID(str(conversion_id)),
+            models.PineConversionRequest.provider == c1.PROVIDER,
+        )
+        if conversion is None:
+            raise C2Error("Approved conversion was not found.", 404, "NOT_FOUND")
+        summary = (
+            conversion.usage_summary
+            if isinstance(conversion.usage_summary, dict)
+            else {}
+        )
+        if summary.get("workflow") != "NOVA_OWNER_CLAUDE":
+            return {"compile": compile_result, "installation": None}
+        strategy = db.get(models.StrategyCatalog, conversion.strategy_id)
+        if strategy is None or strategy.owner_user_id != conversion.owner_user_id:
+            raise C2Error(
+                "Conversion owner binding is invalid.",
+                409,
+                "OWNER_BINDING_INVALID",
+            )
+        requested_setup = (conversion.options or {}).get(
+            "requested_setup_type", MODE_TO_SETUP[SELF]
+        )
+        mode = SETUP_TO_MODE.get(requested_setup)
+        if mode is None:
+            raise C2Error(
+                "Requested installation mode is invalid.",
+                409,
+                "INVALID_MODE",
+            )
+        owner_id = conversion.owner_user_id
+        label = strategy.display_name
+    installation = create_installation(
+        admin_id,
+        conversion_id,
+        owner_id,
+        mode=mode,
+        instance_label=label,
+    )
+    return {"compile": compile_result, "installation": installation}
+
+
 def admin_conversion_status(admin_id, conversion_id) -> dict[str, Any]:
     with session_scope() as db:
         context = _approved_context(db, conversion_id, lock=False)
@@ -386,6 +452,38 @@ def _active_credential(db, instance_id, *, lock=False):
     return db.scalar(query.with_for_update() if lock else query)
 
 
+def _live_readiness_gates(owner_id: uuid.UUID, setup_status: str) -> dict[str, bool]:
+    """Cheap, server-owned Live eligibility gates for a verified C2 strategy.
+
+    The final start path additionally performs a fresh Dhan profile validation,
+    requires explicit consent, and uses durable start idempotency. Listing a
+    strategy must not make a broker request, so this projection deliberately
+    checks only durable/configured authorities.
+    """
+
+    from app.services import entitlements, strategy_fanout, user_credential_vault
+
+    egress = strategy_fanout.user_egress_status(owner_id)
+    try:
+        has_credentials = user_credential_vault.get_user_dhan_credentials(owner_id) is not None
+    except user_credential_vault.UserVaultError:
+        has_credentials = False
+    return {
+        "paper_verification_complete": setup_status == "READY",
+        "live_orders_enabled": bool(settings.ENABLE_LIVE_ORDERS),
+        "private_webhook_live_enabled": bool(
+            settings.PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED
+        ),
+        "dhan_real_mode": settings.DHAN_MODE.upper() == "REAL",
+        "dhan_writes_enabled": not bool(settings.DHAN_READ_ONLY_REAL_DATA),
+        "live_entitlement": entitlements.has_live_entitlement_for_user(owner_id),
+        "strategy_entitlement": entitlements.has_strategy_entitlement_for_user(owner_id),
+        "credentials_saved": has_credentials,
+        "egress_assigned": bool(egress.get("active") and egress.get("has_proxy")),
+        "egress_verified": bool(egress.get("verified")),
+    }
+
+
 def _readiness(db, setup: models.TradingViewSetup) -> dict[str, Any]:
     instance = db.get(models.StrategyInstance, setup.strategy_instance_id)
     credential = _active_credential(db, setup.strategy_instance_id) if instance else None
@@ -440,7 +538,19 @@ def _readiness(db, setup: models.TradingViewSetup) -> dict[str, Any]:
         and credential
         and setup.hold_credential_id == credential.id
     )
-    paper_safe = bool(instance and instance.execution_mode in SAFE_MODES)
+    # READY is durable proof that this exact version completed controlled Paper
+    # verification. A later Live start may therefore change the instance mode
+    # without erasing that proof or making the strategy disappear.
+    paper_safe = bool(
+        instance
+        and (
+            instance.execution_mode in SAFE_MODES
+            or (
+                setup.status == "READY"
+                and instance.execution_mode == "real_orders"
+            )
+        )
+    )
     installation_active = bool(
         setup.installation_confirmed_at
         and setup.status not in {"BLOCKED", "RETIRED"}
@@ -488,10 +598,12 @@ def _readiness(db, setup: models.TradingViewSetup) -> dict[str, Any]:
         reasons.insert(0, "Credential revoked")
     if compile_evidence and compile_evidence.result == "FAILURE":
         reasons = ["Compile failed"] + [item for item in reasons if item != "Awaiting compile"]
+    live_gates = _live_readiness_gates(setup.user_id, setup.status)
     return {
         "gates": gates,
         "paper_eligible": eligible,
-        "live_eligible": False,
+        "live_gates": live_gates,
+        "live_eligible": eligible and all(live_gates.values()),
         "reasons": reasons,
         "instance": instance,
         "credential": credential,
@@ -535,11 +647,14 @@ def _persist_authoritative_readiness(
                 "installation_id": str(setup.id),
                 "instance_id": str(setup.strategy_instance_id),
                 "candidate_sha_ref": setup.approved_candidate_sha256[:12],
-                "live_eligible": False,
+                "live_eligible": readiness["live_eligible"],
                 "new_status": "PAPER_ELIGIBLE",
             },
         )
-    if setup.status != "PAPER_ELIGIBLE" or setup.blocking_reason is not None:
+    if (
+        setup.status not in C2_EXECUTABLE_STATUSES
+        and (setup.status != "PAPER_ELIGIBLE" or setup.blocking_reason is not None)
+    ):
         setup.status = "PAPER_ELIGIBLE"
         setup.blocking_reason = None
         changed = True
@@ -694,7 +809,18 @@ def _installation_public(
         "paper_eligible_at": (
             setup.paper_eligible_at.isoformat() if setup.paper_eligible_at else None
         ),
-        "live_eligible": False,
+        "paper_entry_verified_at": (
+            setup.paper_entry_verified_at.isoformat()
+            if setup.paper_entry_verified_at
+            else None
+        ),
+        "paper_exit_verified_at": (
+            setup.paper_exit_verified_at.isoformat()
+            if setup.paper_exit_verified_at
+            else None
+        ),
+        "live_eligible": readiness["live_eligible"],
+        "live_gates": readiness["live_gates"],
         "gates": readiness["gates"],
         "blocking_reasons": readiness["reasons"],
         "suspended_at": setup.suspended_at.isoformat() if setup.suspended_at else None,
@@ -728,6 +854,20 @@ def create_installation(
     try:
         with session_scope() as db:
             context = _approved_context(db, conversion_id, lock=True)
+            summary = (
+                context["conversion"].usage_summary
+                if isinstance(context["conversion"].usage_summary, dict)
+                else {}
+            )
+            if (
+                summary.get("workflow") == "NOVA_OWNER_CLAUDE"
+                and owner_user_id != context["conversion"].owner_user_id
+            ):
+                raise C2Error(
+                    "Owner-submitted conversions can only be installed for their originating owner.",
+                    409,
+                    "OWNER_BINDING_INVALID",
+                )
             compile_evidence = _compile_for(db, conversion_id, lock=True)
             if not _compile_matches(compile_evidence, context):
                 raise C2Error(
@@ -888,7 +1028,7 @@ def generate_credential(
                     409,
                     "CREDENTIAL_EXISTS",
                 )
-            credential, token = instances._issue_credential(  # noqa: SLF001
+            credential, token = instances._issue_credential(
                 db, instance
             )
             setup.current_credential_id = credential.id
@@ -952,7 +1092,7 @@ def rotate_credential(
         current.revoked_at = _now()
         current.revoked_reason = "c2_rotated"
         db.flush()
-        replacement, token = instances._issue_credential(db, instance)  # noqa: SLF001
+        replacement, token = instances._issue_credential(db, instance)
         current.replaced_by_id = replacement.id
         setup.current_credential_id = replacement.id
         setup.credential_revoked_at = None
@@ -1067,11 +1207,6 @@ def admin_promote_c2_to_paper_verification(admin_id, installation_id) -> dict[st
     provenance binding is preserved, and re-promoting is a safe no-op.
     """
     _require_enabled()
-    if settings.ENABLE_LIVE_ORDERS or settings.PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED:
-        raise C2Error(
-            "Live execution is enabled; promotion is refused for safety.",
-            409, "LIVE_EXECUTION_SAFETY_BLOCK",
-        )
     with session_scope() as db:
         setup = _get_setup(db, installation_id, lock=True)
         if setup.pine_conversion_request_id is None:
@@ -1096,8 +1231,9 @@ def admin_promote_c2_to_paper_verification(admin_id, installation_id) -> dict[st
             raise C2Error("Strategy instance not found.", 404, "INSTANCE_NOT_FOUND")
         if int(instance.current_lots or 0) < 1:
             raise C2Error("Set a valid lot count before promotion.", 409, "INVALID_LOTS")
-        # Graduate into controlled paper verification. paper_live_data + a live
-        # posture check make a real order impossible; the binding is untouched.
+        # Graduate into controlled paper verification. The instance-level
+        # paper_live_data mode makes a real order impossible even when other
+        # owners are allowed to use Live; the binding is untouched.
         instance.execution_mode = "paper_live_data"
         instance.verification_mode = True
         instance.verification_started_at = _now()
@@ -1126,6 +1262,12 @@ def admin_mark_c2_ready(admin_id, installation_id) -> dict[str, Any]:
             return _installation_public(db, setup, include_admin=True, include_source=True)
         if setup.status != "PAPER_VERIFICATION":
             raise C2Error("Only a strategy in Paper Verification can be marked Ready.", 409, "NOT_IN_VERIFICATION")
+        if setup.paper_entry_verified_at is None or setup.paper_exit_verified_at is None:
+            raise C2Error(
+                "Confirmed Paper entry and Paper exit evidence are required.",
+                409,
+                "PAPER_EXECUTION_EVIDENCE_REQUIRED",
+            )
         instance = db.get(models.StrategyInstance, setup.strategy_instance_id)
         if instance is None:
             raise C2Error("Strategy instance not found.", 404, "INSTANCE_NOT_FOUND")
@@ -1141,6 +1283,104 @@ def admin_mark_c2_ready(admin_id, installation_id) -> dict[str, Any]:
             "version_id": str(setup.approved_version_id),
         })
         return _installation_public(db, setup, include_admin=True, include_source=True)
+
+
+def record_paper_execution_evidence_from_job(
+    job_id: uuid.UUID | str,
+) -> dict[str, Any] | None:
+    """Record C2 verification evidence from one confirmed durable Paper job.
+
+    This is idempotent and never promotes the installation by itself. Admin
+    remains the final READY authority after both entry and full-exit evidence
+    have been observed.
+    """
+
+    with session_scope() as db:
+        job = db.get(models.StrategyExecutionJob, uuid.UUID(str(job_id)))
+        if (
+            job is None
+            or job.status != "completed"
+            or job.execution_mode != "paper_live_data"
+            or not str(job.strategy_name).startswith("instance:")
+        ):
+            return None
+        try:
+            instance_id = uuid.UUID(str(job.strategy_name).removeprefix("instance:"))
+        except ValueError:
+            return None
+        setup = db.scalar(
+            select(models.TradingViewSetup)
+            .where(
+                models.TradingViewSetup.strategy_instance_id == instance_id,
+                models.TradingViewSetup.pine_conversion_request_id.is_not(None),
+            )
+            .with_for_update()
+        )
+        if setup is None or setup.status != "PAPER_VERIFICATION":
+            return None
+        if setup.user_id != job.user_id:
+            raise C2Error(
+                "Paper verification job ownership is invalid.",
+                409,
+                "OWNER_BINDING_INVALID",
+            )
+        payload = job.signal_payload if isinstance(job.signal_payload, dict) else {}
+        action = str(payload.get("action") or "").upper()
+        result = job.result_summary if isinstance(job.result_summary, dict) else {}
+        execution = (
+            result.get("execution_result")
+            if isinstance(result.get("execution_result"), dict)
+            else {}
+        )
+        if result.get("status") != "completed" or not execution.get("success"):
+            return None
+        execution_status = str(execution.get("status") or "").upper()
+        now = _now()
+        kind: str | None = None
+        if action == "ENTRY" and execution_status in {
+            "ORDER_PLACED",
+            "PARTIAL_ENTRY_FILLED",
+            "REVERSAL_ORDER_PLACED",
+        }:
+            if setup.paper_entry_verified_at is None:
+                setup.paper_entry_signal_id = job.signal_id
+                setup.paper_entry_verified_at = now
+                kind = "PAPER_ENTRY"
+        elif (
+            action == "EXIT"
+            and execution_status == "ORDER_PLACED"
+            and setup.paper_exit_verified_at is None
+        ):
+            setup.paper_exit_signal_id = job.signal_id
+            setup.paper_exit_verified_at = now
+            kind = "PAPER_EXIT"
+        if kind is None:
+            return {
+                "recorded": False,
+                "installation_id": str(setup.id),
+                "paper_entry_verified": setup.paper_entry_verified_at is not None,
+                "paper_exit_verified": setup.paper_exit_verified_at is not None,
+            }
+        setup.updated_at = now
+        crud.add_audit_log(
+            db,
+            user_id=setup.user_id,
+            action="C2_PAPER_EXECUTION_EVIDENCE_RECORDED",
+            metadata={
+                "installation_id": str(setup.id),
+                "instance_id": str(instance_id),
+                "job_id": str(job.id),
+                "signal_id": job.signal_id,
+                "kind": kind,
+            },
+        )
+        return {
+            "recorded": True,
+            "kind": kind,
+            "installation_id": str(setup.id),
+            "paper_entry_verified": setup.paper_entry_verified_at is not None,
+            "paper_exit_verified": setup.paper_exit_verified_at is not None,
+        }
 
 
 def list_installations(

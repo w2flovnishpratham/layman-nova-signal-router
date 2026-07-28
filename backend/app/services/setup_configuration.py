@@ -9,7 +9,7 @@ The two halves of a configuration live in different stores:
 
 Saving them through two requests could leave a partially applied configuration.
 That is not fail-safe in either direction: a risk-only save can *loosen* limits
-(``max_daily_loss`` 10,000 -> 25,000, cooldown 30 -> 5) while the strategy half
+(``max_daily_loss`` 10,000 -> 25,000) while the strategy half
 never lands, and a strategy-only save can leave sizing that the old limits were
 never sized for.
 
@@ -61,6 +61,15 @@ class ConfigurationConflict(Exception):
         self.current = current
         self.code = code
         self.status_code = 409
+
+
+def configuration_mode_for_execution(execution_mode: str) -> str | None:
+    normalized = str(execution_mode or "").strip().lower()
+    if normalized == "real_orders":
+        return "live"
+    if normalized == "paper_live_data":
+        return "paper"
+    return None
 
 
 def _settings_revision(settings: dict[str, Any] | None = None) -> int:
@@ -322,6 +331,122 @@ def save_configuration(
     }
 
 
+def revise_automation_configuration(
+    user_id: uuid.UUID,
+    *,
+    configuration_id: uuid.UUID,
+    expected_revision: int,
+    changes: dict[str, Any],
+) -> dict[str, Any]:
+    """Create one immutable successor for one reviewed automation batch.
+
+    Runtime and position files are intentionally untouched. A running position
+    and already queued jobs therefore keep the revision they were created with.
+    """
+    if not changes:
+        raise ConfigurationConflict(
+            "No automation changes were supplied.",
+            expected=expected_revision,
+            current=expected_revision,
+            code="NO_CHANGES",
+        )
+    with session_scope() as db:
+        engine_config = db.scalar(
+            select(models.UserEngineConfig)
+            .where(models.UserEngineConfig.user_id == user_id)
+            .with_for_update()
+        )
+        if (
+            engine_config is None
+            or engine_config.selected_configuration_revision_id != configuration_id
+        ):
+            current = (
+                int(engine_config.selected_configuration_revision or 0)
+                if engine_config is not None
+                else 0
+            )
+            raise ConfigurationConflict(
+                "The selected configuration changed. Refresh before confirming.",
+                expected=expected_revision,
+                current=current,
+                code="SELECTION_CHANGED",
+            )
+        current_row = db.scalar(
+            select(models.StrategyConfigurationRevision)
+            .where(
+                models.StrategyConfigurationRevision.id == configuration_id,
+                models.StrategyConfigurationRevision.user_id == user_id,
+            )
+            .with_for_update()
+        )
+        if current_row is None:
+            raise ConfigurationConflict(
+                "The selected configuration is unavailable.",
+                expected=expected_revision,
+                current=0,
+                code="CONFIGURATION_UNAVAILABLE",
+            )
+        if (
+            current_row.status != "active"
+            or current_row.revision != expected_revision
+            or engine_config.selected_configuration_revision != expected_revision
+        ):
+            raise ConfigurationConflict(
+                "This configuration was changed elsewhere. Refresh before confirming.",
+                expected=expected_revision,
+                current=int(engine_config.selected_configuration_revision or 0),
+            )
+        highest_revision = db.scalar(
+            select(func.max(models.StrategyConfigurationRevision.revision)).where(
+                models.StrategyConfigurationRevision.user_id == user_id,
+                models.StrategyConfigurationRevision.strategy_instance_id
+                == current_row.strategy_instance_id,
+                models.StrategyConfigurationRevision.strategy_version_id
+                == current_row.strategy_version_id,
+                models.StrategyConfigurationRevision.mode == current_row.mode,
+            )
+        )
+        next_revision = max(
+            int(highest_revision or 0),
+            int(current_row.revision),
+        ) + 1
+        next_risk = deepcopy(current_row.risk_json or {})
+        next_risk.update(deepcopy(changes))
+        successor = models.StrategyConfigurationRevision(
+            user_id=user_id,
+            strategy_instance_id=current_row.strategy_instance_id,
+            strategy_version_id=current_row.strategy_version_id,
+            mode=current_row.mode,
+            revision=next_revision,
+            configuration_json=deepcopy(current_row.configuration_json or {}),
+            risk_json=next_risk,
+            status="active",
+            supersedes_revision_id=current_row.id,
+            committed_at=strategy_catalog_service._now(),
+        )
+        current_row.status = "superseded"
+        current_row.updated_at = strategy_catalog_service._now()
+        db.add(successor)
+        db.flush()
+        engine_config.selected_configuration_revision_id = successor.id
+        engine_config.selected_configuration_revision = successor.revision
+        engine_config.updated_at = strategy_catalog_service._now()
+        db.flush()
+        result = _serialize_revision(successor)
+
+    log_audit_event(
+        "AUTOMATION_CONFIGURATION_REVISED",
+        f"Automation settings confirmed as configuration revision {result['revision']}.",
+        metadata={
+            "configuration_revision_id": result["id"],
+            "configuration_revision": result["revision"],
+            "supersedes_revision_id": result["supersedes_revision_id"],
+            "changes": deepcopy(changes),
+        },
+    )
+    return result
+
+
 def _serialize_revision(row: models.StrategyConfigurationRevision) -> dict[str, Any]:
     return {
         "id": str(row.id),
@@ -340,15 +465,73 @@ def _serialize_revision(row: models.StrategyConfigurationRevision) -> dict[str, 
     }
 
 
+def selected_configuration_row(
+    db,
+    user_id: uuid.UUID,
+    mode: str | None = None,
+    *,
+    lock: bool = False,
+) -> models.StrategyConfigurationRevision | None:
+    """Return the owner's selected immutable revision inside the caller's transaction."""
+    statement = select(models.UserEngineConfig).where(
+        models.UserEngineConfig.user_id == user_id
+    )
+    if lock:
+        statement = statement.with_for_update()
+    engine_config = db.scalar(statement)
+    if engine_config is None or engine_config.selected_configuration_revision_id is None:
+        return None
+    row = db.get(
+        models.StrategyConfigurationRevision,
+        engine_config.selected_configuration_revision_id,
+    )
+    if (
+        row is None
+        or row.user_id != user_id
+        or row.status != "active"
+        or (mode is not None and row.mode != mode)
+    ):
+        return None
+    return row
+
+
+def configuration_for_instance_row(
+    db,
+    user_id: uuid.UUID,
+    strategy_instance_id: uuid.UUID,
+    mode: str,
+    *,
+    lock: bool = False,
+) -> models.StrategyConfigurationRevision | None:
+    """Return the active immutable revision owned by one strategy instance.
+
+    Private webhook credentials and legacy subscription fan-out are bound to a
+    concrete instance. They must capture that instance's revision rather than a
+    different strategy that happens to be selected in the Trading UI.
+    """
+    statement = (
+        select(models.StrategyConfigurationRevision)
+        .where(
+            models.StrategyConfigurationRevision.user_id == user_id,
+            models.StrategyConfigurationRevision.strategy_instance_id
+            == strategy_instance_id,
+            models.StrategyConfigurationRevision.mode == mode,
+            models.StrategyConfigurationRevision.status == "active",
+        )
+        .order_by(
+            models.StrategyConfigurationRevision.revision.desc(),
+            models.StrategyConfigurationRevision.committed_at.desc(),
+        )
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return db.scalar(statement)
+
+
 def selected_configuration(user_id: uuid.UUID, mode: str | None = None) -> dict[str, Any] | None:
     with session_scope() as db:
-        engine_config = db.scalar(
-            select(models.UserEngineConfig).where(models.UserEngineConfig.user_id == user_id)
-        )
-        if engine_config is None or engine_config.selected_configuration_revision_id is None:
-            return None
-        row = db.get(models.StrategyConfigurationRevision, engine_config.selected_configuration_revision_id)
-        if row is None or row.user_id != user_id or (mode is not None and row.mode != mode):
+        row = selected_configuration_row(db, user_id, mode)
+        if row is None:
             return None
         return _serialize_revision(row)
 
@@ -390,9 +573,13 @@ __all__ = [
     "ConfigurationConflict",
     "SettingsVersionMismatch",
     "committed_revision",
+    "configuration_for_instance_row",
+    "configuration_mode_for_execution",
     "current_revision",
     "get_configuration",
     "list_configurations",
+    "revise_automation_configuration",
     "save_configuration",
     "selected_configuration",
+    "selected_configuration_row",
 ]

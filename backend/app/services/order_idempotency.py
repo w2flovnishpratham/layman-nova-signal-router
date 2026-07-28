@@ -174,6 +174,49 @@ def mark_order_intent_submitted(
         row.updated_at = models.utcnow()
 
 
+def mark_order_intent_stage(
+    *,
+    user_id: uuid.UUID | str,
+    scope: str,
+    idempotency_key: str,
+    stage: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Persist reconciliation-visible stages for a non-atomic position operation."""
+    if not database_configured():
+        raise OrderIdempotencyUnavailable("Durable order idempotency store is unavailable.")
+    user_uuid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(str(user_id))
+    with session_scope() as db:
+        row = db.scalar(
+            select(models.LiveOrderIntent)
+            .where(
+                models.LiveOrderIntent.user_id == user_uuid,
+                models.LiveOrderIntent.scope == str(scope).strip().lower(),
+                models.LiveOrderIntent.idempotency_key == _normalize_key(idempotency_key),
+            )
+            .with_for_update()
+        )
+        if row is None:
+            raise OrderIdempotencyUnavailable("Durable position operation was not found.")
+        previous = dict(row.intent_metadata or {})
+        stages = list(previous.get("stages") or [])
+        stages.append(
+            {
+                "stage": str(stage),
+                "at": models.utcnow().isoformat(),
+                **(metadata or {}),
+            }
+        )
+        row.intent_metadata = {
+            **previous,
+            "operation_stage": str(stage),
+            "stages": stages[-20:],
+        }
+        if stage in {"FILL_CONFIRMED", "POSITION_APPLIED", "LEDGER_APPLIED"}:
+            row.status = "submitted"
+        row.updated_at = models.utcnow()
+
+
 def complete_order_intent(
     intent_id: str,
     *,

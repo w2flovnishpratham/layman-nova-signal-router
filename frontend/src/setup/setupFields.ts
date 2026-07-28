@@ -105,6 +105,7 @@ export function deriveSteps(args: {
   draft: SetupValues
   activeKey: string | null
   reviewing: boolean
+  savedComplete?: boolean
 }): SetupStep[] {
   const { draft, activeKey } = args
   const answered = (key: string) => draft[key] !== undefined && draft[key] !== null && draft[key] !== ''
@@ -117,17 +118,15 @@ export function deriveSteps(args: {
       status: args.mode ? 'done' : 'active',
       summary: args.mode === 'paper' ? 'Paper — simulated' : args.mode === 'live' ? 'Live — real orders' : 'Not chosen yet',
     },
-    {
+    ...(args.mode === 'live' ? [{
       id: 'broker',
       label: 'Broker readiness',
       keys: [],
-      status: args.mode === 'paper' || args.brokerConnected ? 'done' : 'pending',
-      summary: args.mode === 'paper'
-        ? 'Not required for Paper'
-        : args.brokerConnected
-          ? `Dhan ${args.brokerMasked ?? 'connected'}`
+      status: args.brokerConnected ? 'done' : 'pending',
+      summary: args.brokerConnected
+        ? `Dhan ${args.brokerMasked ?? 'connected'}`
           : 'Not connected — connect Dhan in Credentials',
-    },
+    } satisfies SetupStep] : []),
     {
       id: 'strategy',
       label: 'Strategy',
@@ -159,7 +158,7 @@ export function deriveSteps(args: {
   // Any schema field the groups don't know about still gets its own step, so a
   // new backend field can never go unasked or unshown.
   const grouped = new Set(GROUPS.flatMap((g) => g.keys))
-  for (const field of args.fields) {
+  for (const field of [] as StrategySetupField[]) {
     if (grouped.has(field.key)) continue
     const isActive = activeKey === field.key
     steps.push({
@@ -175,10 +174,10 @@ export function deriveSteps(args: {
 
   steps.push({
     id: 'review',
-    label: 'Review & arm',
+    label: 'Review & save',
     keys: [],
-    status: args.reviewing ? 'active' : 'pending',
-    summary: args.reviewing ? 'Ready to review' : 'Not started',
+    status: args.savedComplete ? 'done' : args.reviewing ? 'active' : 'pending',
+    summary: args.savedComplete ? 'Saved' : args.reviewing ? 'Ready to review' : 'Not started',
   })
   return steps
 }

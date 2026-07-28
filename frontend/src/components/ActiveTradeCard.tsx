@@ -14,6 +14,7 @@ import { TickingNumber } from './TickingNumber'
 import { MotionSpinner, softEase, useAppReducedMotion } from './MotionPrimitives'
 import type { ActiveExitLevels, ActiveTrade } from '../types'
 import { lotsForQuantity } from '../lib/trading'
+import { exitLotOptions } from './ActiveTradeCard.helpers'
 
 interface Props {
   trade: ActiveTrade
@@ -39,11 +40,16 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
   const [editingExitLevels, setEditingExitLevels] = useState(false)
   const [draftStopLoss, setDraftStopLoss] = useState('')
   const [draftTarget, setDraftTarget] = useState('')
+  const [exitLevelUnit, setExitLevelUnit] = useState<'PERCENTAGE' | 'POINTS' | 'ABSOLUTE_TRIGGER'>('ABSOLUTE_TRIGGER')
   const [savingExitLevels, setSavingExitLevels] = useState(false)
   const [exitLevelStatus, setExitLevelStatus] = useState('')
   const [savedExitLevels, setSavedExitLevels] = useState<ActiveExitLevels | null>(null)
   const [editingQuantity, setEditingQuantity] = useState(false)
   const [draftLots, setDraftLots] = useState('')
+  const [protectionMode, setProtectionMode] = useState<'KEEP_EXISTING' | 'RECALCULATE_FROM_AVERAGE' | 'CUSTOM'>('KEEP_EXISTING')
+  const [customStopLoss, setCustomStopLoss] = useState('')
+  const [customTarget, setCustomTarget] = useState('')
+  const [exitOptionsOpen, setExitOptionsOpen] = useState(false)
   const [savingQuantity, setSavingQuantity] = useState(false)
   const [positionOperation, setPositionOperation] = useState<'partial' | 'exit' | null>(null)
   const [quantityStatus, setQuantityStatus] = useState('')
@@ -73,6 +79,9 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
 
   function openQuantityEditor() {
     setDraftLots('1')
+    setProtectionMode(activeExitLevels ? 'KEEP_EXISTING' : 'RECALCULATE_FROM_AVERAGE')
+    setCustomStopLoss(activeExitLevels?.stopLossPrice?.toFixed(2) ?? '')
+    setCustomTarget(activeExitLevels?.targetPrice?.toFixed(2) ?? '')
     setQuantityStatus('')
     setEditingExitLevels(false)
     setEditingQuantity(true)
@@ -83,6 +92,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
     const target = activeExitLevels?.targetPrice ?? trade.ltp * 1.2
     setDraftStopLoss(stop.toFixed(2))
     setDraftTarget(target.toFixed(2))
+    setExitLevelUnit('ABSOLUTE_TRIGGER')
     setExitLevelStatus('')
     setEditingQuantity(false)
     setEditingExitLevels(true)
@@ -102,12 +112,29 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
     setSavingQuantity(true)
     setQuantityStatus('')
     try {
-      const response = await postActiveAddLots({ lots, expectedPositionVersion: positionVersion })
+      const customStop = Number(customStopLoss)
+      const customTp = Number(customTarget)
+      if (
+        protectionMode === 'CUSTOM'
+        && (!Number.isFinite(customStop) || customStop <= 0 || !Number.isFinite(customTp) || customTp <= 0)
+      ) {
+        setQuantityStatus('Custom protection requires valid positive SL and TP trigger prices.')
+        return
+      }
+      const response = await postActiveAddLots({
+        lots,
+        expectedPositionVersion: positionVersion,
+        protectionMode,
+        ...(protectionMode === 'CUSTOM'
+          ? { customStopLossPrice: customStop, customTargetPrice: customTp }
+          : {}),
+      })
       if (!response.ok) {
         setQuantityStatus(response.message || 'Could not update qty.')
         return
       }
       setSavedQty(response.qty ?? displayQty + (lots * lotSize))
+      if (response.activeExitLevels) setSavedExitLevels(response.activeExitLevels)
       if (response.positionVersion) setSavedPositionVersion(response.positionVersion)
       setEditingQuantity(false)
       setQuantityStatus(response.message || 'Lots added.')
@@ -120,18 +147,23 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
 
   async function saveExitLevels() {
     if (savingExitLevels) return
-    const stopLossPrice = Number(draftStopLoss)
-    const targetPrice = Number(draftTarget)
-    if (!Number.isFinite(stopLossPrice) || !Number.isFinite(targetPrice) || stopLossPrice <= 0 || targetPrice <= 0) {
+    const stopLossValue = Number(draftStopLoss)
+    const targetValue = Number(draftTarget)
+    if (!Number.isFinite(stopLossValue) || !Number.isFinite(targetValue) || stopLossValue <= 0 || targetValue <= 0) {
       setExitLevelStatus('Enter valid positive prices.')
+      return
+    }
+    if (!positionVersion) {
+      setExitLevelStatus('Position version is unavailable. Refresh before editing SL/TP.')
       return
     }
     setSavingExitLevels(true)
     setExitLevelStatus('')
     try {
       const response = await patchActiveExitLevels({
-        stopLossPrice,
-        targetPrice,
+        unit: exitLevelUnit,
+        stopLossValue,
+        targetValue,
         expectedPositionVersion: positionVersion,
       })
       if (!response.ok) {
@@ -149,7 +181,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
     }
   }
 
-  async function runPositionOperation(operation: 'partial' | 'exit') {
+  async function runPositionOperation(operation: 'partial' | 'exit', exitLots?: number) {
     if (positionOperation || savingQuantity || savingExitLevels) return
     if (!positionVersion) {
       setQuantityStatus('Position version is unavailable. Refresh before changing exposure.')
@@ -159,12 +191,12 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
     setQuantityStatus('')
     try {
       if (operation === 'partial') {
-        if (displayLots < 2) {
+        if (!exitLots || exitLots >= displayLots) {
           setQuantityStatus('Partial exit must leave at least one whole lot open.')
           return
         }
         const response = await postActivePartialExit({
-          percentage: 50,
+          lots: exitLots,
           expectedPositionVersion: positionVersion,
         })
         if (!response.ok) {
@@ -173,9 +205,11 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
         }
         if (response.qty) setSavedQty(response.qty)
         if (response.positionVersion) setSavedPositionVersion(response.positionVersion)
+        setExitOptionsOpen(false)
         setQuantityStatus(response.message || 'Partial exit completed.')
       } else {
         const response = await postManualExit()
+        setExitOptionsOpen(false)
         setQuantityStatus(response.message || (response.ok ? 'Exit completed.' : 'Exit could not be completed.'))
       }
     } catch (error) {
@@ -250,28 +284,55 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
             type="button"
             onClick={openQuantityEditor}
             disabled={!sizingOperationsAvailable || Boolean(positionOperation)}
-            title={sizingOperationsAvailable ? undefined : 'Adding lots is unavailable for Live positions'}
+            title={sizingOperationsAvailable ? undefined : 'Unavailable until broker verification'}
           >
-            Add Lots
+            {sizingOperationsAvailable ? 'Add Lots' : 'Unavailable until broker verification'}
           </button>
           <button
             type="button"
-            onClick={() => void runPositionOperation('partial')}
-            disabled={!sizingOperationsAvailable || displayLots < 2 || Boolean(positionOperation)}
-            title={sizingOperationsAvailable ? undefined : 'Partial exit is unavailable for Live positions'}
-          >
-            {positionOperation === 'partial' ? 'Exiting…' : 'Partial Exit'}
-          </button>
-          <button type="button" onClick={openExitLevelEditor} disabled={Boolean(positionOperation)}>Edit Current SL/TP</button>
-          <button
-            type="button"
-            className="is-danger"
-            onClick={() => void runPositionOperation('exit')}
+            onClick={() => setExitOptionsOpen((current) => !current)}
             disabled={Boolean(positionOperation)}
           >
-            {positionOperation === 'exit' ? 'Exiting…' : 'Exit Position'}
+            {positionOperation ? 'Exiting…' : 'Exit / Reduce'}
           </button>
+          <button type="button" onClick={openExitLevelEditor} disabled={Boolean(positionOperation)}>Edit Current SL/TP</button>
         </div>
+
+        <AnimatePresence initial={false}>
+          {exitOptionsOpen ? (
+            <motion.div
+              className="trade-edit-panel exit-lot-options"
+              aria-label="Exit quantity options"
+              initial={{ height: 0, opacity: 0, y: -4 }}
+              animate={{ height: 'auto', opacity: 1, y: 0 }}
+              exit={{ height: 0, opacity: 0, y: -4 }}
+              transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: softEase }}
+            >
+              {exitLotOptions(displayLots).map((option) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  className={option.lots === null ? 'is-danger' : undefined}
+                  disabled={
+                    Boolean(positionOperation)
+                    || (option.lots !== null && !sizingOperationsAvailable)
+                  }
+                  title={
+                    option.lots !== null && !sizingOperationsAvailable
+                      ? 'Unavailable until broker verification'
+                      : undefined
+                  }
+                  onClick={() => void runPositionOperation(
+                    option.lots === null ? 'exit' : 'partial',
+                    option.lots ?? undefined,
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
 
         <AnimatePresence initial={false}>
           {editingQuantity ? (
@@ -294,6 +355,47 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
                   aria-label="Additional lot count"
                 />
               </label>
+              <label>
+                <span>Protection after fill</span>
+                <select
+                  value={protectionMode}
+                  disabled={savingQuantity}
+                  onChange={(event) => setProtectionMode(event.target.value as typeof protectionMode)}
+                  aria-label="Protection after adding lots"
+                >
+                  <option value="KEEP_EXISTING">Keep existing trigger prices</option>
+                  <option value="RECALCULATE_FROM_AVERAGE">Recalculate from new average</option>
+                  <option value="CUSTOM">Custom SL/TP</option>
+                </select>
+              </label>
+              {protectionMode === 'CUSTOM' ? (
+                <>
+                  <label>
+                    <span>Custom SL</span>
+                    <input
+                      type="number"
+                      min="0.05"
+                      step="0.05"
+                      value={customStopLoss}
+                      disabled={savingQuantity}
+                      onChange={(event) => setCustomStopLoss(event.target.value)}
+                      aria-label="Custom stop loss after adding lots"
+                    />
+                  </label>
+                  <label>
+                    <span>Custom TP</span>
+                    <input
+                      type="number"
+                      min="0.05"
+                      step="0.05"
+                      value={customTarget}
+                      disabled={savingQuantity}
+                      onChange={(event) => setCustomTarget(event.target.value)}
+                      aria-label="Custom target after adding lots"
+                    />
+                  </label>
+                </>
+              ) : null}
               <button type="button" onClick={() => void saveQuantity()} disabled={savingQuantity}>
                 {savingQuantity ? <MotionSpinner><Loader2 size={13} /></MotionSpinner> : <Check size={13} />}
               </button>
@@ -315,7 +417,20 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
               transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: softEase }}
             >
               <label>
-                <span>SL</span>
+                <span>Unit</span>
+                <select
+                  value={exitLevelUnit}
+                  disabled={savingExitLevels}
+                  onChange={(event) => setExitLevelUnit(event.target.value as typeof exitLevelUnit)}
+                  aria-label="SL/TP unit"
+                >
+                  <option value="PERCENTAGE">Percentage</option>
+                  <option value="POINTS">Points</option>
+                  <option value="ABSOLUTE_TRIGGER">Absolute Trigger</option>
+                </select>
+              </label>
+              <label>
+                <span>SL value</span>
                 <input
                   type="number"
                   min="0.05"
@@ -323,11 +438,11 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
                   value={draftStopLoss}
                   disabled={savingExitLevels}
                   onChange={(event) => setDraftStopLoss(event.target.value)}
-                  aria-label="Stop loss price"
+                  aria-label="Stop loss value"
                 />
               </label>
               <label>
-                <span>TP</span>
+                <span>TP value</span>
                 <input
                   type="number"
                   min="0.05"
@@ -335,7 +450,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
                   value={draftTarget}
                   disabled={savingExitLevels}
                   onChange={(event) => setDraftTarget(event.target.value)}
-                  aria-label="Target price"
+                  aria-label="Target value"
                 />
               </label>
               <button type="button" onClick={() => void saveExitLevels()} disabled={savingExitLevels}>

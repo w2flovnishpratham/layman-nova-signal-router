@@ -9,10 +9,8 @@ from app.services.state_store import (
     _LOCK,
     PAPER_PORTFOLIO_FILE,
     get_runtime_settings,
-    record_losing_exit,
     utc_now,
 )
-
 
 _IST = ZoneInfo("Asia/Kolkata")
 
@@ -55,7 +53,59 @@ def _write(portfolio: PaperPortfolio) -> PaperPortfolio:
 
     portfolio.last_checked_at = utc_now()
     _atomic_write_json(PAPER_PORTFOLIO_FILE, asdict(portfolio))
+    _persist_snapshot_best_effort(portfolio)
     return portfolio
+
+
+def _persist_snapshot_best_effort(
+    portfolio: PaperPortfolio,
+    *,
+    audit_action: str | None = None,
+) -> None:
+    """Retain owner-scoped Paper equity history without changing JSON authority."""
+    try:
+        from app.db import crud, models
+        from app.db.engine import database_configured, session_scope
+        from app.services.execution_context import current_execution_user
+
+        if not database_configured():
+            return
+        user = current_execution_user()
+        if user is None or user.is_dev:
+            return
+        equity = round(
+            float(portfolio.available_balance) + float(portfolio.utilized_amount),
+            2,
+        )
+        with session_scope() as db:
+            db.add(
+                models.PortfolioSnapshot(
+                    user_id=user.id,
+                    mode="paper",
+                    starting_balance=float(portfolio.starting_balance),
+                    available_balance=float(portfolio.available_balance),
+                    utilized_amount=float(portfolio.utilized_amount),
+                    equity=equity,
+                    realized_pnl=float(portfolio.realized_pnl),
+                    trade_count=len(portfolio.closed_trades),
+                )
+            )
+            if audit_action:
+                crud.add_audit_log(
+                    db,
+                    user_id=user.id,
+                    action=audit_action,
+                    metadata={
+                        "mode": "paper",
+                        "starting_balance": float(portfolio.starting_balance),
+                        "session_start_date_ist": portfolio.session_start_date_ist,
+                    },
+                )
+    except Exception:  # noqa: BLE001 - reporting projection cannot break execution authority
+        # The JSON paper portfolio remains the execution authority. Snapshot
+        # persistence is a reporting projection and must never corrupt or
+        # duplicate an otherwise-confirmed simulated fill.
+        return
 
 
 def get_paper_portfolio() -> PaperPortfolio:
@@ -75,14 +125,18 @@ def get_paper_portfolio() -> PaperPortfolio:
 
 def reset_paper_portfolio(starting_balance: float | None = None) -> PaperPortfolio:
     balance = max(float(starting_balance if starting_balance is not None else _default_balance()), 0.0)
-    return _write(
-        PaperPortfolio(
-            starting_balance=balance,
-            available_balance=balance,
-            session_start_balance=balance,
-            session_start_date_ist=_today(),
-        )
+    portfolio = PaperPortfolio(
+        starting_balance=balance,
+        available_balance=balance,
+        session_start_balance=balance,
+        session_start_date_ist=_today(),
     )
+    portfolio.last_checked_at = utc_now()
+    from app.services.state_store import _atomic_write_json
+
+    _atomic_write_json(PAPER_PORTFOLIO_FILE, asdict(portfolio))
+    _persist_snapshot_best_effort(portfolio, audit_action="PAPER_PORTFOLIO_RESET")
+    return portfolio
 
 
 def apply_paper_entry(*, qty: int, price: float, charges: float, symbol: str, order_id: str) -> PaperPortfolio:
@@ -255,7 +309,6 @@ def apply_paper_partial_exit(
         )
         portfolio.open_trade = trade
         written = _write(portfolio)
-    record_losing_exit(realized)
     return written
 
 
@@ -306,9 +359,6 @@ def apply_paper_exit(*, qty: int, exit_price: float, charges: float, symbol: str
         )[-200:]
         portfolio.open_trade = None
         written = _write(portfolio)
-    # Outside the portfolio lock: the cooldown stamp lives in a different file,
-    # and failing to record it must never roll back an exit that was booked.
-    record_losing_exit(realized)
     return written
 
 

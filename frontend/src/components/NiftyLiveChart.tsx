@@ -12,13 +12,18 @@ import {
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
-import { getNiftyCandles, getNiftyMarkers, type NiftyCandle, type NiftyCandleSeries, type NiftyTradeMarker } from '../api'
+import {
+  getNiftyCandles,
+  getNiftyMarkers,
+  type ChartTimeframe,
+  type NiftyCandle,
+  type NiftyCandleSeries,
+  type NiftyTradeMarker,
+} from '../api'
 import { useSessionStore } from '../state/sessionStore'
 import type { EngineMode } from '../types'
 import {
-  applyLiveTick,
   chartConnectionLabel,
-  FIVE_MINUTE_SECONDS,
   markerCandleIndex,
   markerStyle,
   sameCandles,
@@ -27,6 +32,11 @@ import {
 
 const CANDLE_POLL_MS = 20_000
 const MARKER_POLL_MS = 12_000
+const CHART_TIMEFRAMES: ChartTimeframe[] = ['1m', '5m', '15m']
+
+function supportedTimeframe(value: string | null | undefined): ChartTimeframe {
+  return value === '1m' || value === '15m' ? value : '5m'
+}
 
 function istTime(epoch: number): string {
   return new Date(epoch * 1000).toLocaleTimeString('en-IN', {
@@ -46,7 +56,14 @@ function toBar(candle: NiftyCandle) {
   }
 }
 
-export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }) {
+export function NiftyLiveChart({
+  engineMode,
+  defaultTimeframe,
+}: {
+  engineMode: EngineMode | null
+  defaultTimeframe?: string | null
+}) {
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>(() => supportedTimeframe(defaultTimeframe))
   const [series, setSeries] = useState<NiftyCandleSeries | null>(null)
   const [markers, setMarkers] = useState<NiftyTradeMarker[]>([])
   const [loadFailed, setLoadFailed] = useState(false)
@@ -59,7 +76,6 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
-  const lastTickEpochRef = useRef<number | null>(null)
   const candlesRef = useRef<NiftyCandle[]>([])
   const [containerReady, setContainerReady] = useState(false)
 
@@ -72,7 +88,7 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
       if (document.hidden || candleRequest) return
       candleRequest = new AbortController()
       try {
-        const next = await getNiftyCandles(candleRequest.signal)
+        const next = await getNiftyCandles(timeframe, candleRequest.signal)
         if (cancelled) return
         if (next.trading_date && tradingDateRef.current && next.trading_date !== tradingDateRef.current) setMarkers([])
         tradingDateRef.current = next.trading_date ?? tradingDateRef.current
@@ -115,7 +131,7 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
       window.clearInterval(candleTimer)
       window.clearInterval(markerTimer)
     }
-  }, [engineMode])
+  }, [engineMode, timeframe])
 
   const candles = useMemo(() => (series ? sessionOnly(series) : []), [series])
   const hasCandles = candles.length > 0
@@ -194,7 +210,6 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
       seriesRef.current = null
       chartRef.current = null
       candlesRef.current = []
-      lastTickEpochRef.current = null
       chart.remove()
     }
   }, [containerReady, hasCandles])
@@ -202,42 +217,13 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
   useEffect(() => {
     const candleSeries = seriesRef.current
     if (!candleSeries || candles.length === 0) return
-    let merged = candles
     const previous = candlesRef.current
-    const forming = previous[previous.length - 1]
-    const lastServer = candles[candles.length - 1]
-    if (forming && forming.time > lastServer.time && forming.time - lastServer.time <= 2 * FIVE_MINUTE_SECONDS) {
-      merged = [...candles, forming]
-    } else if (forming?.time === lastServer.time && snapshot?.marketStatus === 'open' && wsStatus === 'live' && snapshot.atm?.marketfeed?.connected) {
-      merged = [...candles.slice(0, -1), {
-        ...lastServer,
-        high: Math.max(lastServer.high, forming.high),
-        low: Math.min(lastServer.low, forming.low),
-        close: forming.close,
-      }]
-    }
-    if (sameCandles(previous, merged)) return
-    candlesRef.current = [...merged]
-    candleSeries.setData(merged.map(toBar))
+    if (sameCandles(previous, candles)) return
+    candlesRef.current = [...candles]
+    candleSeries.setData(candles.map(toBar))
     if (previous.length === 0) chartRef.current?.timeScale().fitContent()
-    else if (merged[merged.length - 1].time > previous[previous.length - 1].time) chartRef.current?.timeScale().scrollToRealTime()
-  }, [candles, containerReady, hasCandles, snapshot?.atm?.marketfeed?.connected, snapshot?.marketStatus, wsStatus])
-
-  useEffect(() => {
-    const candleSeries = seriesRef.current
-    const spot = snapshot?.niftySpot
-    const tickReceivedAt = snapshot?.atm?.niftySpotReceivedAt
-    if (!candleSeries || spot == null || snapshot?.marketStatus !== 'open' || !tickReceivedAt) return
-    const parsed = Date.parse(tickReceivedAt)
-    if (!Number.isFinite(parsed)) return
-    const tickEpoch = Math.floor(parsed / 1000)
-    const update = applyLiveTick(candlesRef.current, spot, tickEpoch, lastTickEpochRef.current)
-    if (!update) return
-    lastTickEpochRef.current = tickEpoch
-    candlesRef.current = update.candles
-    candleSeries.update(toBar(update.candle))
-    if (update.appended) chartRef.current?.timeScale().scrollToRealTime()
-  }, [snapshot, hasCandles])
+    else if (candles[candles.length - 1].time > previous[previous.length - 1].time) chartRef.current?.timeScale().scrollToRealTime()
+  }, [candles, containerReady, hasCandles])
 
   useEffect(() => {
     const plugin = markersPluginRef.current
@@ -245,7 +231,11 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
     const visibleCandles = candlesRef.current
     const placed = markers
       .map((marker): SeriesMarker<Time> | null => {
-        const index = markerCandleIndex(visibleCandles, marker.time)
+        const index = markerCandleIndex(
+          visibleCandles,
+          marker.time,
+          supportedTimeframe(series?.interval),
+        )
         if (index === null) return null
         const style = markerStyle(marker)
         const fill = [marker.contract, marker.execution_price != null ? `₹${marker.execution_price.toFixed(2)}` : null].filter(Boolean).join(' @ ')
@@ -259,7 +249,7 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
       .filter((marker): marker is SeriesMarker<Time> => marker !== null)
       .sort((left, right) => (left.time as number) - (right.time as number))
     plugin.setMarkers(placed)
-  }, [markers, candles, containerReady, hasCandles])
+  }, [markers, candles, containerReady, hasCandles, series?.interval])
 
   const tickReceivedAt = snapshot?.atm?.niftySpotReceivedAt
   const lastPrice = (tickReceivedAt ? snapshot?.niftySpot : null) ?? (hasCandles ? candles[candles.length - 1].close : null)
@@ -277,7 +267,20 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
   const connectionClass = connectionLabel.toLowerCase().replaceAll(' ', '-')
   const header = (
     <div className="nifty-chart-header">
-      <span className="nifty-chart-title"><Activity size={14} />NIFTY 50 · 5m</span>
+      <span className="nifty-chart-title"><Activity size={14} />NIFTY 50 · {series?.interval ?? timeframe}</span>
+      <div className="nifty-chart-timeframes" role="group" aria-label="Chart timeframe">
+        {CHART_TIMEFRAMES.map((value) => (
+          <button
+            key={value}
+            type="button"
+            className={timeframe === value ? 'is-active' : ''}
+            aria-pressed={timeframe === value}
+            onClick={() => setTimeframe(value)}
+          >
+            {value}
+          </button>
+        ))}
+      </div>
       <span className="nifty-chart-meta">
         {lastPrice != null ? <strong>{lastPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong> : null}
         {lastPrice != null ? ' · ' : null}
@@ -287,15 +290,15 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
     </div>
   )
 
-  if (!series && !loadFailed) return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">Loading NIFTY 5m chart...</div></section>
-  if (loadFailed || !series || series.status === 'unavailable') return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">Market data unavailable</div></section>
-  if (!hasCandles) return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">No NIFTY 5m candles available for today yet.</div></section>
+  if (!series && !loadFailed) return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">Loading authoritative NIFTY {timeframe} candles…</div></section>
+  if (loadFailed || !series || series.status === 'unavailable') return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">{series?.message ?? `Authoritative NIFTY ${timeframe} candles unavailable.`}</div></section>
+  if (!hasCandles) return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">No NIFTY {timeframe} candles available for this session.</div></section>
 
   return (
     <section className="nifty-chart-card">
       {header}
       {series.market_state === 'closed' ? <p className="nifty-chart-note">Market closed - showing today's latest candles.</p> : null}
-      <div ref={containerRef} className="nifty-chart-canvas nova-live-chart" role="img" aria-label="NIFTY 5 minute candlestick chart" />
+      <div ref={containerRef} className="nifty-chart-canvas nova-live-chart" role="img" aria-label={`NIFTY ${series.interval} candlestick chart`} />
     </section>
   )
 }

@@ -208,7 +208,7 @@ def _cache_key(
 def _create_exact_version(
     db,
     *,
-    admin_id: uuid.UUID,
+    owner_id: uuid.UUID,
     strategy: models.StrategyCatalog,
     source: str,
     filename: str,
@@ -234,7 +234,7 @@ def _create_exact_version(
         changelog=changelog,
         source_sha256=digest,
         pine_contract_version=pine.CONTRACT_VERSION,
-        created_by_user_id=admin_id,
+        created_by_user_id=owner_id,
     )
     db.add(version)
     db.flush()
@@ -243,7 +243,7 @@ def _create_exact_version(
         artifact_type=pine.PINE_ARTIFACT,
         content=source,
         content_sha256=digest,
-        submitted_by_user_id=admin_id,
+        submitted_by_user_id=owner_id,
         conversion_method=conversion_method,
         original_filename=filename[:120],
     ))
@@ -253,7 +253,7 @@ def _create_exact_version(
             artifact_type=STRATEGY_LAYER_ARTIFACT,
             content=strategy_layer,
             content_sha256=_hash(strategy_layer),
-            submitted_by_user_id=admin_id,
+            submitted_by_user_id=owner_id,
             conversion_method=conversion_method,
             original_filename="nova-strategy-layer.pine",
         ))
@@ -298,7 +298,7 @@ def submit(admin_id: uuid.UUID, payload: AdminPineSubmission) -> dict[str, Any]:
         db.flush()
         version = _create_exact_version(
             db,
-            admin_id=admin_id,
+            owner_id=admin_id,
             strategy=strategy,
             source=payload.source,
             filename=payload.original_filename,
@@ -363,15 +363,200 @@ def submit(admin_id: uuid.UUID, payload: AdminPineSubmission) -> dict[str, Any]:
         return {"conversion": _public(db, row, include_source=False)}
 
 
-def _owned(db, admin_id: uuid.UUID, conversion_id: uuid.UUID | str, *, lock: bool = False):
+def submit_owner_source(
+    owner_id: uuid.UUID,
+    strategy_id: uuid.UUID | str,
+    version_id: uuid.UUID | str,
+    options_payload,
+) -> dict[str, Any]:
+    """Bind the real C1 Claude workflow to an existing user-owned source.
+
+    This creates conversion evidence only. Admin review, TradingView compile
+    evidence, installation, HOLD verification and Paper verification remain
+    separate durable transitions.
+    """
+    if not settings.CLAUDE_CONVERSION_ENABLED:
+        raise AdminConversionError(
+            "Claude Pine conversion is not enabled.", 503, "AI_DISABLED"
+        )
+    if not settings.ANTHROPIC_API_KEY or not settings.CLAUDE_CONVERSION_MODEL:
+        raise AdminConversionError(
+            "Claude Pine conversion is not configured.",
+            503,
+            "PROVIDER_NOT_CONFIGURED",
+        )
+    options = options_payload.model_dump(mode="json")
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", options["intended_symbol"]):
+        raise AdminConversionError("Intended symbol is invalid.", 422, "INVALID_OPTION")
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", options["intended_timeframe"]):
+        raise AdminConversionError("Intended timeframe is invalid.", 422, "INVALID_OPTION")
+    prompt, prompt_sha, _, transport_sha = _prompt_material()
+    del prompt
+    registry = load_registry()
+    with session_scope() as db:
+        db.scalar(select(models.User).where(models.User.id == owner_id).with_for_update())
+        strategy, version = pine._owned_version(
+            db, owner_id, uuid.UUID(str(strategy_id)), uuid.UUID(str(version_id))
+        )
+        artifact = pine._artifact(db, version.id)
+        encoded, source_sha256 = _validate_exact_source(
+            artifact.content, artifact.original_filename or "strategy.pine"
+        )
+        if source_sha256 != artifact.content_sha256 or source_sha256 != version.source_sha256:
+            raise AdminConversionError(
+                "Submitted source integrity changed.", 409, SOURCE_INTEGRITY_CODE
+            )
+        analysis_result = pine_semantic_preanalyzer.analyze_source(artifact.content)
+        if analysis_result.source_sha256 != source_sha256:
+            raise AdminConversionError(
+                "Source analysis binding failed.", 500, "SOURCE_BINDING_FAILED"
+            )
+        analysis = _analysis_public(analysis_result)
+        options_sha = _json_hash(options)
+        cache_key = _cache_key(
+            source_sha256=source_sha256,
+            options=options,
+            prompt_sha256=prompt_sha,
+            registry_version=registry.registry_version,
+            registry_sha256=registry.sha256,
+            model=settings.CLAUDE_CONVERSION_MODEL,
+            transport_sha256=transport_sha,
+        )
+        identity = _json_hash({
+            "workflow": "NOVA_OWNER_CLAUDE",
+            "owner": str(owner_id),
+            "strategy_id": str(strategy.id),
+            "version_id": str(version.id),
+            "cache_key": cache_key,
+        })
+        existing = db.scalar(
+            select(models.PineConversionRequest)
+            .where(
+                models.PineConversionRequest.identity_sha256 == identity,
+                models.PineConversionRequest.provider == PROVIDER,
+                models.PineConversionRequest.status.not_in(
+                    {"rejected", "unsupported_strategy"}
+                ),
+            )
+            .order_by(models.PineConversionRequest.attempt.desc())
+        )
+        if existing is not None:
+            return {
+                "conversion": _public(db, existing, include_source=True),
+                "reused": True,
+            }
+        today = _now().replace(hour=0, minute=0, second=0, microsecond=0)
+        daily = db.scalar(
+            select(func.count(models.PineConversionRequest.id)).where(
+                models.PineConversionRequest.owner_user_id == owner_id,
+                models.PineConversionRequest.provider == PROVIDER,
+                models.PineConversionRequest.created_at >= today,
+            )
+        ) or 0
+        if daily >= max(1, int(settings.PINE_CONVERSION_MAX_DAILY_REQUESTS_PER_USER)):
+            raise AdminConversionError(
+                "Daily Pine conversion limit reached.", 429, "DAILY_LIMIT"
+            )
+        row = models.PineConversionRequest(
+            owner_user_id=owner_id,
+            strategy_id=strategy.id,
+            input_version_id=version.id,
+            input_source_sha256=source_sha256,
+            contract_version=pine.CONTRACT_VERSION,
+            prompt_version="v3.1",
+            provider=PROVIDER,
+            model=settings.CLAUDE_CONVERSION_MODEL or "not-configured",
+            options=options,
+            options_sha256=options_sha,
+            identity_sha256=identity,
+            consent_at=_now(),
+            status=(
+                "unsupported_strategy"
+                if _blocked(analysis_result)
+                else "ready_for_conversion"
+            ),
+            max_attempts=1,
+            usage_summary={
+                "workflow": "NOVA_OWNER_CLAUDE",
+                "analysis_status": (
+                    "UNSUPPORTED_STRATEGY" if _blocked(analysis_result) else "ANALYZED"
+                ),
+                "analysis": analysis,
+                "provider_mode": None,
+                "validation_status": "NOT_RUN",
+                "review_status": "PENDING",
+                "provenance": {
+                    "source_sha256": source_sha256,
+                    "prompt_version": "v3.1",
+                    "prompt_sha256": prompt_sha,
+                    "registry_version": registry.registry_version,
+                    "registry_sha256": registry.sha256,
+                    "model": settings.CLAUDE_CONVERSION_MODEL or "not-configured",
+                    "response_schema_version": RESPONSE_SCHEMA_VERSION,
+                    "options_sha256": options_sha,
+                    "transport_version": base_conversion.TRANSPORT_V2_VERSION,
+                    "transport_sha256": transport_sha,
+                    "cache_key": cache_key,
+                    "cache_status": "MISS",
+                    "repair_count": 0,
+                    "structured_output_valid": False,
+                },
+            },
+        )
+        db.add(row)
+        db.flush()
+        crud.add_audit_log(
+            db,
+            user_id=owner_id,
+            action="OWNER_CLAUDE_PINE_CONVERSION_REQUESTED",
+            metadata={
+                "conversion_id": str(row.id),
+                "strategy_id": str(strategy.id),
+                "version_id": str(version.id),
+                "source_sha256": source_sha256,
+                "source_bytes": len(encoded),
+                "requested_setup_type": options["requested_setup_type"],
+            },
+        )
+        return {
+            "conversion": _public(db, row, include_source=True),
+            "reused": False,
+        }
+
+
+def _owned(
+    db,
+    admin_id: uuid.UUID,
+    conversion_id: uuid.UUID | str,
+    *,
+    lock: bool = False,
+):
+    """Load a C1 conversion for an already-authorized admin actor."""
+    del admin_id
     query = select(models.PineConversionRequest).where(
         models.PineConversionRequest.id == uuid.UUID(str(conversion_id)),
-        models.PineConversionRequest.owner_user_id == admin_id,
         models.PineConversionRequest.provider == PROVIDER,
     )
     row = db.scalar(query.with_for_update() if lock else query)
     if row is None:
         raise AdminConversionError("Admin Pine conversion not found.", 404, "NOT_FOUND")
+    return row
+
+
+def _owner_conversion(
+    db,
+    owner_id: uuid.UUID,
+    conversion_id: uuid.UUID | str,
+):
+    row = db.scalar(
+        select(models.PineConversionRequest).where(
+            models.PineConversionRequest.id == uuid.UUID(str(conversion_id)),
+            models.PineConversionRequest.owner_user_id == owner_id,
+            models.PineConversionRequest.provider == PROVIDER,
+        )
+    )
+    if row is None:
+        raise AdminConversionError("Pine conversion not found.", 404, "NOT_FOUND")
     return row
 
 
@@ -467,6 +652,7 @@ def _public(db, row: models.PineConversionRequest, *, include_source: bool) -> d
     report = db.get(models.StrategyValidationReport, row.validation_report_id) if row.validation_report_id else None
     result: dict[str, Any] = {
         "id": str(row.id),
+        "owner_user_id": str(row.owner_user_id),
         "strategy_id": str(row.strategy_id),
         "strategy_name": strategy.display_name if strategy else "Unknown",
         "input_version_id": str(row.input_version_id),
@@ -510,10 +696,10 @@ def _public(db, row: models.PineConversionRequest, *, include_source: bool) -> d
 
 
 def list_conversions(admin_id: uuid.UUID, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    del admin_id
     limit, offset = max(1, min(int(limit), 100)), max(0, int(offset))
     with session_scope() as db:
         query = select(models.PineConversionRequest).where(
-            models.PineConversionRequest.owner_user_id == admin_id,
             models.PineConversionRequest.provider == PROVIDER,
         )
         total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
@@ -531,6 +717,48 @@ def get_conversion(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[
             metadata={"conversion_id": str(row.id), "source_sha256": row.input_source_sha256},
         )
         return {"conversion": _public(db, row, include_source=True)}
+
+
+def list_owner_conversions(
+    owner_id: uuid.UUID, *, limit: int = 50, offset: int = 0
+) -> dict[str, Any]:
+    limit, offset = max(1, min(int(limit), 100)), max(0, int(offset))
+    with session_scope() as db:
+        query = select(models.PineConversionRequest).where(
+            models.PineConversionRequest.owner_user_id == owner_id,
+            models.PineConversionRequest.provider == PROVIDER,
+        )
+        total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+        rows = db.scalars(
+            query.order_by(models.PineConversionRequest.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        ).all()
+        return {
+            "conversions": [
+                _public(db, row, include_source=False) for row in rows
+            ],
+            "total": total,
+        }
+
+
+def get_owner_conversion(
+    owner_id: uuid.UUID, conversion_id: uuid.UUID | str
+) -> dict[str, Any]:
+    with session_scope() as db:
+        row = _owner_conversion(db, owner_id, conversion_id)
+        return {"conversion": _public(db, row, include_source=True)}
+
+
+def convert_owner_request(
+    owner_id: uuid.UUID, conversion_id: uuid.UUID | str
+) -> dict[str, Any]:
+    with session_scope() as db:
+        row = _owner_conversion(db, owner_id, conversion_id)
+        summary = row.usage_summary if isinstance(row.usage_summary, dict) else {}
+        if summary.get("workflow") != "NOVA_OWNER_CLAUDE":
+            raise AdminConversionError("Pine conversion not found.", 404, "NOT_FOUND")
+    return convert(owner_id, conversion_id)
 
 
 def _relevant_policies(matched: list[str]) -> list[dict[str, Any]]:
@@ -591,14 +819,14 @@ CANONICAL REVIEWED V3.1 CONVERSION PACKAGE
     )
 
 
-def _quota_check(db, admin_id: uuid.UUID) -> None:
+def _quota_check(db, owner_id: uuid.UUID) -> None:
     today = _now().replace(hour=0, minute=0, second=0, microsecond=0)
     base = (
         models.PineConversionRequest.provider == PROVIDER,
         models.PineConversionRequest.started_at >= today,
     )
     admin_count = db.scalar(select(func.count(models.PineConversionRequest.id)).where(
-        *base, models.PineConversionRequest.owner_user_id == admin_id
+        *base, models.PineConversionRequest.owner_user_id == owner_id
     )) or 0
     if admin_count >= max(0, int(settings.CLAUDE_CONVERSION_DAILY_ADMIN_LIMIT)):
         raise AdminConversionError("Daily admin conversion quota reached.", 429, "QUOTA_EXCEEDED")
@@ -836,7 +1064,7 @@ def convert(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[str, An
             row.status = "manual_conversion_required"
             row.safe_error_code = "REPAIR_POLICY_INVALID"
             return {"conversion": _public(db, row, include_source=False)}
-        _quota_check(db, admin_id)
+        _quota_check(db, row.owner_user_id)
         source_artifact, source_error = _verified_current_source_artifact(
             db,
             row,
@@ -988,7 +1216,7 @@ def _persist_candidate(
                 raise AdminConversionError("Candidate layer failed validation.", 422, layer_errors[0])
             version = _create_exact_version(
                 db,
-                admin_id=admin_id,
+                owner_id=row.owner_user_id,
                 strategy=strategy,
                 source=candidate,
                 filename="nova-claude-candidate.pine",
@@ -1032,7 +1260,11 @@ def _persist_candidate(
             })
             row.usage_summary = summary
             row.updated_at = _now()
-            candidate_id, strategy_id = version.id, strategy.id
+            candidate_id, strategy_id, owner_id = (
+                version.id,
+                strategy.id,
+                row.owner_user_id,
+            )
     if integrity_error:
         raise AdminConversionError(
             "Submitted source integrity changed."
@@ -1041,7 +1273,7 @@ def _persist_candidate(
             409 if integrity_error == SOURCE_INTEGRITY_CODE else 422,
             integrity_error,
         )
-    validated = pine.validate_version(admin_id, strategy_id, candidate_id)
+    validated = pine.validate_version(owner_id, strategy_id, candidate_id)
     with session_scope() as db:
         row = _owned(db, admin_id, conversion_id, lock=True)
         report = validated["report"]

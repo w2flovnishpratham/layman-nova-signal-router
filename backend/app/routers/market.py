@@ -1,3 +1,4 @@
+# ruff: noqa: BLE001
 from __future__ import annotations
 
 from typing import Any
@@ -9,9 +10,12 @@ from app.services.credential_vault import dhan_metadata
 from app.services.execution_context import current_execution_user
 from app.services.market_snapshot import get_shared_nifty_snapshot
 from app.services.risk_manager import _market_is_open
-from app.services.state_store import get_app_state, get_runtime_settings, get_wallet_snapshot
+from app.services.state_store import (
+    get_app_state,
+    get_runtime_settings,
+    get_wallet_snapshot,
+)
 from app.workers.strategy_job_worker import strategy_job_worker_status
-
 
 router = APIRouter()
 
@@ -30,7 +34,9 @@ def atm_ltp(
 
 
 @router.get("/market/nifty/candles")
-def nifty_candles(interval: str = Query(default="5m", pattern="^5m$")) -> dict[str, Any]:
+def nifty_candles(
+    interval: str = Query(default="5m", pattern="^(1m|5m|15m)$"),
+) -> dict[str, Any]:
     """Global NIFTY candles from the shared Dhan market-data identity.
 
     Served from a global cache - no per-user Dhan credentials, entitlement,
@@ -42,10 +48,12 @@ def nifty_candles(interval: str = Query(default="5m", pattern="^5m$")) -> dict[s
 
 
 @router.get("/market/nifty/chart-status")
-def nifty_chart_status() -> dict[str, Any]:
+def nifty_chart_status(
+    interval: str = Query(default="5m", pattern="^(1m|5m|15m)$"),
+) -> dict[str, Any]:
     from app.services.market_chart_service import chart_status
 
-    return chart_status()
+    return chart_status(interval)
 
 
 # Cached passthrough to the NOVA intelligence buy/sell sentiment. The upstream

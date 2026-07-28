@@ -2,7 +2,7 @@ import { AlertTriangle, Check, Copy, Download, FileCode2, Loader2, Plus, ShieldC
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   acceptPineConversion,
-  createPineConversion,
+  createOwnerClaudeConversion,
   createPineStrategy,
   createPineVersion,
   createTradingViewSetup,
@@ -13,6 +13,8 @@ import {
   getPineConversion,
   startManagedTradingViewVerification,
   getPineConversionConfig,
+  getOwnerClaudeConversion,
+  getOwnerClaudeConversionConfig,
   getPineReview,
   getPineSource,
   getPineStrategy,
@@ -20,6 +22,7 @@ import {
   linkPineVersion,
   listManagedTradingViewSetups,
   listPineConversions,
+  listOwnerClaudeConversions,
   listPineReviews,
   listPineStrategies,
   listStrategyInstances,
@@ -31,6 +34,8 @@ import {
   type PineFinding,
   type PineConversion,
   type PineConversionConfig,
+  type AdminPineConversion,
+  type OwnerClaudeConversionConfig,
   type PineReview,
   type PineStrategy,
   type PineVersion,
@@ -48,13 +53,13 @@ export function ImportedPinePage({ isAdmin = false }: { isAdmin?: boolean }) {
     <div className="ps-page pine-page">
       <div className="ps-heading">
         <div>
-          <span className="ps-eyebrow"><ShieldCheck size={13} /> Static review only</span>
+          <span className="ps-eyebrow"><ShieldCheck size={13} /> Owner-bound conversion and review</span>
           <h1>Imported Pine Scripts</h1>
-          <p>Store, validate and review private Pine source. NOVA does not compile, backtest or execute it.</p>
+          <p>Import private Pine, convert it with Claude, and follow its admin approval and TradingView installation.</p>
         </div>
         {isAdmin ? <div className="ps-heading-actions"><button className="secondary-button" type="button" onClick={() => setMode(mode === 'owner' ? 'admin' : 'owner')}>{mode === 'owner' ? 'Admin review queue' : 'My scripts'}</button></div> : null}
       </div>
-      <div className="ps-warning"><AlertTriangle size={16} /><span>Hosted execution is unavailable. Approval records compatibility evidence only and never enables live or paper execution.</span></div>
+      <div className="ps-warning"><AlertTriangle size={16} /><span>Conversion and admin approval do not place orders. The installed strategy remains HOLD-only until genuine TradingView routing and Paper entry/exit verification pass.</span></div>
       {mode === 'admin' ? <AdminWorkspace /> : <OwnerWorkspace />}
     </div>
   )
@@ -76,6 +81,9 @@ function OwnerWorkspace() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [conversionConfig, setConversionConfig] = useState<PineConversionConfig | null>(null)
+  const [claudeConfig, setClaudeConfig] = useState<OwnerClaudeConversionConfig | null>(null)
+  const [claudeConversion, setClaudeConversion] = useState<AdminPineConversion | null>(null)
+  const [claudeHistory, setClaudeHistory] = useState<AdminPineConversion[]>([])
   const [conversion, setConversion] = useState<PineConversion | null>(null)
   const [consent, setConsent] = useState(false)
   const [originalVersionId, setOriginalVersionId] = useState('')
@@ -98,12 +106,22 @@ function OwnerWorkspace() {
   }, [])
 
   useEffect(() => {
-    Promise.all([listPineStrategies(), listStrategyInstances(), getPineConversionConfig(), listPineConversions()]).then(([scripts, rows, config, conversions]) => {
+    Promise.all([
+      listPineStrategies(),
+      listStrategyInstances(),
+      getPineConversionConfig(),
+      listPineConversions(),
+      getOwnerClaudeConversionConfig(),
+      listOwnerClaudeConversions(),
+    ]).then(([scripts, rows, config, conversions, ownerConfig, ownerConversions]) => {
       setStrategies(scripts)
       setInstances(rows.filter((row) => row.execution_mode !== 'real_orders'))
       setStrategyId((current) => current || scripts[0]?.id || '')
       setConversionConfig(config)
       setConversionHistory(conversions)
+      setClaudeConfig(ownerConfig)
+      setClaudeHistory(ownerConversions)
+      setClaudeConversion(ownerConversions[0] ?? null)
     }).catch((reason) => setError(messageOf(reason)))
   }, [])
   useEffect(() => {
@@ -132,6 +150,26 @@ function OwnerWorkspace() {
     }, 1500)
     return () => window.clearInterval(timer)
   }, [conversion])
+  useEffect(() => {
+    if (!claudeConversion) return
+    const terminal = new Set([
+      'APPROVED_FOR_TRADINGVIEW_COMPILE',
+      'REJECTED',
+      'UNSUPPORTED_STRATEGY',
+      'MANUAL_CONVERSION_REQUIRED',
+      'VALIDATION_FAILED',
+    ])
+    if (terminal.has(claudeConversion.conversion_status)) return
+    const timer = window.setInterval(() => {
+      void getOwnerClaudeConversion(claudeConversion.id)
+        .then((current) => {
+          setClaudeConversion(current)
+          setClaudeHistory((rows) => [current, ...rows.filter((row) => row.id !== current.id)])
+        })
+        .catch((reason) => setError(messageOf(reason)))
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [claudeConversion])
   useEffect(() => {
     if (!instanceId) return
     void getTradingViewSetup(instanceId).then(setTvSetup).catch(() => setTvSetup(null))
@@ -225,22 +263,87 @@ function OwnerWorkspace() {
             {selected ? <button className="secondary-button" type="button" onClick={() => void copySource()}><Copy size={14} /> Copy</button> : null}
             {selected?.status === 'approved' ? <button className="secondary-button" type="button" onClick={downloadSource}><Download size={14} /> Download</button> : null}
           </div>
-          {selected && conversionConfig?.manual_package_enabled ? <div className="pine-convert-panel"><div><strong>Convert to NOVA Format</strong><span>Prompt {conversionConfig.prompt_version} · {conversionConfig.prompt_status}. Manual packages make no provider request.</span>{conversionConfig.prompt_version.startsWith('v3') ? <><ol><li>Copy this package into ChatGPT or Claude.</li><li>Copy only Artifact 1 back into NOVA as the converted Pine.</li><li>Artifact 2 is a simple status.</li></ol><p className="ps-note"><strong>Artifact 3 is for NOVA review.</strong> You do not need to edit it.</p></> : null}</div><button className="secondary-button" type="button" onClick={() => void run('Package copy', async () => manualPackage())}><Copy size={14} /> Copy conversion package</button><button className="secondary-button" type="button" onClick={() => void manualPackage(true)}><Download size={14} /> Download package</button></div> : null}
-          {selected?.status === 'ready_for_review' ? <div className="pine-acceptance-panel"><strong>User review and acceptance</strong><p>Static validation is deterministic, but it is not a TradingView compilation test.</p><label>Original Pine version<select aria-label="Original Pine version" value={originalVersionId} onChange={(event) => setOriginalVersionId(event.target.value)}>{versions.map((version) => <option key={version.id} value={version.id}>{version.version} · {version.source_sha256.slice(0, 10)}</option>)}</select></label><fieldset><legend>TradingView setup type</legend><label className="ps-check"><input type="radio" name="review-tv-setup" checked={setupType === 'USER_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('USER_MANAGED_TRADINGVIEW')} />I have TradingView Premium</label><label className="ps-check"><input type="radio" name="review-tv-setup" checked={setupType === 'NOVA_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('NOVA_MANAGED_TRADINGVIEW')} />I need NOVA-managed TradingView setup</label></fieldset>{!conversionConfig?.prompt_version.startsWith('v3') ? <label>Conversion assumptions (one per line)<textarea value={conversionAssumptions} maxLength={4000} onChange={(event) => setConversionAssumptions(event.target.value)} /></label> : null}{[
+          {selected && claudeConfig && !claudeConfig.enabled && conversionConfig?.manual_package_enabled ? <div className="pine-convert-panel"><div><strong>Manual conversion fallback</strong><span>Prompt {conversionConfig.prompt_version} · {conversionConfig.prompt_status}. This fallback makes no provider request.</span>{conversionConfig.prompt_version.startsWith('v3') ? <><ol><li>Copy this package into ChatGPT or Claude.</li><li>Copy only Artifact 1 back into NOVA as the converted Pine.</li><li>Artifact 2 is a simple status.</li></ol><p className="ps-note"><strong>Artifact 3 is for NOVA review.</strong> You do not need to edit it.</p></> : null}</div><button className="secondary-button" type="button" onClick={() => void run('Package copy', async () => manualPackage())}><Copy size={14} /> Copy conversion package</button><button className="secondary-button" type="button" onClick={() => void manualPackage(true)}><Download size={14} /> Download package</button></div> : null}
+          {claudeConfig && !claudeConfig.enabled && selected?.status === 'ready_for_review' ? <div className="pine-acceptance-panel"><strong>Legacy manual review fallback</strong><p>Static validation is deterministic, but it is not a TradingView compilation test.</p><label>Original Pine version<select aria-label="Original Pine version" value={originalVersionId} onChange={(event) => setOriginalVersionId(event.target.value)}>{versions.map((version) => <option key={version.id} value={version.id}>{version.version} · {version.source_sha256.slice(0, 10)}</option>)}</select></label><fieldset><legend>TradingView setup type</legend><label className="ps-check"><input type="radio" name="review-tv-setup" checked={setupType === 'USER_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('USER_MANAGED_TRADINGVIEW')} />I have TradingView Premium</label><label className="ps-check"><input type="radio" name="review-tv-setup" checked={setupType === 'NOVA_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('NOVA_MANAGED_TRADINGVIEW')} />I need NOVA-managed TradingView setup</label></fieldset>{!conversionConfig?.prompt_version.startsWith('v3') ? <label>Conversion assumptions (one per line)<textarea value={conversionAssumptions} maxLength={4000} onChange={(event) => setConversionAssumptions(event.target.value)} /></label> : null}{[
             'I reviewed the converted strategy.',
             'I understand static validation does not guarantee TradingView compilation.',
             'I understand backtests do not guarantee future returns.',
             'I understand the strategy will initially run in paper mode.',
           ].map((label, index) => <label className="ps-check" key={label}><input type="checkbox" checked={acceptance[index]} onChange={(event) => setAcceptance((current) => current.map((value, item) => item === index ? event.target.checked : value))} />{label}</label>)}<button className="ps-primary" type="button" disabled={!originalVersionId || !acceptance.every(Boolean) || !!busy} onClick={() => void run('Review submission', async () => { await submitPineVersion(strategyId, selected.id, { original_version_id: originalVersionId, prompt_version_id: conversionConfig?.prompt_version ?? '', setup_type: setupType, assumptions: conversionConfig?.prompt_version.startsWith('v3') ? [] : conversionAssumptions.split('\n').map((value) => value.trim()).filter(Boolean), reviewed_strategy: true, understands_static_validation: true, understands_performance_risk: true, accepts_paper_only: true }); setAcceptance([false, false, false, false]); await reloadStrategy(strategyId, selected.id) })}><Check size={14} /> Accept and submit for review</button></div> : null}
-          {selected ? <div className="pine-ai-panel"><div><strong><Sparkles size={14} /> AI-assisted conversion</strong><span>{conversionConfig?.ai_enabled ? `${conversionConfig.provider} · ${conversionConfig.model}` : 'Disabled by NOVA configuration. Manual conversion remains available.'}</span></div>{conversionConfig?.ai_enabled ? <><p>Your Pine source will be sent to the configured AI provider for conversion. NOVA will not execute the generated script automatically. Generated output may be incorrect and must pass NOVA validation and human review.</p><label className="ps-check"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />I consent to sending this exact source version for this conversion request.</label><button className="ps-primary" type="button" disabled={!consent || !!busy || (!!conversion && ['queued', 'processing'].includes(conversion.status))} onClick={() => void run('AI conversion request', async () => { const result = await createPineConversion(strategyId, selected.id); setConsent(false); setConversion(result.conversion) })}><Sparkles size={14} /> Send source for conversion</button></> : null}</div> : null}
+          {selected ? (
+            <div className="pine-ai-panel">
+              <div>
+                <strong><Sparkles size={14} /> Convert with Claude</strong>
+                <span>
+                  {claudeConfig?.enabled
+                    ? `${claudeConfig.provider} · ${claudeConfig.model} · prompt ${claudeConfig.prompt_version}`
+                    : 'Claude conversion is not configured on this environment.'}
+                </span>
+              </div>
+              <p>
+                NOVA binds this exact source hash to your account, converts it with Claude,
+                validates it, and sends it to the admin review queue. Approval can install
+                the strategy only into your account.
+              </p>
+              <fieldset>
+                <legend>TradingView setup after approval</legend>
+                <label className="ps-check">
+                  <input type="radio" name="claude-tv-setup" checked={setupType === 'USER_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('USER_MANAGED_TRADINGVIEW')} />
+                  I have TradingView Premium
+                </label>
+                <label className="ps-check">
+                  <input type="radio" name="claude-tv-setup" checked={setupType === 'NOVA_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('NOVA_MANAGED_TRADINGVIEW')} />
+                  Use NOVA-managed TradingView
+                </label>
+              </fieldset>
+              <label className="ps-check">
+                <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
+                I consent to sending this exact private Pine version to Claude for conversion.
+              </label>
+              <button
+                className="ps-primary"
+                type="button"
+                disabled={!claudeConfig?.enabled || !consent || !!busy}
+                onClick={() => void run('Claude conversion request', async () => {
+                  const result = await createOwnerClaudeConversion(strategyId, selected.id, {
+                    requested_setup_type: setupType,
+                    intended_symbol: 'NIFTY',
+                    intended_timeframe: '5',
+                  })
+                  setConsent(false)
+                  setClaudeConversion(result.conversion)
+                  setClaudeHistory((rows) => [result.conversion, ...rows.filter((row) => row.id !== result.conversion.id)])
+                })}
+              >
+                <Sparkles size={14} /> Convert and send for admin review
+              </button>
+            </div>
+          ) : null}
         </section>
         <aside className="ps-card pine-findings">
           <div className="ps-card-head"><div><span>NOVA Pine Contract v1</span><h2>Static findings</h2></div>{selected?.validation ? <strong>{selected.validation.error_count}E · {selected.validation.warning_count}W</strong> : null}</div>
           {findings.length ? findings.map((finding, index) => <button type="button" key={`${finding.code}-${index}`} className={`pine-finding ${finding.severity.toLowerCase()}`} onClick={() => jumpTo(finding)}><span>{finding.severity} · {finding.code}{finding.line ? ` · line ${finding.line}` : ''}</span><strong>{finding.title}</strong><small>{finding.explanation}</small><em>{finding.remediation}</em></button>) : <div className="ps-empty-small"><FileCode2 size={22} /><strong>No validation report</strong><span>Run deterministic static validation for this exact version.</span></div>}
         </aside>
       </div>
-      {conversion ? <ConversionReview conversion={conversion} busy={busy} onAccept={() => run('Candidate acceptance', async () => { const result = await acceptPineConversion(conversion.id); setConversion(result.conversion); await reloadStrategy(strategyId, result.conversion.candidate_version_id ?? undefined); setConversionHistory(await listPineConversions()) })} onReject={() => run('Candidate rejection', async () => { setConversion((await rejectPineConversion(conversion.id)).conversion); setConversionHistory(await listPineConversions()) })} onRetry={() => run('Conversion retry', async () => { setConversion((await retryPineConversion(conversion.id)).conversion); setConversionHistory(await listPineConversions()) })} /> : null}
-      {strategyId && conversionHistory.some((row) => row.strategy_id === strategyId) ? (
+      {claudeConversion ? <OwnerClaudeStatus conversion={claudeConversion} /> : null}
+      {strategyId && claudeHistory.some((row) => row.strategy_id === strategyId) ? (
+        <section className="ps-card pine-conversion-history">
+          <div className="ps-card-head">
+            <div><span>Owner-bound Claude requests</span><h2>Conversion and review history</h2></div>
+          </div>
+          <div className="ps-list">
+            {claudeHistory.filter((row) => row.strategy_id === strategyId).map((row) => (
+              <button className="ps-list-item" type="button" key={row.id} onClick={() => setClaudeConversion(row)}>
+                <strong>{row.strategy_name}</strong>
+                <span>{row.conversion_status.replaceAll('_', ' ')}</span>
+                <span>{row.source_sha256.slice(0, 12)}… · owner bound</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {claudeConfig && !claudeConfig.enabled && conversion ? <ConversionReview conversion={conversion} busy={busy} onAccept={() => run('Candidate acceptance', async () => { const result = await acceptPineConversion(conversion.id); setConversion(result.conversion); await reloadStrategy(strategyId, result.conversion.candidate_version_id ?? undefined); setConversionHistory(await listPineConversions()) })} onReject={() => run('Candidate rejection', async () => { setConversion((await rejectPineConversion(conversion.id)).conversion); setConversionHistory(await listPineConversions()) })} onRetry={() => run('Conversion retry', async () => { setConversion((await retryPineConversion(conversion.id)).conversion); setConversionHistory(await listPineConversions()) })} /> : null}
+      {claudeConfig && !claudeConfig.enabled && strategyId && conversionHistory.some((row) => row.strategy_id === strategyId) ? (
         <section className="ps-card pine-conversion-history">
           <div className="ps-card-head"><div><span>All attempts for this script</span><h2>Conversion history</h2></div></div>
           <div className="ps-list">
@@ -253,8 +356,43 @@ function OwnerWorkspace() {
           </div>
         </section>
       ) : null}
-      {selected?.status === 'approved' ? <section className="ps-card pine-link"><div><span>Stage 6 of 9 · TradingView setup</span><h2>Link approved version and choose setup path</h2><p className="ps-note">Paper-only. NOVA never compiles or executes Pine.</p></div><select aria-label="Personal strategy instance" value={instanceId} onChange={(e) => { setInstanceId(e.target.value); setTvSetup(null) }}><option value="">Choose an instance</option>{instances.map((i) => <option key={i.id} value={i.id}>{i.label} · {i.execution_mode}</option>)}</select><fieldset><legend>TradingView setup type</legend><label className="ps-check"><input type="radio" name="tv-setup" checked={setupType === 'USER_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('USER_MANAGED_TRADINGVIEW')} />I have TradingView Premium</label><small>You manage this strategy in your TradingView account.</small><label className="ps-check"><input type="radio" name="tv-setup" checked={setupType === 'NOVA_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('NOVA_MANAGED_TRADINGVIEW')} />I need NOVA-managed TradingView setup</label><small>NOVA-managed TradingView setup requested; installation remains a manual admin task.</small></fieldset><button className="ps-primary" type="button" disabled={!instanceId || !!busy} onClick={() => void run('TradingView setup', async () => { await linkPineVersion(instanceId, strategyId, selected.id); setTvSetup(await createTradingViewSetup(instanceId, setupType)) })}>Save setup path</button>{tvSetup ? <div className={`ps-message ${tvSetup.ready_for_paper ? 'success' : ''}`} role="status"><strong>{tvSetup.ready_for_paper ? 'READY FOR PAPER USE' : tvSetup.status.replaceAll('_', ' ')}</strong><span>{tvSetup.ready_for_paper ? 'All server-observed paper gates passed.' : `Pending: ${tvSetup.blocking_step ?? 'manual review'}. Next: ${tvSetup.who_acts_next}.`}</span>{tvSetup.blocking_reason ? <span>{tvSetup.blocking_reason}</span> : null}</div> : null}</section> : null}
+      {claudeConfig && !claudeConfig.enabled && selected?.status === 'approved' ? <section className="ps-card pine-link"><div><span>Legacy fallback · TradingView setup</span><h2>Link approved version and choose setup path</h2><p className="ps-note">Paper-only. NOVA never compiles or executes Pine.</p></div><select aria-label="Personal strategy instance" value={instanceId} onChange={(e) => { setInstanceId(e.target.value); setTvSetup(null) }}><option value="">Choose an instance</option>{instances.map((i) => <option key={i.id} value={i.id}>{i.label} · {i.execution_mode}</option>)}</select><fieldset><legend>TradingView setup type</legend><label className="ps-check"><input type="radio" name="tv-setup" checked={setupType === 'USER_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('USER_MANAGED_TRADINGVIEW')} />I have TradingView Premium</label><small>You manage this strategy in your TradingView account.</small><label className="ps-check"><input type="radio" name="tv-setup" checked={setupType === 'NOVA_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('NOVA_MANAGED_TRADINGVIEW')} />I need NOVA-managed TradingView setup</label><small>NOVA-managed TradingView setup requested; installation remains a manual admin task.</small></fieldset><button className="ps-primary" type="button" disabled={!instanceId || !!busy} onClick={() => void run('TradingView setup', async () => { await linkPineVersion(instanceId, strategyId, selected.id); setTvSetup(await createTradingViewSetup(instanceId, setupType)) })}>Save setup path</button>{tvSetup ? <div className={`ps-message ${tvSetup.ready_for_paper ? 'success' : ''}`} role="status"><strong>{tvSetup.ready_for_paper ? 'READY FOR PAPER USE' : tvSetup.status.replaceAll('_', ' ')}</strong><span>{tvSetup.ready_for_paper ? 'All server-observed paper gates passed.' : `Pending: ${tvSetup.blocking_step ?? 'manual review'}. Next: ${tvSetup.who_acts_next}.`}</span>{tvSetup.blocking_reason ? <span>{tvSetup.blocking_reason}</span> : null}</div> : null}</section> : null}
     </>
+  )
+}
+
+function OwnerClaudeStatus({ conversion }: { conversion: AdminPineConversion }) {
+  const approved = conversion.conversion_status === 'APPROVED_FOR_TRADINGVIEW_COMPILE'
+  const reviewReady = conversion.conversion_status === 'READY_FOR_ADMIN_REVIEW'
+  return (
+    <section className="ps-card pine-conversion-review">
+      <div className="ps-card-head">
+        <div>
+          <span>{conversion.provider} · {conversion.model} · source {conversion.source_sha256.slice(0, 12)}…</span>
+          <h2>Claude conversion for {conversion.strategy_name}</h2>
+        </div>
+        <span className="ps-status">{conversion.conversion_status.replaceAll('_', ' ')}</span>
+      </div>
+      {conversion.safe_error_code ? (
+        <div className="ps-message error" role="alert">
+          Conversion stopped safely: {conversion.safe_error_code.replaceAll('_', ' ').toLowerCase()}
+        </div>
+      ) : null}
+      <div className="ps-summary-grid">
+        <div><span>Conversion</span><strong>{conversion.conversion_status.replaceAll('_', ' ')}</strong></div>
+        <div><span>Validation</span><strong>{conversion.validation_status.replaceAll('_', ' ')}</strong></div>
+        <div><span>Admin review</span><strong>{conversion.review_status.replaceAll('_', ' ')}</strong></div>
+      </div>
+      {conversion.conversion_summary ? <p>{conversion.conversion_summary}</p> : null}
+      {reviewReady ? <div className="ps-message">Claude conversion and deterministic validation passed. An admin must now review this exact candidate.</div> : null}
+      {approved ? <div className="ps-message success">Admin approved the exact candidate. TradingView compile evidence will create an installation in your account; HOLD and Paper verification remain required before it can trade.</div> : null}
+      {conversion.final_candidate ? (
+        <details>
+          <summary>View converted Pine candidate</summary>
+          <pre className="pine-review-source">{conversion.final_candidate}</pre>
+        </details>
+      ) : null}
+    </section>
   )
 }
 
