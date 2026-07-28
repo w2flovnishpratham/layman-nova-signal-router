@@ -609,6 +609,15 @@ def test_strategy_mode_preserves_pending_orders_and_attaches_order_fill_alerts(m
     assert 'strategy.cancel(id="BBandLE")' in candidate
     assert "pine_transport_v3_strategy_fill" in candidate
     assert "novaBuyCeSignal" not in candidate
+    # Regression for a real TradingView compile error (CE10271: "Could not
+    # find function or function reference 'novaWebhookPayload'") -- Pine
+    # requires a function to be defined before its first call. The
+    # definition must appear before every alert_message=novaWebhookPayload(
+    # call site, not after (which is where INDICATOR mode's transport goes,
+    # since that one is only ever read from, never called by, the layer).
+    definition_at = candidate.index("novaWebhookPayload(string action")
+    first_call_at = candidate.index("alert_message=novaWebhookPayload(")
+    assert definition_at < first_call_at, "transport must define novaWebhookPayload before the layer calls it"
 
 
 def test_strategy_mode_rejects_a_dropped_order_call(mu_db, monkeypatch):

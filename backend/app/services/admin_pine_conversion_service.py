@@ -1192,7 +1192,26 @@ def _assemble_candidate(layer: str, strategy_code: str, version: str, source_typ
     transport_version = (
         base_conversion.TRANSPORT_V3_STRATEGY_FILL_VERSION if source_type == "STRATEGY" else base_conversion.TRANSPORT_V2_VERSION
     )
-    candidate = layer.rstrip() + "\n\n" + rendered.rstrip() + "\n"
+    if source_type == "STRATEGY":
+        # STRATEGY-mode order calls invoke novaWebhookPayload() inline via
+        # alert_message= -- Pine requires a function to be defined before its
+        # first call, so the transport (which defines it) must be inserted
+        # right after the strategy() declaration, not appended at the end.
+        # (INDICATOR mode's transport only ever reads the layer's booleans,
+        # never the reverse, so appending after it is fine there.)
+        declarations = pine_validation._call_spans(layer, ("strategy",))
+        if len(declarations) != 1:
+            raise AdminConversionError("Candidate declaration count is invalid.", 422, "DECLARATION_COUNT_INVALID")
+        decl_start, decl_text = declarations[0]
+        insert_at = layer.find("\n", decl_start + len(decl_text))
+        insert_at = insert_at + 1 if insert_at >= 0 else len(layer)
+        candidate = (
+            layer[:insert_at].rstrip("\n") + "\n\n"
+            + rendered.rstrip() + "\n\n"
+            + layer[insert_at:].lstrip("\n")
+        )
+    else:
+        candidate = layer.rstrip() + "\n\n" + rendered.rstrip() + "\n"
     if candidate.count(f"NOVA FROZEN TRANSPORT BEGIN: {transport_version}") != 1:
         raise AdminConversionError("Candidate transport count is invalid.", 422, "TRANSPORT_COUNT_INVALID")
     if candidate.count(f"NOVA FROZEN TRANSPORT END: {transport_version}") != 1:
