@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 
 import pytest
 from fastapi import FastAPI
@@ -219,6 +220,52 @@ def test_owner_bollinger_pending_orders_reach_claude_automatically_not_unsupport
     assert "strategy.entry" not in detail["final_candidate"]
     assert "stop=" not in detail["final_candidate"]
     assert "strategy.cancel" not in detail["final_candidate"]
+
+
+def test_owner_resubmit_after_stuck_status_gets_next_attempt_not_500(owner_flow):
+    """Regression: `existing` reuse lookup deliberately excludes rows left in
+    rejected/unsupported_strategy status so a user can retry. But identity_sha256
+    is deterministic for the same owner+strategy+version+options, so a naive
+    retry re-inserts (identity_sha256, attempt=1) and collides with the old
+    stuck row on uq_pine_conversion_identity_attempt -- surfacing as a 500 to
+    the user instead of a fresh conversion."""
+    client, current, owner, _other, _admin, provider = owner_flow
+
+    created = client.post(
+        "/api/personal-pine-strategies",
+        json={"name": "Owner Pine", "source": SOURCE, "filename": "owner.pine"},
+    )
+    assert created.status_code == 200, created.text
+    strategy = created.json()["strategy"]
+    version = created.json()["version"]
+    payload = {
+        "consent": True,
+        "options": {
+            "requested_setup_type": "USER_MANAGED_TRADINGVIEW",
+            "intended_symbol": "NIFTY",
+            "intended_timeframe": "5",
+        },
+    }
+    convert_url = (
+        f"/api/personal-pine-strategies/{strategy['id']}/versions/"
+        f"{version['id']}/claude-conversion"
+    )
+
+    first = client.post(convert_url, json=payload)
+    assert first.status_code == 202, first.text
+    first_id = first.json()["conversion"]["id"]
+
+    # Simulate the old pre-fix stuck state (or a since-rejected candidate):
+    # a row for this exact identity left in a status the reuse check excludes.
+    with session_scope() as db:
+        row = db.get(models.PineConversionRequest, uuid.UUID(first_id))
+        row.status = "unsupported_strategy"
+        db.add(row)
+
+    second = client.post(convert_url, json=payload)
+    assert second.status_code == 202, second.text
+    assert second.json()["reused"] is False
+    assert second.json()["conversion"]["id"] != first_id
 
 
 def test_owner_pine_claude_admin_compile_installs_only_for_origin_owner(owner_flow):

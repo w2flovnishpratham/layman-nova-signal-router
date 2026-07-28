@@ -566,6 +566,20 @@ def submit_owner_source(
         owner_guidance = _conversion_guidance(analysis_result)
         if owner_guidance:
             owner_usage_summary["conversion_guidance"] = owner_guidance
+        # `existing` above excludes rejected/unsupported_strategy rows so a
+        # resubmission can proceed, but identity_sha256 is deterministic for
+        # the same owner+strategy+version+options — attempt must advance past
+        # any prior row (of any status) for this identity or the insert
+        # collides with uq_pine_conversion_identity_attempt.
+        next_attempt = (
+            db.scalar(
+                select(func.max(models.PineConversionRequest.attempt)).where(
+                    models.PineConversionRequest.identity_sha256 == identity,
+                    models.PineConversionRequest.provider == PROVIDER,
+                )
+            )
+            or 0
+        ) + 1
         row = models.PineConversionRequest(
             owner_user_id=owner_id,
             strategy_id=strategy.id,
@@ -578,6 +592,7 @@ def submit_owner_source(
             options=options,
             options_sha256=options_sha,
             identity_sha256=identity,
+            attempt=next_attempt,
             consent_at=_now(),
             status="ready_for_conversion",
             max_attempts=1,
