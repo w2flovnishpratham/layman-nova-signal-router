@@ -637,6 +637,28 @@ def test_strategy_mode_rejects_a_dropped_order_call(mu_db, monkeypatch):
     assert response.status_code == 202, response.text
     conversion = response.json()["conversion"]
     assert conversion["conversion_status"] == "MANUAL_CONVERSION_REQUIRED", conversion
+
+
+def test_strategy_mode_accepts_a_faithfully_preserved_pine_v5_source(mu_db, monkeypatch):
+    """Source intake already accepts Pine v5 or v6 (_validate_exact_source),
+    and STRATEGY mode's whole design is to preserve the declaration exactly
+    -- a real user hit "Conversion stopped safely: pine version unsupported"
+    because the candidate validator hard-required //@version=6 even for a
+    faithfully-preserved v5 candidate. Forcing a version upgrade would also
+    mean asking Claude to touch more than instrumentation. Must accept v5
+    candidates the same way intake does."""
+    v5_source = REAL_BOLLINGER_STRATEGY_SOURCE.replace("//@version=6", "//@version=5")
+    v5_layer = REAL_BOLLINGER_STRATEGY_LAYER_PRESERVED.replace("//@version=6", "//@version=5")
+    output = _strategy_mode_output(v5_source, v5_layer)
+    client, current, owner, provider = _strategy_mode_client(monkeypatch, output)
+    del current, owner
+
+    response = _submit_for_conversion(client, "Bollinger Bands Strategy v5", v5_source)
+    assert response.status_code == 202, response.text
+    conversion = response.json()["conversion"]
+    assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
+    assert conversion["safe_error_code"] is None
+    assert provider.convert_calls == 1
     assert provider.convert_calls == 1
 
 

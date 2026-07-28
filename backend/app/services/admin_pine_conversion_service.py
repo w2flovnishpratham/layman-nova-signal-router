@@ -1116,7 +1116,7 @@ def _validate_layer(
         errors.append("OUTPUT_TOO_LARGE")
     if base_conversion.contains_secret(layer):
         errors.append("SECRET_IN_OUTPUT")
-    if not re.search(r"(?m)^\s*//@version\s*=\s*6\s*$", layer):
+    if not re.search(r"(?m)^\s*//@version\s*=\s*[56]\s*$", layer):
         errors.append("PINE_VERSION_UNSUPPORTED")
     required_decl = "strategy" if source_type == "STRATEGY" else "indicator"
     wrong_decl = "indicator" if source_type == "STRATEGY" else "strategy"
