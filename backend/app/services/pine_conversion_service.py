@@ -27,11 +27,16 @@ PROMPT_V31_SHA256 = "4fc31dbd5a94429806227754a32959716e87f68cbb20b952c746d8a11e8
 TRANSPORT_V2_VERSION = "pine_transport_v2"
 TRANSPORT_V2_PATH = PROMPT_DIR / f"{TRANSPORT_V2_VERSION}.txt"
 TRANSPORT_V2_SHA256 = "18a3247c93c0c17e2bb70847a635c721bacf6e231d8d14c14db7871da56ef96f"
+PROMPT_V4_SHA256 = "d6c2d588386269dfa70e780dcc6afb3d698d9cee8276c6742f56517e5b92fa86"
+TRANSPORT_V3_STRATEGY_FILL_VERSION = "pine_transport_v3_strategy_fill"
+TRANSPORT_V3_STRATEGY_FILL_PATH = PROMPT_DIR / f"{TRANSPORT_V3_STRATEGY_FILL_VERSION}.txt"
+TRANSPORT_V3_STRATEGY_FILL_SHA256 = "e68f14685e64bdee730d20cc1fc039d488c8fc493cf738045470a25f09cbbbdc"
 QUALIFICATION_PACKAGES = {
     "v3": (PROMPT_V3_SHA256, TRANSPORT_VERSION, TRANSPORT_PATH, TRANSPORT_V1_SHA256),
     "v3.1": (PROMPT_V31_SHA256, TRANSPORT_V2_VERSION, TRANSPORT_V2_PATH, TRANSPORT_V2_SHA256),
 }
 PACKAGE_PLACEHOLDERS = {"{{TRANSPORT}}", "{{OPTIONS}}", "{{SOURCE}}"}
+PACKAGE_PLACEHOLDERS_V4 = PACKAGE_PLACEHOLDERS | {"{{SOURCE_TYPE}}"}
 TRANSPORT_PLACEHOLDERS = {"{{STRATEGY_CODE}}", "{{STRATEGY_VERSION}}"}
 RESERVED_DELIMITERS = (
     "BEGIN_FROZEN_NOVA_TRANSPORT", "END_FROZEN_NOVA_TRANSPORT",
@@ -163,6 +168,30 @@ def _assemble_v3_prompt(prompt_template: str, transport: str, source: str, optio
     options_json = _serialize_package_options(options)
     prompt = prompt_template
     for placeholder, value in (("{{TRANSPORT}}", transport), ("{{OPTIONS}}", options_json), ("{{SOURCE}}", source)):
+        if prompt.count(placeholder) != 1:
+            raise _assembly_failed()
+        prompt = prompt.replace(placeholder, value, 1)
+    return prompt, options_json
+
+
+def _assemble_v4_prompt(
+    prompt_template: str, transport: str, source: str, source_type: str, options: Mapping[str, Any] | None = None
+) -> tuple[str, str]:
+    if not source or any(delimiter in source for delimiter in RESERVED_DELIMITERS) or PLACEHOLDER_PATTERN.search(source):
+        raise _assembly_failed()
+    if source_type not in {"STRATEGY", "INDICATOR"}:
+        raise _assembly_failed()
+    prompt_placeholders = set(PLACEHOLDER_PATTERN.findall(prompt_template))
+    if not PACKAGE_PLACEHOLDERS_V4 <= prompt_placeholders or prompt_placeholders - PACKAGE_PLACEHOLDERS_V4 - TRANSPORT_PLACEHOLDERS:
+        raise _assembly_failed()
+    if set(PLACEHOLDER_PATTERN.findall(transport)) != TRANSPORT_PLACEHOLDERS:
+        raise _assembly_failed()
+    options_json = _serialize_package_options(options)
+    prompt = prompt_template
+    for placeholder, value in (
+        ("{{TRANSPORT}}", transport), ("{{OPTIONS}}", options_json),
+        ("{{SOURCE}}", source), ("{{SOURCE_TYPE}}", source_type),
+    ):
         if prompt.count(placeholder) != 1:
             raise _assembly_failed()
         prompt = prompt.replace(placeholder, value, 1)

@@ -29,14 +29,13 @@ if ta.crossunder(fast, slow)
 """
 
 LAYER = """//@version=6
-indicator("Owner Pine Converted", overlay=true)
+strategy("Owner Pine", overlay=true)
 fast = ta.ema(close, 5)
 slow = ta.ema(close, 13)
-bool novaBuyCeSignal = ta.crossover(fast, slow)
-bool novaBuyPeSignal = ta.crossunder(fast, slow)
-bool novaExitSignal = false
-plot(fast)
-plot(slow)
+if ta.crossover(fast, slow)
+    strategy.entry("Long", strategy.long, alert_message=novaWebhookPayload("BUY_CE", "Long"))
+if ta.crossunder(fast, slow)
+    strategy.close("Long", alert_message=novaWebhookPayload("EXIT", "Long"))
 """
 
 
@@ -470,3 +469,163 @@ def test_owner_pine_claude_admin_compile_installs_only_for_origin_owner(owner_fl
                 models.StrategyInstance.strategy_id == request.strategy_id,
             )
         ) is None
+
+
+REAL_BOLLINGER_STRATEGY_SOURCE = """//@version=6
+strategy("Bollinger Bands Strategy", overlay=true)
+source = close
+length = input.int(20, minval=1)
+mult = input.float(2.0, minval=0.001, maxval=50)
+basis = ta.sma(source, length)
+dev = mult * ta.stdev(source, length)
+upper = basis + dev
+lower = basis - dev
+buyEntry = ta.crossover(source, lower)
+sellEntry = ta.crossunder(source, upper)
+if (ta.crossover(source, lower))
+	strategy.entry("BBandLE", strategy.long, stop=lower, oca_name="BollingerBands", oca_type=strategy.oca.cancel, comment="BBandLE")
+else
+	strategy.cancel(id="BBandLE")
+if (ta.crossunder(source, upper))
+	strategy.entry("BBandSE", strategy.short, stop=upper, oca_name="BollingerBands", oca_type=strategy.oca.cancel, comment="BBandSE")
+else
+	strategy.cancel(id="BBandSE")
+"""
+
+REAL_BOLLINGER_STRATEGY_LAYER_PRESERVED = """//@version=6
+strategy("Bollinger Bands Strategy", overlay=true)
+source = close
+length = input.int(20, minval=1)
+mult = input.float(2.0, minval=0.001, maxval=50)
+basis = ta.sma(source, length)
+dev = mult * ta.stdev(source, length)
+upper = basis + dev
+lower = basis - dev
+buyEntry = ta.crossover(source, lower)
+sellEntry = ta.crossunder(source, upper)
+if (ta.crossover(source, lower))
+	strategy.entry("BBandLE", strategy.long, stop=lower, oca_name="BollingerBands", oca_type=strategy.oca.cancel, comment="BBandLE", alert_message=novaWebhookPayload("BUY_CE", "BBandLE"))
+else
+	strategy.cancel(id="BBandLE")
+if (ta.crossunder(source, upper))
+	strategy.entry("BBandSE", strategy.short, stop=upper, oca_name="BollingerBands", oca_type=strategy.oca.cancel, comment="BBandSE", alert_message=novaWebhookPayload("BUY_PE", "BBandSE"))
+else
+	strategy.cancel(id="BBandSE")
+"""
+
+
+def _strategy_mode_output(source: str, layer: str, **overrides) -> ClaudePineConversionOutput:
+    payload = {
+        "schema_version": "nova.claude-pine-conversion.v1",
+        "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+        "status": "CONVERTED",
+        "strategy_layer": layer,
+        "signal_mapping": {
+            "buy_ce_source": "BBandLE stop entry fill",
+            "buy_pe_source": "BBandSE stop entry fill",
+            "exit_source": "no explicit flatten in source",
+        },
+        "behavior_preservation": {"logic_changed": False, "change_summary": []},
+        "capabilities": {
+            "handled": ["Bollinger band calculation preserved unchanged"],
+            "unsupported": [
+                "Pending stop-entry order placement -- preserved as-is, reported on fill",
+            ],
+            "manual_review": [],
+        },
+        "user_summary": "Preserved the original pending-stop strategy and attached order-fill reporting.",
+        "admin_review_points": [],
+    }
+    payload.update(overrides)
+    return ClaudePineConversionOutput.model_validate(payload)
+
+
+def _strategy_mode_client(monkeypatch, output: ClaudePineConversionOutput):
+    from app.auth.dependencies import get_current_user
+    from app.routers import personal_pine, pine_conversion
+    from app.services.user_context import current_user_from_model
+
+    owner = make_user(f"strategy-mode-owner-{uuid.uuid4().hex[:8]}@example.com")
+    current = {"user": owner}
+    app = FastAPI()
+    app.include_router(personal_pine.router)
+    app.include_router(pine_conversion.router)
+    app.include_router(pine_conversion.admin_router)
+    app.dependency_overrides[get_current_user] = lambda: current_user_from_model(current["user"])
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_ENABLED", True)
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-only-never-sent")
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MODEL", "claude-test")
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MAX_REPAIRS", 1)
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MAX_INPUT_TOKENS", 10_000)
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_DAILY_ADMIN_LIMIT", 10)
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_DAILY_GLOBAL_LIMIT", 50)
+    provider = pine_conversion_provider.FakePineConversionProvider(output)
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: provider)
+    return TestClient(app), current, owner, provider
+
+
+def _submit_for_conversion(client, name: str, source: str):
+    created = client.post(
+        "/api/personal-pine-strategies",
+        json={"name": name, "source": source, "filename": "strategy.pine"},
+    )
+    assert created.status_code == 200, created.text
+    strategy, version = created.json()["strategy"], created.json()["version"]
+    convert_url = (
+        f"/api/personal-pine-strategies/{strategy['id']}/versions/{version['id']}/claude-conversion"
+    )
+    payload = {
+        "consent": True,
+        "options": {
+            "requested_setup_type": "USER_MANAGED_TRADINGVIEW",
+            "intended_symbol": "NIFTY",
+            "intended_timeframe": "5",
+        },
+    }
+    return client.post(convert_url, json=payload)
+
+
+def test_strategy_mode_preserves_pending_orders_and_attaches_order_fill_alerts(mu_db, monkeypatch):
+    """The core ask behind the v4.0 redesign: a real TradingView strategy with
+    pending stop entries + OCA cancellation must come back with those exact
+    mechanisms preserved (not normalized away into confirmed-bar booleans),
+    order-fill alert_message wiring attached, and land in admin review."""
+    output = _strategy_mode_output(REAL_BOLLINGER_STRATEGY_SOURCE, REAL_BOLLINGER_STRATEGY_LAYER_PRESERVED)
+    client, current, owner, provider = _strategy_mode_client(monkeypatch, output)
+    del current, owner
+
+    response = _submit_for_conversion(client, "Bollinger Bands Strategy", REAL_BOLLINGER_STRATEGY_SOURCE)
+    assert response.status_code == 202, response.text
+    conversion = response.json()["conversion"]
+    assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
+    assert conversion["validation_status"] == "PASSED"
+    assert provider.convert_calls == 1
+
+    detail = client.get(f"/api/personal-pine-claude-conversions/{conversion['id']}").json()["conversion"]
+    candidate = detail["final_candidate"]
+    assert "strategy.entry" in candidate
+    assert "oca_name=" in candidate
+    assert "stop=lower" in candidate and "stop=upper" in candidate
+    assert 'strategy.cancel(id="BBandLE")' in candidate
+    assert "pine_transport_v3_strategy_fill" in candidate
+    assert "novaBuyCeSignal" not in candidate
+
+
+def test_strategy_mode_rejects_a_dropped_order_call(mu_db, monkeypatch):
+    """If Claude drops an order-producing call instead of just instrumenting
+    it, that's exactly the failure mode this redesign exists to prevent --
+    must not silently pass validation."""
+    layer_missing_short_side = REAL_BOLLINGER_STRATEGY_LAYER_PRESERVED.replace(
+        'strategy.entry("BBandSE", strategy.short, stop=upper, oca_name="BollingerBands", '
+        'oca_type=strategy.oca.cancel, comment="BBandSE", alert_message=novaWebhookPayload("BUY_PE", "BBandSE"))',
+        "// dropped",
+    )
+    output = _strategy_mode_output(REAL_BOLLINGER_STRATEGY_SOURCE, layer_missing_short_side)
+    client, current, owner, provider = _strategy_mode_client(monkeypatch, output)
+    del current, owner
+
+    response = _submit_for_conversion(client, "Bollinger Bands Strategy Dropped", REAL_BOLLINGER_STRATEGY_SOURCE)
+    assert response.status_code == 202, response.text
+    conversion = response.json()["conversion"]
+    assert conversion["conversion_status"] == "MANUAL_CONVERSION_REQUIRED", conversion
+    assert provider.convert_calls == 1

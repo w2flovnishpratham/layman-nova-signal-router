@@ -57,7 +57,7 @@ beforeEach(() => {
   api.conversionHistory.mockResolvedValue([])
   api.ownerClaudeConfig.mockResolvedValue({
     enabled: false, provider: 'anthropic_claude', model: null,
-    prompt_version: 'v3.1', transport_version: 'pine_transport_v2',
+    prompt_version: 'v4.0', transport_version: 'pine_transport_v2',
     admin_review_required: true, paper_verification_required: true,
     live_eligible: false,
   })
@@ -157,7 +157,7 @@ describe('ImportedPinePage', () => {
     const user = userEvent.setup()
     api.ownerClaudeConfig.mockResolvedValue({
       enabled: true, provider: 'anthropic_claude', model: 'claude-test',
-      prompt_version: 'v3.1', transport_version: 'pine_transport_v2',
+      prompt_version: 'v4.0', transport_version: 'pine_transport_v2',
       admin_review_required: true, paper_verification_required: true,
       live_eligible: false,
     })

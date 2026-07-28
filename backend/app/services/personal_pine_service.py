@@ -380,7 +380,7 @@ def validate_version(user_id: uuid.UUID, strategy_id, version_id):
         source, digest = artifact.content, artifact.content_sha256
     started = _now()
     try:
-        result = pine_validation.validate_source(source)
+        result = pine_validation.validate_source(source, mode=pine_validation.detect_source_type(source))
     except Exception:
         # The source is untrusted. Persist a bounded, non-sensitive failure and
         # never leak parser internals or source text through an exception.

@@ -1270,8 +1270,8 @@ export interface OwnerClaudeConversionConfig {
   enabled: boolean
   provider: 'anthropic_claude'
   model: string | null
-  prompt_version: 'v3.1'
-  transport_version: string
+  prompt_version: 'v4.0'
+  transport_version: string | null
   admin_review_required: true
   paper_verification_required: true
   live_eligible: false

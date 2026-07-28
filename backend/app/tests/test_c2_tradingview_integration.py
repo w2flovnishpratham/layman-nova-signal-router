@@ -29,14 +29,13 @@ if ta.crossunder(fast, slow)
 """
 
 LAYER = """//@version=6
-indicator("C2 Candidate", overlay=true)
+strategy("C2 Source", overlay=true)
 fast = ta.ema(close, 5)
 slow = ta.ema(close, 13)
-bool novaBuyCeSignal = ta.crossover(fast, slow)
-bool novaBuyPeSignal = ta.crossunder(fast, slow)
-bool novaExitSignal = false
-plot(fast)
-plot(slow)
+if ta.crossover(fast, slow)
+    strategy.entry("Long", strategy.long, alert_message=novaWebhookPayload("BUY_CE", "Long"))
+if ta.crossunder(fast, slow)
+    strategy.close("Long", alert_message=novaWebhookPayload("EXIT", "Long"))
 """
 
 
@@ -217,7 +216,7 @@ def test_exact_approval_compile_and_feature_flag_gates(c2_app, monkeypatch):
     compile_row = _compile(client, approved)
     assert compile_row["candidate_sha256"] == approved["candidate_sha256"]
     assert compile_row["source_sha256"] == approved["source_sha256"]
-    assert compile_row["prompt_version"] == "v3.1"
+    assert compile_row["prompt_version"] == "v4.0"
     assert compile_row["result"] == "SUCCESS"
     duplicate = client.post(
         f"/api/admin/pine-conversions/{approved['id']}/compile-success", json={}

@@ -85,6 +85,7 @@ def test_transport_files_are_independent_registered_artifacts():
     assert pine_validation.FROZEN_TRANSPORTS == {
         "pine_transport_v1": V1,
         "pine_transport_v2": V2,
+        "pine_transport_v3_strategy_fill": ROOT / "backend/app/prompts/pine_transport_v3_strategy_fill.txt",
     }
 
 

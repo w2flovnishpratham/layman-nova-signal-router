@@ -1,0 +1,32 @@
+// === NOVA FROZEN TRANSPORT BEGIN: pine_transport_v3_strategy_fill ===
+// Replace only the strategy-code and strategy-version constant values below.
+const string novaTransportVersion = "pine_transport_v3_strategy_fill"
+const string novaStrategyCode = "{{STRATEGY_CODE}}"
+const string novaStrategyVersion = "{{STRATEGY_VERSION}}"
+const string novaCredentialPlaceholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"
+
+novaCredential = input.string(novaCredentialPlaceholder, "NOVA private credential", group="NOVA Webhook")
+novaSendHoldTest = input.bool(false, "Send one HOLD connectivity test", group="NOVA Webhook",
+ tooltip="Connectivity only. Disable after one confirmed HOLD alert.")
+
+bool novaCredentialReady = novaCredential != novaCredentialPlaceholder and str.length(novaCredential) >= 20 and str.substring(novaCredential, 0, 4) == "nwk_"
+
+novaWebhookPayload(string action, string orderId) =>
+    string novaSignalId = novaStrategyCode + ":" + syminfo.ticker + ":" + orderId + ":" + str.tostring(time) + ":" + action
+    string novaSignalTime = str.format_time(time, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+    '{"credential":"' + novaCredential + '","action":"' + action + '","signal_id":"' + novaSignalId + '","signal_time":"' + novaSignalTime + '","strategy_version":"' + novaStrategyVersion + '","timeframe":"' + timeframe.period + '","order_id":"' + orderId + '"}'
+
+// Order-fill actions are reported by the alert_message= arguments NOVA
+// attached to the preserved strategy order calls above, fired by TradingView
+// itself on "Order fills only" alerts -- this block never calls alert()
+// for BUY_CE/BUY_PE/EXIT. The HOLD connectivity test below is the only
+// alert() this transport fires directly, so a user can verify their webhook
+// and credential before enabling live order-fill alerts.
+bool novaAlertReady = barstate.isrealtime and barstate.isconfirmed and novaCredentialReady
+var bool novaHoldSent = false
+if not novaSendHoldTest
+    novaHoldSent := false
+if novaAlertReady and novaSendHoldTest and not novaHoldSent
+    alert(novaWebhookPayload("HOLD", "HOLD_TEST"), alert.freq_once_per_bar_close)
+    novaHoldSent := true
+// === NOVA FROZEN TRANSPORT END: pine_transport_v3_strategy_fill ===

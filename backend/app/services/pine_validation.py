@@ -23,7 +23,11 @@ FROZEN_TRANSPORT_PATH = Path(__file__).resolve().parents[1] / "prompts/pine_tran
 FROZEN_TRANSPORTS = {
     FROZEN_TRANSPORT_VERSION: FROZEN_TRANSPORT_PATH,
     "pine_transport_v2": Path(__file__).resolve().parents[1] / "prompts/pine_transport_v2.txt",
+    "pine_transport_v3_strategy_fill": Path(__file__).resolve().parents[1] / "prompts/pine_transport_v3_strategy_fill.txt",
 }
+STRATEGY_ORDER_CALL_NAMES = (
+    "strategy.entry", "strategy.order", "strategy.exit", "strategy.close", "strategy.close_all",
+)
 MANIFEST_SCHEMA = "nova.pine-conversion-manifest.v1"
 MANIFEST_KEYS = {
     "schema", "status", "strategy_code", "source_pine_version", "target_pine_version",
@@ -51,6 +55,14 @@ SECRET_PATTERNS = (
 
 def contains_credential_like_text(source: str) -> bool:
     return any(pattern.search(source) for pattern in SECRET_PATTERNS)
+
+
+def detect_source_type(source: str) -> str:
+    """Deterministic, server-side -- never trust a provider's self-report of
+    this. A Pine script declares exactly one of indicator(...)/strategy(...);
+    a strategy() declaration is what makes STRATEGY-mode order-fill
+    instrumentation applicable instead of INDICATOR-mode boolean signals."""
+    return "STRATEGY" if re.search(r"\bstrategy\s*\(", source) else "INDICATOR"
 
 
 @dataclass(frozen=True)
@@ -208,7 +220,7 @@ def _location(source: str, offset: int) -> tuple[int, int, str]:
     return line, offset - start + 1, excerpt[:120]
 
 
-def validate_source(source: str) -> dict[str, Any]:
+def validate_source(source: str, *, mode: str = "INDICATOR") -> dict[str, Any]:
     started = time.perf_counter()
     source = canonicalize_source(source)
     findings: list[Finding] = []
@@ -293,10 +305,22 @@ def validate_source(source: str) -> dict[str, Any]:
         if not re.search(r"\boverlay\s*=\s*true\b", declaration_text, re.I):
             add("OVERLAY_UNCONFIRMED", "WARNING", "Overlay mode is not confirmed", "NOVA chart setup normally expects overlay=true.", "Confirm the intended chart behavior and set overlay=true when appropriate.", offset=declarations[0].start())
 
+    strategy_fill_mode = mode == "STRATEGY"
     alert_spans = _call_spans(code, ("alert", "alertcondition"))
+    order_call_spans = _call_spans(code, STRATEGY_ORDER_CALL_NAMES) if strategy_fill_mode else []
+    action_spans = list(alert_spans) + list(order_call_spans)
     emitted: set[str] = set()
-    for offset, call in alert_spans:
-        emitted.update(action for action in SUPPORTED_ACTIONS if re.search(rf"(?<![A-Z0-9_]){action}(?![A-Z0-9_])", call))
+    for offset, call in action_spans:
+        if strategy_fill_mode and (offset, call) in order_call_spans:
+            # In STRATEGY mode an action is only real when it's the argument
+            # to alert_message=novaWebhookPayload("ACTION", ...) on an order
+            # call -- a bare action-shaped word anywhere else in the call
+            # (a comment, a label) must not count as emitted.
+            match = re.search(r'alert_message\s*=\s*novaWebhookPayload\s*\(\s*"([A-Z_]+)"', call)
+            call_actions = {match.group(1)} if match else set()
+        else:
+            call_actions = {action for action in SUPPORTED_ACTIONS if re.search(rf"(?<![A-Z0-9_]){action}(?![A-Z0-9_])", call)}
+        emitted.update(call_actions)
         for action in UNSUPPORTED_ACTIONS:
             if re.search(rf"[\"']{action}[\"']", call):
                 add("ACTION_UNSUPPORTED", "ERROR", "Unsupported emitted action", f"{action} is not a NOVA contract action.", "Emit BUY_CE, BUY_PE, EXIT or optional HOLD.", offset=offset)
@@ -305,42 +329,79 @@ def validate_source(source: str) -> dict[str, Any]:
                 add("SERVER_AUTHORITY_FIELD", "ERROR", "Server-controlled field emitted", f"The alert attempts to control '{field}'.", "Remove the field; NOVA resolves it server-side.", offset=offset)
 
     if not emitted.intersection({"BUY_CE", "BUY_PE"}):
-        add("ENTRY_ACTION_MISSING", "ERROR", "Entry action is missing", "No emitted BUY_CE or BUY_PE action was found in an alert call.", "Emit at least one supported entry action from alert() or alertcondition().")
+        add(
+            "ENTRY_ACTION_MISSING", "ERROR", "Entry action is missing",
+            "No emitted BUY_CE or BUY_PE action was found."
+            + (" on an order call's alert_message." if strategy_fill_mode else " in an alert call."),
+            "Emit at least one supported entry action.",
+        )
     if "EXIT" not in emitted:
-        add("EXIT_ACTION_MISSING", "ERROR", "EXIT action is missing", "Entry-capable scripts must expose an EXIT path.", "Emit EXIT for the current NOVA position.")
+        if strategy_fill_mode:
+            # A reversal-only strategy (no independent flatten, only opposite
+            # entries) is a legitimate, common preserved pattern in STRATEGY
+            # mode -- NOVA's server-side EOD square-off is a separate,
+            # always-on protection regardless of whether the strategy itself
+            # ever emits EXIT. INDICATOR mode's frozen transport always emits
+            # a literal EXIT alert text, so this can't happen there.
+            add("EXIT_ACTION_ABSENT", "INFO", "No explicit EXIT action", "This strategy relies on opposite-entry reversal rather than an independent flatten.", "Confirm this is intentional; NOVA EOD protection still applies.")
+        else:
+            add("EXIT_ACTION_MISSING", "ERROR", "EXIT action is missing", "Entry-capable scripts must expose an EXIT path.", "Emit EXIT for the current NOVA position.")
     if "HOLD" not in emitted:
         if has_frozen_transport:
-            add("HOLD_REQUIRED", "ERROR", "HOLD facility is missing", "Prompt v3 candidates require the canonical one-time HOLD facility.", f"Restore the frozen {frozen_transport_version} block without changes.")
+            add("HOLD_REQUIRED", "ERROR", "HOLD facility is missing", "Candidates require the canonical one-time HOLD facility.", f"Restore the frozen {frozen_transport_version} block without changes.")
         else:
             add("HOLD_OPTIONAL", "INFO", "HOLD is optional", "No audit-only HOLD action was found.", "No change is required unless you want explicit no-op alerts.")
 
     if has_frozen_transport:
         if not _frozen_transport_matches(source, frozen_transport_version):
             add("TRANSPORT_HASH_MISMATCH", "ERROR", "Frozen transport was changed", f"The complete {frozen_transport_version} block does not match the registered template after constant substitution.", "Restore the exact frozen transport block.")
-        required_transport = {
-            "TRANSPORT_END_MISSING": f"NOVA FROZEN TRANSPORT END: {frozen_transport_version}",
-            "TRANSPORT_VERSION_MISSING": f'novaTransportVersion = "{frozen_transport_version}"',
-            "CREDENTIAL_INPUT_INVALID": 'input.string(novaCredentialPlaceholder, "NOVA private credential"',
-            "CREDENTIAL_PLACEHOLDER_INVALID": 'novaCredentialPlaceholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"',
-            "SIGNAL_ID_INVALID": 'novaStrategyCode + ":" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action',
-            "SIGNAL_TIME_INVALID": 'str.format_time(time_close, "yyyy-MM-dd\'T\'HH:mm:ss\'Z\'", "UTC")',
-            "BAR_CLOSE_GATE_INVALID": "barstate.isrealtime and barstate.isconfirmed and novaCredentialReady",
-            "HOLD_INPUT_INVALID": 'input.bool(false, "Send one HOLD connectivity test"',
-            "HOLD_ONCE_INVALID": "not novaHoldSent",
-        }
+        if frozen_transport_version == "pine_transport_v3_strategy_fill":
+            required_transport = {
+                "TRANSPORT_END_MISSING": f"NOVA FROZEN TRANSPORT END: {frozen_transport_version}",
+                "TRANSPORT_VERSION_MISSING": f'novaTransportVersion = "{frozen_transport_version}"',
+                "CREDENTIAL_INPUT_INVALID": 'input.string(novaCredentialPlaceholder, "NOVA private credential"',
+                "CREDENTIAL_PLACEHOLDER_INVALID": 'novaCredentialPlaceholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"',
+                "SIGNAL_ID_INVALID": 'novaStrategyCode + ":" + syminfo.ticker + ":" + orderId + ":" + str.tostring(time) + ":" + action',
+                "SIGNAL_TIME_INVALID": 'str.format_time(time, "yyyy-MM-dd\'T\'HH:mm:ss\'Z\'", "UTC")',
+                "BAR_CLOSE_GATE_INVALID": "barstate.isrealtime and barstate.isconfirmed and novaCredentialReady",
+                "HOLD_INPUT_INVALID": 'input.bool(false, "Send one HOLD connectivity test"',
+                "HOLD_ONCE_INVALID": "not novaHoldSent",
+            }
+        else:
+            required_transport = {
+                "TRANSPORT_END_MISSING": f"NOVA FROZEN TRANSPORT END: {frozen_transport_version}",
+                "TRANSPORT_VERSION_MISSING": f'novaTransportVersion = "{frozen_transport_version}"',
+                "CREDENTIAL_INPUT_INVALID": 'input.string(novaCredentialPlaceholder, "NOVA private credential"',
+                "CREDENTIAL_PLACEHOLDER_INVALID": 'novaCredentialPlaceholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"',
+                "SIGNAL_ID_INVALID": 'novaStrategyCode + ":" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action',
+                "SIGNAL_TIME_INVALID": 'str.format_time(time_close, "yyyy-MM-dd\'T\'HH:mm:ss\'Z\'", "UTC")',
+                "BAR_CLOSE_GATE_INVALID": "barstate.isrealtime and barstate.isconfirmed and novaCredentialReady",
+                "HOLD_INPUT_INVALID": 'input.bool(false, "Send one HOLD connectivity test"',
+                "HOLD_ONCE_INVALID": "not novaHoldSent",
+            }
         for finding_code, fragment in required_transport.items():
             if fragment not in source:
                 add(finding_code, "ERROR", "Frozen transport is incomplete", f"Required {frozen_transport_version} element {finding_code} was not found.", "Restore the exact frozen transport block.")
         payload_fields = set(re.findall(r'"([a-z_]+)"\s*:', code))
-        allowed_fields = {"credential", "action", "signal_id", "signal_time", "strategy_version", "timeframe", "reference_price", "comment"}
+        allowed_fields = {"credential", "action", "signal_id", "signal_time", "strategy_version", "timeframe", "reference_price", "comment", "order_id"}
         if payload_fields - allowed_fields:
-            add("PAYLOAD_FIELD_UNSUPPORTED", "ERROR", "Unsupported webhook field", "The v3 payload contains a field owned by NOVA.", "Keep only canonical required fields and permitted metadata.")
+            add("PAYLOAD_FIELD_UNSUPPORTED", "ERROR", "Unsupported webhook field", "The payload contains a field owned by NOVA.", "Keep only canonical required fields and permitted metadata.")
         emitted_literals = set(re.findall(r'novaWebhookPayload\(\s*"([A-Z_]+)"', code))
         if emitted_literals - SUPPORTED_ACTIONS:
             add("ACTION_UNSUPPORTED", "ERROR", "Unsupported emitted action", "The frozen transport contains a non-contract action.", "Use only BUY_CE, BUY_PE, EXIT, and HOLD.")
+        canonical_alert_pattern = (
+            re.compile(r'^alert\s*\(\s*novaWebhookPayload\s*\(\s*"HOLD"\s*,\s*"[^"]*"\s*\)')
+            if strategy_fill_mode
+            else re.compile(r'^alert\s*\(\s*novaWebhookPayload\s*\(\s*"(?:BUY_CE|BUY_PE|EXIT|HOLD)"\s*\)')
+        )
         for offset, call in alert_spans:
-            if not re.match(r'alert\s*\(\s*novaWebhookPayload\(\s*"(?:BUY_CE|BUY_PE|EXIT|HOLD)"\s*\)', call):
-                add("NONCANONICAL_ALERT", "ERROR", "Non-canonical alert detected", "Prompt v3 candidates may emit alerts only through the frozen NOVA transport.", "Remove strategy-layer alert calls and keep only canonical booleans.", offset=offset)
+            if not canonical_alert_pattern.match(call):
+                add(
+                    "NONCANONICAL_ALERT", "ERROR", "Non-canonical alert detected",
+                    "Candidates may emit bare alert() calls only for the frozen transport's own HOLD test.",
+                    "Remove the extra alert() call; report actions only through the transport's own mechanism for this mode.",
+                    offset=offset,
+                )
         forbidden_input = re.search(r'input\.\w+\([^\n]*"[^"\n]*(?:strategy code|strategy version|timezone|webhook url|quantity|lots|strike|expiry|broker|execution mode|order type|product type)[^"\n]*"', code, re.I)
         if forbidden_input:
             add("TRANSPORT_AUTHORITY_INPUT", "ERROR", "Editable transport authority detected", "A normal-user input controls NOVA transport or execution authority.", "Remove the input and keep transport identity as constants.", offset=forbidden_input.start())
@@ -356,13 +417,17 @@ def validate_source(source: str) -> dict[str, Any]:
         else:
             add("UNDERLYING_UNCONFIRMED", "WARNING", "NIFTY compatibility is unconfirmed", "No explicit NIFTY or generic chart-symbol reference was found.", "Confirm the script is intended only for NIFTY.")
 
-    pyramiding = re.search(r"\bpyramiding\s*=\s*(\d+)", code)
-    if pyramiding and int(pyramiding.group(1)) > 1:
-        add("PYRAMIDING_UNSUPPORTED", "ERROR", "Pyramiding is unsupported", "NOVA currently supports one position without scale-in.", "Set pyramiding to 0 or 1 and remove scale-in behavior.", offset=pyramiding.start())
+    if not strategy_fill_mode:
+        # STRATEGY mode exists specifically to preserve TradingView's native
+        # pyramiding/scaling/order-management state; these checks only apply
+        # to INDICATOR mode's one-position boolean-signal model.
+        pyramiding = re.search(r"\bpyramiding\s*=\s*(\d+)", code)
+        if pyramiding and int(pyramiding.group(1)) > 1:
+            add("PYRAMIDING_UNSUPPORTED", "ERROR", "Pyramiding is unsupported", "NOVA currently supports one position without scale-in.", "Set pyramiding to 0 or 1 and remove scale-in behavior.", offset=pyramiding.start())
+        if re.search(r"\b(?:martingale|strategy\.opentrades|strategy\.order)\b", code, re.I):
+            add("POSITION_MODEL_UNSUPPORTED", "ERROR", "Unsupported position management", "The source appears to manage scaling, orders or multiple positions directly.", "Use one-position BUY_CE/BUY_PE/EXIT intent only.")
     if len(re.findall(r"\bstrategy\.entry\s*\(", code)) > 2:
         add("MULTIPLE_ENTRY_PATHS", "WARNING", "Multiple entry paths detected", "Multiple strategy.entry calls may imply scaling or independent legs.", "Confirm all paths normalize to one current position.")
-    if re.search(r"\b(?:martingale|strategy\.opentrades|strategy\.order)\b", code, re.I):
-        add("POSITION_MODEL_UNSUPPORTED", "ERROR", "Unsupported position management", "The source appears to manage scaling, orders or multiple positions directly.", "Use one-position BUY_CE/BUY_PE/EXIT intent only.")
     if re.search(r"\brequest\.security\s*\(", code) and len(re.findall(r"\brequest\.security\s*\(", code)) > 1:
         add("MULTI_SYMBOL_RISK", "WARNING", "Multiple security requests detected", "The source may depend on multiple symbols.", "Keep execution intent NIFTY-only and review every requested series.")
 
