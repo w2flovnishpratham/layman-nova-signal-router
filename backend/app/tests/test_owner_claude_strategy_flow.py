@@ -222,6 +222,103 @@ def test_owner_bollinger_pending_orders_reach_claude_automatically_not_unsupport
     assert "strategy.cancel" not in detail["final_candidate"]
 
 
+def test_owner_bollinger_realistic_claude_response_is_not_rejected_as_invalid(
+    mu_db, monkeypatch
+):
+    """Regression for the actual production failure after the advisory-flow
+    fix shipped: a real Claude response describes what it normalized in
+    free-text sentences (not the analyzer's bare capability_id tokens) and
+    reports CONVERTED with a non-empty `unsupported` list for the mechanism
+    it dropped (pending stop entries / OCA cancellation) in favor of a
+    disclosed, supported equivalent. The old `_validate_layer` manifest/status
+    checks rejected exactly this shape -- every real Bollinger-style strategy
+    landed at manual_conversion_required with CAPABILITY_MANIFEST_INCOMPLETE /
+    CAPABILITY_MANIFEST_UNKNOWN / UNSUPPORTED_CAPABILITY_STATUS_INVALID even
+    though the conversion was correct. The prior test in this file passed
+    only because its fake fixture echoed exact capability_id tokens into
+    `handled`, which no real Claude response does."""
+    import hashlib as _hashlib
+
+    from app.auth.dependencies import get_current_user
+    from app.routers import personal_pine, pine_conversion
+    from app.services.user_context import current_user_from_model
+
+    owner = make_user("bollinger-realistic-owner@example.com")
+    current = {"user": owner}
+    app = FastAPI()
+    app.include_router(personal_pine.router)
+    app.include_router(pine_conversion.router)
+    app.include_router(pine_conversion.admin_router)
+    app.dependency_overrides[get_current_user] = lambda: current_user_from_model(
+        current["user"]
+    )
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_ENABLED", True)
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-only-never-sent")
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MODEL", "claude-test")
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MAX_REPAIRS", 1)
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MAX_INPUT_TOKENS", 10_000)
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_DAILY_ADMIN_LIMIT", 10)
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_DAILY_GLOBAL_LIMIT", 50)
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/personal-pine-strategies",
+        json={
+            "name": "Bollinger Bands strategy",
+            "source": BOLLINGER_SOURCE,
+            "filename": "bollinger.pine",
+        },
+    )
+    assert created.status_code == 200, created.text
+    strategy = created.json()["strategy"]
+    version = created.json()["version"]
+
+    output = ClaudePineConversionOutput.model_validate({
+        "schema_version": "nova.claude-pine-conversion.v1",
+        "source_sha256": _hashlib.sha256(BOLLINGER_SOURCE.encode()).hexdigest(),
+        "status": "CONVERTED",
+        "strategy_layer": BOLLINGER_LAYER,
+        "signal_mapping": {
+            "buy_ce_source": "ta.crossunder(close, lower)",
+            "buy_pe_source": "ta.crossover(close, upper)",
+            "exit_source": "ta.crossover(close, upper) or ta.crossunder(close, lower)",
+        },
+        "behavior_preservation": {"logic_changed": False, "change_summary": []},
+        "capabilities": {
+            "handled": ["Bollinger band basis/upper/lower calculation preserved unchanged"],
+            "unsupported": [
+                "Pending stop-entry order placement -- normalized to confirmed-bar market intent",
+                "OCA group cancellation lifecycle -- not tracked; exit-first reversal used instead",
+            ],
+            "manual_review": [],
+        },
+        "user_summary": "Normalized pending stop entries and OCA cancellation to confirmed signals.",
+        "admin_review_points": ["Confirm source does not require atomic broker reversal."],
+    })
+    provider = pine_conversion_provider.FakePineConversionProvider(output)
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: provider)
+
+    response = client.post(
+        (
+            f"/api/personal-pine-strategies/{strategy['id']}/versions/"
+            f"{version['id']}/claude-conversion"
+        ),
+        json={
+            "consent": True,
+            "options": {
+                "requested_setup_type": "USER_MANAGED_TRADINGVIEW",
+                "intended_symbol": "NIFTY",
+                "intended_timeframe": "5",
+            },
+        },
+    )
+    assert response.status_code == 202, response.text
+    conversion = response.json()["conversion"]
+    assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
+    assert conversion["validation_status"] == "PASSED"
+    assert provider.convert_calls == 1
+
+
 def test_owner_resubmit_after_stuck_status_gets_next_attempt_not_500(owner_flow):
     """Regression: `existing` reuse lookup deliberately excludes rows left in
     rejected/unsupported_strategy status so a user can retry. But identity_sha256

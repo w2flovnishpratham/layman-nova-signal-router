@@ -996,8 +996,15 @@ def _validate_layer(
     output: ClaudePineConversionOutput,
     *,
     expected_source_sha256: str | None = None,
-    analysis: dict[str, Any] | None = None,
 ) -> list[str]:
+    # capabilities.handled/unsupported/manual_review are Claude's free-text
+    # disclosure of what it did, not a required echo of the analyzer's
+    # capability_id tokens (nothing in the schema/prompt asks for that) -- a
+    # set-equality check between the two vocabularies can never pass and
+    # previously rejected every advisory-normalized conversion. Likewise,
+    # CONVERTED + a non-empty `unsupported` list is now the expected shape
+    # for a strategy whose blocked mechanism (e.g. pending orders) was
+    # normalized to a supported equivalent and disclosed, not an error.
     layer = output.strategy_layer
     errors: list[str] = []
     if expected_source_sha256 and output.source_sha256 != expected_source_sha256:
@@ -1008,19 +1015,6 @@ def _validate_layer(
             if output.status != "MANUAL_REVIEW_REQUIRED"
             else "LOGIC_CHANGED_REQUIRES_MANUAL_CORRECTION"
         )
-    if output.capabilities.unsupported and output.status == "CONVERTED":
-        errors.append("UNSUPPORTED_CAPABILITY_STATUS_INVALID")
-    if analysis is not None:
-        matched = set(analysis.get("matched_capabilities") or [])
-        classified = (
-            set(output.capabilities.handled)
-            | set(output.capabilities.unsupported)
-            | set(output.capabilities.manual_review)
-        )
-        if matched - classified:
-            errors.append("CAPABILITY_MANIFEST_INCOMPLETE")
-        if classified - matched:
-            errors.append("CAPABILITY_MANIFEST_UNKNOWN")
     if output.status == "BLOCKED":
         errors.append("PROVIDER_BLOCKED")
     if len(layer.encode("utf-8")) > max(int(settings.PINE_CONVERSION_MAX_SOURCE_BYTES), 1):
@@ -1097,12 +1091,10 @@ def _candidate_findings(
     strategy_code: str,
     *,
     expected_source_sha256: str,
-    analysis: dict[str, Any],
 ) -> tuple[str, list[str], dict[str, Any]]:
     layer_errors = _validate_layer(
         output,
         expected_source_sha256=expected_source_sha256,
-        analysis=analysis,
     )
     if layer_errors:
         return "", layer_errors, {}
@@ -1269,7 +1261,6 @@ def convert(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[str, An
                     output,
                     strategy.code,
                     expected_source_sha256=current.input_source_sha256,
-                    analysis=(current.usage_summary or {}).get("analysis") or {},
                 )
         except pine_conversion_provider.ProviderError as exc:
             if exc.code in {"PROVIDER_TIMEOUT", "PROVIDER_RATE_LIMITED", "PROVIDER_UNAVAILABLE"}:
@@ -1288,7 +1279,6 @@ def convert(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[str, An
                     output,
                     strategy.code,
                     expected_source_sha256=current.input_source_sha256,
-                    analysis=(current.usage_summary or {}).get("analysis") or {},
                 )
         if output is None or errors:
             _set_failure(admin_id, conversion_id, errors[0] if errors else "INVALID_PROVIDER_RESPONSE", "manual_conversion_required")
@@ -1349,7 +1339,6 @@ def _persist_candidate(
             layer_errors = _validate_layer(
                 output,
                 expected_source_sha256=row.input_source_sha256,
-                analysis=(row.usage_summary or {}).get("analysis") or {},
             )
             if layer_errors:
                 raise AdminConversionError("Candidate layer failed validation.", 422, layer_errors[0])
@@ -1555,7 +1544,6 @@ def submit_manual_response(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, 
             row.started_at = _now()
             row.safe_error_code = None
             expected_source_sha256 = row.input_source_sha256
-            analysis = (row.usage_summary or {}).get("analysis") or {}
     if integrity_error:
         raise AdminConversionError(
             "Submitted source integrity changed."
@@ -1567,7 +1555,6 @@ def submit_manual_response(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, 
     errors = _validate_layer(
         output,
         expected_source_sha256=expected_source_sha256,
-        analysis=analysis,
     )
     if errors:
         _set_failure(admin_id, conversion_id, errors[0], "manual_conversion_required")
