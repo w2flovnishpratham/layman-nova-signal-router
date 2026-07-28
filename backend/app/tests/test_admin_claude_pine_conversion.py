@@ -184,16 +184,29 @@ def test_binary_oversized_and_unsafe_schemas_fail_closed(mu_db, monkeypatch):
     assert unsafe.status_code == 422
 
 
+def test_capability_analysis_is_advisory_only_and_does_not_block_conversion(mu_db, monkeypatch):
+    """Pre-conversion capability analysis is context for Claude, never a gate:
+    a source matching a normally-unsupported mechanism (here, non-reproducible
+    intrabar `varip` state) must still reach the provider, not 409."""
+    _enable(monkeypatch)
+    client = _client(make_user("c1-advisory-admin@example.com", is_admin=True))
+    advisory = _submit(client, SOURCE + "varip int tickState = 0\n", "Advisory")
+    assert advisory["conversion_status"] == "READY_FOR_CONVERSION"
+    assert advisory["analysis_status"] == "ANALYZED"
+    assert advisory["analysis"]["blockers"]
+    assert advisory["conversion_guidance"]["blockers"] == advisory["analysis"]["blockers"]
+    fake = pine_conversion_provider.FakePineConversionProvider(_output(advisory))
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
+    response = client.post(f"/api/admin/pine-conversions/{advisory['id']}/convert")
+    assert response.status_code == 200, response.text
+    assert fake.count_calls == fake.convert_calls == 1
+
+
 def test_hard_block_disabled_and_missing_key_make_zero_provider_calls(mu_db, monkeypatch):
     _enable(monkeypatch)
     client = _client(make_user("c1-block-admin@example.com", is_admin=True))
-    blocked = _submit(client, SOURCE + "varip int tickState = 0\n", "Blocked")
-    fake = pine_conversion_provider.FakePineConversionProvider(_output(blocked))
+    fake = pine_conversion_provider.FakePineConversionProvider(_output(_submit(client, name="Unused")))
     monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
-    response = client.post(f"/api/admin/pine-conversions/{blocked['id']}/convert")
-    assert response.status_code == 409
-    assert fake.count_calls == fake.convert_calls == fake.repair_calls == 0
-
     ready = _submit(client, name="Disabled")
     monkeypatch.setattr(settings, "CLAUDE_CONVERSION_ENABLED", False)
     disabled = client.post(f"/api/admin/pine-conversions/{ready['id']}/convert").json()["conversion"]

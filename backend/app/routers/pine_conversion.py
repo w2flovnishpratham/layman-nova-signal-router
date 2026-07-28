@@ -264,3 +264,15 @@ def admin_reject(
         return {"ok": True, **admin_service.reject(admin.id, conversion_id, payload.reason)}
     except Exception as exc:
         return _error(exc)
+
+
+@admin_router.post("/{conversion_id}/request-changes")
+def admin_request_changes(
+    conversion_id: uuid.UUID,
+    payload: AdminPineDecisionPayload,
+    admin: CurrentUser = Depends(require_admin),
+):
+    try:
+        return {"ok": True, **admin_service.request_changes(admin.id, conversion_id, payload.reason)}
+    except Exception as exc:
+        return _error(exc)

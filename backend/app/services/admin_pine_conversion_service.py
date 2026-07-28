@@ -140,6 +140,98 @@ def _blocked(result: pine_semantic_preanalyzer.PineSemanticAnalysisResult) -> bo
     }
 
 
+# Pre-conversion capability analysis is advisory context only, never an
+# execution gate. Registry findings (any level, L0-L4) are surfaced to the
+# admin/owner and to Claude as guidance, but never block submission or
+# conversion. The only pre-conversion blockers are the intake safety checks in
+# _validate_exact_source: empty/oversized/binary source, credential-like
+# content, and a missing Pine version/declaration (structurally unusable).
+# Real enforcement happens post-conversion, against the converted candidate,
+# via pine.validate_version (see _persist_candidate).
+#
+# Every L3_REQUIRES_BACKEND_CAPABILITY entry in registry.v1.json has an empty
+# allowed_normalization (NOVA has no pending-order engine, ever) but the
+# strategy's *intent* is usually re-expressible without the mechanism. This is
+# the fixed, reviewed NOVA-native re-expression handed to Claude as advisory
+# context for any blocker family it encounters.
+CONVERSION_ADVISORY_BY_BLOCKER: dict[str, dict[str, Any]] = {
+    "BLK_PENDING_ENGINE": {
+        "title": "Pending order engine",
+        "original_semantics": [
+            "Pending stop or limit entry orders",
+            "strategy.cancel / strategy.cancel_all (OCA cancellation)",
+            "Automatic opposite-direction reversal at the broker",
+        ],
+        "proposed_semantics": [
+            "Confirmed bar-close signals only trigger BUY_CE / BUY_PE; no pending TradingView order is placed",
+            "No OCA or cancellation lifecycle is tracked",
+            "An opposite signal while a position is open emits EXIT only; a later confirmed signal may open the opposite side",
+            "NOVA server-side EOD protection remains authoritative unless explicit EOD Pine logic is added",
+        ],
+    },
+    "BLK_FILL_DEPENDENT": {
+        "title": "Fill-dependent recalculation",
+        "original_semantics": [
+            "Logic that reads strategy.position_avg_price / opentrades / closedtrades fill state",
+        ],
+        "proposed_semantics": [
+            "Entries and exits are recomputed from confirmed bar data only, never broker fill state",
+            "Any fill-dependent adjustment the source relied on is disclosed as removed, not silently approximated",
+        ],
+    },
+    "BLK_PARTIAL_QTY": {
+        "title": "Partial exit",
+        "original_semantics": ["strategy.exit with a partial qty / qty_percent"],
+        "proposed_semantics": [
+            "Exits are full-position EXIT signals only; partial scale-out is not represented",
+        ],
+    },
+    "BLK_MULTI_FILL": {
+        "title": "Multiple concurrent entries",
+        "original_semantics": ["Pyramiding or multiple simultaneous entry IDs"],
+        "proposed_semantics": [
+            "Only one open position per side is tracked; a later same-side signal is a no-op until exit",
+        ],
+    },
+    "BLK_ORDER_SEMANTICS": {
+        "title": "Generic order semantics",
+        "original_semantics": ["strategy.order direction-agnostic order semantics"],
+        "proposed_semantics": [
+            "Orders are re-expressed as directional BUY_CE / BUY_PE / EXIT signals",
+        ],
+    },
+}
+
+
+def _conversion_guidance(result: pine_semantic_preanalyzer.PineSemanticAnalysisResult) -> dict[str, Any]:
+    """Informational only: surfaced to the admin/owner and handed to Claude as
+    conversion context. Never gates submission or conversion."""
+    blockers = sorted(set(result.blocker_codes))
+    if not blockers:
+        return {}
+    notes = [
+        {"blocker_code": code, **CONVERSION_ADVISORY_BY_BLOCKER[code]}
+        if code in CONVERSION_ADVISORY_BY_BLOCKER
+        else {
+            "blocker_code": code,
+            "title": code.removeprefix("BLK_").replace("_", " ").title(),
+            "original_semantics": [],
+            "proposed_semantics": [
+                (
+                    "No NOVA guidance is authored for this yet; produce the safest "
+                    "supported equivalent and disclose the change explicitly."
+                ),
+            ],
+        }
+        for code in blockers
+    ]
+    return {
+        "blockers": blockers,
+        "matched_capabilities": list(result.matched_capabilities),
+        "notes": notes,
+    }
+
+
 def _validate_exact_source(source: str, filename: str) -> tuple[bytes, str]:
     if not isinstance(source, str):
         raise AdminConversionError("Pine source must be UTF-8 text.", 422, "INVALID_UTF8")
@@ -306,6 +398,17 @@ def submit(admin_id: uuid.UUID, payload: AdminPineSubmission) -> dict[str, Any]:
             conversion_method="admin_claude_source",
         )
         identity = _json_hash({"cache_key": cache_key, "strategy_id": str(strategy.id)})
+        usage_summary: dict[str, Any] = {
+            "workflow": "NOVA_C1",
+            "analysis_status": "ANALYZED",
+            "analysis": analysis,
+            "provider_mode": None,
+            "validation_status": "NOT_RUN",
+            "review_status": "PENDING",
+        }
+        guidance = _conversion_guidance(analysis_result)
+        if guidance:
+            usage_summary["conversion_guidance"] = guidance
         row = models.PineConversionRequest(
             owner_user_id=admin_id,
             strategy_id=strategy.id,
@@ -319,15 +422,10 @@ def submit(admin_id: uuid.UUID, payload: AdminPineSubmission) -> dict[str, Any]:
             options_sha256=_json_hash(options),
             identity_sha256=identity,
             consent_at=_now(),
-            status="unsupported_strategy" if _blocked(analysis_result) else "ready_for_conversion",
+            status="ready_for_conversion",
             max_attempts=1,
             usage_summary={
-                "workflow": "NOVA_C1",
-                "analysis_status": "UNSUPPORTED_STRATEGY" if _blocked(analysis_result) else "ANALYZED",
-                "analysis": analysis,
-                "provider_mode": None,
-                "validation_status": "NOT_RUN",
-                "review_status": "PENDING",
+                **usage_summary,
                 "provenance": {
                     "source_sha256": source_sha256,
                     "prompt_version": "v3.1",
@@ -457,6 +555,17 @@ def submit_owner_source(
             raise AdminConversionError(
                 "Daily Pine conversion limit reached.", 429, "DAILY_LIMIT"
             )
+        owner_usage_summary: dict[str, Any] = {
+            "workflow": "NOVA_OWNER_CLAUDE",
+            "analysis_status": "ANALYZED",
+            "analysis": analysis,
+            "provider_mode": None,
+            "validation_status": "NOT_RUN",
+            "review_status": "PENDING",
+        }
+        owner_guidance = _conversion_guidance(analysis_result)
+        if owner_guidance:
+            owner_usage_summary["conversion_guidance"] = owner_guidance
         row = models.PineConversionRequest(
             owner_user_id=owner_id,
             strategy_id=strategy.id,
@@ -470,21 +579,10 @@ def submit_owner_source(
             options_sha256=options_sha,
             identity_sha256=identity,
             consent_at=_now(),
-            status=(
-                "unsupported_strategy"
-                if _blocked(analysis_result)
-                else "ready_for_conversion"
-            ),
+            status="ready_for_conversion",
             max_attempts=1,
             usage_summary={
-                "workflow": "NOVA_OWNER_CLAUDE",
-                "analysis_status": (
-                    "UNSUPPORTED_STRATEGY" if _blocked(analysis_result) else "ANALYZED"
-                ),
-                "analysis": analysis,
-                "provider_mode": None,
-                "validation_status": "NOT_RUN",
-                "review_status": "PENDING",
+                **owner_usage_summary,
                 "provenance": {
                     "source_sha256": source_sha256,
                     "prompt_version": "v3.1",
@@ -670,6 +768,7 @@ def _public(db, row: models.PineConversionRequest, *, include_source: bool) -> d
         "review_status": summary.get("review_status", "PENDING"),
         "safe_error_code": row.safe_error_code,
         "analysis": summary.get("analysis"),
+        "conversion_guidance": summary.get("conversion_guidance"),
         "provenance": summary.get("provenance", {}),
         "validation": pine._report_public(report) if report else None,
         "conversion_summary": row.conversion_summary,
@@ -772,6 +871,31 @@ def _relevant_policies(matched: list[str]) -> list[dict[str, Any]]:
     } for item in matched if item in entries]
 
 
+def _advisory_prompt_block(row: models.PineConversionRequest) -> str:
+    """Always-on advisory context for Claude. Never gates conversion — this is
+    the informational half of "pre-conversion analysis = advisory only"."""
+    guidance = (row.usage_summary or {}).get("conversion_guidance") or {}
+    notes = guidance.get("notes") or []
+    if not notes:
+        return ""
+    lines = [
+        "ADVISORY PRE-ANALYSIS CONTEXT (informational, not a blocker)",
+        (
+            "The deterministic pre-analyzer matched execution mechanisms NOVA's "
+            "backend does not run as-is. Normalize them to the safest supported "
+            "NOVA equivalent below and disclose the change via "
+            "behavior_preservation/admin_review_points; do not return BLOCKED "
+            "solely because of these matches."
+        ),
+    ]
+    for note in notes:
+        lines.append(f"- {note['title']} ({note['blocker_code']}):")
+        if note.get("original_semantics"):
+            lines.append(f"  Original mechanism: {'; '.join(note['original_semantics'])}")
+        lines.append(f"  Apply instead: {'; '.join(note['proposed_semantics'])}")
+    return "\n".join(lines) + "\n\n"
+
+
 def _build_request(row: models.PineConversionRequest, source: str) -> pine_conversion_provider.ClaudePineConversionProviderRequest:
     template, _, transport, _ = _prompt_material()
     canonical_package, _ = base_conversion._assemble_v3_prompt(template, transport, source, row.options)
@@ -799,7 +923,7 @@ cannot be preserved; in that case status must be MANUAL_REVIEW_REQUIRED. A
 response with behavior_preservation.logic_changed=true and status=CONVERTED is
 invalid and will be rejected.
 
-SOURCE SHA-256: {row.input_source_sha256}
+{_advisory_prompt_block(row)}SOURCE SHA-256: {row.input_source_sha256}
 MATCHED CAPABILITY IDS:
 {json.dumps(analysis.get("matched_capabilities", []), separators=(",", ":"))}
 RELEVANT CAPABILITY POLICIES:
@@ -1304,7 +1428,7 @@ def manual_package(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[
         raise AdminConversionError("Manual conversion packages are disabled.", 404, "FEATURE_DISABLED")
     with session_scope() as db:
         row = _owned(db, admin_id, conversion_id)
-        if row.status in {"unsupported_strategy", "approved_for_tv_compile", "rejected"}:
+        if row.status in {"unsupported_strategy", "approved_for_tv_compile", "rejected", "changes_requested"}:
             raise AdminConversionError("Manual fallback is not allowed in this state.", 409, "STATE_CONFLICT")
         source = pine._artifact(db, row.input_version_id)
         analysis = (row.usage_summary or {}).get("analysis") or {}
@@ -1509,6 +1633,45 @@ def approve(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, reason: str | N
             user_id=admin_id,
             action="ADMIN_PINE_CANDIDATE_APPROVED_FOR_COMPILE",
             metadata={"conversion_id": str(row.id), **{key: value for key, value in binding.items() if key != "admin_note"}},
+        )
+        return {"conversion": _public(db, row, include_source=True)}
+
+
+def request_changes(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, reason: str | None) -> dict[str, Any]:
+    """Third admin review action alongside approve/reject: the converted
+    candidate needs rework. Terminal for this exact candidate (like reject),
+    but recorded with its own decision value for an honest audit trail."""
+    safe_reason = (reason or "").strip()
+    if not safe_reason:
+        raise AdminConversionError("A changes-requested reason is required.", 422, "CHANGES_REASON_REQUIRED")
+    with session_scope() as db:
+        row = _owned(db, admin_id, conversion_id, lock=True)
+        if row.status not in {"ready_for_admin_review", "validation_failed"}:
+            raise AdminConversionError("Changes cannot be requested in this state.", 409, "STATE_CONFLICT")
+        candidate = pine._artifact(db, row.candidate_version_id) if row.candidate_version_id else None
+        db.add(models.StrategyAdminReview(
+            strategy_version_id=row.candidate_version_id,
+            reviewer_user_id=admin_id,
+            decision="changes_requested",
+            notes=safe_reason[:500],
+            validation_report_id=row.validation_report_id,
+            previous_status=row.status,
+            new_status="changes_requested",
+            source_sha256=candidate.content_sha256 if candidate else None,
+        ))
+        if row.candidate_version_id:
+            version = db.get(models.StrategyVersion, row.candidate_version_id)
+            version.status = "changes_requested"
+        row.status = "changes_requested"
+        row.completed_at = _now()
+        summary = dict(row.usage_summary or {})
+        summary["review_status"] = "CHANGES_REQUESTED"
+        row.usage_summary = summary
+        crud.add_audit_log(
+            db,
+            user_id=admin_id,
+            action="ADMIN_PINE_CANDIDATE_CHANGES_REQUESTED",
+            metadata={"conversion_id": str(row.id), "candidate_sha256": candidate.content_sha256 if candidate else None},
         )
         return {"conversion": _public(db, row, include_source=True)}
 

@@ -5,7 +5,7 @@ import { AdminPineConversionWorkspace } from './AdminPineConversion'
 
 const api = vi.hoisted(() => ({
   list: vi.fn(), get: vi.fn(), submit: vi.fn(), convert: vi.fn(), manualPackage: vi.fn(),
-  manualResponse: vi.fn(), approve: vi.fn(), reject: vi.fn(),
+  manualResponse: vi.fn(), approve: vi.fn(), reject: vi.fn(), requestChanges: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
@@ -17,6 +17,7 @@ vi.mock('../api', () => ({
   submitAdminPineManualResponse: api.manualResponse,
   approveAdminPineConversion: api.approve,
   rejectAdminPineConversion: api.reject,
+  requestChangesAdminPineConversion: api.requestChanges,
   getC2Config: vi.fn().mockResolvedValue({ enabled: false }),
   getAdminC2Conversion: vi.fn(),
   listAdminC2Installations: vi.fn().mockResolvedValue({ installations: [] }),
@@ -53,6 +54,7 @@ const ready = {
     unsupported_capabilities: [], warnings: [], blockers: [], admin_review_points: ['Review crossover timing'],
     effective_capability_level: 'L0_DIRECTLY_SUPPORTED', confidence: 'HIGH_CONFIDENCE_MATCH',
   },
+  conversion_guidance: null,
   provenance: { input_token_count: 120, output_token_count: 80, cache_status: 'MISS', repair_count: 0 },
   validation, conversion_summary: 'Preserved behavior.', warnings: [], unsupported_features: [],
   action_mapping: { buy_ce_source: 'cross', buy_pe_source: 'under', exit_source: 'false' },
@@ -72,6 +74,7 @@ beforeEach(() => {
   api.manualResponse.mockResolvedValue(ready)
   api.approve.mockResolvedValue({ ...ready, conversion_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE', review_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE', approval_integrity: true })
   api.reject.mockResolvedValue({ ...ready, conversion_status: 'REJECTED', review_status: 'REJECTED' })
+  api.requestChanges.mockResolvedValue({ ...ready, conversion_status: 'CHANGES_REQUESTED', review_status: 'CHANGES_REQUESTED' })
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
   vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
@@ -127,6 +130,37 @@ describe('AdminPineConversionWorkspace', () => {
     expect(screen.getByRole('button', { name: /open manual fallback/i })).toBeDisabled()
   })
 
+  it('shows advisory conversion guidance for a matched capability without ever gating conversion', async () => {
+    const advisory = {
+      ...ready, candidate_version_id: null, conversion_status: 'READY_FOR_CONVERSION',
+      validation: null, validation_status: 'NOT_RUN', final_candidate: null, strategy_layer: null,
+      analysis: {
+        ...ready.analysis,
+        matched_capabilities: ['OPPOSITE_DIRECTION_REVERSAL_NORMALIZATION', 'PENDING_ORDER_CANCELLATION', 'PENDING_STOP_ENTRY'],
+        blockers: ['BLK_PENDING_ENGINE'], effective_capability_level: 'L3_REQUIRES_BACKEND_CAPABILITY',
+        confidence: 'PARTIAL_MATCH',
+      },
+      conversion_guidance: {
+        blockers: ['BLK_PENDING_ENGINE'],
+        matched_capabilities: ['PENDING_ORDER_CANCELLATION', 'PENDING_STOP_ENTRY'],
+        notes: [{
+          blocker_code: 'BLK_PENDING_ENGINE', title: 'Pending order engine',
+          original_semantics: ['Pending stop or limit entry orders'],
+          proposed_semantics: ['An opposite signal while a position is open emits EXIT only'],
+        }],
+      },
+    }
+    api.list.mockResolvedValue([advisory]); api.get.mockResolvedValue(advisory)
+    render(<AdminPineConversionWorkspace />)
+    expect(await screen.findByText(/BLK_PENDING_ENGINE/)).toBeInTheDocument()
+    expect(screen.getByText('Conversion guidance given to Claude')).toBeInTheDocument()
+    expect(screen.getByText('Pending stop or limit entry orders')).toBeInTheDocument()
+    expect(screen.getByText(/opposite signal while a position is open emits EXIT only/)).toBeInTheDocument()
+    // Advisory only -- conversion stays reachable, nothing here requires a decision.
+    expect(screen.getByRole('button', { name: /run ai conversion/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /open manual fallback/i })).toBeEnabled()
+  })
+
   it('runs AI conversion with a visible loading boundary and safe failure state', async () => {
     const pending = { ...ready, candidate_version_id: null, conversion_status: 'READY_FOR_CONVERSION', validation: null, final_candidate: null, strategy_layer: null }
     api.list.mockResolvedValue([pending]); api.get.mockResolvedValue(pending)
@@ -154,7 +188,7 @@ describe('AdminPineConversionWorkspace', () => {
     await waitFor(() => expect(api.manualResponse).toHaveBeenCalledWith('c1', '{"schema_version":"v1"}'))
   })
 
-  it('binds approval to explicit confirmation and records rejection reasons', async () => {
+  it('binds approval to explicit confirmation', async () => {
     const user = userEvent.setup()
     render(<AdminPineConversionWorkspace />)
     const approve = await screen.findByRole('button', { name: /approve for tradingview compile/i })
@@ -162,6 +196,27 @@ describe('AdminPineConversionWorkspace', () => {
     await user.click(approve)
     await waitFor(() => expect(window.confirm).toHaveBeenCalled())
     expect(api.approve).toHaveBeenCalledWith('c1', '')
+  })
+
+  it('requires a reason before request-changes or reject are enabled, and records it', async () => {
+    const user = userEvent.setup()
+    render(<AdminPineConversionWorkspace />)
+    await screen.findByRole('button', { name: /approve for tradingview compile/i })
+    const requestChanges = screen.getByRole('button', { name: /request changes/i })
+    const reject = screen.getByRole('button', { name: /reject candidate/i })
+    expect(requestChanges).toBeDisabled()
+    expect(reject).toBeDisabled()
+    await user.type(screen.getByLabelText('Conversion review reason'), 'TradingView mismatch')
+    expect(requestChanges).toBeEnabled()
+    expect(reject).toBeEnabled()
+    await user.click(requestChanges)
+    await waitFor(() => expect(api.requestChanges).toHaveBeenCalledWith('c1', 'TradingView mismatch'))
+  })
+
+  it('records the rejection reason', async () => {
+    const user = userEvent.setup()
+    render(<AdminPineConversionWorkspace />)
+    await screen.findByRole('button', { name: /approve for tradingview compile/i })
     await user.type(screen.getByLabelText('Conversion review reason'), 'TradingView mismatch')
     await user.click(screen.getByRole('button', { name: /reject candidate/i }))
     await waitFor(() => expect(api.reject).toHaveBeenCalledWith('c1', 'TradingView mismatch'))

@@ -97,6 +97,130 @@ def owner_flow(mu_db, monkeypatch):
     return TestClient(app), current, owner, other, admin, provider
 
 
+BOLLINGER_SOURCE = """//@version=6
+indicator("Bollinger Bands strategy", overlay=true)
+[middle, upper, lower] = ta.bb(close, 20, 2)
+if ta.crossunder(close, lower)
+    strategy.entry("Long", strategy.long, stop=lower)
+if ta.crossover(close, upper)
+    strategy.entry("Short", strategy.short, stop=upper)
+strategy.cancel_all()
+"""
+
+BOLLINGER_LAYER = """//@version=6
+indicator("Bollinger Bands converted", overlay=true)
+[middle, upper, lower] = ta.bb(close, 20, 2)
+bool novaBuyCeSignal = ta.crossunder(close, lower)
+bool novaBuyPeSignal = ta.crossover(close, upper)
+bool novaExitSignal = ta.crossover(close, upper) or ta.crossunder(close, lower)
+"""
+
+
+def test_owner_bollinger_pending_orders_reach_claude_automatically_not_unsupported(
+    mu_db, monkeypatch
+):
+    """Regression for the exact reported bug: a user uploads a Pine strategy
+    with pending stop entries + strategy.cancel_all + an opposite-direction
+    reversal, clicks "Convert and send for admin review", and it used to get
+    stuck at UNSUPPORTED_STRATEGY / Validation: NOT_RUN forever. It must now
+    reach Claude automatically and land in the admin review queue."""
+    import hashlib as _hashlib
+
+    from app.auth.dependencies import get_current_user
+    from app.routers import personal_pine, pine_conversion
+    from app.services.user_context import current_user_from_model
+
+    owner = make_user("bollinger-owner@example.com")
+    current = {"user": owner}
+    app = FastAPI()
+    app.include_router(personal_pine.router)
+    app.include_router(pine_conversion.router)
+    app.include_router(pine_conversion.admin_router)
+    app.dependency_overrides[get_current_user] = lambda: current_user_from_model(
+        current["user"]
+    )
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_ENABLED", True)
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-only-never-sent")
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MODEL", "claude-test")
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MAX_REPAIRS", 1)
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MAX_INPUT_TOKENS", 10_000)
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_DAILY_ADMIN_LIMIT", 10)
+    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_DAILY_GLOBAL_LIMIT", 50)
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/personal-pine-strategies",
+        json={
+            "name": "Bollinger Bands strategy",
+            "source": BOLLINGER_SOURCE,
+            "filename": "bollinger.pine",
+        },
+    )
+    assert created.status_code == 200, created.text
+    strategy = created.json()["strategy"]
+    version = created.json()["version"]
+
+    analysis = pine_semantic_preanalyzer.analyze_source(BOLLINGER_SOURCE)
+    output = ClaudePineConversionOutput.model_validate({
+        "schema_version": "nova.claude-pine-conversion.v1",
+        "source_sha256": _hashlib.sha256(BOLLINGER_SOURCE.encode()).hexdigest(),
+        "status": "CONVERTED",
+        "strategy_layer": BOLLINGER_LAYER,
+        "signal_mapping": {
+            "buy_ce_source": "ta.crossunder(close, lower)",
+            "buy_pe_source": "ta.crossover(close, upper)",
+            "exit_source": "ta.crossover(close, upper) or ta.crossunder(close, lower)",
+        },
+        "behavior_preservation": {"logic_changed": False, "change_summary": []},
+        "capabilities": {
+            "handled": list(analysis.matched_capabilities),
+            "unsupported": [],
+            "manual_review": [],
+        },
+        "user_summary": "Normalized pending stop entries and OCA cancellation to confirmed signals.",
+        "admin_review_points": [],
+    })
+    provider = pine_conversion_provider.FakePineConversionProvider(output)
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: provider)
+
+    response = client.post(
+        (
+            f"/api/personal-pine-strategies/{strategy['id']}/versions/"
+            f"{version['id']}/claude-conversion"
+        ),
+        json={
+            "consent": True,
+            "options": {
+                "requested_setup_type": "USER_MANAGED_TRADINGVIEW",
+                "intended_symbol": "NIFTY",
+                "intended_timeframe": "5",
+            },
+        },
+    )
+    assert response.status_code == 202, response.text
+    conversion = response.json()["conversion"]
+
+    # The old bug: this used to stop here as UNSUPPORTED_STRATEGY /
+    # Validation: NOT_RUN, with Claude never called.
+    assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW"
+    assert conversion["validation_status"] == "PASSED"
+    assert provider.convert_calls == 1
+
+    # The blocker finding is still visible -- advisory, not hidden.
+    assert conversion["analysis"]["blockers"] == ["BLK_PENDING_ENGINE"]
+    assert conversion["conversion_guidance"]["blockers"] == ["BLK_PENDING_ENGINE"]
+
+    detail = client.get(
+        f"/api/personal-pine-claude-conversions/{conversion['id']}"
+    ).json()["conversion"]
+    assert "novaBuyCeSignal" in detail["strategy_layer"]
+    assert "novaBuyPeSignal" in detail["strategy_layer"]
+    assert "novaExitSignal" in detail["strategy_layer"]
+    assert "strategy.entry" not in detail["final_candidate"]
+    assert "stop=" not in detail["final_candidate"]
+    assert "strategy.cancel" not in detail["final_candidate"]
+
+
 def test_owner_pine_claude_admin_compile_installs_only_for_origin_owner(owner_flow):
     client, current, owner, other, admin, provider = owner_flow
     created = client.post(

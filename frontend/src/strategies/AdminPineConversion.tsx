@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Copy, FileCode2, Loader2, Sparkles, Upload, X } from 'lucide-react'
+import { Check, Copy, FileCode2, Loader2, RefreshCcw, Sparkles, Upload, X } from 'lucide-react'
 import {
   approveAdminPineConversion,
   getAdminPineConversion,
   getAdminPineManualPackage,
   listAdminPineConversions,
   rejectAdminPineConversion,
+  requestChangesAdminPineConversion,
   runAdminPineConversion,
   submitAdminPineConversion,
   submitAdminPineManualResponse,
@@ -150,6 +151,7 @@ export function AdminPineConversionWorkspace() {
             onSubmitManual={() => run('Manual response', async () => { const value = await submitAdminPineManualResponse(selected.id, manualResponse); setSelected(value); await refresh(selected.id) })}
             onApprove={() => run('Candidate approval', async () => { if (!window.confirm('Approve this exact candidate for TradingView compilation only?')) return; const value = await approveAdminPineConversion(selected.id, reviewReason); setSelected(value); await refresh(selected.id) })}
             onReject={() => run('Candidate rejection', async () => { const value = await rejectAdminPineConversion(selected.id, reviewReason); setSelected(value); await refresh(selected.id) })}
+            onRequestChanges={() => run('Changes requested', async () => { const value = await requestChangesAdminPineConversion(selected.id, reviewReason); setSelected(value); await refresh(selected.id) })}
           /> : <div className="ps-empty"><FileCode2 size={28} /><h2>Select a conversion</h2></div>}
         </main>
       </div>
@@ -159,7 +161,7 @@ export function AdminPineConversionWorkspace() {
 
 function ConversionDetail({
   conversion, busy, manualPackage, manualResponse, reviewReason, onManualResponse, onReviewReason,
-  onConvert, onManualPackage, onSubmitManual, onApprove, onReject,
+  onConvert, onManualPackage, onSubmitManual, onApprove, onReject, onRequestChanges,
 }: {
   conversion: AdminPineConversion
   busy: string
@@ -173,11 +175,12 @@ function ConversionDetail({
   onSubmitManual: () => Promise<void>
   onApprove: () => Promise<void>
   onReject: () => Promise<void>
+  onRequestChanges: () => Promise<void>
 }) {
   const canConvert = ['READY_FOR_CONVERSION', 'AI_FAILED_RETRYABLE'].includes(conversion.conversion_status)
-  const canManual = !['UNSUPPORTED_STRATEGY', 'APPROVED_FOR_TRADINGVIEW_COMPILE', 'REJECTED'].includes(conversion.conversion_status)
+  const canManual = !['UNSUPPORTED_STRATEGY', 'APPROVED_FOR_TRADINGVIEW_COMPILE', 'REJECTED', 'CHANGES_REQUESTED'].includes(conversion.conversion_status)
   const canReview = conversion.conversion_status === 'READY_FOR_ADMIN_REVIEW' && conversion.validation?.eligible_for_review
-  const canReject = ['READY_FOR_ADMIN_REVIEW', 'VALIDATION_FAILED'].includes(conversion.conversion_status)
+  const canDecide = ['READY_FOR_ADMIN_REVIEW', 'VALIDATION_FAILED'].includes(conversion.conversion_status)
   const provenance = conversion.provenance ?? {}
   return <>
     <div className="ps-card-head"><div><span>{conversion.source_sha256.slice(0, 12)}… · {new Date(conversion.submitted_at ?? '').toLocaleString()}</span><h2>{conversion.strategy_name}</h2></div><span className="ps-status">{conversion.conversion_status.replaceAll('_', ' ')}</span></div>
@@ -188,12 +191,25 @@ function ConversionDetail({
       <div><span>Review</span><strong>{conversion.review_status}</strong></div>
     </div>
     <div className="c1-capabilities">
-      <strong>Deterministic pre-analysis</strong>
+      <strong>Deterministic pre-analysis (advisory only — never blocks conversion)</strong>
       <span>{conversion.analysis.effective_capability_level} · {conversion.analysis.confidence}</span>
       <span>Matched: {conversion.analysis.matched_capabilities.join(', ') || 'None'}</span>
       {conversion.analysis.blockers.length ? <span className="c1-blocker">Blockers: {conversion.analysis.blockers.join(', ')}</span> : null}
       {conversion.analysis.admin_review_points.length ? <span>Review: {conversion.analysis.admin_review_points.join('; ')}</span> : null}
     </div>
+    {conversion.conversion_guidance?.notes.length ? (
+      <div className="c1-normalization">
+        <strong>Conversion guidance given to Claude</strong>
+        <p className="ps-note">Informational context, not a gate — Claude was instructed to normalize these mechanisms to the safest supported NOVA equivalent and disclose the change.</p>
+        {conversion.conversion_guidance.notes.map((note) => (
+          <div className="c1-normalization-policy" key={note.blocker_code}>
+            <span className="c1-blocker">{note.title} · {note.blocker_code}</span>
+            {note.original_semantics.length ? <div><strong>Original semantics</strong><ul>{note.original_semantics.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+            <div><strong>Proposed NOVA semantics</strong><ul>{note.proposed_semantics.map((item) => <li key={item}>{item}</li>)}</ul></div>
+          </div>
+        ))}
+      </div>
+    ) : null}
     <div className="ps-actions">
       <button className="ps-primary" type="button" disabled={!canConvert || !!busy} onClick={() => void onConvert()}><Sparkles size={14} /> Run AI Conversion</button>
       <button className="secondary-button" type="button" disabled={!canManual || !!busy} onClick={() => void onManualPackage()}><Copy size={14} /> Open Manual Fallback</button>
@@ -214,7 +230,8 @@ function ConversionDetail({
     <label className="c1-review-reason">Internal review reason<textarea aria-label="Conversion review reason" value={reviewReason} maxLength={500} onChange={(event) => onReviewReason(event.target.value)} /></label>
     <div className="ps-actions">
       <button className="ps-primary" type="button" disabled={!canReview || !!busy} onClick={() => void onApprove()}><Check size={14} /> Approve for TradingView compile</button>
-      <button className="ps-danger" type="button" disabled={!canReject || !reviewReason.trim() || !!busy} onClick={() => void onReject()}><X size={14} /> Reject Candidate</button>
+      <button className="secondary-button" type="button" disabled={!canDecide || !reviewReason.trim() || !!busy} onClick={() => void onRequestChanges()}><RefreshCcw size={14} /> Request Changes</button>
+      <button className="ps-danger" type="button" disabled={!canDecide || !reviewReason.trim() || !!busy} onClick={() => void onReject()}><X size={14} /> Reject Candidate</button>
     </div>
     {conversion.approval_integrity === false ? <div className="ps-message error">Approval binding no longer matches the candidate SHA.</div> : null}
     <C2AdminPanel conversion={conversion} />

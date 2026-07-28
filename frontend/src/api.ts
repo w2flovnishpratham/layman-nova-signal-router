@@ -1218,6 +1218,19 @@ export interface AdminPineAnalysis {
   confidence: string
 }
 
+export interface AdminPineConversionGuidanceNote {
+  blocker_code: string
+  title: string
+  original_semantics: string[]
+  proposed_semantics: string[]
+}
+
+export interface AdminPineConversionGuidance {
+  blockers: string[]
+  matched_capabilities: string[]
+  notes: AdminPineConversionGuidanceNote[]
+}
+
 export interface AdminPineConversion {
   id: string
   owner_user_id: string
@@ -1238,6 +1251,7 @@ export interface AdminPineConversion {
   review_status: string
   safe_error_code: string | null
   analysis: AdminPineAnalysis
+  conversion_guidance: AdminPineConversionGuidance | null
   provenance: Record<string, unknown>
   validation: PineValidation | null
   conversion_summary: string | null
@@ -1303,6 +1317,12 @@ export const approveAdminPineConversion = async (id: string, reason?: string) =>
 export const rejectAdminPineConversion = async (id: string, reason: string) =>
   (await pineCall<{ conversion: AdminPineConversion }>(
     `/api/admin/pine-conversions/${id}/reject` as `/${string}`,
+    'POST',
+    { reason },
+  )).conversion
+export const requestChangesAdminPineConversion = async (id: string, reason: string) =>
+  (await pineCall<{ conversion: AdminPineConversion }>(
+    `/api/admin/pine-conversions/${id}/request-changes` as `/${string}`,
     'POST',
     { reason },
   )).conversion
