@@ -315,7 +315,11 @@ function OwnerWorkspace() {
                   setClaudeHistory((rows) => [result.conversion, ...rows.filter((row) => row.id !== result.conversion.id)])
                 })}
               >
-                <Sparkles size={14} /> Convert and send for admin review
+                {busy === 'Claude conversion request' ? (
+                  <><Loader2 className="ps-spin" size={14} /> Converting with Claude… this can take up to a minute</>
+                ) : (
+                  <><Sparkles size={14} /> Convert and send for admin review</>
+                )}
               </button>
             </div>
           ) : null}
