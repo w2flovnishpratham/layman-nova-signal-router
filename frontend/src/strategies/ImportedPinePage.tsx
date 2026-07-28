@@ -382,12 +382,20 @@ function OwnerClaudeStatus({ conversion }: { conversion: AdminPineConversion }) 
           Conversion stopped safely: {conversion.safe_error_code.replaceAll('_', ' ').toLowerCase()}
         </div>
       ) : null}
+      {!conversion.safe_error_code && conversion.unsupported_features.length > 0 && ['READY_FOR_ADMIN_REVIEW', 'APPROVED_FOR_TRADINGVIEW_COMPILE'].includes(conversion.conversion_status) ? (
+        <div className="ps-message warning" role="status">
+          Converted with disclosed NOVA normalizations — TradingView-specific execution behaviour was mapped to NOVA's confirmed-bar / server-managed execution model. Review all disclosed changes below.
+        </div>
+      ) : null}
       <div className="ps-summary-grid">
         <div><span>Conversion</span><strong>{conversion.conversion_status.replaceAll('_', ' ')}</strong></div>
         <div><span>Validation</span><strong>{conversion.validation_status.replaceAll('_', ' ')}</strong></div>
         <div><span>Admin review</span><strong>{conversion.review_status.replaceAll('_', ' ')}</strong></div>
       </div>
       {conversion.conversion_summary ? <p>{conversion.conversion_summary}</p> : null}
+      {conversion.unsupported_features.length ? (
+        <div className="c1-normalization"><strong>Removed / normalized behaviour</strong><ul>{conversion.unsupported_features.map((item, index) => <li key={index}>{item}</li>)}</ul></div>
+      ) : null}
       {reviewReady ? <div className="ps-message">Claude conversion and deterministic validation passed. An admin must now review this exact candidate.</div> : null}
       {approved ? <div className="ps-message success">Admin approved the exact candidate. TradingView compile evidence will create an installation in your account; HOLD and Paper verification remain required before it can trade.</div> : null}
       {conversion.final_candidate ? (

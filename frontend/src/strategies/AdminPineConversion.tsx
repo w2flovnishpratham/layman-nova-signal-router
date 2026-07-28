@@ -185,11 +185,24 @@ function ConversionDetail({
   return <>
     <div className="ps-card-head"><div><span>{conversion.source_sha256.slice(0, 12)}… · {new Date(conversion.submitted_at ?? '').toLocaleString()}</span><h2>{conversion.strategy_name}</h2></div><span className="ps-status">{conversion.conversion_status.replaceAll('_', ' ')}</span></div>
     {conversion.safe_error_code ? <div className="ps-message error">Safe failure: {conversion.safe_error_code.replaceAll('_', ' ')}</div> : null}
+    {!conversion.safe_error_code && conversion.unsupported_features.length > 0 && ['READY_FOR_ADMIN_REVIEW', 'APPROVED_FOR_TRADINGVIEW_COMPILE'].includes(conversion.conversion_status) ? (
+      <div className="ps-message warning">
+        Converted with disclosed NOVA normalizations — TradingView-specific execution behaviour was mapped to NOVA's confirmed-bar / server-managed execution model. Review every disclosed change below before approval.
+      </div>
+    ) : null}
     <div className="ps-summary-grid">
       <div><span>Analysis</span><strong>{conversion.analysis_status}</strong></div>
       <div><span>Validation</span><strong>{conversion.validation_status}</strong></div>
       <div><span>Review</span><strong>{conversion.review_status}</strong></div>
     </div>
+    {conversion.conversion_summary || conversion.unsupported_features.length || conversion.warnings.length ? (
+      <div className="c1-normalization">
+        <strong>Semantic changes disclosed by Claude</strong>
+        {conversion.conversion_summary ? <p className="ps-note">{conversion.conversion_summary}</p> : null}
+        {conversion.unsupported_features.length ? <div><strong>Removed / normalized behaviour</strong><ul>{conversion.unsupported_features.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
+        {conversion.warnings.length ? <div><strong>Admin review points</strong><ul>{conversion.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}
+      </div>
+    ) : null}
     <div className="c1-capabilities">
       <strong>Deterministic pre-analysis (advisory only — never blocks conversion)</strong>
       <span>{conversion.analysis.effective_capability_level} · {conversion.analysis.confidence}</span>

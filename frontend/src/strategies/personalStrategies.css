@@ -68,6 +68,7 @@
 .ps-message { margin-bottom: 14px; padding: 10px 13px; border: 1px solid; border-radius: 10px; font-size: 12px; }
 .ps-message.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, transparent); background: var(--danger-bg); }
 .ps-message.success { color: var(--success); border-color: color-mix(in srgb, var(--success) 30%, transparent); background: var(--success-bg); }
+.ps-message.warning { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 30%, transparent); background: color-mix(in srgb, var(--warning) 10%, transparent); }
 
 .ps-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 18px; align-items: start; }
 .ps-list { display: flex; flex-direction: column; gap: 8px; position: sticky; top: 76px; }

@@ -540,7 +540,7 @@ def _strategy_mode_output(source: str, layer: str, **overrides) -> ClaudePineCon
     return ClaudePineConversionOutput.model_validate(payload)
 
 
-def _strategy_mode_client(monkeypatch, output: ClaudePineConversionOutput):
+def _strategy_mode_client(monkeypatch, output: ClaudePineConversionOutput, *, repair_output: ClaudePineConversionOutput | None = None):
     from app.auth.dependencies import get_current_user
     from app.routers import personal_pine, pine_conversion
     from app.services.user_context import current_user_from_model
@@ -559,7 +559,7 @@ def _strategy_mode_client(monkeypatch, output: ClaudePineConversionOutput):
     monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MAX_INPUT_TOKENS", 10_000)
     monkeypatch.setattr(settings, "CLAUDE_CONVERSION_DAILY_ADMIN_LIMIT", 10)
     monkeypatch.setattr(settings, "CLAUDE_CONVERSION_DAILY_GLOBAL_LIMIT", 50)
-    provider = pine_conversion_provider.FakePineConversionProvider(output)
+    provider = pine_conversion_provider.FakePineConversionProvider(output, repair_output=repair_output)
     monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: provider)
     return TestClient(app), current, owner, provider
 
@@ -629,3 +629,128 @@ def test_strategy_mode_rejects_a_dropped_order_call(mu_db, monkeypatch):
     conversion = response.json()["conversion"]
     assert conversion["conversion_status"] == "MANUAL_CONVERSION_REQUIRED", conversion
     assert provider.convert_calls == 1
+
+
+REAL_GREEDY_STRATEGY_SOURCE = """//@version=6
+strategy("Greedy Strategy", pyramiding = 100, calc_on_order_fills=false, overlay=true)
+tp = input(10, "Take profit")
+sl = input(10, "Stop loss")
+upGap = open > high[1]
+dnGap = open < low[1]
+dn = strategy.position_size < 0 and open > close
+up = strategy.position_size > 0 and open < close
+if upGap
+    strategy.entry("GapUp", strategy.long, stop = high[1])
+else
+    strategy.cancel("GapUp")
+if dn
+    strategy.entry("Dn", strategy.short, stop = close)
+else
+    strategy.cancel("Dn")
+if dnGap
+    strategy.entry("GapDn", strategy.short, stop = low[1])
+else
+    strategy.cancel("GapDn")
+if up
+    strategy.entry("Up", strategy.long, stop = close)
+else
+    strategy.cancel("Up")
+XQty = strategy.position_size < 0 ? -strategy.position_size : strategy.position_size
+dir = strategy.position_size < 0 ? -1 : 1
+lmP = strategy.position_avg_price + dir*tp*syminfo.mintick
+slP = strategy.position_avg_price - dir*sl*syminfo.mintick
+float nav = na
+if XQty > 0
+    strategy.order("TP", strategy.position_size < 0 ? strategy.long : strategy.short, XQty, lmP, nav, "TPSL", strategy.oca.reduce, "TPSL")
+    strategy.order("SL", strategy.position_size < 0 ? strategy.long : strategy.short, XQty, nav, slP, "TPSL", strategy.oca.reduce, "TPSL")
+else
+    strategy.cancel("TP")
+    strategy.cancel("SL")
+"""
+
+REAL_GREEDY_STRATEGY_LAYER_PRESERVED = """//@version=6
+strategy("Greedy Strategy", pyramiding = 100, calc_on_order_fills=false, overlay=true)
+tp = input(10, "Take profit")
+sl = input(10, "Stop loss")
+upGap = open > high[1]
+dnGap = open < low[1]
+dn = strategy.position_size < 0 and open > close
+up = strategy.position_size > 0 and open < close
+if upGap
+    strategy.entry("GapUp", strategy.long, stop = high[1], alert_message=novaWebhookPayload("BUY_CE", "GapUp"))
+else
+    strategy.cancel("GapUp")
+if dn
+    strategy.entry("Dn", strategy.short, stop = close, alert_message=novaWebhookPayload("BUY_PE", "Dn"))
+else
+    strategy.cancel("Dn")
+if dnGap
+    strategy.entry("GapDn", strategy.short, stop = low[1], alert_message=novaWebhookPayload("BUY_PE", "GapDn"))
+else
+    strategy.cancel("GapDn")
+if up
+    strategy.entry("Up", strategy.long, stop = close, alert_message=novaWebhookPayload("BUY_CE", "Up"))
+else
+    strategy.cancel("Up")
+XQty = strategy.position_size < 0 ? -strategy.position_size : strategy.position_size
+dir = strategy.position_size < 0 ? -1 : 1
+lmP = strategy.position_avg_price + dir*tp*syminfo.mintick
+slP = strategy.position_avg_price - dir*sl*syminfo.mintick
+float nav = na
+if XQty > 0
+    strategy.order("TP", strategy.position_size < 0 ? strategy.long : strategy.short, XQty, lmP, nav, "TPSL", strategy.oca.reduce, "TPSL", alert_message=novaWebhookPayload("EXIT", "TP"))
+    strategy.order("SL", strategy.position_size < 0 ? strategy.long : strategy.short, XQty, nav, slP, "TPSL", strategy.oca.reduce, "TPSL", alert_message=novaWebhookPayload("EXIT", "SL"))
+else
+    strategy.cancel("TP")
+    strategy.cancel("SL")
+"""
+
+
+def test_strategy_mode_advisory_reassures_preserve_for_matched_blockers(mu_db, monkeypatch):
+    """Regression for the actual reported 'greedy' bug: for a STRATEGY-mode
+    source, the advisory block must not tell Claude to normalize/remove
+    fill-dependent state, pyramiding, or generic order semantics -- it must
+    say to keep them exactly as-is. The old INDICATOR-oriented wording
+    directly contradicted the main STRATEGY-mode instructions and caused
+    Claude to report logic_changed=true for mechanisms that need no change
+    at all in this mode."""
+    from app.services import admin_pine_conversion_service as svc
+    from app.services import pine_semantic_preanalyzer
+    from types import SimpleNamespace
+
+    analysis_result = pine_semantic_preanalyzer.analyze_source(REAL_GREEDY_STRATEGY_SOURCE)
+    row = SimpleNamespace(
+        input_source_sha256="a" * 64,
+        usage_summary={"analysis": svc._analysis_public(analysis_result), "conversion_guidance": svc._conversion_guidance(analysis_result)},
+        options={},
+        model="claude-test-model",
+    )
+    prompt = svc._build_request(row, REAL_GREEDY_STRATEGY_SOURCE).prompt
+    assert "keep as-is, no change needed" in prompt
+    assert "recompute from confirmed bar data only" not in prompt
+    assert "Only one open position per side is tracked" not in prompt
+    assert "Orders are re-expressed as directional BUY_CE" not in prompt
+
+
+def test_strategy_mode_logic_changed_gets_one_corrective_retry_then_succeeds(mu_db, monkeypatch):
+    """End-to-end reproduction of the real 'greedy' strategy: even with the
+    corrected advisory text, if Claude's first response still reports
+    logic_changed=true/MANUAL_REVIEW_REQUIRED for a source whose every
+    matched blocker has an authored safe mapping, one bounded corrective
+    retry must run before giving up -- not an immediate manual_conversion_required."""
+    overly_conservative = _strategy_mode_output(
+        REAL_GREEDY_STRATEGY_SOURCE, REAL_GREEDY_STRATEGY_LAYER_PRESERVED,
+        status="MANUAL_REVIEW_REQUIRED",
+        behavior_preservation={"logic_changed": True, "change_summary": ["fill-dependent TP/SL calc"]},
+    )
+    corrected = _strategy_mode_output(REAL_GREEDY_STRATEGY_SOURCE, REAL_GREEDY_STRATEGY_LAYER_PRESERVED)
+    client, current, owner, provider = _strategy_mode_client(monkeypatch, overly_conservative, repair_output=corrected)
+    del current, owner
+
+    response = _submit_for_conversion(client, "Greedy Strategy", REAL_GREEDY_STRATEGY_SOURCE)
+    assert response.status_code == 202, response.text
+    conversion = response.json()["conversion"]
+    assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
+    assert conversion["validation_status"] == "PASSED"
+    assert provider.convert_calls == 1
+    assert provider.repair_calls == 1

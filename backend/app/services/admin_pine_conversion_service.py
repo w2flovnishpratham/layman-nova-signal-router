@@ -912,13 +912,51 @@ def _relevant_policies(matched: list[str]) -> list[dict[str, Any]]:
     } for item in matched if item in entries]
 
 
-def _advisory_prompt_block(row: models.PineConversionRequest) -> str:
+def _all_blockers_have_authored_guidance(row: models.PineConversionRequest) -> bool:
+    """True when every matched blocker_code for this row has a reviewed
+    CONVERSION_ADVISORY_BY_BLOCKER entry (vs the generic "no guidance
+    authored yet" fallback). Used to decide whether a stuck
+    LOGIC_CHANGED_REQUIRES_MANUAL_CORRECTION response is worth one
+    corrective retry -- if a blocker has no authored safe mapping, Claude's
+    manual-review call may be a genuine, non-repairable ambiguity."""
+    analysis = (row.usage_summary or {}).get("analysis") or {}
+    blockers = analysis.get("blockers") or []
+    return bool(blockers) and all(code in CONVERSION_ADVISORY_BY_BLOCKER for code in blockers)
+
+
+def _advisory_prompt_block(row: models.PineConversionRequest, source_type: str = "INDICATOR") -> str:
     """Always-on advisory context for Claude. Never gates conversion — this is
     the informational half of "pre-conversion analysis = advisory only"."""
     guidance = (row.usage_summary or {}).get("conversion_guidance") or {}
     notes = guidance.get("notes") or []
     if not notes:
         return ""
+    if source_type == "STRATEGY":
+        # The per-blocker "Apply instead" text below is written for INDICATOR
+        # mode's boolean-normalization model (recompute from confirmed bars
+        # only, one position, re-express as BUY_CE/BUY_PE/EXIT) -- injecting
+        # it into a STRATEGY-mode prompt directly contradicts "preserve
+        # everything unchanged" and was observed making Claude report
+        # logic_changed=true for mechanisms that don't need any change at
+        # all in this mode (they're just preserved Pine, still executed by
+        # TradingView's own emulator; NOVA only listens for real fills).
+        lines = [
+            "ADVISORY PRE-ANALYSIS CONTEXT (informational, not a blocker, and not a normalization instruction for STRATEGY mode)",
+            (
+                "The deterministic pre-analyzer matched the mechanisms listed below. "
+                "In STRATEGY mode this is informational only: leave every one of "
+                "them exactly as written in the source. Do not remove, simplify, "
+                "recompute, or re-express any of it -- TradingView's own emulator "
+                "keeps calculating and executing this code unchanged; NOVA only "
+                "listens for real order fills via the alert_message wiring the main "
+                "instructions above already describe. None of these matches require "
+                "a behavior change, so behavior_preservation.logic_changed should "
+                "stay false and status should stay CONVERTED for these reasons alone."
+            ),
+        ]
+        for note in notes:
+            lines.append(f"- {note['title']} ({note['blocker_code']}): keep as-is, no change needed for this reason.")
+        return "\n".join(lines) + "\n\n"
     lines = [
         "ADVISORY PRE-ANALYSIS CONTEXT (informational, not a blocker)",
         (
@@ -982,7 +1020,7 @@ cannot be preserved; in that case status must be MANUAL_REVIEW_REQUIRED. A
 response with behavior_preservation.logic_changed=true and status=CONVERTED is
 invalid and will be rejected.
 
-{_advisory_prompt_block(row)}SOURCE SHA-256: {row.input_source_sha256}
+{_advisory_prompt_block(row, source_type)}SOURCE SHA-256: {row.input_source_sha256}
 SOURCE TYPE: {source_type}
 MATCHED CAPABILITY IDS:
 {json.dumps(analysis.get("matched_capabilities", []), separators=(",", ":"))}
@@ -1189,8 +1227,25 @@ def _repair_prompt(
     source: str,
     previous: ClaudePineConversionOutput | None,
     errors: list[str],
+    *,
+    force_safe_normalization: bool = False,
+    advisory_block: str = "",
 ) -> pine_conversion_provider.ClaudePineConversionProviderRequest:
     payload = previous.model_dump(mode="json") if previous else None
+    correction = ""
+    if force_safe_normalization:
+        correction = f"""
+CORRECTIVE INSTRUCTION -- READ BEFORE REPAIRING
+Your previous response set behavior_preservation.logic_changed=true and
+status=MANUAL_REVIEW_REQUIRED. Every mechanism the pre-analyzer matched for
+this source has an approved, reviewed safe handling, repeated below. None of
+them require a behavior change on their own. Apply the approved handling for
+each one exactly as instructed, set behavior_preservation.logic_changed=false,
+and return status=CONVERTED. Only keep MANUAL_REVIEW_REQUIRED if you find a
+SPECIFIC, concrete ambiguity beyond what this context already resolves -- if
+so, name that exact ambiguity in admin_review_points.
+
+{advisory_block}"""
     prompt = f"""RESTRICTED REPAIR
 Repair only JSON/schema formatting, Pine syntax, built-in signatures,
 type/declaration defects, or missing canonical NOVA boolean wiring. Do not
@@ -1207,7 +1262,7 @@ If STRATEGY_LAYER_ALERT_FORBIDDEN or NONCANONICAL_ALERT is listed: remove every
 alert() and alertcondition() call from strategy_layer and express the same
 entry/exit intent only by setting novaBuyCeSignal, novaBuyPeSignal, and
 novaExitSignal. NOVA owns transport; do not add it.
-
+{correction}
 DETERMINISTIC ERRORS: {json.dumps(errors, separators=(",", ":"))}
 PREVIOUS STRUCTURED RESPONSE: {json.dumps(payload, sort_keys=True, separators=(",", ":"))}
 EXACT ORIGINAL SOURCE:
@@ -1350,10 +1405,31 @@ def convert(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[str, An
                 raise
             errors = [exc.code]
         repair_count = 0
-        repairable = errors and all(code in REPAIRABLE_CODES or code == "INVALID_PROVIDER_RESPONSE" for code in errors)
+        # LOGIC_CHANGED_REQUIRES_MANUAL_CORRECTION is normally terminal (it's
+        # Claude's own "this needs a human" call) but when every matched
+        # blocker has an authored, reviewed safe mapping, a stuck response is
+        # more likely Claude being overly conservative than a genuine
+        # ambiguity -- worth one bounded corrective retry before giving up.
+        logic_changed_recoverable = (
+            errors == ["LOGIC_CHANGED_REQUIRES_MANUAL_CORRECTION"]
+            and _all_blockers_have_authored_guidance(current)
+        )
+        repairable = errors and (
+            all(code in REPAIRABLE_CODES or code == "INVALID_PROVIDER_RESPONSE" for code in errors)
+            or logic_changed_recoverable
+        )
         if errors and repairable and int(settings.CLAUDE_CONVERSION_MAX_REPAIRS) == 1:
             repair_count = 1
-            result = provider.repair(_repair_prompt(request, source, output, errors))
+            repair_request = (
+                _repair_prompt(
+                    request, source, output, errors,
+                    force_safe_normalization=True,
+                    advisory_block=_advisory_prompt_block(current, source_type),
+                )
+                if logic_changed_recoverable
+                else _repair_prompt(request, source, output, errors)
+            )
+            result = provider.repair(repair_request)
             output = result.output
             with session_scope() as db:
                 current = _owned(db, admin_id, conversion_id)
