@@ -37,6 +37,12 @@ TradingView backtest quantity may remain in the source, but it is
 informational only -- never include quantity, lots, or risk values in the
 NOVA webhook payload.
 
+The source's //@version=N directive line is functionally required, not
+decorative -- copy it into strategy_layer exactly as written, even when
+license or author comment lines appear above or around it in the source.
+Preserve those license/author comment lines too, but the version directive
+in particular must never be dropped, moved, or altered.
+
 ==================================================
 STRATEGY MODE (source declares strategy(...))
 ==================================================

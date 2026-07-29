@@ -1296,6 +1296,12 @@ strategy.close_all -- never cancel/cancel_all) that is missing it. This is
 required instrumentation regardless of whether the original source had any
 alert()/alertcondition()/webhook mechanism of its own -- do not omit it just
 because the source didn't have one. Do not otherwise change the order call.
+
+If PINE_VERSION_MISSING or PINE_VERSION_UNSUPPORTED is listed: the source's
+own //@version=N directive line must be present verbatim in strategy_layer,
+exactly as it appeared in the original source (do not change the number, do
+not drop it even if it's separated from the declaration by license or author
+comment lines above it).
 {correction}
 DETERMINISTIC ERRORS: {json.dumps(errors, separators=(",", ":"))}
 PREVIOUS STRUCTURED RESPONSE: {json.dumps(payload, sort_keys=True, separators=(",", ":"))}

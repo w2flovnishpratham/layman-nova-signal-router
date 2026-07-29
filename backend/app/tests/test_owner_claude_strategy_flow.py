@@ -715,6 +715,43 @@ def test_strategy_mode_repairs_a_missing_alert_message_instead_of_failing(mu_db,
     assert provider.repair_calls == 1
 
 
+LICENSED_ATST_STRATEGY_SOURCE = """// This source code is subject to the terms of the Mozilla Public License 2.0
+// author © KivancOzbilgic
+//@version=5
+strategy("AlphaTrend Strategy", shorttitle='ATSt', overlay=true)
+buySignalk = ta.crossover(close, open)
+sellSignalk = ta.crossunder(close, open)
+
+longCondition = buySignalk
+if (longCondition)
+    strategy.entry("Long", strategy.long, alert_message=novaWebhookPayload("BUY_CE", "Long"))
+
+shortCondition = sellSignalk
+if (shortCondition)
+    strategy.entry("Short", strategy.short, alert_message=novaWebhookPayload("BUY_PE", "Short"))
+"""
+
+
+def test_strategy_mode_repairs_a_version_directive_dropped_alongside_license_header(mu_db, monkeypatch):
+    """Regression for a second real ATSt failure mode: with a license/author
+    comment header above //@version=5, Claude sometimes drops the version
+    directive along with the header it was cleaning up around. Must repair,
+    not fail closed on the first miss."""
+    dropped_version = LICENSED_ATST_STRATEGY_SOURCE.replace("//@version=5\n", "")
+    missing_version = _strategy_mode_output(LICENSED_ATST_STRATEGY_SOURCE, dropped_version)
+    corrected = _strategy_mode_output(LICENSED_ATST_STRATEGY_SOURCE, LICENSED_ATST_STRATEGY_SOURCE)
+    client, current, owner, provider = _strategy_mode_client(monkeypatch, missing_version, repair_output=corrected)
+    del current, owner
+
+    response = _submit_for_conversion(client, "AlphaTrend Strategy Licensed", LICENSED_ATST_STRATEGY_SOURCE)
+    assert response.status_code == 202, response.text
+    conversion = response.json()["conversion"]
+    assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
+    assert conversion["validation_status"] == "PASSED"
+    assert provider.convert_calls == 1
+    assert provider.repair_calls == 1
+
+
 REAL_GREEDY_STRATEGY_SOURCE = """//@version=6
 strategy("Greedy Strategy", pyramiding = 100, calc_on_order_fills=false, overlay=true)
 tp = input(10, "Take profit")
