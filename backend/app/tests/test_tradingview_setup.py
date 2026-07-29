@@ -149,6 +149,36 @@ def test_managed_queue_installation_does_not_create_false_ready(mu_db):
     assert client.get(f"/api/strategy-instances/{instance_id}/tradingview-setup").json()["setup"].get("installation_metadata") is None
 
 
+def test_managed_installation_auto_fills_workspace_and_alert_reference_when_blank(mu_db):
+    """The installation is already identified by setup_id + the matched
+    version hash; workspace/alert reference are admin-facing notes only, so
+    omitting them must not block recording the installation."""
+    owner = make_user("tv-autofill@example.com")
+    admin = make_user("tv-autofill-admin@example.com", is_admin=True)
+    client, admin_client, instance_id, version_id = _approved_personal_instance(owner, admin, "NOVA_MANAGED_TRADINGVIEW")
+    setup = client.post(f"/api/strategy-instances/{instance_id}/tradingview-setup", json={
+        "setup_type": "NOVA_MANAGED_TRADINGVIEW", "requested_timeframe": "5",
+    }).json()["setup"]
+
+    installed = admin_client.post(f"/api/admin/managed-tradingview-setups/{setup['id']}/installation", json={
+        "installed_version_hash": _version_hash(version_id),
+        "symbol": "NIFTY", "timeframe": "5",
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    assert installed.status_code == 200, installed.text
+
+    from app.db import models
+    from app.db.engine import session_scope
+
+    with session_scope() as db:
+        row = db.get(models.TradingViewSetup, uuid.UUID(setup["id"]))
+        metadata = row.installation_metadata
+        assert metadata["workspace_reference"], "must not be stored blank"
+        assert metadata["alert_reference"], "must not be stored blank"
+        assert metadata["workspace_reference"] == f"managed-{row.id.hex[:8]}"
+        assert metadata["alert_reference"] == f"alert-{_version_hash(version_id)[:12]}"
+
+
 def _version_hash(version_id: str) -> str:
     from app.db import models
     from app.db.engine import session_scope

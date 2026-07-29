@@ -252,6 +252,13 @@ def record_installation(admin_id, setup_id, data: dict[str, Any]) -> dict[str, A
         version = db.get(models.StrategyVersion, row.approved_version_id)
         if version is None or data["installed_version_hash"] != version.source_sha256:
             raise SetupError("Installed Pine hash must match the approved immutable version.", 409, "VERSION_HASH_MISMATCH")
+        # The installation is already identified by setup_id + the matched
+        # version hash above; these two are admin-facing notes only, so a
+        # blank one gets a deterministic default instead of blocking install.
+        if not str(data.get("workspace_reference") or "").strip():
+            data["workspace_reference"] = f"managed-{row.id.hex[:8]}"
+        if not str(data.get("alert_reference") or "").strip():
+            data["alert_reference"] = f"alert-{version.source_sha256[:12]}"
         row.installation_metadata = _safe_installation(data)
         row.installation_confirmed_at = data["installed_at"]
         row.status = "ALERT_TEST_PENDING"; row.updated_at = _now()

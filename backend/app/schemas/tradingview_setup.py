@@ -26,8 +26,13 @@ class CompilationPayload(BaseModel):
 class InstallationPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     installed_version_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    workspace_reference: str = Field(min_length=1, max_length=120)
-    alert_reference: str = Field(min_length=1, max_length=120)
+    # Descriptive admin notes only -- the real identity check is
+    # installed_version_hash against the approved immutable version's
+    # source_sha256. Optional: the installation is already identified
+    # without them, so record_installation fills in a deterministic default
+    # when left blank instead of blocking the admin on two free-text boxes.
+    workspace_reference: str | None = Field(default=None, max_length=120)
+    alert_reference: str | None = Field(default=None, max_length=120)
     symbol: str = Field(min_length=1, max_length=30)
     timeframe: str = Field(min_length=1, max_length=20)
     installed_at: datetime

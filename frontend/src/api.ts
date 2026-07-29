@@ -1651,7 +1651,7 @@ export async function listManagedTradingViewSetups(): Promise<TradingViewSetup[]
 }
 
 export const recordManagedTradingViewInstallation = (setupId: string, payload: {
-  installed_version_hash: string; workspace_reference: string; alert_reference: string
+  installed_version_hash: string; workspace_reference?: string; alert_reference?: string
   symbol: string; timeframe: string; installed_at: string
 }) => setupCall(`/api/admin/managed-tradingview-setups/${setupId}/installation` as `/${string}`, 'POST', payload)
 
