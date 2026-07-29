@@ -26,6 +26,7 @@ import { AutomationsPage } from './automations/AutomationsPage'
 import { TradingActivityTabs } from './trading/TradingActivityTabs'
 import { SetupPage, type SetupSnapshot } from './setup/SetupPage'
 import { getConfigurationState, saveConfiguration } from './setup/configurationApi'
+import { attemptAfterFailure, attemptKeyFor } from './lib/engineStartIdempotency'
 import {
   getCurrentUser,
   getMarketSnapshot,
@@ -54,6 +55,12 @@ import type { ClientCommand, SystemHealth } from './types'
 function App() {
   const wsRef = useRef<SessionWS | null>(null)
   const lastCommandRef = useRef<{ key: string; at: number } | null>(null)
+  // Stable across retries of the SAME start attempt (e.g. a client-side
+  // timeout after the server already committed) so a retry reuses NOVA's
+  // durable engine-start idempotency claim instead of minting a fresh key
+  // and risking a second engine. Cleared on success/failure so the NEXT
+  // distinct attempt (a different revision) gets its own key.
+  const engineStartAttemptRef = useRef<{ revisionId: string; key: string } | null>(null)
   const [bootNonce, setBootNonce] = useState(0)
   // View is derived from the URL (nested /app/* routes), never from in-memory
   // state, so refresh and Back/Forward work on every page. setView is kept as the
@@ -347,17 +354,26 @@ function App() {
     if (!selectedConfiguration || selectedConfiguration.strategy_instance_id !== instanceId) {
       throw new Error('Save and select an exact configuration revision before starting.')
     }
-    const latest = await startSelectedEngine(
-      instanceId,
-      selectedConfiguration.strategy_version_id,
-      selectedConfiguration.id,
-      selectedConfiguration.revision,
-      selectedConfiguration.mode,
-      liveAcknowledged,
-    )
-    setRuntimeStatus(latest)
-    applyRuntimeHydration(latest)
-    setRuntimeError('')
+    const attempt = attemptKeyFor(engineStartAttemptRef.current, selectedConfiguration.id)
+    engineStartAttemptRef.current = attempt
+    try {
+      const latest = await startSelectedEngine(
+        instanceId,
+        selectedConfiguration.strategy_version_id,
+        selectedConfiguration.id,
+        selectedConfiguration.revision,
+        selectedConfiguration.mode,
+        liveAcknowledged,
+        attempt.key as ReturnType<typeof crypto.randomUUID>,
+      )
+      engineStartAttemptRef.current = null
+      setRuntimeStatus(latest)
+      applyRuntimeHydration(latest)
+      setRuntimeError('')
+    } catch (error) {
+      engineStartAttemptRef.current = attemptAfterFailure(attempt, error)
+      throw error
+    }
   }
 
   if (authLoading || !authUser) {

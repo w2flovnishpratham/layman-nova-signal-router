@@ -207,6 +207,21 @@ export function ConversationController({
     && state.mode === runtime?.selected_configuration?.mode,
   )
 
+  // Nothing in the draft persists server-side until an explicit Save, so a
+  // refresh or tab close mid-setup would otherwise silently discard answers
+  // with no warning. beforeunload is the one reliable native hook for this;
+  // it doesn't cover in-app navigation (Dashboard/Strategies), which is a
+  // known gap rather than something this warns about.
+  useEffect(() => {
+    if (!dirty || setupSaved) return
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [dirty, setupSaved])
+
   useEffect(() => {
     onStateChange?.({
       state,
