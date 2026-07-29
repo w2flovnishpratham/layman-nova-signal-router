@@ -23,7 +23,7 @@ FROZEN_TRANSPORT_PATH = Path(__file__).resolve().parents[1] / "prompts/pine_tran
 FROZEN_TRANSPORTS = {
     FROZEN_TRANSPORT_VERSION: FROZEN_TRANSPORT_PATH,
     "pine_transport_v2": Path(__file__).resolve().parents[1] / "prompts/pine_transport_v2.txt",
-    "pine_transport_v3_strategy_fill": Path(__file__).resolve().parents[1] / "prompts/pine_transport_v3_strategy_fill.txt",
+    "pine_transport_v3_fill": Path(__file__).resolve().parents[1] / "prompts/pine_transport_v3_fill.txt",
 }
 STRATEGY_ORDER_CALL_NAMES = (
     "strategy.entry", "strategy.order", "strategy.exit", "strategy.close", "strategy.close_all",
@@ -355,7 +355,7 @@ def validate_source(source: str, *, mode: str = "INDICATOR") -> dict[str, Any]:
     if has_frozen_transport:
         if not _frozen_transport_matches(source, frozen_transport_version):
             add("TRANSPORT_HASH_MISMATCH", "ERROR", "Frozen transport was changed", f"The complete {frozen_transport_version} block does not match the registered template after constant substitution.", "Restore the exact frozen transport block.")
-        if frozen_transport_version == "pine_transport_v3_strategy_fill":
+        if frozen_transport_version == "pine_transport_v3_fill":
             required_transport = {
                 "TRANSPORT_END_MISSING": f"NOVA FROZEN TRANSPORT END: {frozen_transport_version}",
                 "TRANSPORT_VERSION_MISSING": f'novaTransportVersion = "{frozen_transport_version}"',

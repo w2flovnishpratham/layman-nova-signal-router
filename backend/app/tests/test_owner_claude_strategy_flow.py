@@ -607,7 +607,7 @@ def test_strategy_mode_preserves_pending_orders_and_attaches_order_fill_alerts(m
     assert "oca_name=" in candidate
     assert "stop=lower" in candidate and "stop=upper" in candidate
     assert 'strategy.cancel(id="BBandLE")' in candidate
-    assert "pine_transport_v3_strategy_fill" in candidate
+    assert "pine_transport_v3_fill" in candidate
     assert "novaBuyCeSignal" not in candidate
     # Regression for a real TradingView compile error (CE10271: "Could not
     # find function or function reference 'novaWebhookPayload'") -- Pine

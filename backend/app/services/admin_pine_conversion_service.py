@@ -1630,7 +1630,7 @@ except cancel/cancel_all. Do not remove or reduce any original order call. Do
 not include the transport block itself, bare alert()/alertcondition() calls,
 webhook URLs, credentials, broker fields, lots, quantity, strike, expiry,
 security ID, or paper/live mode."""
-            transport_note = "appends hash-pinned pine_transport_v3_strategy_fill server-side"
+            transport_note = "appends hash-pinned pine_transport_v3_fill server-side"
         else:
             layer_contract = """strategy_layer must contain one complete Pine v6 indicator with exactly
 one bool definition for novaBuyCeSignal, novaBuyPeSignal, and novaExitSignal.

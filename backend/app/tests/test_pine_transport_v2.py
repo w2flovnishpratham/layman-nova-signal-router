@@ -85,8 +85,14 @@ def test_transport_files_are_independent_registered_artifacts():
     assert pine_validation.FROZEN_TRANSPORTS == {
         "pine_transport_v1": V1,
         "pine_transport_v2": V2,
-        "pine_transport_v3_strategy_fill": ROOT / "backend/app/prompts/pine_transport_v3_strategy_fill.txt",
+        "pine_transport_v3_fill": ROOT / "backend/app/prompts/pine_transport_v3_fill.txt",
     }
+    # Regression: TradingViewCompileEvidence.transport_version is VARCHAR(30)
+    # (app/db/models.py) -- "pine_transport_v3_strategy_fill" (32 chars) blew
+    # past it and 500'd on the real compile-success admin action. Any
+    # registered transport version string must fit.
+    for name in pine_validation.FROZEN_TRANSPORTS:
+        assert len(name) <= 30, f"{name} exceeds TradingViewCompileEvidence.transport_version's VARCHAR(30)"
 
 
 def test_v2_template_has_one_ready_gated_exclusive_alert_branch():

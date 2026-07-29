@@ -1,6 +1,6 @@
-// === NOVA FROZEN TRANSPORT BEGIN: pine_transport_v3_strategy_fill ===
+// === NOVA FROZEN TRANSPORT BEGIN: pine_transport_v3_fill ===
 // Replace only the strategy-code and strategy-version constant values below.
-const string novaTransportVersion = "pine_transport_v3_strategy_fill"
+const string novaTransportVersion = "pine_transport_v3_fill"
 const string novaStrategyCode = "{{STRATEGY_CODE}}"
 const string novaStrategyVersion = "{{STRATEGY_VERSION}}"
 const string novaCredentialPlaceholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"
@@ -29,4 +29,4 @@ if not novaSendHoldTest
 if novaAlertReady and novaSendHoldTest and not novaHoldSent
     alert(novaWebhookPayload("HOLD", "HOLD_TEST"), alert.freq_once_per_bar_close)
     novaHoldSent := true
-// === NOVA FROZEN TRANSPORT END: pine_transport_v3_strategy_fill ===
+// === NOVA FROZEN TRANSPORT END: pine_transport_v3_fill ===
