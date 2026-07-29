@@ -64,19 +64,18 @@ describe('ConversationController — keyboard-only operation', () => {
     expect(onModeSelect).not.toHaveBeenCalled()
   })
 
-  it('operates the saved-setup decision and choice question by keyboard', async () => {
+  it('operates the saved-setup decision by keyboard, and Start New Setup returns to mode choice', async () => {
     const user = userEvent.setup()
     render(<ConversationController {...props({ runtime: runtime({ saved: { direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' } }) })} />)
     await choosePaperAndStrategy(user)
     const startNew = screen.getByRole('button', { name: 'Start New Setup' })
     startNew.focus()
     await user.keyboard('{Enter}')
-    // Choice question appears after the typing pause; pick PE by keyboard.
-    const pe = await screen.findByRole('button', { name: 'PE' })
-    pe.focus()
+    // Back to Step 1, operable by keyboard, not left mid-question.
+    const paper = await screen.findByRole('button', { name: /start in paper/i })
+    paper.focus()
     await user.keyboard('{Enter}')
-    // one user answer recorded for direction
-    expect(await screen.findByText('Direction: PE')).toBeInTheDocument()
+    expect(await screen.findByText('Which strategy should NOVA run?')).toBeInTheDocument()
   })
 
   it('enters a numeric answer and reaches Save, then keyboard Save→Start', async () => {

@@ -255,15 +255,16 @@ describe('ConversationController — saved setup decision', () => {
     expect(screen.getByRole('button', { name: /save setup/i })).toBeInTheDocument()
   })
 
-  it('Start New asks the first fresh question and does not overwrite the saved setup', () => {
+  it('Start New Setup returns to Step 1 (Choose Mode) and does not overwrite the saved setup', () => {
     const p = props()
     render(<ConversationController {...p} />)
     choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Start New Setup' }))
-    act(() => vi.advanceTimersByTime(700))
-    // first question is Direction, rendered as choice pills
-    expect(screen.getByRole('group', { name: 'Direction' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'CE' })).toBeInTheDocument()
+    // Back at mode selection -- not a fresh run of questions for the same
+    // mode/strategy, and not the saved-setup decision card either.
+    expect(screen.getByText('How should NOVA trade for you?')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /start in paper/i })).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Direction' })).toBeNull()
     expect(p.onSave).not.toHaveBeenCalled() // saved setup untouched
   })
 })

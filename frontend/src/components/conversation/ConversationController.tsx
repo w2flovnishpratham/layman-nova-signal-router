@@ -224,6 +224,12 @@ export function ConversationController({
       ?? runtime?.engine?.mode
     if (!authoritativeMode || !selectedConfiguration) return
     if (selectedConfiguration.mode !== authoritativeMode) return
+    // The user explicitly asked to start a new setup before this remount (e.g.
+    // a mid-flow refresh) — that intent survives the remount via sessionStorage
+    // because nothing else here does. Suppress auto-restore entirely (mode
+    // included) so a refresh mid "Start New Setup" lands back on Step 1
+    // (Choose Mode), not silently re-selects the old mode/strategy first.
+    if (isFreshStartFlagged(runtime?.owner_user_id)) return
     if (!state.mode) {
       conv.selectMode(authoritativeMode)
       return
@@ -244,12 +250,7 @@ export function ConversationController({
         ...selectedConfiguration.risk,
       },
     )
-    // The user explicitly asked to start a new setup before this remount (e.g.
-    // a mid-flow refresh) — that intent survives the remount via sessionStorage
-    // because nothing else here does. Without this, every refresh silently
-    // re-surfaces the OLD saved setup instead of the fresh flow they asked for.
-    if (isFreshStartFlagged(runtime?.owner_user_id)) conv.startNew()
-  }, [catalog?.selected_strategy_key, conv.selectMode, conv.selectStrategy, conv.startNew, runtime, state.mode, state.strategyKey, strategies])
+  }, [catalog?.selected_strategy_key, conv.selectMode, conv.selectStrategy, runtime, state.mode, state.strategyKey, strategies])
   // Synchronous guard so two rapid clicks (before the disabled state re-renders)
   // cannot fire a second save/start network request.
   const inFlightRef = useRef(false)
@@ -439,7 +440,12 @@ export function ConversationController({
                 setSaved(false)
                 setLiveAcknowledged(false)
                 setFreshStartFlag(runtime?.owner_user_id)
-                conv.startNew()
+                // A full reset, not conv.startNew() — the audit requirement is
+                // explicit: Start New Setup begins at Step 1 (Choose Mode), not
+                // a fresh run of questions for the same already-selected mode
+                // and strategy. Nothing here mutates the backend saved config;
+                // it stays intact for Resume/Review to find later.
+                conv.reset()
               }}
             >
               Start New Setup
