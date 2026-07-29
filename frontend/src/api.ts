@@ -1429,6 +1429,10 @@ export interface C2Installation {
   updated_at: string
   setup_package?: C2SetupPackage
   compile?: C2CompileEvidence
+  symbol: string
+  timeframe: string | null
+  live_market_paper_test_ready: boolean
+  progress: Array<{ key: string; label: string; status: 'PASSED' | 'WAITING' }>
 }
 
 export interface C2IssuedCredential {

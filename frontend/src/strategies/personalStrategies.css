@@ -163,6 +163,19 @@
 .pine-managed-detail { display: grid; gap: 9px; min-width: 0; }
 .pine-managed-detail p { margin: 0; overflow-wrap: anywhere; }
 .pine-managed-detail label { display: grid; gap: 5px; }
+
+.c2-verified-summary { display: grid; gap: 6px; padding: 12px 13px; border: 1px solid color-mix(in srgb, var(--success) 30%, transparent); border-radius: 10px; background: var(--success-bg); }
+.c2-verified-summary p { display: flex; justify-content: space-between; gap: 10px; margin: 0; font-size: 12px; }
+.c2-verified-summary span { color: var(--text-3); }
+.c2-verified-summary strong { color: var(--success); text-align: right; }
+
+.c2-progress-tracker { padding: 12px 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); }
+.c2-progress-title { margin: 0 0 2px; font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+.c2-progress-tracker ol { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; counter-reset: c2-step; }
+.c2-progress-tracker li { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; padding: 6px 9px; border-radius: 7px; background: var(--bg-1); counter-increment: c2-step; }
+.c2-progress-tracker li::before { content: counter(c2-step) ". "; color: var(--text-3); }
+.c2-progress-tracker li.is-passed { color: var(--success); }
+.c2-progress-tracker li.is-waiting { color: var(--text-3); }
 .pine-ai-panel p { width: 100%; margin: 0; color: var(--text-3); font-size: 11.5px; }
 .pine-conversion-review { margin-top: 16px; }
 .pine-diff { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }

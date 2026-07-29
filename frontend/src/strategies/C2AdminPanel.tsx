@@ -175,14 +175,39 @@ export function C2AdminPanel({ conversion }: { conversion: AdminPineConversion }
               {selected ? <div className="pine-managed-detail">
                 <p><strong>Owner:</strong> {selected.owner_user_id}</p>
                 <p><strong>Instance:</strong> {selected.strategy_instance_id}</p>
-                <p><strong>Paper:</strong> {selected.paper_eligible ? 'Eligible' : selected.blocking_reasons.join(', ')}</p>
-                <p><strong>Execution gate:</strong> {selected.status.replaceAll('_', ' ')}</p>
-                <p><strong>Paper evidence:</strong> {selected.paper_entry_verified_at ? 'Entry confirmed' : 'Entry pending'} · {selected.paper_exit_verified_at ? 'Exit confirmed' : 'Exit pending'}</p>
+
+                {selected.live_market_paper_test_ready || selected.status === 'PAPER_VERIFICATION' || selected.status === 'READY' ? (
+                  <div className="c2-verified-summary">
+                    <p><span>Strategy routing</span><strong>VERIFIED</strong></p>
+                    <p><span>HOLD connectivity</span><strong>PASSED</strong></p>
+                    <p><span>Installed strategy</span><strong>{selected.strategy_name} · v{selected.strategy_version}</strong></p>
+                    <p><span>Symbol</span><strong>{selected.symbol}</strong></p>
+                    <p><span>Timeframe</span><strong>{selected.timeframe ?? 'Not recorded'}</strong></p>
+                    <p><span>Paper verification</span><strong>{selected.status === 'PAPER_ELIGIBLE' ? 'READY' : selected.status.replaceAll('_', ' ')}</strong></p>
+                  </div>
+                ) : (
+                  <p><strong>Paper:</strong> {selected.paper_eligible ? 'Eligible' : selected.blocking_reasons.join(', ')}</p>
+                )}
+
+                {selected.status === 'PAPER_VERIFICATION' ? (
+                  <div className="c2-progress-tracker" aria-label="Live-market Paper test progress">
+                    <p className="c2-progress-title">LIVE-MARKET PAPER TEST — LISTENING</p>
+                    <p className="ps-note">Waiting for the next genuine TradingView strategy signal.</p>
+                    <ol>
+                      {selected.progress.map((step) => (
+                        <li key={step.key} className={step.status === 'PASSED' ? 'is-passed' : 'is-waiting'}>
+                          {step.label} — {step.status}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : null}
+
                 <p><strong>Live:</strong> {selected.live_eligible ? 'Eligible after explicit Live start confirmation' : 'Complete Ready status and owner Live readiness first'}</p>
                 <div className="ps-actions">
                   {selected.credential_status !== 'ACTIVE' ? <button className="secondary-button" type="button" onClick={() => void run('Credential generation', async () => issue('generate'))}><KeyRound size={14} /> Generate Credential</button> : <button className="secondary-button" type="button" onClick={() => { if (window.confirm('Rotate this credential and require a new HOLD?')) void run('Credential rotation', async () => issue('rotate')) }}><RotateCw size={14} /> Rotate Credential</button>}
                   {selected.credential_status === 'ACTIVE' ? <button className="ps-danger" type="button" onClick={() => { if (window.confirm('Revoke this credential and remove Paper eligibility?')) void run('Credential revocation', async () => { await revokeAdminC2Credential(selected.id) }) }}><ShieldOff size={14} /> Revoke Credential</button> : null}
-                  {selected.status === 'PAPER_ELIGIBLE' && selected.hold_status === 'VERIFIED' ? <button className="ps-primary" disabled={!!busy} type="button" onClick={() => void run('Paper verification promotion', async () => { await promoteAdminC2PaperVerification(selected.id) })}><Check size={14} /> Start Controlled Paper Verification</button> : null}
+                  {selected.live_market_paper_test_ready ? <button className="ps-primary" disabled={!!busy} type="button" onClick={() => void run('Live-market Paper test start', async () => { await promoteAdminC2PaperVerification(selected.id) })}><Check size={14} /> Start Live-Market Paper Test</button> : null}
                   {selected.status === 'PAPER_VERIFICATION' ? <button className="ps-primary" disabled={!!busy || !selected.paper_entry_verified_at || !selected.paper_exit_verified_at} type="button" onClick={() => void run('Ready approval', async () => { await markAdminC2Ready(selected.id) })}><Check size={14} /> Mark Ready After Evidence</button> : null}
                   {!selected.suspended_at ? <button className="ps-danger" type="button" onClick={() => { if (window.confirm('Suspend this installation?')) void run('Installation suspension', async () => { await suspendAdminC2Installation(selected.id, 'Suspended by administrator') }) }}>Suspend Installation</button> : null}
                 </div>

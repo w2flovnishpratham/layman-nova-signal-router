@@ -975,6 +975,115 @@ def _run_worker(limit: int = 5) -> int:
     return process_queued_jobs_once(limit=limit)
 
 
+def test_hold_verified_flips_live_market_paper_test_ready_and_progress(c2_app):
+    """The simplified post-HOLD flow: readiness and a 6-step progress summary
+    are computed from HOLD/evidence fields already recorded elsewhere, so the
+    UI never has to ask the admin anything new to show them."""
+    client, current, admin, owner, _ = c2_app
+    approved = _approved(client)
+    _compile(client, approved)
+    installation = _install(client, approved, owner.id)
+    iid = installation["id"]
+    current["user"] = owner
+    issued = _credential(client, iid, admin=False)
+
+    before = client.get(f"/api/strategies/my-installations/{iid}").json()["installation"]
+    assert before["live_market_paper_test_ready"] is False
+    assert before["symbol"] == "NIFTY"
+    assert [step["status"] for step in before["progress"]] == ["WAITING"] * 6
+
+    assert client.post("/api/webhooks/private", json=_hold(issued["token"])).status_code == 202
+
+    after = client.get(f"/api/strategies/my-installations/{iid}").json()["installation"]
+    assert after["live_market_paper_test_ready"] is True
+    progress_by_key = {step["key"]: step["status"] for step in after["progress"]}
+    assert progress_by_key["hold_connectivity"] == "PASSED"
+    assert progress_by_key["entry_signal"] == "WAITING"
+    assert progress_by_key["exit_signal"] == "WAITING"
+
+
+def test_promotion_creates_no_order_and_never_touches_dhan(c2_app):
+    client, current, admin, owner, _ = c2_app
+    approved = _approved(client)
+    _compile(client, approved)
+    installation = _install(client, approved, owner.id)
+    iid = installation["id"]
+    current["user"] = owner
+    issued = _credential(client, iid, admin=False)
+    assert client.post("/api/webhooks/private", json=_hold(issued["token"])).status_code == 202
+
+    current["user"] = admin
+    promoted = _promote(client, iid)
+    assert promoted.status_code == 200, promoted.text
+
+    from sqlalchemy import select
+
+    from app.db import models
+    from app.db.engine import session_scope
+
+    with session_scope() as db:
+        assert db.scalar(select(models.LiveOrderIntent)) is None
+        assert db.query(models.StrategyExecutionJob).count() == 0
+        assert db.query(models.StrategyInstancePosition).count() == 0
+
+
+def test_re_promotion_does_not_duplicate_or_overwrite_an_existing_configuration(c2_app):
+    """Idempotent promotion: a second click must not create a second Paper
+    revision, and must never clobber an owner-saved config that already
+    exists (e.g. from the normal setup wizard) with different lots."""
+    client, current, admin, owner, _ = c2_app
+    approved = _approved(client)
+    _compile(client, approved)
+    installation = _install(client, approved, owner.id)
+    iid = installation["id"]
+    instance_id = installation["strategy_instance_id"]
+    current["user"] = owner
+    issued = _credential(client, iid, admin=False)
+    assert client.post("/api/webhooks/private", json=_hold(issued["token"])).status_code == 202
+
+    from sqlalchemy import select
+
+    from app.db import models
+    from app.db.engine import session_scope
+
+    with session_scope() as db:
+        instance_row = db.get(models.StrategyInstance, uuid.UUID(instance_id))
+        owner_saved_revision = models.StrategyConfigurationRevision(
+            user_id=owner.id,
+            strategy_instance_id=instance_row.id,
+            strategy_version_id=instance_row.strategy_version_id,
+            mode="paper",
+            revision=1,
+            configuration_json={"lots": 7, "allowed_option_side": "CE"},
+            risk_json={},
+            status="active",
+        )
+        db.add(owner_saved_revision)
+        db.flush()
+        owner_saved_revision_id = owner_saved_revision.id
+
+    current["user"] = admin
+    first = _promote(client, iid)
+    assert first.status_code == 200, first.text
+    second = _promote(client, iid)  # idempotent re-promotion
+    assert second.status_code == 200, second.text
+
+    with session_scope() as db:
+        revisions = db.scalars(
+            select(models.StrategyConfigurationRevision).where(
+                models.StrategyConfigurationRevision.strategy_instance_id == uuid.UUID(instance_id),
+                models.StrategyConfigurationRevision.mode == "paper",
+            )
+        ).all()
+        assert len(revisions) == 1  # no duplicate created
+        assert revisions[0].id == owner_saved_revision_id  # the owner's real config wasn't replaced
+        assert revisions[0].configuration_json == {"lots": 7, "allowed_option_side": "CE"}
+        selection = db.scalar(
+            select(models.UserEngineConfig).where(models.UserEngineConfig.user_id == owner.id)
+        )
+        assert selection.selected_configuration_revision_id == owner_saved_revision_id
+
+
 def test_approved_installation_webhook_produces_a_real_paper_fill(c2_app, c2_worker_runtime):
     """The actual gap: an admin-approved, Claude-converted, HOLD-verified,
     admin-promoted installation receives a real BUY_CE webhook, the real
@@ -998,37 +1107,22 @@ def test_approved_installation_webhook_produces_a_real_paper_fill(c2_app, c2_wor
     assert promoted.status_code == 200, promoted.text
     assert promoted.json()["installation"]["execution_mode"] == "paper_live_data"
 
-    # The owner still has to bind a configuration revision (lots/mode) before
-    # the instance is executable — promotion alone only authorizes it. This
-    # mirrors _start_paper_engine in test_private_webhook_execution.py: the
-    # real save path is the frontend setup wizard's HTTP router, which needs a
-    # full schema/risk-validator context this test doesn't stand up.
+    # Promotion itself now auto-binds a Paper configuration revision (lots
+    # from instance.current_lots, default 1) and the owner's UserEngineConfig
+    # selection -- the admin's one click is enough, no separate owner-side
+    # setup-wizard step is needed before a genuine signal is executable.
     from app.db import models
     from app.db.engine import session_scope
 
     with session_scope() as db:
-        instance_row = db.get(models.StrategyInstance, uuid.UUID(instance_id))
-        revision = models.StrategyConfigurationRevision(
-            user_id=owner.id,
-            strategy_instance_id=uuid.UUID(instance_id),
-            strategy_version_id=instance_row.strategy_version_id,
-            mode="paper",
-            revision=1,
-            configuration_json={"lots": 1, "allowed_option_side": "BOTH"},
-            risk_json={},
-            status="active",
-        )
-        db.add(revision)
-        db.flush()
         selection = db.scalar(
             select(models.UserEngineConfig).where(models.UserEngineConfig.user_id == owner.id)
         )
-        if selection is None:
-            selection = models.UserEngineConfig(user_id=owner.id)
-            db.add(selection)
-        selection.selected_strategy_instance_id = uuid.UUID(instance_id)
-        selection.selected_configuration_revision_id = revision.id
-        selection.selected_configuration_revision = revision.revision
+        assert selection is not None
+        assert str(selection.selected_strategy_instance_id) == instance_id
+        revision = db.get(models.StrategyConfigurationRevision, selection.selected_configuration_revision_id)
+        assert revision is not None
+        assert revision.configuration_json["lots"] == 1
 
     from app.services import state_store
     from app.services.execution_context import bind_user_execution_context

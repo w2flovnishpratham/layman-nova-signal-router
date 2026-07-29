@@ -51,6 +51,25 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _live_market_paper_test_progress(setup: models.TradingViewSetup) -> list[dict[str, str]]:
+    """Six-step progress for the admin's Live-Market Paper Test panel. Derived
+    entirely from fields already recorded elsewhere (hold_verified_at,
+    paper_entry_verified_at, paper_exit_verified_at) -- no new evidence
+    tracking, so entry/fill and exit/close/P&L are reported together per pair
+    rather than as independently observed sub-events."""
+    hold_passed = setup.hold_verified_at is not None
+    entry_passed = setup.paper_entry_verified_at is not None
+    exit_passed = setup.paper_exit_verified_at is not None
+    return [
+        {"key": "hold_connectivity", "label": "HOLD connectivity", "status": "PASSED" if hold_passed else "WAITING"},
+        {"key": "entry_signal", "label": "Entry signal", "status": "PASSED" if entry_passed else "WAITING"},
+        {"key": "paper_fill", "label": "Paper fill", "status": "PASSED" if entry_passed else "WAITING"},
+        {"key": "exit_signal", "label": "Exit signal", "status": "PASSED" if exit_passed else "WAITING"},
+        {"key": "position_closed", "label": "Position closed", "status": "PASSED" if exit_passed else "WAITING"},
+        {"key": "pnl_persisted", "label": "P&L persisted", "status": "PASSED" if exit_passed else "WAITING"},
+    ]
+
+
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -830,6 +849,15 @@ def _installation_public(
         "live_gates": readiness["live_gates"],
         "gates": readiness["gates"],
         "blocking_reasons": readiness["reasons"],
+        # NOVA trades NIFTY options only -- there is no per-installation symbol
+        # to collect; timeframe was already given at conversion time
+        # (requested_timeframe), so it's never asked for again here.
+        "symbol": "NIFTY",
+        "timeframe": setup.requested_timeframe,
+        "live_market_paper_test_ready": (
+            setup.status == "PAPER_ELIGIBLE" and setup.hold_verified_at is not None
+        ),
+        "progress": _live_market_paper_test_progress(setup),
         "suspended_at": setup.suspended_at.isoformat() if setup.suspended_at else None,
         "created_at": setup.created_at.isoformat(),
         "updated_at": setup.updated_at.isoformat(),
@@ -1238,6 +1266,44 @@ def admin_promote_c2_to_paper_verification(admin_id, installation_id) -> dict[st
             raise C2Error("Strategy instance not found.", 404, "INSTANCE_NOT_FOUND")
         if int(instance.current_lots or 0) < 1:
             raise C2Error("Set a valid lot count before promotion.", 409, "INVALID_LOTS")
+        # Auto-bind a Paper configuration so a genuine signal never bounces off
+        # CONFIGURATION_REVISION_REQUIRED after this -- the owner already
+        # proved routing via HOLD, and current_lots (default 1) was already
+        # validated above; nothing here is admin-entered, so it's never
+        # re-requested. An existing active revision (the owner already ran
+        # the normal setup wizard) is reused untouched, never overwritten.
+        existing_revision = db.scalar(
+            select(models.StrategyConfigurationRevision)
+            .where(
+                models.StrategyConfigurationRevision.user_id == setup.user_id,
+                models.StrategyConfigurationRevision.strategy_instance_id == instance.id,
+                models.StrategyConfigurationRevision.mode == "paper",
+                models.StrategyConfigurationRevision.status == "active",
+            )
+            .order_by(models.StrategyConfigurationRevision.revision.desc())
+        )
+        if existing_revision is None:
+            existing_revision = models.StrategyConfigurationRevision(
+                user_id=setup.user_id,
+                strategy_instance_id=instance.id,
+                strategy_version_id=instance.strategy_version_id,
+                mode="paper",
+                revision=1,
+                configuration_json={"lots": int(instance.current_lots), "allowed_option_side": "BOTH"},
+                risk_json={},
+                status="active",
+            )
+            db.add(existing_revision)
+            db.flush()
+        selection = db.scalar(
+            select(models.UserEngineConfig).where(models.UserEngineConfig.user_id == setup.user_id)
+        )
+        if selection is None:
+            selection = models.UserEngineConfig(user_id=setup.user_id)
+            db.add(selection)
+        selection.selected_strategy_instance_id = instance.id
+        selection.selected_configuration_revision_id = existing_revision.id
+        selection.selected_configuration_revision = existing_revision.revision
         # Graduate into controlled paper verification. The instance-level
         # paper_live_data mode makes a real order impossible even when other
         # owners are allowed to use Live; the binding is untouched.
@@ -1252,6 +1318,7 @@ def admin_promote_c2_to_paper_verification(admin_id, installation_id) -> dict[st
             "actor_user_id": str(admin_id), "owner_user_id": str(setup.user_id),
             "installation_id": str(setup.id), "instance_id": str(instance.id),
             "version_id": str(setup.approved_version_id), "new_status": setup.status,
+            "configuration_revision_id": str(existing_revision.id),
         })
         return _installation_public(db, setup, include_admin=True, include_source=True)
 

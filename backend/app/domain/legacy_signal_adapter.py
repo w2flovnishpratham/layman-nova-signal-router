@@ -95,6 +95,7 @@ def canonical_to_normalized_signal(
         "timeframe": event.timeframe,
         "reference_price": event.metadata.get("reference_price"),
         "comment": event.metadata.get("comment"),
+        "order_id": event.metadata.get("order_id"),
     }
     return NormalizedSignal(
         payload_format="NOVA",

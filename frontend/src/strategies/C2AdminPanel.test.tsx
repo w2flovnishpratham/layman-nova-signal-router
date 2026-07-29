@@ -74,6 +74,15 @@ const installation = {
   live_eligible: false, live_gates: {},
   gates: {}, blocking_reasons: ['Credential not generated'], suspended_at: null,
   created_at: '2026-07-19T10:00:00Z', updated_at: '2026-07-19T10:00:00Z',
+  symbol: 'NIFTY', timeframe: '5', live_market_paper_test_ready: false,
+  progress: [
+    { key: 'hold_connectivity', label: 'HOLD connectivity', status: 'WAITING' as const },
+    { key: 'entry_signal', label: 'Entry signal', status: 'WAITING' as const },
+    { key: 'paper_fill', label: 'Paper fill', status: 'WAITING' as const },
+    { key: 'exit_signal', label: 'Exit signal', status: 'WAITING' as const },
+    { key: 'position_closed', label: 'Position closed', status: 'WAITING' as const },
+    { key: 'pnl_persisted', label: 'P&L persisted', status: 'WAITING' as const },
+  ],
 }
 
 const issued = {
@@ -171,6 +180,7 @@ describe('C2AdminPanel', () => {
         credential_status: 'ACTIVE',
         hold_status: 'VERIFIED',
         paper_eligible: true,
+        live_market_paper_test_ready: true,
       }],
     }
     const verification = {
@@ -180,15 +190,17 @@ describe('C2AdminPanel', () => {
         credential_status: 'ACTIVE',
         hold_status: 'VERIFIED',
         paper_eligible: true,
+        live_market_paper_test_ready: false,
         paper_entry_verified_at: '2026-07-19T10:05:00Z',
         paper_exit_verified_at: '2026-07-19T10:06:00Z',
+        progress: installation.progress.map((step) => ({ ...step, status: 'PASSED' as const })),
       }],
     }
     api.installations
       .mockResolvedValue(verification)
       .mockResolvedValueOnce(eligible)
     render(<C2AdminPanel conversion={conversion as never} />)
-    await user.click(await screen.findByRole('button', { name: /Start Controlled Paper Verification/i }))
+    await user.click(await screen.findByRole('button', { name: /Start Live-Market Paper Test/i }))
     await waitFor(() => expect(api.promote).toHaveBeenCalledWith('install-1'))
     await waitFor(() => expect(screen.getByRole('button', { name: /Mark Ready After Evidence/i })).toBeInTheDocument())
     await user.click(screen.getByRole('button', { name: /Mark Ready After Evidence/i }))
