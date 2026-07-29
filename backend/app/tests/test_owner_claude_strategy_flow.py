@@ -659,7 +659,60 @@ def test_strategy_mode_accepts_a_faithfully_preserved_pine_v5_source(mu_db, monk
     assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
     assert conversion["safe_error_code"] is None
     assert provider.convert_calls == 1
+
+
+REAL_ATST_STRATEGY_SOURCE = """//@version=5
+strategy("AlphaTrend Strategy", shorttitle='ATSt', overlay=true, format=format.price, precision=2, margin_long=100, margin_short=100)
+buySignalk = ta.crossover(close, open)
+sellSignalk = ta.crossunder(close, open)
+
+longCondition = buySignalk
+if (longCondition)
+    strategy.entry("Long", strategy.long)
+
+shortCondition = sellSignalk
+if (shortCondition)
+    strategy.entry("Short", strategy.short)
+"""
+
+
+def test_strategy_mode_repairs_a_missing_alert_message_instead_of_failing(mu_db, monkeypatch):
+    """Regression for the real reported "ATSt" strategy: a plain Long/Short
+    strategy.entry pair with no pre-existing alert()/alertcondition()/webhook
+    of any kind. Claude sometimes preserves the order calls but forgets to
+    add alert_message -- a purely mechanical omission -- and it went straight
+    to manual_conversion_required because ALERT_MESSAGE_MISSING wasn't in
+    REPAIRABLE_CODES. One bounded repair must recover it, the same way
+    CANONICAL_SIGNAL_MISSING already does for INDICATOR mode."""
+    missing_alert_message = ClaudePineConversionOutput.model_validate({
+        "schema_version": "nova.claude-pine-conversion.v1",
+        "source_sha256": hashlib.sha256(REAL_ATST_STRATEGY_SOURCE.encode()).hexdigest(),
+        "status": "CONVERTED",
+        "strategy_layer": REAL_ATST_STRATEGY_SOURCE,  # preserved verbatim, but no alert_message added
+        "signal_mapping": {"buy_ce_source": "Long entry", "buy_pe_source": "Short entry", "exit_source": "reversal only"},
+        "behavior_preservation": {"logic_changed": False, "change_summary": []},
+        "capabilities": {"handled": ["Long/Short entries preserved"], "unsupported": [], "manual_review": []},
+        "user_summary": "Preserved the strategy as-is.",
+        "admin_review_points": [],
+    })
+    fixed = REAL_ATST_STRATEGY_SOURCE.replace(
+        'strategy.entry("Long", strategy.long)',
+        'strategy.entry("Long", strategy.long, alert_message=novaWebhookPayload("BUY_CE", "Long"))',
+    ).replace(
+        'strategy.entry("Short", strategy.short)',
+        'strategy.entry("Short", strategy.short, alert_message=novaWebhookPayload("BUY_PE", "Short"))',
+    )
+    corrected = _strategy_mode_output(REAL_ATST_STRATEGY_SOURCE, fixed)
+    client, current, owner, provider = _strategy_mode_client(monkeypatch, missing_alert_message, repair_output=corrected)
+    del current, owner
+
+    response = _submit_for_conversion(client, "AlphaTrend Strategy", REAL_ATST_STRATEGY_SOURCE)
+    assert response.status_code == 202, response.text
+    conversion = response.json()["conversion"]
+    assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
+    assert conversion["validation_status"] == "PASSED"
     assert provider.convert_calls == 1
+    assert provider.repair_calls == 1
 
 
 REAL_GREEDY_STRATEGY_SOURCE = """//@version=6

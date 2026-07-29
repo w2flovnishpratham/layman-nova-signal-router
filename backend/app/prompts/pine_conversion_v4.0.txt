@@ -62,12 +62,23 @@ order calls themselves. Do not emit an alert directly from a raw entry
 condition when the source uses a pending stop or limit order -- the report
 must correspond to the actual order fill, which TradingView triggers.
 
+alert_message is required instrumentation on every order-producing call
+regardless of whether the source had any alert()/alertcondition()/webhook
+mechanism of its own. A source with plain strategy.entry calls and no
+existing alerting at all still needs alert_message added -- "preserve
+everything unchanged" governs the strategy's calculations and order logic,
+not whether you add the one piece of instrumentation this conversion exists
+to add. Never return a candidate with an order-producing call missing it.
+
 Do not rewrite or remove TradingView reversal logic. An opposite
 strategy.entry stays an opposite strategy.entry; its NOVA action is BUY_CE or
 BUY_PE exactly as above. NOVA's backend already closes the existing position
 and opens the opposite one when it receives an opposite-side action while a
 position is open -- do not invent a second signal or a synthetic EXIT for a
-reversal entry.
+reversal entry. When a source has unambiguous long and short entries but no
+explicit exit-only condition, interpret the opposite entry as a reversal:
+generate only the new BUY_CE or BUY_PE alert_message and rely on NOVA's
+server-side EXIT_THEN_ENTER; do not generate a separate synthetic EXIT.
 
 strategy_layer for this mode is the complete preserved strategy body
 (everything above, with alert_message additions only). Do not include the
