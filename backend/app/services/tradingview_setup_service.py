@@ -374,9 +374,17 @@ def _setup_public(db, row, *, include_admin=False) -> dict[str, Any]:
 
 
 def list_managed(*, limit=50, offset=0) -> dict[str, Any]:
+    """Legacy (non-C2) managed queue only. A C2 installation with mode=MANAGED
+    also gets setup_type=NOVA_MANAGED_TRADINGVIEW, but every action here
+    (record_installation, admin_set_state) explicitly rejects C2 rows with
+    C2_ROUTE_REQUIRED -- so the listing must exclude them too, or an admin
+    sees an entry in this queue that nothing on this panel can ever act on."""
     limit, offset = max(1, min(int(limit), 100)), max(0, int(offset))
     with session_scope() as db:
-        query = select(models.TradingViewSetup).where(models.TradingViewSetup.setup_type == "NOVA_MANAGED_TRADINGVIEW")
+        query = select(models.TradingViewSetup).where(
+            models.TradingViewSetup.setup_type == "NOVA_MANAGED_TRADINGVIEW",
+            models.TradingViewSetup.pine_conversion_request_id.is_(None),
+        )
         total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
         rows = db.scalars(query.order_by(models.TradingViewSetup.updated_at.desc()).limit(limit).offset(offset)).all()
         return {"setups": [_setup_public(db, row, include_admin=True) for row in rows], "total": total, "limit": limit, "offset": offset}

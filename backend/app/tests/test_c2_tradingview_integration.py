@@ -866,6 +866,24 @@ def test_c2_admin_promotion_lifts_the_gate_only_after_hold_and_only_by_admin(
     assert live_detail["live_eligible"] is True
 
 
+def test_managed_c2_installation_never_appears_in_the_legacy_managed_queue(c2_app):
+    """A C2 installation with mode=MANAGED gets setup_type=NOVA_MANAGED_TRADINGVIEW
+    -- the same setup_type the legacy (non-C2) admin queue filters on. Every
+    action in that legacy panel (record_installation, admin_set_state)
+    already rejects C2 rows with C2_ROUTE_REQUIRED, so the listing must
+    exclude them too; otherwise an admin sees an entry nothing on that panel
+    can ever act on ("C2 installations use the C2 lifecycle" on every click)."""
+    client, current, admin, owner, _ = c2_app
+    approved = _approved(client)
+    _compile(client, approved)
+    managed = _install(client, approved, owner.id, mode="MANAGED")
+
+    from app.services import tradingview_setup_service
+
+    legacy_queue = tradingview_setup_service.list_managed()
+    assert managed["id"] not in {row["id"] for row in legacy_queue["setups"]}
+
+
 def test_c2_mark_ready_requires_paper_verification_first(c2_app):
     client, current, admin, owner, _ = c2_app
     approved = _approved(client)
