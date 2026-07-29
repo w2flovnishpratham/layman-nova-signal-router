@@ -45,7 +45,7 @@ function choosePaperAndStrategy() {
   fireEvent.click(screen.getByRole('button', { name: /Supertrend/i }))
 }
 
-beforeEach(() => vi.useFakeTimers())
+beforeEach(() => { vi.useFakeTimers(); sessionStorage.clear() })
 afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers(); cleanup() })
 
 describe('ConversationController — session isolation & logout', () => {

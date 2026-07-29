@@ -13,6 +13,7 @@ const FIELDS = [
 
 function runtimeWith(saved: Record<string, unknown>): RuntimeStatus {
   return {
+    owner_user_id: 'owner-1',
     strategy_catalog: {
       strategies: [{
         strategy_key: 'supertrend', strategy_instance_id: 'inst-1', source_type: 'BUILT_IN',
@@ -35,7 +36,7 @@ function props(over: Partial<Parameters<typeof ConversationController>[0]> = {})
   }
 }
 
-beforeEach(() => vi.useFakeTimers())
+beforeEach(() => { vi.useFakeTimers(); sessionStorage.clear() })
 afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers(); cleanup() })
 
 function runtimeNoMode(): RuntimeStatus {
@@ -308,6 +309,29 @@ describe('ConversationController — saved setup decision', () => {
     expect(screen.getByText('Which strategy should NOVA run?')).toBeInTheDocument()
     expect(screen.queryByText('I found your previous Paper configuration.')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+  })
+
+  it('picking a strategy with real saved answers during Start New Setup goes to fresh questions, not the saved-setup card again', () => {
+    // One level deeper than the mode-level loop above: pickStrategy always
+    // passed the strategy's genuine saved_setup into the machine, so
+    // re-picking the same strategy after Start New Setup immediately
+    // re-triggered "I found your previous configuration" -- no matter how
+    // many times the user backed out, picking the strategy they actually
+    // want brings the old card right back. Start New Setup must mean fresh
+    // answers for whichever strategy is picked next, not just a fresh mode.
+    const p = props() // Supertrend has a real saved setup in this fixture
+    render(<ConversationController {...p} />)
+    choosePaperAndStrategy() // lands on the saved-setup decision card
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start New Setup' }))
+    fireEvent.click(screen.getByRole('button', { name: /start in paper/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Supertrend/i }))
+    act(() => vi.advanceTimersByTime(700))
+
+    expect(screen.queryByText('I found your previous Paper configuration.')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+    expect(screen.getByRole('group', { name: 'Direction' })).toBeInTheDocument()
+    expect(p.onSave).not.toHaveBeenCalled()
   })
 })
 

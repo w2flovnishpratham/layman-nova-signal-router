@@ -295,7 +295,12 @@ export function ConversationController({
     setDirty(true)
     setSaved(false)
     setLiveAcknowledged(false)
-    clearFreshStartFlag()
+    // Deliberately NOT clearing the fresh-start flag here: "Start New Setup"
+    // must survive picking a mode, or the very next step (picking a strategy
+    // that has old saved answers) immediately re-surfaces the saved-setup
+    // card the user just tried to get away from. The flag only clears once
+    // the fresh flow actually completes (save) or the user explicitly opts
+    // back into their old data (Resume/Review).
     conv.selectMode(m)
     onModeSelect?.(m, 1_000_000)
   }
@@ -331,7 +336,13 @@ export function ConversationController({
     setDirty(true)
     setSaved(false)
     setLiveAcknowledged(false)
-    conv.selectStrategy(s.strategy_key, withRiskFields(s.setup_schema.fields), s.saved_setup?.[mode] ?? {})
+    // Mid an explicit "Start New Setup" attempt, never resurface this
+    // strategy's old saved answers -- that's the whole point of Start New.
+    // Without this, picking a strategy that has a real saved config always
+    // re-triggers the saved-setup decision card, no matter how many times
+    // the user backs out via Start New Setup: an inescapable loop.
+    const savedValues = isFreshStartFlagged(runtime?.owner_user_id) ? {} : (s.saved_setup?.[mode] ?? {})
+    conv.selectStrategy(s.strategy_key, withRiskFields(s.setup_schema.fields), savedValues)
     try {
       await onSelect(s.strategy_key)
     } catch {

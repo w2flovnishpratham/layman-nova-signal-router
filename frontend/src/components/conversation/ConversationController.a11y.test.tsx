@@ -1,6 +1,6 @@
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeStatus } from '../../api'
 import { ConversationController } from './ConversationController'
 
@@ -39,6 +39,7 @@ async function choosePaperAndStrategy(user: ReturnType<typeof userEvent.setup>) 
   await user.click(await screen.findByRole('button', { name: /Supertrend/i }))
 }
 
+beforeEach(() => sessionStorage.clear())
 afterEach(() => cleanup())
 
 describe('ConversationController — keyboard-only operation', () => {
