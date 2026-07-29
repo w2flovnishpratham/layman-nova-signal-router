@@ -116,7 +116,6 @@ class AnthropicClaudePineConversionProvider:
         return Anthropic(
             api_key=settings.ANTHROPIC_API_KEY,
             timeout=float(request.timeout_seconds),
-            max_retries=0,
         )
 
     @staticmethod

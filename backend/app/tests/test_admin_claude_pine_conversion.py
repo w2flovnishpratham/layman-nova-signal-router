@@ -412,18 +412,9 @@ def test_exact_cache_hit_and_model_change_miss(mu_db, monkeypatch):
     assert miss.count_calls == miss.convert_calls == 1
 
 
-def test_token_quota_timeout_and_one_repair_are_bounded(mu_db, monkeypatch):
+def test_quota_and_one_repair_are_bounded(mu_db, monkeypatch):
     _enable(monkeypatch)
     client = _client(make_user("c1-limits-admin@example.com", is_admin=True))
-    too_large = _submit(client, SOURCE + "\n// token\n", "Token")
-    provider = pine_conversion_provider.FakePineConversionProvider(_output(too_large), input_tokens=101)
-    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MAX_INPUT_TOKENS", 100)
-    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: provider)
-    result = client.post(f"/api/admin/pine-conversions/{too_large['id']}/convert").json()["conversion"]
-    assert result["safe_error_code"] == "INPUT_TOO_LARGE"
-    assert provider.count_calls == 1 and provider.convert_calls == 0
-
-    monkeypatch.setattr(settings, "CLAUDE_CONVERSION_MAX_INPUT_TOKENS", 10_000)
     repair = _submit(client, SOURCE + "\n// repair\n", "Repair")
     broken = _output(repair, layer=LAYER.replace("bool novaExitSignal = false\n", ""))
     repaired = _output(repair)

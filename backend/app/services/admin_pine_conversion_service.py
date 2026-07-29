@@ -1354,7 +1354,7 @@ def convert(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[str, An
             row.safe_error_code = "PROVIDER_NOT_CONFIGURED"
             return {"conversion": _public(db, row, include_source=False)}
         current_registry = load_registry()
-        if int(settings.CLAUDE_CONVERSION_MAX_REPAIRS) not in {0, 1}:
+        if int(settings.CLAUDE_CONVERSION_MAX_REPAIRS) < 0:
             row.status = "manual_conversion_required"
             row.safe_error_code = "REPAIR_POLICY_INVALID"
             return {"conversion": _public(db, row, include_source=False)}
@@ -1421,9 +1421,6 @@ def convert(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[str, An
     provider = pine_conversion_provider.get_claude_provider()
     try:
         input_tokens = provider.count_tokens(request)
-        if input_tokens > max(1, int(settings.CLAUDE_CONVERSION_MAX_INPUT_TOKENS)):
-            _set_failure(admin_id, conversion_id, "INPUT_TOO_LARGE", "manual_conversion_required")
-            return get_conversion(admin_id, conversion_id)
         result: pine_conversion_provider.ClaudePineConversionProviderResult | None = None
         output: ClaudePineConversionOutput | None = None
         errors: list[str] = []
@@ -1445,21 +1442,21 @@ def convert(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[str, An
                 raise
             errors = [exc.code]
         repair_count = 0
-        # LOGIC_CHANGED_REQUIRES_MANUAL_CORRECTION is normally terminal (it's
-        # Claude's own "this needs a human" call) but when every matched
-        # blocker has an authored, reviewed safe mapping, a stuck response is
-        # more likely Claude being overly conservative than a genuine
-        # ambiguity -- worth one bounded corrective retry before giving up.
-        logic_changed_recoverable = (
-            errors == ["LOGIC_CHANGED_REQUIRES_MANUAL_CORRECTION"]
-            and _all_blockers_have_authored_guidance(current)
-        )
-        repairable = errors and (
-            all(code in REPAIRABLE_CODES or code == "INVALID_PROVIDER_RESPONSE" for code in errors)
-            or logic_changed_recoverable
-        )
-        if errors and repairable and int(settings.CLAUDE_CONVERSION_MAX_REPAIRS) == 1:
-            repair_count = 1
+        max_repairs = max(0, int(settings.CLAUDE_CONVERSION_MAX_REPAIRS))
+        while errors and repair_count < max_repairs:
+            # LOGIC_CHANGED_REQUIRES_MANUAL_CORRECTION is normally terminal (it's
+            # Claude's own "this needs a human" call) but when every matched
+            # blocker has an authored, reviewed safe mapping, a stuck response is
+            # more likely Claude being overly conservative than a genuine
+            # ambiguity -- worth a bounded corrective retry before giving up.
+            logic_changed_recoverable = (
+                errors == ["LOGIC_CHANGED_REQUIRES_MANUAL_CORRECTION"]
+                and _all_blockers_have_authored_guidance(current)
+            )
+            repairable = all(code in REPAIRABLE_CODES or code == "INVALID_PROVIDER_RESPONSE" for code in errors) or logic_changed_recoverable
+            if not repairable:
+                break
+            repair_count += 1
             repair_request = (
                 _repair_prompt(
                     request, source, output, errors,
