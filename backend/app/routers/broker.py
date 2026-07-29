@@ -50,15 +50,24 @@ def dhan_status() -> dict:
 
 @router.post("/dhan/test")
 def test_dhan() -> dict:
+    """Read-only credential check. Deliberately bypasses the user's assigned
+    execution-node proxy (proxy_url="") — this verifies the Client ID/Access
+    Token themselves, not the static-IP routing path, which has its own
+    separate verify flow (POST /api/strategies/egress/verify) and its own
+    gate before live order placement."""
     creds = get_dhan_credentials()
     if not creds:
         return {"success": False, "message": "Dhan Client ID or Access Token missing."}
-    result = RealDhanClient().validate_token(
+    result = RealDhanClient(proxy_url="").validate_token(
         client_id=creds.client_id,
         access_token=creds.access_token,
     )
     _record_verification(result)
-    wallet = sanitize_wallet_snapshot(refresh_wallet_snapshot(force=True, log_event=True)) if result.success else None
+    wallet = (
+        sanitize_wallet_snapshot(refresh_wallet_snapshot(force=True, log_event=True, proxy_url=""))
+        if result.success
+        else None
+    )
     message = result.message
     if wallet and wallet.get("success") and wallet.get("available_balance") is not None:
         message = f"{message} Available balance: Rs.{wallet['available_balance']:.2f}."

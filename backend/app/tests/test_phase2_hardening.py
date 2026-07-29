@@ -724,6 +724,9 @@ def test_broker_routes_sanitize_wallet_and_profile_payload(monkeypatch):
     from app.services.dhan_client import DhanValidationResult
 
     class FakeDhanClient:
+        def __init__(self, *, proxy_url=None, expected_egress_ip=None):
+            pass
+
         def validate_token(self, *, client_id, access_token):
             return DhanValidationResult(
                 success=True,
