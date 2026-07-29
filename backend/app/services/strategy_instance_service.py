@@ -118,6 +118,21 @@ def _instance_public(row: models.StrategyInstance, *, strategy: models.StrategyC
 
 def _decorate_personal_instance(db, row: models.StrategyInstance, payload: dict[str, Any]) -> dict[str, Any]:
     if row.source_journey != "PERSONAL_TRADINGVIEW":
+        if row.source_journey == "NOVA_SHARED":
+            # This is the ONLY place live_eligible is set for a built-in
+            # instance on the engine-selection/save-configuration path
+            # (strategy_catalog_service.get_catalog() has its own separate,
+            # already-correct read of the registry for the catalog *listing*
+            # — this decorates the persisted StrategyInstance selection that
+            # setup_configuration.save_configuration() actually enforces
+            # against). Without this, every NOVA_SHARED instance silently
+            # read live_eligible as False regardless of the registry.
+            from app.services import built_in_strategy_registry as built_ins
+
+            catalog = db.get(models.StrategyCatalog, row.strategy_id)
+            key = built_ins.key_for_catalog_code(catalog.code) if catalog else None
+            definition = built_ins.get_built_in(key) if key else None
+            payload["live_eligible"] = bool(definition and definition.get("live_eligible"))
         return payload
     from app.routers.setup import current_nifty_lot_size
     from app.services.private_webhook_service import instance_strategy_name

@@ -174,7 +174,19 @@ def test_setup_schema_validation_and_atomic_rehydration(mu_db, runtime, monkeypa
     assert hydrated["config"]["paper"]["allowed_option_side"] == "BOTH"
 
 
-def test_live_setup_remains_blocked_and_paper_configuration_unchanged(mu_db, runtime):
+def test_live_setup_remains_blocked_and_paper_configuration_unchanged(mu_db, runtime, monkeypatch):
+    # Supertrend is live-eligible by explicit product decision (2026-07-29).
+    # Force it back to ineligible for this test only, so this exercises the
+    # LIVE_UNAVAILABLE gate itself rather than depending on which built-in
+    # currently is/isn't eligible.
+    from app.services import built_in_strategy_registry as built_ins
+
+    patched = tuple(
+        {**item, "live_eligible": False} if item["strategy_key"] == "nova-supertrend" else item
+        for item in built_ins._BUILT_INS
+    )
+    monkeypatch.setattr(built_ins, "_BUILT_INS", patched)
+
     _seed()
     user = make_user("catalog-live@example.com")
     client = _client(user)

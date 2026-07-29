@@ -354,3 +354,35 @@ def test_a_restart_with_matching_revisions_starts_normally(mu_db, runtime):
     assert (state["settings_revision"], state["setup_revision"], state["coherent"]) == (1, 1, True)
     selection = strategy_catalog_service.instances.get_engine_selection(user.id)
     assert strategy_catalog_service.apply_selected_setup(user.id, selection["selected"])["lots"] == 2
+
+
+def test_a_live_eligible_built_in_can_save_a_live_configuration(mu_db, runtime):
+    """Regression: strategy_catalog_service.get_catalog() correctly reads
+    live_eligible from the built-in registry for the catalog *listing*, but
+    the separate engine-selection path (get_engine_selection ->
+    _decorate_personal_instance -> _engine_entry, which
+    save_configuration()'s live-mode gate actually enforces against) used to
+    hard-code live_eligible=False for every NOVA_SHARED instance regardless
+    of the registry — so a built-in the registry marked live-eligible still
+    got "Live setup is unavailable for this strategy" (LIVE_UNAVAILABLE)."""
+    from app.services import strategy_catalog_service
+
+    user, client = _ready("atomic-live-eligible@example.com")
+
+    selection = strategy_catalog_service.instances.get_engine_selection(user.id)
+    assert selection["selected"]["live_eligible"] is True, (
+        "nova-supertrend is live_eligible in the registry; the persisted "
+        "engine selection must reflect that, not silently default to False"
+    )
+
+    response = client.put(
+        "/api/setup/configuration",
+        json={
+            "strategy_key": "nova-supertrend",
+            "mode": "live",
+            "setup": SETUP,
+            "risk": RISK,
+            "expected_revision": 0,
+        },
+    )
+    assert response.status_code == 200, response.text
