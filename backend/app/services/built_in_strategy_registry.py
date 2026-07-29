@@ -61,7 +61,7 @@ _BUILT_INS: tuple[dict[str, Any], ...] = (
         "availability": "READY",
         "disabled_reason": None,
         "paper_eligible": True,
-        "live_eligible": False,
+        "live_eligible": True,
         "execution_adapter": "strategy_webhook:supertrend",
         "setup_schema": _standard_setup_schema(),
     },

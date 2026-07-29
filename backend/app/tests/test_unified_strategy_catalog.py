@@ -59,11 +59,14 @@ def test_catalog_returns_deterministic_built_ins_with_honest_availability(mu_db,
     ]
     assert by_key["nova-supertrend"]["availability"] == "READY"
     assert by_key["nova-supertrend"]["paper_eligible"] is True
+    # Supertrend is the only built-in with a real execution adapter and has
+    # been deliberately qualified for live trading (owner sign-off, 2026-07-29).
+    assert by_key["nova-supertrend"]["live_eligible"] is True
     for key in ("nova-orb", "nova-vwap", "nova-rsi", "nova-scalper"):
         assert by_key[key]["availability"] == "COMING_SOON"
         assert by_key[key]["paper_eligible"] is False
         assert by_key[key]["disabled_reason"] == "Missing execution adapter"
-    assert all(item["live_eligible"] is False for item in by_key.values())
+        assert by_key[key]["live_eligible"] is False
 
 
 def test_catalog_is_owner_scoped_and_exposes_no_secret_or_source(mu_db, runtime):
