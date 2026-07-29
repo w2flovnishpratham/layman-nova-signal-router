@@ -249,30 +249,29 @@ def test_success_appends_transport_validates_and_approves_exact_hashes(mu_db, mo
     assert approved["approval_integrity"] is True
 
 
-def test_model_transport_source_sha_and_logic_change_are_rejected(mu_db, monkeypatch):
+def test_source_sha_mismatch_and_logic_changed_reach_admin_review_as_info(mu_db, monkeypatch):
+    """No in-between checkup: a source_sha256 mismatch or an inconsistent
+    logic_changed/status pairing in Claude's own response is no longer a
+    backend block. It reaches admin review as-is; the admin reads Claude's
+    self-reported fields and approves/rejects/requests changes."""
     _enable(monkeypatch)
     client = _client(make_user("c1-untrusted-admin@example.com", is_admin=True))
     cases = [
-        LAYER + '\n// === NOVA FROZEN TRANSPORT BEGIN: pine_transport_v2 ===\n',
-        LAYER,
-        LAYER,
+        lambda conversion: _output(conversion).model_copy(update={"source_sha256": "0" * 64}),
+        lambda conversion: ClaudePineConversionOutput.model_validate({
+            **_output(conversion).model_dump(),
+            "behavior_preservation": {"logic_changed": True, "change_summary": ["changed entry"]},
+        }),
     ]
-    for index, layer in enumerate(cases):
-        conversion = _submit(client, SOURCE + f"\n// case {index}\n", f"Unsafe {index}")
-        if index == 0:
-            output = _output(conversion, layer=layer)
-        elif index == 1:
-            output = _output(conversion)
-            output = output.model_copy(update={"source_sha256": "0" * 64})
-        else:
-            value = _output(conversion).model_dump()
-            value["behavior_preservation"] = {"logic_changed": True, "change_summary": ["changed entry"]}
-            output = ClaudePineConversionOutput.model_validate(value)
+    for index, make_output in enumerate(cases):
+        conversion = _submit(client, SOURCE + f"\n// case {index}\n", f"Case {index}")
+        output = make_output(conversion)
         fake = pine_conversion_provider.FakePineConversionProvider(output)
         monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda fake=fake: fake)
         result = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
-        assert result["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
-        assert result["candidate_version_id"] is None
+        assert result["conversion_status"] == "READY_FOR_ADMIN_REVIEW"
+        assert result["candidate_version_id"] is not None
+        assert fake.repair_calls == 0
 
 
 def _logic_changed(conversion, *, status="CONVERTED"):
@@ -308,41 +307,20 @@ def test_api_prompt_states_logic_preservation_contract_and_v31_is_unchanged():
     )
 
 
-def test_logic_changed_converted_is_repaired_into_a_valid_candidate(mu_db, monkeypatch):
+def test_logic_changed_converted_reaches_admin_review_without_a_repair_call(mu_db, monkeypatch):
     _enable(monkeypatch)
     client = _client(make_user("c1-logic-repair-admin@example.com", is_admin=True))
     conversion = _submit(client)
     inconsistent = _logic_changed(conversion)   # logic_changed=true + CONVERTED (invalid pairing)
-    corrected = _output(conversion)             # logic_changed=false + CONVERTED
-    fake = pine_conversion_provider.FakePineConversionProvider(inconsistent, repair_output=corrected)
+    fake = pine_conversion_provider.FakePineConversionProvider(inconsistent)
     monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
     detail = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
     assert detail["conversion_status"] == "READY_FOR_ADMIN_REVIEW"
-    assert detail["validation"]["eligible_for_review"] is True
     assert detail["candidate_version_id"] is not None
-    assert fake.convert_calls == 1 and fake.repair_calls == 1
+    assert fake.convert_calls == 1 and fake.repair_calls == 0
 
 
-def test_logic_changed_converted_fails_closed_when_repair_stays_inconsistent(mu_db, monkeypatch):
-    _enable(monkeypatch)
-    client = _client(make_user("c1-logic-badrepair-admin@example.com", is_admin=True))
-    conversion = _submit(client)
-    inconsistent = _logic_changed(conversion)
-    fake = pine_conversion_provider.FakePineConversionProvider(inconsistent, repair_output=inconsistent)
-    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
-    detail = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
-    assert detail["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
-    assert detail["candidate_version_id"] is None
-    assert fake.repair_calls == 1
-    from app.db import models
-    from app.db.engine import session_scope
-
-    with session_scope() as db:
-        row = db.get(models.PineConversionRequest, uuid.UUID(conversion["id"]))
-        assert row.safe_error_code == "LOGIC_CHANGED_STATUS_INVALID"
-
-
-def test_logic_changed_with_manual_review_required_is_terminal_not_repaired(mu_db, monkeypatch):
+def test_logic_changed_with_manual_review_required_reaches_admin_review_as_info(mu_db, monkeypatch):
     _enable(monkeypatch)
     client = _client(make_user("c1-logic-manual-admin@example.com", is_admin=True))
     conversion = _submit(client)
@@ -350,9 +328,9 @@ def test_logic_changed_with_manual_review_required_is_terminal_not_repaired(mu_d
     fake = pine_conversion_provider.FakePineConversionProvider(manual)  # no repair_output
     monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
     detail = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
-    assert detail["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
-    assert detail["candidate_version_id"] is None
-    assert fake.repair_calls == 0  # logic_changed=true + MANUAL_REVIEW_REQUIRED stays terminal
+    assert detail["conversion_status"] == "READY_FOR_ADMIN_REVIEW"
+    assert detail["candidate_version_id"] is not None
+    assert fake.repair_calls == 0
 
 
 # alert(...) -> STRATEGY_LAYER_ALERT_FORBIDDEN (layer level); alertcondition(...) ->
@@ -361,31 +339,20 @@ def test_logic_changed_with_manual_review_required_is_terminal_not_repaired(mu_d
     "alert_line",
     ['alert("BUY_CE")', 'alertcondition(novaBuyCeSignal, "BUY_CE")'],
 )
-def test_strategy_layer_alert_is_repaired_into_a_valid_candidate(mu_db, monkeypatch, alert_line):
+def test_strategy_layer_alert_reaches_admin_review_without_a_repair_call(mu_db, monkeypatch, alert_line):
     _enable(monkeypatch)
     client = _client(make_user("c1-alert-repair-admin@example.com", is_admin=True))
     conversion = _submit(client)
     dirty = _output(conversion, layer=LAYER + "\n" + alert_line + "\n")  # strategy-layer alert
-    clean = _output(conversion)                                          # canonical booleans only
-    fake = pine_conversion_provider.FakePineConversionProvider(dirty, repair_output=clean)
+    fake = pine_conversion_provider.FakePineConversionProvider(dirty)
     monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
     detail = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
     assert detail["conversion_status"] == "READY_FOR_ADMIN_REVIEW"
     assert detail["candidate_version_id"] is not None
-    assert fake.repair_calls == 1
-
-
-def test_strategy_layer_alert_fails_closed_when_repair_keeps_alert(mu_db, monkeypatch):
-    _enable(monkeypatch)
-    client = _client(make_user("c1-alert-badrepair-admin@example.com", is_admin=True))
-    conversion = _submit(client)
-    dirty = _output(conversion, layer=LAYER + '\nalertcondition(novaBuyCeSignal, "BUY_CE")\n')
-    fake = pine_conversion_provider.FakePineConversionProvider(dirty, repair_output=dirty)
-    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
-    detail = client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert").json()["conversion"]
-    assert detail["conversion_status"] == "MANUAL_CONVERSION_REQUIRED"
-    assert detail["candidate_version_id"] is None
-    assert fake.repair_calls == 1
+    assert fake.repair_calls == 0
+    # The deterministic validator still runs and its verdict is still visible
+    # to the admin -- it just no longer blocks the path to review.
+    assert detail["validation"]["eligible_for_review"] is False
 
 
 def test_exact_cache_hit_and_model_change_miss(mu_db, monkeypatch):
@@ -412,19 +379,9 @@ def test_exact_cache_hit_and_model_change_miss(mu_db, monkeypatch):
     assert miss.count_calls == miss.convert_calls == 1
 
 
-def test_quota_and_one_repair_are_bounded(mu_db, monkeypatch):
+def test_quota_is_bounded(mu_db, monkeypatch):
     _enable(monkeypatch)
     client = _client(make_user("c1-limits-admin@example.com", is_admin=True))
-    repair = _submit(client, SOURCE + "\n// repair\n", "Repair")
-    broken = _output(repair, layer=LAYER.replace("bool novaExitSignal = false\n", ""))
-    repaired = _output(repair)
-    repair_provider = pine_conversion_provider.FakePineConversionProvider(broken, repair_output=repaired)
-    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: repair_provider)
-    fixed = client.post(f"/api/admin/pine-conversions/{repair['id']}/convert").json()["conversion"]
-    assert fixed["conversion_status"] == "READY_FOR_ADMIN_REVIEW"
-    assert fixed["provenance"]["repair_count"] == 1
-    assert repair_provider.repair_calls == 1
-
     quota = _submit(client, SOURCE + "\n// quota\n", "Quota")
     monkeypatch.setattr(settings, "CLAUDE_CONVERSION_DAILY_ADMIN_LIMIT", 0)
     limited = client.post(f"/api/admin/pine-conversions/{quota['id']}/convert")

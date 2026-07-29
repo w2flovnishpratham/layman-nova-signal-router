@@ -620,10 +620,11 @@ def test_strategy_mode_preserves_pending_orders_and_attaches_order_fill_alerts(m
     assert definition_at < first_call_at, "transport must define novaWebhookPayload before the layer calls it"
 
 
-def test_strategy_mode_rejects_a_dropped_order_call(mu_db, monkeypatch):
-    """If Claude drops an order-producing call instead of just instrumenting
-    it, that's exactly the failure mode this redesign exists to prevent --
-    must not silently pass validation."""
+def test_strategy_mode_dropped_order_call_still_reaches_admin_review(mu_db, monkeypatch):
+    """No in-between checkup: if Claude drops an order-producing call instead
+    of just instrumenting it, that's no longer a backend block -- it reaches
+    admin review as-is, with the deterministic validator's finding attached
+    as advisory info for the admin to read before approving/rejecting."""
     layer_missing_short_side = REAL_BOLLINGER_STRATEGY_LAYER_PRESERVED.replace(
         'strategy.entry("BBandSE", strategy.short, stop=upper, oca_name="BollingerBands", '
         'oca_type=strategy.oca.cancel, comment="BBandSE", alert_message=novaWebhookPayload("BUY_PE", "BBandSE"))',
@@ -636,7 +637,9 @@ def test_strategy_mode_rejects_a_dropped_order_call(mu_db, monkeypatch):
     response = _submit_for_conversion(client, "Bollinger Bands Strategy Dropped", REAL_BOLLINGER_STRATEGY_SOURCE)
     assert response.status_code == 202, response.text
     conversion = response.json()["conversion"]
-    assert conversion["conversion_status"] == "MANUAL_CONVERSION_REQUIRED", conversion
+    assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
+    assert conversion["candidate_version_id"] is not None
+    assert provider.repair_calls == 0
 
 
 def test_strategy_mode_accepts_a_faithfully_preserved_pine_v5_source(mu_db, monkeypatch):
@@ -676,14 +679,13 @@ if (shortCondition)
 """
 
 
-def test_strategy_mode_repairs_a_missing_alert_message_instead_of_failing(mu_db, monkeypatch):
+def test_strategy_mode_missing_alert_message_reaches_admin_review_without_repair(mu_db, monkeypatch):
     """Regression for the real reported "ATSt" strategy: a plain Long/Short
     strategy.entry pair with no pre-existing alert()/alertcondition()/webhook
     of any kind. Claude sometimes preserves the order calls but forgets to
-    add alert_message -- a purely mechanical omission -- and it went straight
-    to manual_conversion_required because ALERT_MESSAGE_MISSING wasn't in
-    REPAIRABLE_CODES. One bounded repair must recover it, the same way
-    CANONICAL_SIGNAL_MISSING already does for INDICATOR mode."""
+    add alert_message -- no in-between checkup fixes or blocks this anymore,
+    it reaches admin review as Claude returned it, with the validator's
+    ALERT_MESSAGE_MISSING finding attached as advisory info only."""
     missing_alert_message = ClaudePineConversionOutput.model_validate({
         "schema_version": "nova.claude-pine-conversion.v1",
         "source_sha256": hashlib.sha256(REAL_ATST_STRATEGY_SOURCE.encode()).hexdigest(),
@@ -695,24 +697,16 @@ def test_strategy_mode_repairs_a_missing_alert_message_instead_of_failing(mu_db,
         "user_summary": "Preserved the strategy as-is.",
         "admin_review_points": [],
     })
-    fixed = REAL_ATST_STRATEGY_SOURCE.replace(
-        'strategy.entry("Long", strategy.long)',
-        'strategy.entry("Long", strategy.long, alert_message=novaWebhookPayload("BUY_CE", "Long"))',
-    ).replace(
-        'strategy.entry("Short", strategy.short)',
-        'strategy.entry("Short", strategy.short, alert_message=novaWebhookPayload("BUY_PE", "Short"))',
-    )
-    corrected = _strategy_mode_output(REAL_ATST_STRATEGY_SOURCE, fixed)
-    client, current, owner, provider = _strategy_mode_client(monkeypatch, missing_alert_message, repair_output=corrected)
+    client, current, owner, provider = _strategy_mode_client(monkeypatch, missing_alert_message)
     del current, owner
 
     response = _submit_for_conversion(client, "AlphaTrend Strategy", REAL_ATST_STRATEGY_SOURCE)
     assert response.status_code == 202, response.text
     conversion = response.json()["conversion"]
     assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
-    assert conversion["validation_status"] == "PASSED"
+    assert conversion["validation_status"] == "FAILED"
     assert provider.convert_calls == 1
-    assert provider.repair_calls == 1
+    assert provider.repair_calls == 0
 
 
 LICENSED_ATST_STRATEGY_SOURCE = """// This source code is subject to the terms of the Mozilla Public License 2.0
@@ -732,24 +726,24 @@ if (shortCondition)
 """
 
 
-def test_strategy_mode_repairs_a_version_directive_dropped_alongside_license_header(mu_db, monkeypatch):
+def test_strategy_mode_dropped_version_directive_reaches_admin_review_without_repair(mu_db, monkeypatch):
     """Regression for a second real ATSt failure mode: with a license/author
     comment header above //@version=5, Claude sometimes drops the version
-    directive along with the header it was cleaning up around. Must repair,
-    not fail closed on the first miss."""
+    directive along with the header it was cleaning up around. No in-between
+    checkup repairs this anymore -- it reaches admin review as Claude
+    returned it, with the validator's finding attached as advisory info."""
     dropped_version = LICENSED_ATST_STRATEGY_SOURCE.replace("//@version=5\n", "")
     missing_version = _strategy_mode_output(LICENSED_ATST_STRATEGY_SOURCE, dropped_version)
-    corrected = _strategy_mode_output(LICENSED_ATST_STRATEGY_SOURCE, LICENSED_ATST_STRATEGY_SOURCE)
-    client, current, owner, provider = _strategy_mode_client(monkeypatch, missing_version, repair_output=corrected)
+    client, current, owner, provider = _strategy_mode_client(monkeypatch, missing_version)
     del current, owner
 
     response = _submit_for_conversion(client, "AlphaTrend Strategy Licensed", LICENSED_ATST_STRATEGY_SOURCE)
     assert response.status_code == 202, response.text
     conversion = response.json()["conversion"]
     assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
-    assert conversion["validation_status"] == "PASSED"
+    assert conversion["validation_status"] == "FAILED"
     assert provider.convert_calls == 1
-    assert provider.repair_calls == 1
+    assert provider.repair_calls == 0
 
 
 REAL_GREEDY_STRATEGY_SOURCE = """//@version=6
@@ -853,25 +847,22 @@ def test_strategy_mode_advisory_reassures_preserve_for_matched_blockers(mu_db, m
     assert "Orders are re-expressed as directional BUY_CE" not in prompt
 
 
-def test_strategy_mode_logic_changed_gets_one_corrective_retry_then_succeeds(mu_db, monkeypatch):
-    """End-to-end reproduction of the real 'greedy' strategy: even with the
-    corrected advisory text, if Claude's first response still reports
-    logic_changed=true/MANUAL_REVIEW_REQUIRED for a source whose every
-    matched blocker has an authored safe mapping, one bounded corrective
-    retry must run before giving up -- not an immediate manual_conversion_required."""
+def test_strategy_mode_logic_changed_manual_review_reaches_admin_without_retry(mu_db, monkeypatch):
+    """End-to-end reproduction of the real 'greedy' strategy: even when
+    Claude's response reports logic_changed=true/MANUAL_REVIEW_REQUIRED, no
+    in-between checkup retries Claude anymore -- the response goes straight
+    to admin review as Claude returned it, self-reported concern included."""
     overly_conservative = _strategy_mode_output(
         REAL_GREEDY_STRATEGY_SOURCE, REAL_GREEDY_STRATEGY_LAYER_PRESERVED,
         status="MANUAL_REVIEW_REQUIRED",
         behavior_preservation={"logic_changed": True, "change_summary": ["fill-dependent TP/SL calc"]},
     )
-    corrected = _strategy_mode_output(REAL_GREEDY_STRATEGY_SOURCE, REAL_GREEDY_STRATEGY_LAYER_PRESERVED)
-    client, current, owner, provider = _strategy_mode_client(monkeypatch, overly_conservative, repair_output=corrected)
+    client, current, owner, provider = _strategy_mode_client(monkeypatch, overly_conservative)
     del current, owner
 
     response = _submit_for_conversion(client, "Greedy Strategy", REAL_GREEDY_STRATEGY_SOURCE)
     assert response.status_code == 202, response.text
     conversion = response.json()["conversion"]
     assert conversion["conversion_status"] == "READY_FOR_ADMIN_REVIEW", conversion
-    assert conversion["validation_status"] == "PASSED"
     assert provider.convert_calls == 1
-    assert provider.repair_calls == 1
+    assert provider.repair_calls == 0
