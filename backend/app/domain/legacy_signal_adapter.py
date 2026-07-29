@@ -72,6 +72,7 @@ def canonical_to_normalized_signal(
     *,
     strategy_instance_id: str,
     received_at: datetime,
+    source: str = "private_tradingview_webhook",
 ) -> NormalizedSignal | None:
     if event.event_type is CanonicalEventType.CONNECTIVITY_TEST:
         return None
@@ -114,6 +115,6 @@ def canonical_to_normalized_signal(
         qty=1,
         order_type="MARKET",
         product_type="INTRADAY",
-        source="private_tradingview_webhook",
+        source=source,
         raw_payload=raw_payload,
     )

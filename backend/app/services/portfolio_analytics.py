@@ -22,6 +22,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.services.audit_logger import read_jsonl
+from app.services.signal_parser import AUTOMATED_ORIGINS, origin_from_source
 from app.services.state_store import get_engine_mode
 
 logger = logging.getLogger("nova_signal_router.portfolio")
@@ -176,6 +177,8 @@ def _pair_round_trips(events: list[dict]) -> tuple[list[dict[str, Any]], dict | 
                     "entry_order_id": entry.get("order_id"),
                     "exit_order_id": ev.get("order_id"),
                     "signal_id": ev.get("signal_id") or entry.get("signal_id"),
+                    # Position keeps the origin of whoever opened it, not the exit leg.
+                    "origin": origin_from_source(entry.get("source")),
                     "opened_at": entry.get("timestamp"),
                     "closed_at": ev.get("timestamp"),
                     "hold_minutes": _round(hold_minutes, 1),
@@ -337,14 +340,14 @@ def _symbol_breakdown(trades: list[dict[str, Any]], limit: int = 8) -> list[dict
     return rows
 
 
-def _live_wallet_snapshot() -> dict[str, Any]:
+def _live_wallet_snapshot(*, force: bool = False) -> dict[str, Any]:
     """Real Dhan funds only — never the resettable paper wallet."""
     try:
         from app.services.state_store import get_wallet_snapshot
         from app.services.wallet_service import refresh_wallet_snapshot
 
         if (get_engine_mode(legacy_fallback=False) or "") == "live":
-            snap = refresh_wallet_snapshot(force=False, log_event=False)
+            snap = refresh_wallet_snapshot(force=force, log_event=False)
         else:
             # Not live right now: use the last real funds snapshot on record.
             snap = get_wallet_snapshot()
@@ -398,6 +401,8 @@ def _persist_trades_best_effort(trades: list[dict[str, Any]]) -> None:
                         entry_order_id=t.get("entry_order_id"),
                         exit_order_id=str(exit_id),
                         signal_id=t.get("signal_id"),
+                        origin=t.get("origin"),
+                        exit_trigger=t.get("exit_trigger"),
                         opened_at=_parse_ts(t.get("opened_at")) if t.get("opened_at") else None,
                         closed_at=_parse_ts(t.get("closed_at")) if t.get("closed_at") else None,
                     )
@@ -431,10 +436,47 @@ def _persist_snapshot_best_effort(wallet: dict[str, Any], kpis: dict[str, Any]) 
                     equity=_num(wallet.get("equity")),
                     realized_pnl=kpis.get("realized_pnl"),
                     trade_count=kpis.get("total_trades") or 0,
+                    fetch_status="ok" if wallet.get("funds_connected") else "error",
                 )
             )
     except Exception as exc:  # pragma: no cover - persistence is best effort
         logger.debug("Portfolio snapshot persistence skipped: %s", exc)
+
+
+def _last_known_live_snapshot(user_id: Any) -> dict[str, Any] | None:
+    """Most recent successful Live wallet reading on record for this user, for
+    display when the current Dhan fetch is stale/failed/unavailable. Never raises."""
+    try:
+        from app.db.engine import database_configured, session_scope
+        from app.db.models import PortfolioSnapshot
+    except Exception:
+        return None
+    if not database_configured():
+        return None
+    try:
+        with session_scope() as session:
+            row = (
+                session.query(PortfolioSnapshot)
+                .filter(
+                    PortfolioSnapshot.user_id == user_id,
+                    PortfolioSnapshot.mode == "live",
+                    PortfolioSnapshot.fetch_status == "ok",
+                )
+                .order_by(PortfolioSnapshot.captured_at.desc())
+                .first()
+            )
+            if row is None:
+                return None
+            return {
+                "starting_balance": row.starting_balance,
+                "available_balance": row.available_balance,
+                "utilized_amount": row.utilized_amount,
+                "equity": row.equity,
+                "captured_at": row.captured_at.isoformat() if row.captured_at else None,
+            }
+    except Exception as exc:  # pragma: no cover - read is best effort
+        logger.debug("Last-known live snapshot lookup skipped: %s", exc)
+        return None
 
 
 def _persist_best_effort(trades: list[dict[str, Any]], wallet: dict[str, Any], kpis: dict[str, Any]) -> None:
@@ -510,6 +552,8 @@ def persist_paper_trade(closed_trade: dict[str, Any]) -> None:
                     realized_pnl=realized,
                     entry_order_id=closed_trade.get("entry_order_id"),
                     exit_order_id=str(exit_id),
+                    origin=closed_trade.get("origin"),
+                    exit_trigger=closed_trade.get("exit_trigger"),
                     opened_at=_parse_ts(closed_trade.get("opened_at")) if closed_trade.get("opened_at") else None,
                     closed_at=_parse_ts(closed_trade.get("closed_at")) if closed_trade.get("closed_at") else None,
                 )
@@ -552,6 +596,8 @@ def _paper_trade_row(trade: dict[str, Any]) -> dict[str, Any]:
         "entry_order_id": trade.get("entry_order_id"),
         "exit_order_id": trade.get("exit_order_id"),
         "signal_id": trade.get("signal_id"),
+        "origin": trade.get("origin"),
+        "exit_trigger": trade.get("exit_trigger"),
         "opened_at": trade.get("opened_at"),
         "closed_at": trade.get("closed_at"),
         "hold_minutes": hold_minutes,
@@ -559,16 +605,28 @@ def _paper_trade_row(trade: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_paper_portfolio_analytics() -> dict[str, Any]:
+def _filter_trades_by_origin(trades: list[dict[str, Any]], trade_origin: str | None) -> list[dict[str, Any]]:
+    """Reporting-only filter — never touches the stored trade/wallet ledger."""
+    selection = (trade_origin or "all").lower()
+    if selection == "automated":
+        return [t for t in trades if t.get("origin") in AUTOMATED_ORIGINS]
+    if selection == "manual":
+        return [t for t in trades if t.get("origin") == "MANUAL"]
+    return trades
+
+
+def _build_paper_portfolio_analytics(trade_origin: str | None = None) -> dict[str, Any]:
     from app.services.paper_portfolio import get_paper_portfolio
 
     portfolio = get_paper_portfolio()
-    trades = [_paper_trade_row(t) for t in portfolio.closed_trades]
+    all_trades = [_paper_trade_row(t) for t in portfolio.closed_trades]
+    trades = _filter_trades_by_origin(all_trades, trade_origin)
 
     starting_balance = float(portfolio.session_start_balance or portfolio.starting_balance or 0.0)
     current_equity = round(float(portfolio.available_balance) + float(portfolio.utilized_amount), 2)
 
     wallet = {
+        # Real account state — always the true totals, never filtered.
         "starting_balance": _round(starting_balance),
         "available_balance": _round(portfolio.available_balance),
         "utilized_amount": _round(portfolio.utilized_amount),
@@ -601,6 +659,7 @@ def _build_paper_portfolio_analytics() -> dict[str, Any]:
         "currency": "INR",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "funds_connected": True,
+        "trade_origin": (trade_origin or "all").lower(),
         "wallet": wallet,
         "kpis": kpis,
         "equity_curve": _equity_curve(trades, starting_balance),
@@ -612,16 +671,18 @@ def _build_paper_portfolio_analytics() -> dict[str, Any]:
     }
 
 
-def build_portfolio_analytics(persist: bool = True, mode: str | None = None) -> dict[str, Any]:
+def build_portfolio_analytics(
+    persist: bool = True, mode: str | None = None, force: bool = False, trade_origin: str | None = None
+) -> dict[str, Any]:
     if (mode or "live").lower() == "paper":
-        return _build_paper_portfolio_analytics()
+        return _build_paper_portfolio_analytics(trade_origin=trade_origin)
 
     # LIVE-only: paper trades and the resettable paper wallet are excluded.
     events = read_jsonl("order", limit=_ORDER_LOG_LIMIT)
     trades, open_entry = _pair_round_trips(events)
 
     # Real Dhan funds as the capital base.
-    snap = _live_wallet_snapshot()
+    snap = _live_wallet_snapshot(force=force)
     available = _num(snap.get("available_balance"))
     utilized = _num(snap.get("utilized_amount"))
     sod_limit = _num(snap.get("sod_limit"))
@@ -631,6 +692,24 @@ def build_portfolio_analytics(persist: bool = True, mode: str | None = None) -> 
         current_equity = (available or 0.0) + (utilized or 0.0)
 
     realized_total = sum(float(t["realized_pnl"] or 0.0) for t in trades)
+
+    balance_source = "current"
+    last_known_at = None
+    if not funds_connected:
+        # Current fetch failed/stale/disconnected: fall back to the most recent
+        # successful reading on record rather than showing nothing or 0.
+        from app.services.execution_context import current_execution_user
+
+        user = current_execution_user()
+        last_known = _last_known_live_snapshot(user.id) if user is not None and not user.is_dev else None
+        if last_known is not None:
+            available = last_known["available_balance"]
+            utilized = last_known["utilized_amount"]
+            current_equity = last_known["equity"]
+            balance_source = "last_known"
+            last_known_at = last_known["captured_at"]
+        else:
+            balance_source = "none"
 
     # Infer the capital base before these trades so the equity curve ends at the
     # real account value. Fall back to start-of-day funds, then to 0.
@@ -650,10 +729,16 @@ def build_portfolio_analytics(persist: bool = True, mode: str | None = None) -> 
         "session_pnl": _round(_num(snap.get("session_pnl"))),
         "equity": _round(current_equity),
         "funds_connected": funds_connected,
+        "balance_source": balance_source,
+        "last_known_at": last_known_at,
     }
 
     pct_base = starting_balance if starting_balance and starting_balance > 0 else (current_equity or 0.0)
+    # kpis here is computed from the FULL trade set and is what gets persisted
+    # below — the ground-truth equity-curve history must never be filter-dependent.
     kpis = _compute_kpis(trades, pct_base)
+    display_trades = _filter_trades_by_origin(trades, trade_origin)
+    display_kpis = _compute_kpis(display_trades, pct_base) if trade_origin and trade_origin != "all" else kpis
 
     open_position = None
     if open_entry is not None:
@@ -671,17 +756,19 @@ def build_portfolio_analytics(persist: bool = True, mode: str | None = None) -> 
         "currency": "INR",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "funds_connected": funds_connected,
+        "trade_origin": (trade_origin or "all").lower(),
         "wallet": wallet,
-        "kpis": kpis,
-        "equity_curve": _equity_curve(trades, starting_balance),
-        "daily_pnl": _daily_pnl(trades),
-        "side_breakdown": _side_breakdown(trades),
-        "symbol_breakdown": _symbol_breakdown(trades),
+        "kpis": display_kpis,
+        "equity_curve": _equity_curve(display_trades, starting_balance),
+        "daily_pnl": _daily_pnl(display_trades),
+        "side_breakdown": _side_breakdown(display_trades),
+        "symbol_breakdown": _symbol_breakdown(display_trades),
         "open_position": open_position,
-        "trades": list(reversed(trades)),
+        "trades": list(reversed(display_trades)),
     }
 
     if persist:
+        # Always persisted from the FULL, unfiltered trade set (see kpis above).
         _persist_best_effort(trades, wallet, kpis)
 
     return payload

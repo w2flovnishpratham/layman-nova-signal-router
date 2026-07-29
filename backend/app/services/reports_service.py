@@ -56,21 +56,28 @@ def _round(value: float) -> float:
     return round(float(value), 2)
 
 
-def _fetch(user_id: uuid.UUID, start: date, end: date, mode: str) -> list[models.PortfolioTrade]:
+_AUTOMATED_ORIGINS = ("BUILT_IN_STRATEGY", "USER_STRATEGY", "TRADINGVIEW_WEBHOOK")
+
+
+def _fetch(
+    user_id: uuid.UUID, start: date, end: date, mode: str, trade_origin: str | None = None
+) -> list[models.PortfolioTrade]:
     if not database_configured():
         return []
     begin, finish = _day_bounds(start, end)
     with session_scope() as db:
-        rows = list(db.scalars(
-            select(models.PortfolioTrade)
-            .where(
-                models.PortfolioTrade.user_id == user_id,
-                models.PortfolioTrade.mode == mode,
-                models.PortfolioTrade.closed_at >= begin,
-                models.PortfolioTrade.closed_at < finish,
-            )
-            .order_by(models.PortfolioTrade.closed_at.asc())
-        ))
+        query = select(models.PortfolioTrade).where(
+            models.PortfolioTrade.user_id == user_id,
+            models.PortfolioTrade.mode == mode,
+            models.PortfolioTrade.closed_at >= begin,
+            models.PortfolioTrade.closed_at < finish,
+        )
+        selection = (trade_origin or "all").lower()
+        if selection == "automated":
+            query = query.where(models.PortfolioTrade.origin.in_(_AUTOMATED_ORIGINS))
+        elif selection == "manual":
+            query = query.where(models.PortfolioTrade.origin == "MANUAL")
+        rows = list(db.scalars(query.order_by(models.PortfolioTrade.closed_at.asc())))
         # Detach a plain snapshot: the session closes with the scope.
         return [
             models.PortfolioTrade(
@@ -81,6 +88,7 @@ def _fetch(user_id: uuid.UUID, start: date, end: date, mode: str) -> list[models
                 gross_pnl=row.gross_pnl, realized_pnl=row.realized_pnl,
                 entry_order_id=row.entry_order_id, exit_order_id=row.exit_order_id,
                 signal_id=row.signal_id, opened_at=row.opened_at, closed_at=row.closed_at,
+                origin=row.origin, exit_trigger=row.exit_trigger,
             )
             for row in rows
         ]
@@ -110,8 +118,9 @@ def build_report(
     start: date,
     end: date,
     mode: str = "paper",
+    trade_origin: str | None = None,
 ) -> dict[str, Any]:
-    trades = _fetch(user_id, start, end, mode)
+    trades = _fetch(user_id, start, end, mode, trade_origin)
     wins = [t for t in trades if float(t.realized_pnl or 0.0) > 0]
     losses = [t for t in trades if float(t.realized_pnl or 0.0) < 0]
     scratches = len(trades) - len(wins) - len(losses)
@@ -123,6 +132,7 @@ def build_report(
     return {
         "ok": True,
         "mode": mode,
+        "trade_origin": (trade_origin or "all").lower(),
         "period": {"start": start.isoformat(), "end": end.isoformat(), "timezone": "Asia/Kolkata"},
         "totals": {
             "trades": len(trades),

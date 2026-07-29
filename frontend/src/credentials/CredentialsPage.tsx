@@ -3,8 +3,10 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   disconnectBroker,
   getCredentialsOverview,
+  saveCredentials,
   verifyBroker,
   type CredentialsOverview,
+  type DhanConnectionStatus,
 } from './credentialsApi'
 
 function Fact({ label, value, ok }: { label: string; value: string; ok?: boolean }) {
@@ -19,19 +21,35 @@ function Fact({ label, value, ok }: { label: string; value: string; ok?: boolean
   )
 }
 
+const CONNECTION_STATUS_LABEL: Record<DhanConnectionStatus, string> = {
+  NOT_CONFIGURED: 'Not configured',
+  CONNECTED: 'Connected',
+  INVALID_CREDENTIALS: 'Invalid credentials',
+  TOKEN_EXPIRED: 'Access token expired',
+  BROKER_UNAVAILABLE: 'Broker unavailable',
+  DISCONNECTED: 'Disconnected',
+  ERROR: 'Error',
+}
+
 export function CredentialsPage() {
   const [data, setData] = useState<CredentialsOverview | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [verifying, setVerifying] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [verifyResult, setVerifyResult] = useState<{ success: boolean; message: string } | null>(null)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
+  const [clientIdDraft, setClientIdDraft] = useState('')
+  const [accessTokenDraft, setAccessTokenDraft] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      setData(await getCredentialsOverview())
+      const overview = await getCredentialsOverview()
+      setData(overview)
+      // Client ID is not a secret: autofill it. Access Token is always left blank.
+      setClientIdDraft(overview.broker.client_id ?? '')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load credentials.')
     } finally {
@@ -53,6 +71,25 @@ export function CredentialsPage() {
       setVerifyResult({ success: false, message: e instanceof Error ? e.message : 'Verification failed.' })
     } finally {
       setVerifying(false)
+      await load()
+    }
+  }
+
+  async function runSaveAndVerify() {
+    setSaving(true)
+    setVerifyResult(null)
+    setError('')
+    try {
+      await saveCredentials({ clientId: clientIdDraft, accessToken: accessTokenDraft })
+      setAccessTokenDraft('')
+      setVerifying(true)
+      setVerifyResult(await verifyBroker())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Save failed.')
+    } finally {
+      setSaving(false)
+      setVerifying(false)
+      await load()
     }
   }
 
@@ -97,13 +134,17 @@ export function CredentialsPage() {
             </div>
 
             <div className="nova-cred-grid">
-              <Fact label="Client ID" value={data.broker.client_id_masked ?? 'Not set'} ok={data.broker.has_client_id} />
-              <Fact label="Access token" value={data.broker.has_access_token ? 'Stored' : 'Not set'} ok={data.broker.has_access_token} />
-              <Fact label="API secret" value={data.broker.has_api_secret ? 'Stored' : 'Not set'} ok={data.broker.has_api_secret} />
+              <Fact label="Client ID" value={data.broker.has_client_id ? 'Configured' : 'Not configured'} ok={data.broker.has_client_id} />
+              <Fact label="Access token" value={data.broker.has_access_token ? 'Saved' : 'Not set'} ok={data.broker.has_access_token} />
               <Fact label="Webhook secret" value={data.broker.has_webhook_secret ? 'Stored' : 'Not set'} ok={data.broker.has_webhook_secret} />
               <Fact
-                label="Token saved"
-                value={data.broker.token_saved_at ? new Date(data.broker.token_saved_at).toLocaleString() : 'Never'}
+                label="Connection"
+                value={CONNECTION_STATUS_LABEL[data.broker.connection_status] ?? data.broker.connection_status}
+                ok={data.broker.connection_status === 'CONNECTED'}
+              />
+              <Fact
+                label="Last verified"
+                value={data.broker.last_verified_at ? new Date(data.broker.last_verified_at).toLocaleString() : 'Never'}
               />
               <Fact
                 label="Token expiry"
@@ -114,19 +155,51 @@ export function CredentialsPage() {
               />
             </div>
 
-            <p className="nova-risk-note">
-              Values are masked by the server. NOVA never returns a stored token or secret to the browser.
-            </p>
+            {data.broker.connection_status !== 'NOT_CONFIGURED' && data.broker.connection_status !== 'CONNECTED' ? (
+              <p className="nova-sig-bad" role="alert">
+                {data.broker.last_verification_error ?? CONNECTION_STATUS_LABEL[data.broker.connection_status]}
+              </p>
+            ) : null}
 
-            <div className="nova-cred-actions">
-              <button type="button" className="conv-pill conv-pill--primary" onClick={() => void runVerify()} disabled={verifying}>
-                {verifying ? 'Verifying…' : 'Verify again'}
-              </button>
-              <a className="conv-pill" href="/app/setup">Update credentials</a>
-              <button type="button" className="conv-pill nova-cred-danger" onClick={() => setConfirmDisconnect(true)}>
-                Disconnect
-              </button>
-            </div>
+            <form
+              className="nova-cred-form"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void runSaveAndVerify()
+              }}
+            >
+              <label className="nova-cred-field">
+                <span>Dhan Client ID</span>
+                <input
+                  type="text"
+                  value={clientIdDraft}
+                  onChange={(e) => setClientIdDraft(e.target.value)}
+                  autoComplete="off"
+                />
+              </label>
+              <label className="nova-cred-field">
+                <span>Dhan Access Token</span>
+                <input
+                  type="password"
+                  value={accessTokenDraft}
+                  onChange={(e) => setAccessTokenDraft(e.target.value)}
+                  placeholder="Leave blank to keep the existing token"
+                  autoComplete="off"
+                />
+              </label>
+
+              <div className="nova-cred-actions">
+                <button type="submit" className="conv-pill conv-pill--primary" disabled={saving || verifying}>
+                  {saving ? 'Saving…' : 'Save and verify'}
+                </button>
+                <button type="button" className="conv-pill" onClick={() => void runVerify()} disabled={verifying || saving}>
+                  {verifying ? 'Verifying…' : 'Verify again'}
+                </button>
+                <button type="button" className="conv-pill nova-cred-danger" onClick={() => setConfirmDisconnect(true)}>
+                  Disconnect
+                </button>
+              </div>
+            </form>
 
             {verifyResult ? (
               <p className={verifyResult.success ? 'nova-sig-ok' : 'nova-sig-bad'} role="status">

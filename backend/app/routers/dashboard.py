@@ -99,7 +99,11 @@ def dashboard_summary() -> dict:
 
 
 @router.get("/dashboard/portfolio")
-def dashboard_portfolio(mode: str | None = Query(None)) -> dict:
+def dashboard_portfolio(
+    mode: str | None = Query(None),
+    force: bool = Query(False),
+    trade_origin: str | None = Query(None, pattern="^(all|automated|manual)$"),
+) -> dict:
     """Analytics for the user's portfolio dashboard.
 
     Only round-trips NOVA actually executed (an entry order it placed and the
@@ -108,8 +112,14 @@ def dashboard_portfolio(mode: str | None = Query(None)) -> dict:
 
     `mode` selects which book to read ("live" real Dhan trades, or "paper"
     the virtual wallet) — it only changes what's displayed, never execution.
+    `force` bypasses the wallet staleness cache for an explicit user refresh;
+    `refresh_wallet_snapshot`'s own STALE_AFTER_SECONDS still rate-limits how
+    often that reaches Dhan.
+    `trade_origin` (all/automated/manual) filters the reported KPIs, equity
+    curve, and trade list only — it never touches the stored trade or wallet
+    ledger, and account equity/balance always reflects every trade.
     """
-    return build_portfolio_analytics(mode=mode)
+    return build_portfolio_analytics(mode=mode, force=force, trade_origin=trade_origin)
 
 
 @router.get("/dashboard/live-flow")

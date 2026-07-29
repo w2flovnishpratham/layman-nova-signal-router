@@ -35,7 +35,10 @@ def test_every_revision_id_fits_alembic_version_column():
 def test_single_head_is_user_preferences_off_admin_review_width():
     script = _script_directory()
     # One head, never a branch: two heads mean an ambiguous upgrade target.
-    assert script.get_heads() == ["0020_engine_start_entry"]
+    assert script.get_heads() == ["0021_cred_verify_wallet_origin"]
+    head = script.get_revision("0021_cred_verify_wallet_origin")
+    assert head.down_revision == "0020_engine_start_entry"
+    assert len(head.revision) <= ALEMBIC_VERSION_NUM_MAXLEN
     head = script.get_revision("0019_trading_config_revisions")
     assert head.down_revision == "0018_user_preferences"
     assert len(head.revision) <= ALEMBIC_VERSION_NUM_MAXLEN

@@ -73,6 +73,10 @@ export function PortfolioDashboard({
     const requested = new URLSearchParams(window.location.search).get('mode')
     return requested === 'paper' || requested === 'live' ? requested : 'live'
   })
+  const [tradeOrigin, setTradeOrigin] = useState<'all' | 'automated' | 'manual'>(() => {
+    const requested = new URLSearchParams(window.location.search).get('tradeOrigin')
+    return requested === 'automated' || requested === 'manual' ? requested : 'all'
+  })
 
   // Changing this only changes which book is displayed — it never arms or
   // stops the engine, and never touches execution/runtime mode.
@@ -83,12 +87,21 @@ export function PortfolioDashboard({
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
   }, [])
 
-  const load = useCallback(async (soft = false) => {
+  // Reporting-only: never starts/stops an engine, changes execution mode, or
+  // mutates stored P&L — it only changes which trades are aggregated for display.
+  const setTradeOriginAndUrl = useCallback((next: 'all' | 'automated' | 'manual') => {
+    setTradeOrigin(next)
+    const url = new URL(window.location.href)
+    url.searchParams.set('tradeOrigin', next)
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
+  }, [])
+
+  const load = useCallback(async (soft = false, forceWalletRefresh = false) => {
     if (preview) return
     if (soft) setRefreshing(true)
 
     const [portfolioResult, riskResult, signalResult, webhookResult] = await Promise.allSettled([
-      getPortfolioAnalytics(viewMode),
+      getPortfolioAnalytics(viewMode, { force: forceWalletRefresh, tradeOrigin }),
       getRiskOverview(),
       getSignals({ limit: 1 }),
       getWebhooksOverview(),
@@ -110,7 +123,7 @@ export function PortfolioDashboard({
 
     setLoading(false)
     setRefreshing(false)
-  }, [preview, viewMode])
+  }, [preview, viewMode, tradeOrigin])
 
   useEffect(() => {
     if (preview) return
@@ -151,6 +164,13 @@ export function PortfolioDashboard({
 
   const { kpis, wallet } = data
   const sessionPnl = wallet.session_pnl ?? kpis.realized_pnl
+  const balanceSource = viewMode === 'live' ? (wallet.balance_source ?? 'current') : 'current'
+  const equityValue = balanceSource === 'none' ? '—' : moneyOrUnavailable(wallet.equity)
+  const equityNote = balanceSource === 'last_known'
+    ? `Last known Dhan balance${wallet.last_known_at ? ` · ${new Date(wallet.last_known_at).toLocaleString()}` : ''}`
+    : balanceSource === 'none'
+      ? 'Connect to Dhan to view your Live balance'
+      : `${moneyOrUnavailable(wallet.available_balance)} available`
   const signalCounts = signals?.counts ?? {}
   const acceptedSignals = count(signalCounts, 'accepted') + count(signalCounts, 'queued')
   const rejectedSignals = count(signalCounts, 'rejected')
@@ -199,6 +219,19 @@ export function PortfolioDashboard({
               </button>
             ))}
           </div>
+          <div className="nv-segmented" aria-label="Trade origin filter" role="group">
+            {(['all', 'automated', 'manual'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={option === tradeOrigin ? 'active' : ''}
+                onClick={() => setTradeOriginAndUrl(option)}
+                aria-pressed={option === tradeOrigin}
+              >
+                {option === 'all' ? 'All Trades' : titleCase(option)}
+              </button>
+            ))}
+          </div>
           <select
             className="nv-range-select"
             aria-label="Export period"
@@ -211,7 +244,7 @@ export function PortfolioDashboard({
           </select>
           <a
             className="nv-export-button"
-            href={reportCsvUrl(exportDates.start, exportDates.end, mode)}
+            href={reportCsvUrl(exportDates.start, exportDates.end, mode, tradeOrigin)}
             download
           >
             <Download size={14} />
@@ -220,7 +253,7 @@ export function PortfolioDashboard({
           <button
             className="nv-icon-refresh"
             type="button"
-            onClick={() => void load(true)}
+            onClick={() => void load(true, true)}
             aria-label="Refresh dashboard"
             title="Refresh dashboard"
           >
@@ -230,6 +263,14 @@ export function PortfolioDashboard({
       </header>
 
       {error ? <p className="nv-soft-error" role="status">{error} Showing the last successful snapshot.</p> : null}
+      {balanceSource === 'last_known' ? (
+        <p className="nv-soft-error" role="status">
+          Current balance could not be refreshed. Update your Dhan Access Token to refresh the account.
+        </p>
+      ) : null}
+      {balanceSource === 'none' ? (
+        <p className="nv-soft-error" role="status">Connect to Dhan to view your Live balance.</p>
+      ) : null}
 
       <section className="nv-kpi-grid nv-kpi-grid-six" aria-label="Portfolio summary">
         <MetricCard
@@ -241,9 +282,9 @@ export function PortfolioDashboard({
         />
         <MetricCard
           i={1}
-          label="Account equity"
-          value={moneyOrUnavailable(wallet.equity)}
-          note={`${moneyOrUnavailable(wallet.available_balance)} available`}
+          label={balanceSource === 'last_known' ? 'Last known Dhan balance' : 'Account equity'}
+          value={equityValue}
+          note={equityNote}
         />
         <MetricCard
           i={2}

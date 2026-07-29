@@ -41,6 +41,20 @@ from app.services.audit_logger import log_audit_event, log_error_event
 PRIVATE_STRATEGY_PREFIX = "instance:"
 PRIVATE_WEBHOOK_SOURCE = "PRIVATE_TRADINGVIEW_WEBHOOK"
 
+# Trade-origin taxonomy: this same private-webhook mechanism carries built-in
+# strategy signals, the user's own hosted strategies, and genuine personal
+# TradingView alerts — auth["source_journey"] is the only thing that tells
+# them apart, so it — not this endpoint — decides NormalizedSignal.source.
+_SOURCE_BY_JOURNEY = {
+    "NOVA_SHARED": "built_in_strategy",
+    "NOVA_HOSTED_PERSONAL": "user_strategy",
+    "PERSONAL_TRADINGVIEW": "private_tradingview_webhook",
+}
+
+
+def _signal_source_for_journey(source_journey: str | None) -> str:
+    return _SOURCE_BY_JOURNEY.get(str(source_journey or ""), PRIVATE_WEBHOOK_SOURCE.lower())
+
 # Exactly the four normalized actions. Case normalization only — no free-form
 # Pine vocabulary (LONG/SHORT/CALL/PUT/...) is interpreted here.
 NORMALIZED_ACTIONS = {"BUY_CE", "BUY_PE", "EXIT", "HOLD"}
@@ -376,7 +390,7 @@ def build_normalized_signal(
         qty=1,  # placeholder; worker overrides with engine lots x lot size
         order_type="MARKET",
         product_type="INTRADAY",
-        source=PRIVATE_WEBHOOK_SOURCE.lower(),
+        source=_signal_source_for_journey(auth.get("source_journey")),
         raw_payload=raw_payload,
     )
 
@@ -421,6 +435,7 @@ def _shadow_compare_canonical(
             event,
             strategy_instance_id=auth["instance_id"],
             received_at=received_at,
+            source=_signal_source_for_journey(auth.get("source_journey")),
         )
         if action == "HOLD":
             matches = (

@@ -258,6 +258,18 @@ async def _apply_production_command(
             raise ValueError(dhan_connection_failure_message(message, details))
         await asyncio.to_thread(save_dhan_credentials, client_id, access_token)
         await asyncio.to_thread(refresh_wallet_snapshot, force=True, log_event=True)
+        if not user.is_dev:
+            # Record AFTER save_dhan_credentials: saving resets connection_status
+            # to NOT_CONFIGURED, so recording first would be immediately overwritten.
+            from app.services.user_credential_vault import (
+                connection_status_from_dhan_result,
+                record_verification_result,
+            )
+
+            status, error = connection_status_from_dhan_result(
+                success=ok, status_code=details.get("status_code"), raw_response=None, message=message
+            )
+            await asyncio.to_thread(record_verification_result, user.id, status=status, error=error, wallet_ok=ok)
         return
 
     if command_type == "setup.use_shared_data":

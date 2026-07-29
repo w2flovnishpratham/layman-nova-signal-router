@@ -44,6 +44,7 @@ export const dashboardPreviewBundle: DashboardPreviewBundle = {
     currency: 'INR',
     generated_at: '2026-07-23T14:58:00+05:30',
     funds_connected: true,
+    trade_origin: 'all',
     wallet: {
       starting_balance: 200_000,
       available_balance: 202_420,

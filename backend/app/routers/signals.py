@@ -85,13 +85,14 @@ def reports_endpoint(
     start: date | None = Query(None),
     end: date | None = Query(None),
     mode: str = Query("paper", pattern="^(paper|live)$"),
+    trade_origin: str | None = Query(None, pattern="^(all|automated|manual)$"),
     user: CurrentUser = Depends(get_current_user),
 ):
     """Performance over a date range, computed from the owner's closed trades."""
     begin, finish = _period(start, end)
     if begin > finish:
         return JSONResponse(status_code=400, content={"ok": False, "error": "start must not be after end."})
-    return reports_service.build_report(user.id, start=begin, end=finish, mode=mode)
+    return reports_service.build_report(user.id, start=begin, end=finish, mode=mode, trade_origin=trade_origin)
 
 
 @router.get("/reports/export.csv")
@@ -99,12 +100,13 @@ def reports_csv_endpoint(
     start: date | None = Query(None),
     end: date | None = Query(None),
     mode: str = Query("paper", pattern="^(paper|live)$"),
+    trade_origin: str | None = Query(None, pattern="^(all|automated|manual)$"),
     user: CurrentUser = Depends(get_current_user),
 ):
     begin, finish = _period(start, end)
     if begin > finish:
         return JSONResponse(status_code=400, content={"ok": False, "error": "start must not be after end."})
-    report = reports_service.build_report(user.id, start=begin, end=finish, mode=mode)
+    report = reports_service.build_report(user.id, start=begin, end=finish, mode=mode, trade_origin=trade_origin)
     filename = f"nova-{mode}-{begin.isoformat()}-to-{finish.isoformat()}.csv"
     return Response(
         content=reports_service.report_csv(report),

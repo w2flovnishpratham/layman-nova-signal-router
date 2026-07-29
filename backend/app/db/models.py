@@ -149,6 +149,13 @@ class UserCredentialVault(Base):
     # Stored when the token was saved so the UI can show token age without ever
     # exposing the token itself.
     dhan_token_saved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # NOT_CONFIGURED/CONNECTED/INVALID_CREDENTIALS/TOKEN_EXPIRED/BROKER_UNAVAILABLE/ERROR.
+    # Reset to NOT_CONFIGURED whenever client_id/access_token changes, so a stale
+    # CONNECTED can never survive a credential swap without re-verification.
+    connection_status: Mapped[str] = mapped_column(String(30), default="NOT_CONFIGURED", nullable=False)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_verification_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_wallet_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
@@ -656,6 +663,12 @@ class PortfolioTrade(Base):
     entry_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     exit_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # MANUAL/BUILT_IN_STRATEGY/USER_STRATEGY/TRADINGVIEW_WEBHOOK. Null on rows
+    # closed before this column existed — never guessed during backfill.
+    origin: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # STOP_LOSS/TAKE_PROFIT/EOD_SQUAREOFF/MANUAL/etc — the reason the position
+    # closed, independent of `origin` (who opened it).
+    exit_trigger: Mapped[str | None] = mapped_column(String(30), nullable=True)
     configuration_revision_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"),
@@ -1853,4 +1866,8 @@ class PortfolioSnapshot(Base):
     equity: Mapped[float | None] = mapped_column(Float, nullable=True)
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     trade_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # ok/error — whether this reading came from a live broker fetch that
+    # succeeded. Lets a "last known balance" query filter out failed attempts.
+    fetch_status: Mapped[str] = mapped_column(String(20), default="ok", nullable=False)
+    safe_error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

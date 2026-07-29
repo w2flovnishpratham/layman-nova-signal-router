@@ -39,7 +39,10 @@ def _egress(user_id: uuid.UUID) -> dict[str, Any]:
 
 def build_credentials_overview(user_id: uuid.UUID) -> dict[str, Any]:
     status = vault.user_credential_status(user_id)
-    connected = bool(status.get("has_dhan_client_id") and status.get("has_dhan_access_token"))
+    has_values = bool(status.get("has_dhan_client_id") and status.get("has_dhan_access_token"))
+    # Verified, not just "values exist in the DB" — an unverified/invalid save
+    # must not be reported as connected.
+    connected = has_values and str(status.get("connection_status") or "") == "CONNECTED"
 
     live_orders_enabled = bool(settings.ENABLE_LIVE_ORDERS)
     dhan_mode = str(settings.DHAN_MODE or "").upper()
@@ -50,7 +53,9 @@ def build_credentials_overview(user_id: uuid.UUID) -> dict[str, Any]:
     if dhan_mode != "REAL":
         live_blockers.append(f"Broker mode is {dhan_mode or 'unset'}, not REAL.")
     if not connected:
-        live_blockers.append("Dhan credentials are not fully configured.")
+        live_blockers.append(
+            "Dhan credentials are saved but not verified yet." if has_values else "Dhan credentials are not fully configured."
+        )
 
     return {
         "ok": True,
@@ -58,11 +63,12 @@ def build_credentials_overview(user_id: uuid.UUID) -> dict[str, Any]:
             "key": "dhan",
             "name": "Dhan",
             "connected": connected,
-            # Masked by the vault; the full value is never serialised.
+            # Client ID is not a secret: the owner's own plaintext value is
+            # returned for autofill. The masked form stays for display.
+            "client_id": status.get("dhan_client_id"),
             "client_id_masked": status.get("dhan_client_id_masked"),
             "has_client_id": bool(status.get("has_dhan_client_id")),
             "has_access_token": bool(status.get("has_dhan_access_token")),
-            "has_api_secret": bool(status.get("has_dhan_api_secret")),
             "has_webhook_secret": bool(status.get("has_webhook_secret")),
             # The vault stores when the token was saved. It does not store an
             # expiry, so none is reported rather than guessed.
@@ -70,6 +76,11 @@ def build_credentials_overview(user_id: uuid.UUID) -> dict[str, Any]:
             "token_expires_at": None,
             "expiry_known": False,
             "last_updated_at": status.get("updated_at"),
+            # Verified status, distinct from "values exist in the DB" above.
+            "connection_status": status.get("connection_status"),
+            "last_verified_at": status.get("last_verified_at"),
+            "last_verification_error": status.get("last_verification_error"),
+            "last_wallet_snapshot_at": status.get("last_wallet_snapshot_at"),
         },
         "static_ip": _egress(user_id),
         "eligibility": {

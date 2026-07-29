@@ -11,6 +11,29 @@ from app.services.dhan_response_safety import sanitize_wallet_snapshot
 router = APIRouter()
 
 
+def _record_verification(result) -> None:
+    """Best-effort persist of the verification outcome for the bound user. Never raises."""
+    try:
+        from app.services.execution_context import current_execution_user
+        from app.services.user_credential_vault import (
+            connection_status_from_dhan_result,
+            record_verification_result,
+        )
+
+        user = current_execution_user()
+        if user is None or user.is_dev:
+            return
+        status, error = connection_status_from_dhan_result(
+            success=result.success,
+            status_code=result.status_code,
+            raw_response=result.raw_response,
+            message=result.message,
+        )
+        record_verification_result(user.id, status=status, error=error)
+    except Exception:
+        pass
+
+
 @router.get("/dhan/status")
 def dhan_status() -> dict:
     meta = dhan_metadata()
@@ -34,6 +57,7 @@ def test_dhan() -> dict:
         client_id=creds.client_id,
         access_token=creds.access_token,
     )
+    _record_verification(result)
     wallet = sanitize_wallet_snapshot(refresh_wallet_snapshot(force=True, log_event=True)) if result.success else None
     message = result.message
     if wallet and wallet.get("success") and wallet.get("available_balance") is not None:

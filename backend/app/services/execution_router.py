@@ -38,6 +38,7 @@ from app.services.risk_manager import (
     option_side_is_allowed,
 )
 from app.services.security_id_resolver import resolve_security_id
+from app.services.signal_parser import origin_from_source
 from app.services.state_store import (
     claim_exit_operation,
     clear_open_position,
@@ -106,6 +107,7 @@ def _normalized_log_fields(signal: NormalizedSignal) -> dict[str, Any]:
         "normalized_strike": signal.strike,
         "normalized_expiry": signal.expiry,
         "normalized_option_side": signal.option_side,
+        "source": signal.source,
     }
 
 
@@ -1563,8 +1565,18 @@ def _place_order(
                 },
             )
 
+    def _tag_paper_origin(payload: dict[str, Any]) -> dict[str, Any]:
+        # PaperBroker never sends this payload to Dhan, so an extra internal key
+        # is safe here and lets apply_paper_entry/exit attribute the trade.
+        # Never applied to a live (RealDhanClient) payload.
+        if engine_mode == "paper":
+            payload["_nova_origin"] = origin_from_source(signal.source)
+        return payload
+
     if use_super_order:
-        result = client.place_super_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
+        result = client.place_super_order(
+            client_id=client_id, access_token=access_token, payload=_tag_paper_origin(order_request_payload)
+        )
         # Dhan validates targetPrice/stopLossPrice against the CURRENT price on
         # their side ("Profit Price Should be greater than Order price"). Our
         # reference LTP is fetched moments earlier, so a fast premium move can
@@ -1595,9 +1607,13 @@ def _place_order(
                         "super_order_levels": super_order_levels,
                     }
                 )
-                result = client.place_super_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
+                result = client.place_super_order(
+                    client_id=client_id, access_token=access_token, payload=_tag_paper_origin(order_request_payload)
+                )
     else:
-        result = client.place_order(client_id=client_id, access_token=access_token, payload=order_request_payload)
+        result = client.place_order(
+            client_id=client_id, access_token=access_token, payload=_tag_paper_origin(order_request_payload)
+        )
 
     log_order_event(
         {

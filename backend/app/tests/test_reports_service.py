@@ -16,7 +16,9 @@ TRADE_DAY = date(2026, 7, 24)
 BASE = datetime(2026, 7, 24, 11, 0, tzinfo=reports_service.IST)
 
 
-def _trade(user_id, pnl: float, *, minutes: int = 0, mode: str = "paper", symbol: str = "NIFTY CE"):
+def _trade(
+    user_id, pnl: float, *, minutes: int = 0, mode: str = "paper", symbol: str = "NIFTY CE", origin: str | None = None
+):
     # `minutes` orders trades within the pinned day; later values close earlier.
     closed = BASE - timedelta(minutes=minutes)
     with session_scope() as db:
@@ -35,6 +37,7 @@ def _trade(user_id, pnl: float, *, minutes: int = 0, mode: str = "paper", symbol
             realized_pnl=pnl,
             exit_order_id=f"x-{user_id}-{minutes}-{pnl}",
             closed_at=closed,
+            origin=origin,
         ))
 
 
@@ -134,3 +137,34 @@ def test_an_empty_csv_still_carries_its_header(mu_db):
     user = make_user("report-csv-empty@example.com")
     csv_text = reports_service.report_csv(_report(user.id))
     assert csv_text.strip() == ",".join(reports_service.CSV_COLUMNS)
+
+
+def test_trade_origin_filter_all_automated_manual(mu_db):
+    user = make_user("report-origin@example.com")
+    _trade(user.id, 300.0, minutes=30, origin="MANUAL")
+    _trade(user.id, 200.0, minutes=20, origin="BUILT_IN_STRATEGY")
+    _trade(user.id, 100.0, minutes=10, origin="TRADINGVIEW_WEBHOOK")
+
+    all_trades = _report(user.id, trade_origin="all")
+    automated = _report(user.id, trade_origin="automated")
+    manual = _report(user.id, trade_origin="manual")
+
+    assert all_trades["totals"]["trades"] == 3
+    assert automated["totals"]["trades"] == 2
+    assert automated["totals"]["net_pnl"] == 300.0
+    assert manual["totals"]["trades"] == 1
+    assert manual["totals"]["net_pnl"] == 300.0
+    assert manual["trade_origin"] == "manual"
+
+
+def test_default_trade_origin_is_all_and_export_honours_the_filter(mu_db):
+    user = make_user("report-origin-default@example.com")
+    _trade(user.id, 50.0, minutes=5, origin="MANUAL")
+    _trade(user.id, 75.0, minutes=1, origin="USER_STRATEGY")
+
+    assert _report(user.id)["trade_origin"] == "all"
+    assert _report(user.id)["totals"]["trades"] == 2
+
+    csv_text = reports_service.report_csv(_report(user.id, trade_origin="manual"))
+    lines = csv_text.strip().splitlines()
+    assert len(lines) == 2  # header + one manual trade

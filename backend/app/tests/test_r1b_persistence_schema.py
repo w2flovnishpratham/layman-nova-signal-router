@@ -50,7 +50,7 @@ def test_migration_metadata_is_exact():
 
     script = ScriptDirectory.from_config(_alembic_config())
     r1b = script.get_revision("0015_r1b_persistence")
-    assert script.get_heads() == ["0020_engine_start_entry"]
+    assert script.get_heads() == ["0021_cred_verify_wallet_origin"]
     assert r1b.down_revision == "0014_verify_select"
     assert len(r1b.revision) == 20
     assert len(r1b.revision) <= 32

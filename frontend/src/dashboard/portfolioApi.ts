@@ -30,6 +30,10 @@ export interface PortfolioWallet {
   session_pnl: number | null
   equity: number | null
   funds_connected: boolean
+  // Live only: where the displayed balance came from. Paper always omits this
+  // (equivalent to 'current' — the paper wallet has no notion of staleness).
+  balance_source?: 'current' | 'last_known' | 'none'
+  last_known_at?: string | null
 }
 
 export interface EquityPoint {
@@ -72,6 +76,8 @@ export interface PortfolioTrade {
   entry_order_id: string | null
   exit_order_id: string | null
   signal_id: string | null
+  origin: 'MANUAL' | 'BUILT_IN_STRATEGY' | 'USER_STRATEGY' | 'TRADINGVIEW_WEBHOOK' | null
+  exit_trigger: string | null
   opened_at: string | null
   closed_at: string | null
   hold_minutes: number | null
@@ -92,6 +98,7 @@ export interface PortfolioAnalytics {
   currency: string
   generated_at: string
   funds_connected: boolean
+  trade_origin: 'all' | 'automated' | 'manual'
   wallet: PortfolioWallet
   kpis: PortfolioKpis
   equity_curve: EquityPoint[]
@@ -102,8 +109,15 @@ export interface PortfolioAnalytics {
   trades: PortfolioTrade[]
 }
 
-export async function getPortfolioAnalytics(mode?: 'paper' | 'live'): Promise<PortfolioAnalytics> {
-  const query = mode ? `?mode=${mode}` : ''
+export async function getPortfolioAnalytics(
+  mode?: 'paper' | 'live',
+  options?: { force?: boolean; tradeOrigin?: 'all' | 'automated' | 'manual' },
+): Promise<PortfolioAnalytics> {
+  const params = new URLSearchParams()
+  if (mode) params.set('mode', mode)
+  if (options?.force) params.set('force', 'true')
+  if (options?.tradeOrigin && options.tradeOrigin !== 'all') params.set('trade_origin', options.tradeOrigin)
+  const query = params.toString() ? `?${params.toString()}` : ''
   const response = await fetch(backendHttpUrl(`/api/dashboard/portfolio${query}`), {
     credentials: 'include',
     cache: 'no-store',

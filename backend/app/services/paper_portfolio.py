@@ -139,7 +139,9 @@ def reset_paper_portfolio(starting_balance: float | None = None) -> PaperPortfol
     return portfolio
 
 
-def apply_paper_entry(*, qty: int, price: float, charges: float, symbol: str, order_id: str) -> PaperPortfolio:
+def apply_paper_entry(
+    *, qty: int, price: float, charges: float, symbol: str, order_id: str, origin: str | None = None
+) -> PaperPortfolio:
     # Serialize read-check-write under the shared runtime lock so two concurrent
     # mutations can't both read the same portfolio and double-book.
     with _LOCK:
@@ -157,6 +159,7 @@ def apply_paper_entry(*, qty: int, price: float, charges: float, symbol: str, or
             "entry_charges": charges,
             "entry_value": cost,
             "entry_order_id": order_id,
+            "origin": origin,
             "opened_at": utc_now(),
         }
         portfolio.session_pnl = round(portfolio.available_balance + portfolio.utilized_amount - portfolio.session_start_balance, 2)
@@ -256,6 +259,7 @@ def apply_paper_partial_exit(
     charges: float,
     symbol: str,
     order_id: str,
+    exit_trigger: str | None = None,
 ) -> PaperPortfolio:
     """Book an intentional partial exit while retaining one open position."""
     with _LOCK:
@@ -294,6 +298,7 @@ def apply_paper_partial_exit(
                 "exit_charges": fee,
                 "realized_pnl": realized,
                 "exit_order_id": order_id,
+                "exit_trigger": exit_trigger,
                 "partial_exit": True,
                 "closed_at": utc_now(),
             }]
@@ -321,7 +326,9 @@ class NoOpenPaperTradeError(ValueError):
     """
 
 
-def apply_paper_exit(*, qty: int, exit_price: float, charges: float, symbol: str, order_id: str) -> PaperPortfolio:
+def apply_paper_exit(
+    *, qty: int, exit_price: float, charges: float, symbol: str, order_id: str, exit_trigger: str | None = None
+) -> PaperPortfolio:
     # Serialize read-check-write: without the lock two concurrent exits (e.g.
     # monitor SL/TP + manual/session/square-off) could both read the same
     # open_trade and each book a SELL — the duplicate-exit false-profit race.
@@ -354,6 +361,7 @@ def apply_paper_exit(*, qty: int, exit_price: float, charges: float, symbol: str
                 "exit_charges": charges,
                 "realized_pnl": realized,
                 "exit_order_id": order_id,
+                "exit_trigger": exit_trigger,
                 "closed_at": utc_now(),
             }]
         )[-200:]

@@ -37,6 +37,10 @@ def test_the_builder_copies_named_fields_only(mu_db, monkeypatch):
             "has_webhook_secret": True,
             "mode": "paper",
             "dhan_token_saved_at": "2026-07-24T09:00:00+00:00",
+            "connection_status": "CONNECTED",
+            "last_verified_at": "2026-07-24T09:00:00+00:00",
+            "last_verification_error": None,
+            "last_wallet_snapshot_at": "2026-07-24T09:00:00+00:00",
             "updated_at": "2026-07-24T09:00:00+00:00",
             # Planted: must not appear in the response.
             "dhan_access_token": "PLAINTEXT-TOKEN-SHOULD-NEVER-APPEAR",

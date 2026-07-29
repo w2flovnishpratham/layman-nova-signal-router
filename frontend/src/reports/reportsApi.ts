@@ -17,9 +17,12 @@ export interface ReportTrade {
   realized_pnl: number
 }
 
+export type TradeOrigin = 'all' | 'automated' | 'manual'
+
 export interface Report {
   ok: boolean
   mode: string
+  trade_origin: TradeOrigin
   period: { start: string; end: string; timezone: string }
   totals: {
     trades: number
@@ -38,8 +41,14 @@ export interface Report {
   trades: ReportTrade[]
 }
 
-export async function getReport(start: string, end: string, mode = 'paper'): Promise<Report> {
+export async function getReport(
+  start: string,
+  end: string,
+  mode = 'paper',
+  tradeOrigin?: TradeOrigin,
+): Promise<Report> {
   const query = new URLSearchParams({ start, end, mode })
+  if (tradeOrigin) query.set('trade_origin', tradeOrigin)
   const response = await fetch(backendHttpUrl(`/api/reports?${query.toString()}`), {
     credentials: 'include',
     cache: 'no-store',
@@ -49,8 +58,9 @@ export async function getReport(start: string, end: string, mode = 'paper'): Pro
 }
 
 /** The CSV comes from the same server-side aggregate the page displays. */
-export function reportCsvUrl(start: string, end: string, mode = 'paper'): string {
+export function reportCsvUrl(start: string, end: string, mode = 'paper', tradeOrigin?: TradeOrigin): string {
   const query = new URLSearchParams({ start, end, mode })
+  if (tradeOrigin) query.set('trade_origin', tradeOrigin)
   return backendHttpUrl(`/api/reports/export.csv?${query.toString()}`)
 }
 
