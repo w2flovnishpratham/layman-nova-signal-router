@@ -746,6 +746,7 @@ def test_broker_routes_sanitize_wallet_and_profile_payload(monkeypatch):
     monkeypatch.setattr(broker, "get_dhan_credentials", lambda: DhanCredentials("1000000001", "raw-token-secret"))
     monkeypatch.setattr(broker, "RealDhanClient", FakeDhanClient)
     monkeypatch.setattr(broker, "refresh_wallet_snapshot", lambda **_kwargs: raw_wallet)
+    monkeypatch.setattr(broker, "fetch_dhan_wallet_snapshot", lambda **_kwargs: raw_wallet)
 
     app = FastAPI()
     app.include_router(broker.router)

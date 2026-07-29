@@ -26,7 +26,7 @@ def _verify_as(monkeypatch, user, validation: DhanValidationResult, *, captured_
 
     monkeypatch.setattr(broker, "RealDhanClient", _FakeClient)
     monkeypatch.setattr(
-        broker, "refresh_wallet_snapshot", lambda force=True, log_event=True, proxy_url=None: {"success": False}
+        broker, "fetch_dhan_wallet_snapshot", lambda proxy_url=None, log_event=False: {"success": False}
     )
 
     current = current_user_from_model(user)
@@ -108,3 +108,44 @@ def test_credential_check_bypasses_the_execution_node_proxy(mu_db, monkeypatch):
         captured_proxy_urls=seen,
     )
     assert seen == [""], "RealDhanClient must be constructed with proxy_url='' for this check"
+
+
+def test_credential_check_shows_real_dhan_wallet_even_in_paper_engine_mode(mu_db, monkeypatch):
+    """Regression: broker.test_dhan() used to call refresh_wallet_snapshot(),
+    which serves the Paper virtual wallet whenever engine_mode is "paper" —
+    so verifying Dhan credentials while the account happened to be set to
+    Paper silently showed the ₹10,00,000 Paper balance instead of the real
+    Dhan fund limit. It must always call the mode-independent
+    fetch_dhan_wallet_snapshot() instead."""
+    import app.routers.broker as broker
+    from app.services import user_credential_vault as vault
+    from app.services.dhan_client import DhanFundsResult
+    from app.services.execution_context import bind_user_execution_context
+    from app.services.user_context import current_user_from_model
+
+    user = make_user("verify-paper-mode@example.com")
+    vault.save_user_credentials(user.id, dhan_client_id="1100123456", dhan_access_token="TOKEN-ABC")
+
+    class _FakeClient:
+        def __init__(self, *, proxy_url=None, expected_egress_ip=None):
+            pass
+
+        def validate_token(self, *, client_id, access_token):
+            return DhanValidationResult(success=True, message="Dhan token valid.", status_code=200)
+
+        def get_fund_limit(self, *, client_id, access_token):
+            return DhanFundsResult(
+                success=True, message="Dhan fund limit fetched.", status_code=200,
+                client_id=client_id, available_balance=6423.88,
+            )
+
+    monkeypatch.setattr(broker, "RealDhanClient", _FakeClient)
+    monkeypatch.setattr("app.services.wallet_service.get_engine_mode", lambda legacy_fallback=False: "paper")
+    monkeypatch.setattr("app.services.wallet_service.RealDhanClient", _FakeClient)
+
+    current = current_user_from_model(user)
+    with bind_user_execution_context(current):
+        result = broker.test_dhan()
+
+    assert result["wallet"]["available_balance"] == 6423.88
+    assert result["wallet"]["available_balance"] != 1_000_000.0

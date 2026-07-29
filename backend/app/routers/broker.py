@@ -4,7 +4,7 @@ from app.config import settings
 from app.services.credential_vault import dhan_metadata, get_dhan_credentials
 from app.services.dhan_client import RealDhanClient
 from app.services.state_store import get_engine_mode
-from app.services.wallet_service import refresh_wallet_snapshot
+from app.services.wallet_service import fetch_dhan_wallet_snapshot, refresh_wallet_snapshot
 from app.services.dhan_response_safety import sanitize_wallet_snapshot
 
 
@@ -63,8 +63,11 @@ def test_dhan() -> dict:
         access_token=creds.access_token,
     )
     _record_verification(result)
+    # fetch_dhan_wallet_snapshot, not refresh_wallet_snapshot: this must show
+    # the real Dhan balance even when the account's engine_mode is "paper" —
+    # refresh_wallet_snapshot would silently substitute the Paper wallet then.
     wallet = (
-        sanitize_wallet_snapshot(refresh_wallet_snapshot(force=True, log_event=True, proxy_url=""))
+        sanitize_wallet_snapshot(fetch_dhan_wallet_snapshot(proxy_url="", log_event=True))
         if result.success
         else None
     )
