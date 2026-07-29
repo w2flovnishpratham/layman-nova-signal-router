@@ -267,6 +267,48 @@ describe('ConversationController — saved setup decision', () => {
     expect(screen.queryByRole('group', { name: 'Direction' })).toBeNull()
     expect(p.onSave).not.toHaveBeenCalled() // saved setup untouched
   })
+
+  it('Start New Setup -> pick the same mode again does not re-loop back to the saved-setup card', () => {
+    // Regression: the restore effect depends on state.mode, so it re-ran
+    // whenever pickMode changed it -- including for the user's own
+    // interactive click, not just the genuine mount-time restore. With a
+    // matching backend selected_configuration, mounting correctly
+    // auto-restores straight to the saved-setup decision card (expected --
+    // this IS "refresh restores your session"). But from there, clicking
+    // Start New Setup resets to mode choice, and picking the SAME mode again
+    // re-triggered the exact same auto-restore, landing right back on the
+    // saved-setup card the user just explicitly tried to get away from --
+    // an infinite Start-New/Resume loop with no way to actually reach a
+    // fresh strategy pick.
+    const runtime = runtimeWith({
+      direction: 'CE', lots: 2, max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15',
+    }) as RuntimeStatus & { mode: 'paper' }
+    runtime.mode = 'paper'
+    runtime.engine = { mode: 'paper' } as RuntimeStatus['engine']
+    runtime.selected_configuration = {
+      id: 'config-1', strategy_instance_id: 'inst-1', strategy_version_id: 'version-1',
+      mode: 'paper', revision: 3, status: 'active',
+      configuration: { direction: 'CE', lots: 2 },
+      risk: { max_daily_loss: 25000, max_trades_per_day: 6, entry_cutoff_ist: '15:15' },
+      committed_at: '2026-07-28T10:00:00Z',
+    }
+
+    render(<ConversationController {...props({ runtime })} />)
+
+    // Mount auto-restores to the saved-setup card -- expected.
+    expect(screen.getByText('I found your previous Paper configuration.')).toBeInTheDocument()
+
+    // Start New Setup -> back to mode choice.
+    fireEvent.click(screen.getByRole('button', { name: 'Start New Setup' }))
+    expect(screen.getByText('How should NOVA trade for you?')).toBeInTheDocument()
+
+    // Pick the SAME mode the backend already has saved. Must land on
+    // strategy selection, NOT loop back to the saved-setup decision card.
+    fireEvent.click(screen.getByRole('button', { name: /start in paper/i }))
+    expect(screen.getByText('Which strategy should NOVA run?')).toBeInTheDocument()
+    expect(screen.queryByText('I found your previous Paper configuration.')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+  })
 })
 
 describe('ConversationController — sequential questions & save/start', () => {

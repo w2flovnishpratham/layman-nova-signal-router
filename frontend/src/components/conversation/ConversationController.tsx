@@ -200,6 +200,14 @@ export function ConversationController({
   const [dirty, setDirty] = useState(false)
   const [liveAcknowledged, setLiveAcknowledged] = useState(false)
   const restoredRevisionRef = useRef<string | null>(null)
+  // Once the user has explicitly interacted this mount (picked a mode,
+  // picked a strategy, clicked Start New/Resume/Review), the restore effect
+  // below must never fire again for the rest of this mount. Without this,
+  // picking a mode that happens to match the backend's last-persisted mode
+  // makes the effect re-run (it depends on state.mode) and auto-select the
+  // last-saved strategy+config, landing back on the saved-setup decision
+  // card the user never asked for -- the exact Start-New/Resume loop.
+  const userInteractedRef = useRef(false)
   const setupSaved = saved || Boolean(
     !dirty
     && runtime?.selected_configuration
@@ -232,6 +240,7 @@ export function ConversationController({
   }, [state, selectedStrategy, setupSaved, onStateChange])
 
   useEffect(() => {
+    if (userInteractedRef.current) return
     const selectedConfiguration = runtime?.selected_configuration
     const bootstrapMode = (runtime as RuntimeStatus & { mode?: EngineMode | null } | null)?.mode
     const authoritativeMode = bootstrapMode
@@ -281,6 +290,7 @@ export function ConversationController({
 
   function pickMode(m: EngineMode) {
     if (m === 'live' && !liveAvailable) return // never advance when Live is blocked
+    userInteractedRef.current = true
     restoredRevisionRef.current = null
     setDirty(true)
     setSaved(false)
@@ -316,6 +326,7 @@ export function ConversationController({
 
   async function pickStrategy(s: CatalogStrategy) {
     if (!mode) return
+    userInteractedRef.current = true
     restoredRevisionRef.current = null
     setDirty(true)
     setSaved(false)
@@ -430,7 +441,7 @@ export function ConversationController({
               : (selectedStrategy?.disabled_reason ?? 'This strategy is currently unavailable, so setup is paused.')}
           </BotBubble>
           <div className="conv-actions">
-            <button type="button" className="conv-pill" onClick={() => { if (state.mode) conv.selectMode(state.mode) }}>Choose another strategy</button>
+            <button type="button" className="conv-pill" onClick={() => { userInteractedRef.current = true; if (state.mode) conv.selectMode(state.mode) }}>Choose another strategy</button>
           </div>
         </div>
       ) : null}
@@ -444,12 +455,13 @@ export function ConversationController({
             ))}
           </div>
           <div className="conv-actions">
-            <button type="button" className="conv-pill conv-pill--primary" onClick={() => { clearFreshStartFlag(); conv.resume() }}>Resume</button>
-            <button type="button" className="conv-pill" onClick={() => { clearFreshStartFlag(); conv.review() }}>Review</button>
+            <button type="button" className="conv-pill conv-pill--primary" onClick={() => { userInteractedRef.current = true; clearFreshStartFlag(); conv.resume() }}>Resume</button>
+            <button type="button" className="conv-pill" onClick={() => { userInteractedRef.current = true; clearFreshStartFlag(); conv.review() }}>Review</button>
             <button
               type="button"
               className="conv-pill"
               onClick={() => {
+                userInteractedRef.current = true
                 restoredRevisionRef.current = null
                 setDirty(true)
                 setSaved(false)
