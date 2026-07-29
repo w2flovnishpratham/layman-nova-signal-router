@@ -69,13 +69,26 @@ export function PortfolioDashboard({
   const [refreshing, setRefreshing] = useState(false)
   const [exportRange, setExportRange] = useState<ExportRange>('today')
   const [equityRange, setEquityRange] = useState<EquityRange>('1m')
+  const [viewMode, setViewMode] = useState<'paper' | 'live'>(() => {
+    const requested = new URLSearchParams(window.location.search).get('mode')
+    return requested === 'paper' || requested === 'live' ? requested : 'live'
+  })
+
+  // Changing this only changes which book is displayed — it never arms or
+  // stops the engine, and never touches execution/runtime mode.
+  const setViewModeAndUrl = useCallback((next: 'paper' | 'live') => {
+    setViewMode(next)
+    const url = new URL(window.location.href)
+    url.searchParams.set('mode', next)
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
+  }, [])
 
   const load = useCallback(async (soft = false) => {
     if (preview) return
     if (soft) setRefreshing(true)
 
     const [portfolioResult, riskResult, signalResult, webhookResult] = await Promise.allSettled([
-      getPortfolioAnalytics(),
+      getPortfolioAnalytics(viewMode),
       getRiskOverview(),
       getSignals({ limit: 1 }),
       getWebhooksOverview(),
@@ -97,7 +110,7 @@ export function PortfolioDashboard({
 
     setLoading(false)
     setRefreshing(false)
-  }, [preview])
+  }, [preview, viewMode])
 
   useEffect(() => {
     if (preview) return
@@ -156,7 +169,9 @@ export function PortfolioDashboard({
     ? (growth / wallet.starting_balance) * 100
     : null
   const exportDates = getExportDates(exportRange)
-  const mode = String(data.mode || runtime?.engine.mode || 'live').toLowerCase()
+  const mode = viewMode
+  const engineMode = runtime?.engine.mode
+  const engineState = runtime?.engine.state
   const strategyRows = buildStrategyRows(runtime, risk)
 
   return (
@@ -165,11 +180,25 @@ export function PortfolioDashboard({
         <div>
           <h1>Portfolio Dashboard</h1>
           <p>
-            {titleCase(mode)} session · {formatSessionDate(data.generated_at)} ·{' '}
+            Viewing: {titleCase(mode)} data · {formatSessionDate(data.generated_at)} ·{' '}
             {health?.market === 'open' ? 'Market open until 15:30 IST' : 'Market closed'}
+            {engineMode && engineState ? ` · Engine: ${titleCase(engineMode)} — ${engineState}` : ''}
           </p>
         </div>
         <div className="nv-dash-actions">
+          <div className="nv-segmented" aria-label="Dashboard view mode" role="group">
+            {(['paper', 'live'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={option === viewMode ? 'active' : ''}
+                onClick={() => setViewModeAndUrl(option)}
+                aria-pressed={option === viewMode}
+              >
+                {titleCase(option)}
+              </button>
+            ))}
+          </div>
           <select
             className="nv-range-select"
             aria-label="Export period"

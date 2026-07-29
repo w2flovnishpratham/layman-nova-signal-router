@@ -206,7 +206,7 @@ export function TradingActivityTabs({ mode = null, runId = null }: Props) {
       {tab === 'automation' ? (
         <div className="terminal-automation"><AutomationsPage /></div>
       ) : loading && rows.length === 0 ? (
-        <p className="terminal-feed-state">Loading {TABS.find((item) => item.key === tab)?.label.toLowerCase()}â€¦</p>
+        <p className="terminal-feed-state">Loading {TABS.find((item) => item.key === tab)?.label.toLowerCase()}…</p>
       ) : error ? (
         <p className="terminal-feed-state is-error">{error}<button type="button" onClick={() => void load(tab)}>Retry</button></p>
       ) : rows.length === 0 ? (
@@ -384,13 +384,13 @@ function isCopyField(key: string): boolean {
 
 function displayValue(key: string, value: unknown): string {
   if (key === 'occurred_at') {
-    if (!value) return 'â€”'
+    if (!value) return '—'
     const date = new Date(String(value))
-    return Number.isNaN(date.getTime()) ? 'â€”' : date.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })
+    return Number.isNaN(date.getTime()) ? '—' : date.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })
   }
   if (key === 'acknowledged') return value ? 'Acknowledged' : 'New'
   if (key === 'active') return value ? 'Active' : 'Historical'
-  if (value === null || value === undefined || value === '') return 'â€”'
+  if (value === null || value === undefined || value === '') return '—'
   if (typeof value === 'number') return value.toLocaleString('en-IN')
   return String(value)
 }

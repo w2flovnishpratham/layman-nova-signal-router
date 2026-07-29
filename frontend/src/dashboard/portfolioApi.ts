@@ -102,8 +102,9 @@ export interface PortfolioAnalytics {
   trades: PortfolioTrade[]
 }
 
-export async function getPortfolioAnalytics(): Promise<PortfolioAnalytics> {
-  const response = await fetch(backendHttpUrl('/api/dashboard/portfolio'), {
+export async function getPortfolioAnalytics(mode?: 'paper' | 'live'): Promise<PortfolioAnalytics> {
+  const query = mode ? `?mode=${mode}` : ''
+  const response = await fetch(backendHttpUrl(`/api/dashboard/portfolio${query}`), {
     credentials: 'include',
     cache: 'no-store',
   })

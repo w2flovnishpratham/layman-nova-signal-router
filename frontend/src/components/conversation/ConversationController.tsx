@@ -43,6 +43,36 @@ interface Props {
   strategyPromptPresent?: boolean
 }
 
+/** Persists across a refresh (sessionStorage, not the backend) so a mid-flow
+    reload after "Start New Setup" re-enters the fresh flow instead of the old
+    saved setup — see the restore effect in ConversationController. Scoped to
+    the owner_user_id at the moment it was set: sessionStorage survives a
+    same-tab logout/login (App unmounts/remounts this subtree without a page
+    reload), so an unscoped flag would leak owner A's "start new" intent into
+    owner B's first render. */
+const FRESH_START_KEY = 'nova.setup.freshStart'
+
+function setFreshStartFlag(ownerId: string | undefined): void {
+  if (!ownerId) return
+  sessionStorage.setItem(FRESH_START_KEY, JSON.stringify({ ownerId }))
+}
+
+function clearFreshStartFlag(): void {
+  sessionStorage.removeItem(FRESH_START_KEY)
+}
+
+function isFreshStartFlagged(ownerId: string | undefined): boolean {
+  if (!ownerId) return false
+  try {
+    const raw = sessionStorage.getItem(FRESH_START_KEY)
+    if (!raw) return false
+    const parsed = JSON.parse(raw) as { ownerId?: string }
+    return parsed.ownerId === ownerId
+  } catch {
+    return false
+  }
+}
+
 function labelFor(fields: StrategySetupField[], key: string): string {
   return fields.find((f) => f.key === key)?.label ?? key
 }
@@ -214,7 +244,12 @@ export function ConversationController({
         ...selectedConfiguration.risk,
       },
     )
-  }, [catalog?.selected_strategy_key, conv, runtime, state.mode, state.strategyKey, strategies])
+    // The user explicitly asked to start a new setup before this remount (e.g.
+    // a mid-flow refresh) — that intent survives the remount via sessionStorage
+    // because nothing else here does. Without this, every refresh silently
+    // re-surfaces the OLD saved setup instead of the fresh flow they asked for.
+    if (isFreshStartFlagged(runtime?.owner_user_id)) conv.startNew()
+  }, [catalog?.selected_strategy_key, conv.selectMode, conv.selectStrategy, conv.startNew, runtime, state.mode, state.strategyKey, strategies])
   // Synchronous guard so two rapid clicks (before the disabled state re-renders)
   // cannot fire a second save/start network request.
   const inFlightRef = useRef(false)
@@ -234,6 +269,7 @@ export function ConversationController({
     setDirty(true)
     setSaved(false)
     setLiveAcknowledged(false)
+    clearFreshStartFlag()
     conv.selectMode(m)
     onModeSelect?.(m, 1_000_000)
   }
@@ -297,6 +333,7 @@ export function ConversationController({
       // leave new limits applied to old sizing, or the reverse.
       await onSave(selectedStrategy.strategy_key, toSaveValues(strategy), toSaveValues(risk))
       if (isStale(gen, strategyKey)) return // conversation moved on — ignore result
+      clearFreshStartFlag()
       setDirty(false)
       setSaved(true)
     } catch (e) {
@@ -391,8 +428,8 @@ export function ConversationController({
             ))}
           </div>
           <div className="conv-actions">
-            <button type="button" className="conv-pill conv-pill--primary" onClick={conv.resume}>Resume</button>
-            <button type="button" className="conv-pill" onClick={conv.review}>Review</button>
+            <button type="button" className="conv-pill conv-pill--primary" onClick={() => { clearFreshStartFlag(); conv.resume() }}>Resume</button>
+            <button type="button" className="conv-pill" onClick={() => { clearFreshStartFlag(); conv.review() }}>Review</button>
             <button
               type="button"
               className="conv-pill"
@@ -401,6 +438,7 @@ export function ConversationController({
                 setDirty(true)
                 setSaved(false)
                 setLiveAcknowledged(false)
+                setFreshStartFlag(runtime?.owner_user_id)
                 conv.startNew()
               }}
             >

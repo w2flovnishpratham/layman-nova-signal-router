@@ -74,6 +74,10 @@ class PrivateWebhookPayload(BaseModel):
     timeframe: str | None = Field(default=None, max_length=12)
     reference_price: float | None = Field(default=None, gt=0)
     comment: str | None = Field(default=None, max_length=200)
+    # The frozen Pine transport (novaWebhookPayload in pine_transport_v3_fill.txt)
+    # always sends this -- it's the strategy.entry/close order id already folded
+    # into signal_id for uniqueness, kept here too as plain correlation metadata.
+    order_id: str | None = Field(default=None, max_length=64)
 
 
 class PrivateWebhookRequest(PrivateWebhookPayload):
@@ -158,6 +162,7 @@ def payload_fingerprint(payload: PrivateWebhookPayload, action: str) -> str:
             "timeframe": payload.timeframe,
             "reference_price": payload.reference_price,
             "comment": payload.comment,
+            "order_id": payload.order_id,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -351,6 +356,7 @@ def build_normalized_signal(
         "timeframe": payload.timeframe,
         "reference_price": payload.reference_price,
         "comment": payload.comment,
+        "order_id": payload.order_id,
     }
     return NormalizedSignal(
         payload_format="NOVA",
@@ -408,6 +414,7 @@ def _shadow_compare_canonical(
             metadata={
                 "reference_price": payload.reference_price,
                 "comment": payload.comment,
+                "order_id": payload.order_id,
             },
         )
         compatibility = canonical_to_normalized_signal(

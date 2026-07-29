@@ -61,7 +61,9 @@ export function SetupPage({ conversation, snapshot }: { conversation: ReactNode;
       <section className="nova-setup-main" aria-label="Setup conversation">
         <div className="nova-setup-conversation-inner">
           <p className="nova-setup-kicker">
-            Guided engine setup <span aria-hidden="true">·</span> {mode === 'paper' ? 'Paper mode' : mode === 'live' ? 'Live mode' : 'Choose mode'} <span aria-hidden="true">·</span> resumes where you left off
+            Guided engine setup <span aria-hidden="true">·</span> {mode === 'paper' ? 'Paper mode' : mode === 'live' ? 'Live mode' : 'Choose mode'}
+            {snapshot?.state.origin === 'resume' ? <> <span aria-hidden="true">·</span> resuming your saved setup</> : null}
+            {snapshot?.state.origin === 'start_new' ? <> <span aria-hidden="true">·</span> starting a new setup</> : null}
           </p>
           {conversation}
         </div>

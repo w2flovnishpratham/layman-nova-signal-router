@@ -1,13 +1,14 @@
-"""Portfolio analytics for the user dashboard — LIVE money only.
+"""Portfolio analytics for the user dashboard, selectable by mode=live|paper.
 
-This dashboard intentionally ignores paper trading. The paper wallet can be
-reset with a fresh virtual balance at any time, so its P&L history is not a
-meaningful record. Live trades are real money: persistent and worth tracking.
+Live: reconstructs the round-trips NOVA actually executed with real orders by
+pairing filled ENTRY/EXIT legs from the durable order event log, using the
+real Dhan fund snapshot (never the paper wallet) as the capital base.
 
-We reconstruct the round-trips NOVA actually executed with real orders by
-pairing filled ENTRY/EXIT legs from the durable order event log, and we use the
-real Dhan fund snapshot (never the paper wallet) as the capital base. Everything
-is derived server-side so the frontend just renders.
+Paper: reads the virtual wallet's closed_trades/open_trade directly (paper_portfolio.py)
+so the paper book never mixes with real money. The paper wallet can be reset at
+any time by the user, so its history is a session record, not permanent capital.
+
+Everything is derived server-side so the frontend just renders.
 
 When a database is configured and a real (non-dev) user is bound to the request,
 closed trades and an equity snapshot are persisted best-effort so history
@@ -352,11 +353,14 @@ def _live_wallet_snapshot() -> dict[str, Any]:
         return {}
 
 
-def _persist_best_effort(trades: list[dict[str, Any]], wallet: dict[str, Any], kpis: dict[str, Any]) -> None:
-    """Upsert closed live trades + an equity snapshot for the bound user. Never raises."""
+def _persist_trades_best_effort(trades: list[dict[str, Any]]) -> None:
+    """Upsert closed live trades for the bound user, idempotent on exit_order_id.
+    Never raises. Split out from snapshot persistence so a single confirmed
+    EXIT fill can persist its realized P&L without needing a fresh wallet
+    snapshot (see log_order_event's live-exit hook in audit_logger.py)."""
     try:
         from app.db.engine import database_configured, session_scope
-        from app.db.models import PortfolioSnapshot, PortfolioTrade
+        from app.db.models import PortfolioTrade
         from app.services.execution_context import current_execution_user
     except Exception:
         return
@@ -398,6 +402,25 @@ def _persist_best_effort(trades: list[dict[str, Any]], wallet: dict[str, Any], k
                         closed_at=_parse_ts(t.get("closed_at")) if t.get("closed_at") else None,
                     )
                 )
+    except Exception as exc:  # pragma: no cover - persistence is best effort
+        logger.debug("Portfolio trade persistence skipped: %s", exc)
+
+
+def _persist_snapshot_best_effort(wallet: dict[str, Any], kpis: dict[str, Any]) -> None:
+    """Add one equity snapshot for the bound user. Never raises."""
+    try:
+        from app.db.engine import database_configured, session_scope
+        from app.db.models import PortfolioSnapshot
+        from app.services.execution_context import current_execution_user
+    except Exception:
+        return
+    if not database_configured():
+        return
+    user = current_execution_user()
+    if user is None or user.is_dev:
+        return
+    try:
+        with session_scope() as session:
             session.add(
                 PortfolioSnapshot(
                     user_id=user.id,
@@ -411,7 +434,26 @@ def _persist_best_effort(trades: list[dict[str, Any]], wallet: dict[str, Any], k
                 )
             )
     except Exception as exc:  # pragma: no cover - persistence is best effort
-        logger.debug("Portfolio persistence skipped: %s", exc)
+        logger.debug("Portfolio snapshot persistence skipped: %s", exc)
+
+
+def _persist_best_effort(trades: list[dict[str, Any]], wallet: dict[str, Any], kpis: dict[str, Any]) -> None:
+    """Upsert closed live trades + an equity snapshot for the bound user. Never raises."""
+    _persist_trades_best_effort(trades)
+    _persist_snapshot_best_effort(wallet, kpis)
+
+
+def persist_live_trades_from_log() -> None:
+    """Best-effort: re-pair the live order-event log and upsert any newly
+    closed trades. Cheap (no live Dhan API call, unlike full analytics) and
+    idempotent, so it's safe to call right when an EXIT fill is logged rather
+    than waiting for someone to next open the dashboard."""
+    try:
+        events = read_jsonl("order", limit=_ORDER_LOG_LIMIT)
+        trades, _ = _pair_round_trips(events)
+        _persist_trades_best_effort(trades)
+    except Exception as exc:  # pragma: no cover - persistence is best effort
+        logger.debug("Live trade persistence trigger skipped: %s", exc)
 
 
 def persist_paper_trade(closed_trade: dict[str, Any]) -> None:
@@ -476,7 +518,104 @@ def persist_paper_trade(closed_trade: dict[str, Any]) -> None:
         logger.debug("Paper trade persistence skipped: %s", exc)
 
 
-def build_portfolio_analytics(persist: bool = True) -> dict[str, Any]:
+def _paper_trade_row(trade: dict[str, Any]) -> dict[str, Any]:
+    symbol = trade.get("symbol")
+    upper = str(symbol).upper() if symbol else ""
+    option_side = "CE" if upper.endswith("CE") else "PE" if upper.endswith("PE") else None
+    opened = _parse_ts(trade.get("opened_at"))
+    closed = _parse_ts(trade.get("closed_at"))
+    hold_minutes = (
+        round((closed - opened).total_seconds() / 60.0, 1)
+        if opened > _EPOCH and closed > _EPOCH
+        else None
+    )
+    entry_price = _num(trade.get("entry_price"))
+    exit_price = _num(trade.get("exit_price"))
+    entry_charges = _num(trade.get("entry_charges")) or 0.0
+    exit_charges = _num(trade.get("exit_charges")) or 0.0
+    realized = _num(trade.get("realized_pnl")) or 0.0
+    gross = realized + entry_charges + exit_charges
+    qty = int(trade.get("qty") or 0)
+    invested = (entry_price or 0) * qty
+    pnl_pct = (realized / invested * 100.0) if invested else None
+    return {
+        "symbol": symbol,
+        "option_side": option_side,
+        "qty": qty,
+        "entry_price": _round(entry_price),
+        "exit_price": _round(exit_price),
+        "entry_charges": _round(entry_charges),
+        "exit_charges": _round(exit_charges),
+        "gross_pnl": _round(gross),
+        "realized_pnl": _round(realized),
+        "pnl_pct": _round(pnl_pct),
+        "entry_order_id": trade.get("entry_order_id"),
+        "exit_order_id": trade.get("exit_order_id"),
+        "signal_id": trade.get("signal_id"),
+        "opened_at": trade.get("opened_at"),
+        "closed_at": trade.get("closed_at"),
+        "hold_minutes": hold_minutes,
+        "result": "win" if realized > 0 else "loss" if realized < 0 else "flat",
+    }
+
+
+def _build_paper_portfolio_analytics() -> dict[str, Any]:
+    from app.services.paper_portfolio import get_paper_portfolio
+
+    portfolio = get_paper_portfolio()
+    trades = [_paper_trade_row(t) for t in portfolio.closed_trades]
+
+    starting_balance = float(portfolio.session_start_balance or portfolio.starting_balance or 0.0)
+    current_equity = round(float(portfolio.available_balance) + float(portfolio.utilized_amount), 2)
+
+    wallet = {
+        "starting_balance": _round(starting_balance),
+        "available_balance": _round(portfolio.available_balance),
+        "utilized_amount": _round(portfolio.utilized_amount),
+        "sod_limit": None,
+        "realized_pnl": _round(portfolio.realized_pnl),
+        "session_pnl": _round(portfolio.session_pnl),
+        "equity": _round(current_equity),
+        "funds_connected": True,
+    }
+
+    pct_base = starting_balance if starting_balance > 0 else (current_equity or 0.0)
+    kpis = _compute_kpis(trades, pct_base)
+
+    open_position = None
+    open_trade = portfolio.open_trade
+    if isinstance(open_trade, dict) and open_trade:
+        symbol = open_trade.get("symbol")
+        upper = str(symbol).upper() if symbol else ""
+        open_position = {
+            "symbol": symbol,
+            "option_side": "CE" if upper.endswith("CE") else "PE" if upper.endswith("PE") else None,
+            "qty": int(open_trade.get("qty") or 0),
+            "entry_price": _round(_num(open_trade.get("entry_price"))),
+            "opened_at": open_trade.get("opened_at"),
+            "entry_order_id": open_trade.get("entry_order_id"),
+        }
+
+    return {
+        "mode": "paper",
+        "currency": "INR",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "funds_connected": True,
+        "wallet": wallet,
+        "kpis": kpis,
+        "equity_curve": _equity_curve(trades, starting_balance),
+        "daily_pnl": _daily_pnl(trades),
+        "side_breakdown": _side_breakdown(trades),
+        "symbol_breakdown": _symbol_breakdown(trades),
+        "open_position": open_position,
+        "trades": list(reversed(trades)),
+    }
+
+
+def build_portfolio_analytics(persist: bool = True, mode: str | None = None) -> dict[str, Any]:
+    if (mode or "live").lower() == "paper":
+        return _build_paper_portfolio_analytics()
+
     # LIVE-only: paper trades and the resettable paper wallet are excluded.
     events = read_jsonl("order", limit=_ORDER_LOG_LIMIT)
     trades, open_entry = _pair_round_trips(events)

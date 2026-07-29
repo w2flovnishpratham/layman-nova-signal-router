@@ -878,3 +878,231 @@ def test_c2_mark_ready_requires_paper_verification_first(c2_app):
     current["user"] = admin
     r = client.post(f"/api/admin/strategy-installations/{iid}/mark-ready")
     assert r.status_code == 409 and r.json()["reason"] == "NOT_IN_VERIFICATION"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: does an admin-approved conversion's webhook actually place a
+# real Paper order? Every other test above proves routing/state gating using
+# _complete_c2_paper_job, which fabricates job.result_summary directly instead
+# of running strategy_job_worker.process_queued_jobs_once() against the real
+# execution router + PaperBroker. That left a real gap: nothing proved a
+# genuine webhook, for a genuine Claude-approved installation, produces a
+# genuine paper fill. This drives the actual worker instead of faking its
+# output.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def c2_worker_runtime(mu_db, monkeypatch, tmp_path):
+    """Isolated per-user runtime dirs + a deterministic fill, so the real
+    worker/PaperBroker can run offline. Mirrors test_private_webhook_execution's
+    per_user_runtime + deterministic_paper_market fixtures."""
+    from app.config import settings
+    from app.services import (
+        audit_logger,
+        paper_broker,
+        paper_portfolio,
+        private_webhook_execution,
+        shared_market_data,
+        state_store,
+        user_context,
+    )
+    from app.services.credential_vault import DhanCredentials
+    from app.services.dhan_client import DhanLtpResult
+
+    monkeypatch.setattr(settings, "STRATEGY_JOB_WORKER_ENABLED", True, raising=False)
+
+    state_root = tmp_path / "state"
+    log_root = tmp_path / "logs"
+    monkeypatch.setattr(state_store, "RUNTIME_STATE_DIR", state_root)
+    monkeypatch.setattr(state_store, "RUNTIME_LOG_DIR", log_root)
+    monkeypatch.setattr(user_context, "RUNTIME_STATE_DIR", state_root)
+    monkeypatch.setattr(user_context, "RUNTIME_LOG_DIR", log_root)
+    for name, filename in {
+        "APP_STATE_FILE": "app_state.json",
+        "OPEN_POSITION_FILE": "open_position.json",
+        "PAPER_POSITION_FILE": "paper_position.json",
+        "PAPER_PORTFOLIO_FILE": "paper_portfolio.json",
+        "EXTERNAL_POSITIONS_FILE": "external_positions.json",
+        "SEEN_SIGNALS_FILE": "seen_signals.json",
+        "SETTINGS_FILE": "settings.json",
+    }.items():
+        monkeypatch.setattr(state_store, name, state_root / filename)
+    monkeypatch.setattr(paper_portfolio, "PAPER_PORTFOLIO_FILE", state_root / "paper_portfolio.json")
+    log_files = {
+        "webhook": log_root / "webhook_events.jsonl",
+        "order": log_root / "order_events.jsonl",
+        "audit": log_root / "audit_events.jsonl",
+        "error": log_root / "errors.jsonl",
+        "paper_orders": log_root / "paper_orders.jsonl",
+    }
+    monkeypatch.setattr(state_store, "LOG_FILES", log_files)
+    monkeypatch.setattr(paper_broker, "LOG_FILES", log_files)
+    monkeypatch.setattr(audit_logger, "LOG_FILES", log_files)
+    monkeypatch.setattr(paper_broker, "_market_is_open", lambda: True)
+
+    monkeypatch.setattr(
+        private_webhook_execution,
+        "_resolve_entry_contract",
+        lambda option_side, lots: {
+            "security_id": "57046" if option_side == "CE" else "57047",
+            "trading_symbol": f"NIFTY TEST {option_side}",
+            "strike": 25000.0,
+            "expiry": "2026-07-16",
+        },
+    )
+
+    class _QuoteClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_ltp(self, **_kwargs) -> DhanLtpResult:
+            return DhanLtpResult(success=True, message="quote", ltp=100.0)
+
+    monkeypatch.setattr(paper_broker, "RealDhanClient", _QuoteClient)
+    fake_creds = DhanCredentials("shared-client", "shared-token", "shared_market_data")
+    monkeypatch.setattr(
+        paper_broker,
+        "get_quote_snapshot",
+        lambda **_kwargs: {"ltp": 100.0, "source": "DHAN_WEBSOCKET", "status": "FRESH", "stale": False},
+    )
+    monkeypatch.setattr(shared_market_data, "get_shared_market_credentials", lambda: fake_creds)
+    monkeypatch.setattr(shared_market_data, "shared_market_data_configured", lambda: True)
+
+
+def _run_worker(limit: int = 5) -> int:
+    from app.workers.strategy_job_worker import process_queued_jobs_once
+
+    return process_queued_jobs_once(limit=limit)
+
+
+def test_approved_installation_webhook_produces_a_real_paper_fill(c2_app, c2_worker_runtime):
+    """The actual gap: an admin-approved, Claude-converted, HOLD-verified,
+    admin-promoted installation receives a real BUY_CE webhook, the real
+    worker (not a fabricated job) runs it through the real execution router
+    and PaperBroker, and a real paper position + realized P&L land durably —
+    then the owner's own EXIT closes it and mark-ready succeeds on genuine
+    evidence."""
+    client, current, admin, owner, _ = c2_app
+    approved = _approved(client)
+    _compile(client, approved)
+    installation = _install(client, approved, owner.id)
+    iid = installation["id"]
+    instance_id = installation["strategy_instance_id"]
+
+    current["user"] = owner
+    issued = _credential(client, iid, admin=False)
+    assert client.post("/api/webhooks/private", json=_hold(issued["token"])).status_code == 202
+
+    current["user"] = admin
+    promoted = _promote(client, iid)
+    assert promoted.status_code == 200, promoted.text
+    assert promoted.json()["installation"]["execution_mode"] == "paper_live_data"
+
+    # The owner still has to bind a configuration revision (lots/mode) before
+    # the instance is executable — promotion alone only authorizes it. This
+    # mirrors _start_paper_engine in test_private_webhook_execution.py: the
+    # real save path is the frontend setup wizard's HTTP router, which needs a
+    # full schema/risk-validator context this test doesn't stand up.
+    from app.db import models
+    from app.db.engine import session_scope
+
+    with session_scope() as db:
+        instance_row = db.get(models.StrategyInstance, uuid.UUID(instance_id))
+        revision = models.StrategyConfigurationRevision(
+            user_id=owner.id,
+            strategy_instance_id=uuid.UUID(instance_id),
+            strategy_version_id=instance_row.strategy_version_id,
+            mode="paper",
+            revision=1,
+            configuration_json={"lots": 1, "allowed_option_side": "BOTH"},
+            risk_json={},
+            status="active",
+        )
+        db.add(revision)
+        db.flush()
+        selection = db.scalar(
+            select(models.UserEngineConfig).where(models.UserEngineConfig.user_id == owner.id)
+        )
+        if selection is None:
+            selection = models.UserEngineConfig(user_id=owner.id)
+            db.add(selection)
+        selection.selected_strategy_instance_id = uuid.UUID(instance_id)
+        selection.selected_configuration_revision_id = revision.id
+        selection.selected_configuration_revision = revision.revision
+
+    from app.services import state_store
+    from app.services.execution_context import bind_user_execution_context
+    from app.services.user_context import current_user_from_model
+
+    with bind_user_execution_context(current_user_from_model(owner)):
+        state_store.init_runtime_files()
+        state_store.update_app_state(
+            engine_mode="paper", engine_started=True, webhook_trading_enabled=True
+        )
+        state_store.update_runtime_settings(
+            allow_entry=True,
+            allow_exit=True,
+            allowed_option_side="BOTH",
+            emergency_stop=False,
+            global_kill_switch=False,
+        )
+
+    current["user"] = owner
+    entry_signal_id = "e2e-entry-1"
+    entry = client.post(
+        "/api/webhooks/private",
+        json=_hold(issued["token"], action="BUY_CE", signal_id=entry_signal_id),
+    )
+    assert entry.status_code == 202, entry.text
+    assert entry.json().get("reason") != "STRATEGY_NOT_EXECUTABLE"
+    completed = _run_worker()
+    assert completed == 1
+
+    with session_scope() as db:
+        entry_job = db.scalar(
+            select(models.StrategyExecutionJob).where(
+                models.StrategyExecutionJob.strategy_name == f"instance:{instance_id}",
+                models.StrategyExecutionJob.signal_id == entry_signal_id,
+            )
+        )
+        assert entry_job is not None
+        assert entry_job.status == "completed"
+        execution = entry_job.result_summary["execution_result"]
+        assert execution["success"] is True
+        assert execution["order_id"].startswith("PAPER-")
+
+    with bind_user_execution_context(current_user_from_model(owner)):
+        position = state_store.get_open_position()
+    assert position["has_open_position"] is True
+    assert position["option_side"] == "CE"
+
+    exit_signal_id = "e2e-exit-1"
+    exit_response = client.post(
+        "/api/webhooks/private",
+        json=_hold(issued["token"], action="EXIT", signal_id=exit_signal_id),
+    )
+    assert exit_response.status_code == 202, exit_response.text
+    assert _run_worker() == 1
+
+    with bind_user_execution_context(current_user_from_model(owner)):
+        position_after = state_store.get_open_position()
+    assert position_after["has_open_position"] is False
+
+    with session_scope() as db:
+        trade = db.scalar(
+            select(models.PortfolioTrade).where(
+                models.PortfolioTrade.user_id == owner.id,
+                models.PortfolioTrade.mode == "paper",
+            )
+        )
+        assert trade is not None, "a real paper EXIT must persist a durable PortfolioTrade row"
+        assert trade.symbol == "NIFTY TEST CE"
+
+    # Genuine paper entry/exit evidence (from the real worker, not a fabricated
+    # job) is exactly what admin mark-ready requires.
+    current["user"] = admin
+    ready = client.post(f"/api/admin/strategy-installations/{iid}/mark-ready")
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["installation"]["status"] == "READY"
+    assert ready.json()["installation"]["paper_entry_verified_at"] is not None
+    assert ready.json()["installation"]["paper_exit_verified_at"] is not None

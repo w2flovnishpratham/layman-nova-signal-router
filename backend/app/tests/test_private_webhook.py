@@ -531,6 +531,42 @@ def test_privileged_fields_rejected(client, field, value):
     assert _jobs(instance_id) == []
 
 
+def test_frozen_transport_payload_shape_is_accepted(client):
+    """Regression: the frozen Pine transport (pine_transport_v3_fill.txt,
+    novaWebhookPayload) hardcodes an order_id field into every alert it fires
+    -- HOLD and every real BUY_CE/BUY_PE/EXIT order-fill alike. A real admin
+    HOLD test against a compiled candidate 422'd with INVALID_PAYLOAD because
+    the webhook schema didn't allow-list order_id, which would have silently
+    broken every STRATEGY-mode installation's routing in production. Parse the
+    live transport file's own JSON template so this can't regress unnoticed
+    if the transport changes again."""
+    import re
+    from pathlib import Path
+
+    transport_source = (
+        Path(__file__).resolve().parents[1] / "prompts" / "pine_transport_v3_fill.txt"
+    ).read_text(encoding="utf-8")
+    literal = re.search(r"novaWebhookPayload\(string action, string orderId\) =>.*?'(\{.*?\})'", transport_source, re.DOTALL)
+    assert literal, "could not locate the JSON template in the frozen transport"
+    field_names = re.findall(r'"(\w+)":"', literal.group(1))
+    assert "order_id" in field_names  # the actual bug this test guards against
+
+    user = make_user("frozen-transport-shape@gmail.com")
+    instance_id = _make_instance(user)
+    token = _issue_token(user, instance_id)
+    transport_shaped_payload = {
+        "action": "HOLD",
+        "signal_id": f"PINE_TEST:NIFTY:HOLD_TEST:{uuid.uuid4().hex[:10]}",
+        "signal_time": _now_iso(),
+        "strategy_version": "C1_CANDIDATE",
+        "timeframe": "5",
+        "order_id": "HOLD_TEST",
+    }
+    assert set(transport_shaped_payload) - {"action", "signal_id", "signal_time"} <= set(field_names)
+    response = _post(client, token, transport_shaped_payload)
+    assert response.status_code == 202, response.json()
+
+
 def test_invalid_json_and_wrong_content_type_and_oversized_body(client):
     user = make_user("payload-body@gmail.com")
     instance_id = _make_instance(user)

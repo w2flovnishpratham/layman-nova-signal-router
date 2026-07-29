@@ -99,14 +99,17 @@ def dashboard_summary() -> dict:
 
 
 @router.get("/dashboard/portfolio")
-def dashboard_portfolio() -> dict:
+def dashboard_portfolio(mode: str | None = Query(None)) -> dict:
     """Analytics for the user's portfolio dashboard.
 
     Only round-trips NOVA actually executed (an entry order it placed and the
     matching exit it placed) are included. Returns KPIs, equity curve, daily
     PnL, side/symbol breakdowns and the closed-trade ledger.
+
+    `mode` selects which book to read ("live" real Dhan trades, or "paper"
+    the virtual wallet) — it only changes what's displayed, never execution.
     """
-    return build_portfolio_analytics()
+    return build_portfolio_analytics(mode=mode)
 
 
 @router.get("/dashboard/live-flow")
