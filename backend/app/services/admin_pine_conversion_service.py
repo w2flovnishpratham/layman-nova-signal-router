@@ -254,7 +254,7 @@ _detect_source_type = pine_validation.detect_source_type
 
 def _prompt_material_v4(source_type: str) -> tuple[str, str, str, str]:
     prompt = base_conversion._read_canonical(
-        base_conversion.prompt_path("v4.0"), base_conversion.PROMPT_V4_SHA256
+        base_conversion.prompt_path("v4.1"), base_conversion.PROMPT_V41_SHA256
     )
     if source_type == "STRATEGY":
         transport = base_conversion._read_canonical(
@@ -410,7 +410,7 @@ def submit(admin_id: uuid.UUID, payload: AdminPineSubmission) -> dict[str, Any]:
             input_version_id=version.id,
             input_source_sha256=source_sha256,
             contract_version=pine.CONTRACT_VERSION,
-            prompt_version="v4.0",
+            prompt_version="v4.1",
             provider=PROVIDER,
             model=settings.CLAUDE_CONVERSION_MODEL or "not-configured",
             options=options,
@@ -423,7 +423,7 @@ def submit(admin_id: uuid.UUID, payload: AdminPineSubmission) -> dict[str, Any]:
                 **usage_summary,
                 "provenance": {
                     "source_sha256": source_sha256,
-                    "prompt_version": "v4.0",
+                    "prompt_version": "v4.1",
                     "prompt_sha256": prompt_sha,
                     "registry_version": registry.registry_version,
                     "registry_sha256": registry.sha256,
@@ -586,7 +586,7 @@ def submit_owner_source(
             input_version_id=version.id,
             input_source_sha256=source_sha256,
             contract_version=pine.CONTRACT_VERSION,
-            prompt_version="v4.0",
+            prompt_version="v4.1",
             provider=PROVIDER,
             model=settings.CLAUDE_CONVERSION_MODEL or "not-configured",
             options=options,
@@ -600,7 +600,7 @@ def submit_owner_source(
                 **owner_usage_summary,
                 "provenance": {
                     "source_sha256": source_sha256,
-                    "prompt_version": "v4.0",
+                    "prompt_version": "v4.1",
                     "prompt_sha256": prompt_sha,
                     "registry_version": registry.registry_version,
                     "registry_sha256": registry.sha256,
@@ -810,6 +810,7 @@ def _public(db, row: models.PineConversionRequest, *, include_source: bool) -> d
         result["transport_source"] = _transport_from_candidate(candidate.content) if candidate else None
         result["diff"] = _diff(original.content, candidate.content) if candidate else []
         result["approval_integrity"] = _approval_integrity(row, original, layer, candidate)
+        result["backtest_layer"] = summary.get("backtest_layer")
     return result
 
 
@@ -1116,7 +1117,42 @@ def _validate_layer(
         errors.append("UNRESOLVED_PLACEHOLDER")
     if _unbalanced(layer):
         errors.append("UNBALANCED_DELIMITERS")
+    errors.extend(_validate_backtest_layer(output, source_type=source_type))
     return sorted(set(errors))
+
+
+def _validate_backtest_layer(output: ClaudePineConversionOutput, *, source_type: str) -> list[str]:
+    """Admin-only TradingView backtest preview (prompt v4.1). Required only
+    for INDICATOR-mode CONVERTED candidates; must stay null otherwise. Never
+    wired to the frozen transport -- these checks confirm it *can't* be,
+    not that its trading logic is correct."""
+    backtest = output.backtest_layer
+    if source_type == "STRATEGY" or output.status != "CONVERTED":
+        return ["BACKTEST_LAYER_UNEXPECTED"] if backtest else []
+    if not backtest:
+        return ["BACKTEST_LAYER_MISSING"]
+    errors: list[str] = []
+    if len(re.findall(r"\bstrategy\s*\(", backtest)) != 1:
+        errors.append("BACKTEST_LAYER_DECLARATION_INVALID")
+    if re.search(r"\bindicator\s*\(", backtest):
+        errors.append("BACKTEST_LAYER_DECLARATION_INVALID")
+    if not re.search(r"\bstrategy\.entry\s*\(", backtest):
+        errors.append("BACKTEST_LAYER_NO_ENTRY")
+    for name in ("novaBuyCeSignal", "novaBuyPeSignal", "novaExitSignal"):
+        if name not in backtest:
+            errors.append("BACKTEST_LAYER_SIGNAL_MISSING")
+    if any(
+        token in backtest
+        for token in ("alert_message", "novaWebhookPayload", "NOVA FROZEN TRANSPORT", "novaTransportVersion", "REPLACE_WITH_PRIVATE_CREDENTIAL")
+    ):
+        errors.append("BACKTEST_LAYER_TRANSPORT_FORBIDDEN")
+    if re.search(r"\balert\s*\(", backtest):
+        errors.append("BACKTEST_LAYER_ALERT_FORBIDDEN")
+    if re.search(r"{{[A-Z][A-Z0-9_]*}}", backtest):
+        errors.append("BACKTEST_LAYER_UNRESOLVED_PLACEHOLDER")
+    if _unbalanced(backtest):
+        errors.append("BACKTEST_LAYER_UNBALANCED_DELIMITERS")
+    return errors
 
 
 def _unbalanced(source: str) -> bool:
@@ -1183,6 +1219,42 @@ def _assemble_candidate(layer: str, strategy_code: str, version: str, source_typ
     if candidate.count(f"NOVA FROZEN TRANSPORT END: {transport_version}") != 1:
         raise AdminConversionError("Candidate transport count is invalid.", 422, "TRANSPORT_COUNT_INVALID")
     return candidate, _hash(candidate)
+
+
+def _broadcast_transport_material(source_type: str) -> tuple[str, str, str]:
+    """(private transport_version name, broadcast block content, broadcast
+    transport_version name) for swapping an approved candidate's private
+    per-user-credential transport for the single-admin-secret broadcast one.
+    """
+    if source_type == "STRATEGY":
+        private_version = base_conversion.TRANSPORT_V3_STRATEGY_FILL_VERSION
+        bcast_version = base_conversion.TRANSPORT_V3_STRATEGY_FILL_BCAST_VERSION
+        bcast_path = base_conversion.TRANSPORT_V3_STRATEGY_FILL_BCAST_PATH
+        bcast_sha = base_conversion.TRANSPORT_V3_STRATEGY_FILL_BCAST_SHA256
+    else:
+        private_version = base_conversion.TRANSPORT_V2_VERSION
+        bcast_version = base_conversion.TRANSPORT_V2_BCAST_VERSION
+        bcast_path = base_conversion.TRANSPORT_V2_BCAST_PATH
+        bcast_sha = base_conversion.TRANSPORT_V2_BCAST_SHA256
+    bcast_block = base_conversion._read_canonical(bcast_path, bcast_sha)
+    return private_version, bcast_block, bcast_version
+
+
+def _swap_to_broadcast_transport(candidate: str, source_type: str) -> str:
+    """Rewrite an already-approved candidate's frozen transport block in
+    place, so publish hands back Pine that's ready to paste onto the one
+    admin-run broadcast chart -- no manual transport editing required."""
+    private_version, bcast_block, bcast_version = _broadcast_transport_material(source_type)
+    begin = f"// === NOVA FROZEN TRANSPORT BEGIN: {private_version} ==="
+    end = f"// === NOVA FROZEN TRANSPORT END: {private_version} ==="
+    start_idx = candidate.find(begin)
+    end_idx = candidate.find(end)
+    if start_idx == -1 or end_idx == -1 or candidate.count(begin) != 1 or candidate.count(end) != 1:
+        raise AdminConversionError("Candidate transport block is missing or malformed.", 422, "TRANSPORT_COUNT_INVALID")
+    broadcast = candidate[:start_idx] + bcast_block.rstrip("\n") + "\n" + candidate[end_idx + len(end):].lstrip("\n")
+    if broadcast.count(f"NOVA FROZEN TRANSPORT BEGIN: {bcast_version}") != 1:
+        raise AdminConversionError("Broadcast transport count is invalid.", 422, "TRANSPORT_COUNT_INVALID")
+    return broadcast
 
 
 def _set_failure(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, code: str, status: str) -> None:
@@ -1393,6 +1465,7 @@ def _persist_candidate(
                 "validation_status": "RUNNING",
                 "review_status": "PENDING",
                 "usage": usage,
+                "backtest_layer": output.backtest_layer,
             })
             row.usage_summary = summary
             row.updated_at = _now()
@@ -1677,6 +1750,92 @@ def approve(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, reason: str | N
             metadata={"conversion_id": str(row.id), **{key: value for key, value in binding.items() if key != "admin_note"}},
         )
         return {"conversion": _public(db, row, include_source=True)}
+
+
+def publish_as_shared(
+    admin_id: uuid.UUID,
+    conversion_id: uuid.UUID | str,
+    *,
+    catalog_code: str,
+    display_name: str | None = None,
+) -> dict[str, Any]:
+    """Turn an approved private candidate into a NOVA_SHARED strategy every
+    user can select. built_in_strategy_registry.list_built_ins() reads
+    published rows live, so this alone makes the strategy appear in the
+    catalog as READY -- no code change or deploy needed.
+
+    Also rewrites the approved candidate's frozen transport block from the
+    private per-user credential shape to the single-admin-secret broadcast
+    shape and returns it as broadcast_pine -- install-ready for the one
+    admin-run TradingView chart at /api/webhook/strategy/{catalog_code},
+    no manual editing required (see nova_supertrend_managed_broadcast.pine
+    for the hand-built reference this mirrors). Publishing makes the
+    strategy selectable and makes the webhook accept its signals; the admin
+    still has to paste broadcast_pine onto one chart and create the alert.
+    """
+    code = str(catalog_code or "").strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{1,39}", code):
+        raise AdminConversionError(
+            "catalog_code must start with a letter and contain only lowercase letters, digits, - or _ (2-40 characters).",
+            422,
+            "INVALID_CATALOG_CODE",
+        )
+    with session_scope() as db:
+        row = _owned(db, admin_id, conversion_id, lock=True)
+        if row.status != "approved_for_tv_compile" or not row.candidate_version_id:
+            raise AdminConversionError(
+                "Only an approved candidate can be published.", 409, "NOT_APPROVED"
+            )
+        strategy = db.get(models.StrategyCatalog, row.strategy_id)
+        version = db.get(models.StrategyVersion, row.candidate_version_id)
+        if strategy is None or version is None:
+            raise AdminConversionError("Approved strategy or version not found.", 404, "NOT_FOUND")
+        original = pine._artifact(db, row.input_version_id)
+        candidate = pine._artifact(db, row.candidate_version_id)
+        broadcast_pine = _swap_to_broadcast_transport(
+            candidate.content, _detect_source_type(original.content)
+        )
+        conflict = db.scalar(
+            select(models.StrategyCatalog).where(
+                models.StrategyCatalog.owner_user_id.is_(None),
+                models.StrategyCatalog.code == code,
+                models.StrategyCatalog.id != strategy.id,
+            )
+        )
+        if conflict is not None:
+            raise AdminConversionError(
+                f"'{code}' is already published by another strategy.", 409, "CATALOG_CODE_TAKEN"
+            )
+        strategy.code = code
+        strategy.display_name = (display_name or "").strip() or strategy.display_name
+        strategy.owner_type = "nova"
+        strategy.owner_user_id = None
+        strategy.visibility = "nova_shared"
+        strategy.status = "active"
+        if version.status != "approved":
+            version.status = "approved"
+            version.approved_at = _now()
+            version.approved_by_user_id = admin_id
+        db.flush()
+        crud.add_audit_log(
+            db,
+            user_id=admin_id,
+            action="STRATEGY_PUBLISHED_NOVA_SHARED",
+            metadata={
+                "conversion_id": str(row.id),
+                "strategy_id": str(strategy.id),
+                "catalog_code": code,
+                "version_id": str(version.id),
+            },
+        )
+        return {
+            "strategy_id": str(strategy.id),
+            "catalog_code": code,
+            "display_name": strategy.display_name,
+            "version": version.version,
+            "webhook_path": f"/api/webhook/strategy/{code}",
+            "broadcast_pine": broadcast_pine,
+        }
 
 
 def request_changes(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, reason: str | None) -> dict[str, Any]:

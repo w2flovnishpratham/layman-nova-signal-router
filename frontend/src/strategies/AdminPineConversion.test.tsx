@@ -7,6 +7,11 @@ const api = vi.hoisted(() => ({
   list: vi.fn(), get: vi.fn(), submit: vi.fn(), convert: vi.fn(), manualPackage: vi.fn(),
   manualResponse: vi.fn(), approve: vi.fn(), reject: vi.fn(), requestChanges: vi.fn(),
 }))
+const toastApi = vi.hoisted(() => ({
+  add: vi.fn(),
+  promise: vi.fn(async (request: Promise<unknown>) => request),
+}))
+vi.mock('@/components/ui/toast', () => ({ toast: toastApi }))
 
 vi.mock('../api', () => ({
   listAdminPineConversions: api.list,
@@ -34,6 +39,7 @@ vi.mock('../api', () => ({
 
 const SOURCE = '//@version=6\nindicator("NIFTY source", overlay=true)\n'
 const LAYER = '//@version=6\nindicator("NIFTY converted", overlay=true)\nbool novaBuyCeSignal = true\nbool novaBuyPeSignal = false\nbool novaExitSignal = false\n'
+const BACKTEST_LAYER = '//@version=6\nstrategy("NIFTY converted backtest", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)\nbool novaBuyCeSignal = true\nif novaBuyCeSignal\n    strategy.entry("CE", strategy.long)\n'
 const TRANSPORT = '// === NOVA FROZEN TRANSPORT BEGIN: pine_transport_v2 ===\n// transport\n'
 const validation = {
   id: 'report-1', status: 'PASSED_WITH_WARNINGS', validator_version: '1.0.0', contract_version: 1,
@@ -58,7 +64,7 @@ const ready = {
   provenance: { input_token_count: 120, output_token_count: 80, cache_status: 'MISS', repair_count: 0 },
   validation, conversion_summary: 'Preserved behavior.', warnings: [], unsupported_features: [],
   action_mapping: { buy_ce_source: 'cross', buy_pe_source: 'under', exit_source: 'false' },
-  original_source: SOURCE, strategy_layer: LAYER, final_candidate: `${LAYER}\n${TRANSPORT}`,
+  original_source: SOURCE, strategy_layer: LAYER, backtest_layer: BACKTEST_LAYER, final_candidate: `${LAYER}\n${TRANSPORT}`,
   transport_source: TRANSPORT,
   diff: [{ kind: 'removed', text: 'indicator("NIFTY source", overlay=true)' }, { kind: 'added', text: 'indicator("NIFTY converted", overlay=true)' }],
   approval_integrity: null,
@@ -94,6 +100,16 @@ describe('AdminPineConversionWorkspace', () => {
     expect(screen.getByText(/120 in \/ 80 out/)).toBeInTheDocument()
     expect(screen.getAllByText(/indicator\("NIFTY converted"/).length).toBeGreaterThan(0)
     expect(screen.getByText('Server-added Transport V2')).toBeInTheDocument()
+  })
+
+  it('shows the backtest layer with a working copy button', async () => {
+    const user = userEvent.setup()
+    render(<AdminPineConversionWorkspace />)
+    await screen.findAllByText('Legend MACD')
+    expect(screen.getByText(/Backtest layer/)).toBeInTheDocument()
+    expect(screen.getByText(/strategy\("NIFTY converted backtest"/)).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: /copy/i })[0])
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(BACKTEST_LAYER)
   })
 
   it('submits pasted or uploaded UTF-8 Pine with safe fixed options and no model or prompt controls', async () => {
@@ -152,7 +168,7 @@ describe('AdminPineConversionWorkspace', () => {
     }
     api.list.mockResolvedValue([advisory]); api.get.mockResolvedValue(advisory)
     render(<AdminPineConversionWorkspace />)
-    expect(await screen.findByText(/BLK_PENDING_ENGINE/)).toBeInTheDocument()
+    expect((await screen.findAllByText(/BLK_PENDING_ENGINE/)).length).toBeGreaterThan(0)
     expect(screen.getByText('Conversion guidance given to Claude')).toBeInTheDocument()
     expect(screen.getByText('Pending stop or limit entry orders')).toBeInTheDocument()
     expect(screen.getByText(/opposite signal while a position is open emits EXIT only/)).toBeInTheDocument()
@@ -180,7 +196,10 @@ describe('AdminPineConversionWorkspace', () => {
     render(<AdminPineConversionWorkspace />)
     await user.click(await screen.findByRole('button', { name: /open manual fallback/i }))
     await waitFor(() => expect(api.manualPackage).toHaveBeenCalledWith('c1'))
-    expect(screen.getByRole('status')).toHaveTextContent('Manual package copy completed')
+    expect(toastApi.add).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Manual package copy completed.',
+      type: 'success',
+    }))
     expect(screen.getByText('Current C1 manual package')).toBeInTheDocument()
     expect(screen.getByText('CONTROLLED PACKAGE')).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Manual Claude response JSON'), { target: { value: '{"schema_version":"v1"}' } })

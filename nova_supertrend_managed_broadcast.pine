@@ -1,0 +1,106 @@
+//@version=6
+indicator("NOVA Supertrend v2 (Admin-Managed Broadcast)", overlay=true)
+
+// ADMIN-ONLY SCRIPT. Do not distribute this source or the secret configured
+// below to any subscriber -- this single chart is the sole signal source for
+// every user who has selected the Supertrend strategy in NOVA. NOVA fans the
+// signal out to each subscriber's own account (lots, paper/live, broker) on
+// the server; this script only ever states directional intent, never a
+// contract, quantity, or account.
+string secretPlaceholder = "REPLACE_WITH_NOVA_MANAGED_SECRET"
+secret = input.string(secretPlaceholder, "NOVA Managed Secret (admin-only)", group="NOVA Webhook")
+enableHoldTest = input.bool(false, "Send one HOLD connectivity test", group="NOVA Webhook",
+ tooltip="Temporary test only. Disable it after one confirmed HOLD alert.")
+
+enableEodExit = input.bool(false, "Optional EOD EXIT (backend square-off remains authoritative)", group="NOVA Extensions")
+eodExitHour = input.int(15, "EOD hour IST", minval=0, maxval=23, group="NOVA Extensions")
+eodExitMinute = input.int(15, "EOD minute IST", minval=0, maxval=59, group="NOVA Extensions")
+resetTrendDaily = input.bool(false, "Reset Supertrend each IST day", group="NOVA Extensions")
+freshEntryAfterDailyReset = input.bool(false, "Fresh entry after daily reset", group="NOVA Extensions",
+ tooltip="Has an effect only when daily reset is enabled. Changes the original strategy behavior.")
+
+atrPeriod = input.int(10, "ATR Period", minval=1, group="Supertrend")
+src = input.source(hl2, "Source", group="Supertrend")
+atrMultiplier = input.float(3.0, "ATR Multiplier", minval=0.1, step=0.1, group="Supertrend")
+useBuiltInAtr = input.bool(true, "Use built-in ATR calculation", group="Supertrend")
+showSignals = input.bool(true, "Show CE/PE reversal markers", group="Display")
+highlightTrend = input.bool(true, "Highlight trend", group="Display")
+
+string indiaTimezone = "Asia/Kolkata"
+bool isFiveMinuteChart = timeframe.isminutes and timeframe.multiplier == 5
+bool secretReady = secret != secretPlaceholder and str.length(secret) >= 20
+
+bool isNewIstDay = not na(time[1]) and (
+ year(time, indiaTimezone) != year(time[1], indiaTimezone) or
+ month(time, indiaTimezone) != month(time[1], indiaTimezone) or
+ dayofmonth(time, indiaTimezone) != dayofmonth(time[1], indiaTimezone))
+bool applyDailyReset = resetTrendDaily and isNewIstDay
+
+float alternativeAtr = ta.sma(ta.tr(true), atrPeriod)
+float atr = useBuiltInAtr ? ta.atr(atrPeriod) : alternativeAtr
+
+float upperBand = src - atrMultiplier * atr
+float previousUpperBand = nz(upperBand[1], upperBand)
+upperBand := applyDailyReset ? upperBand : (close[1] > previousUpperBand ? math.max(upperBand, previousUpperBand) : upperBand)
+
+float lowerBand = src + atrMultiplier * atr
+float previousLowerBand = nz(lowerBand[1], lowerBand)
+lowerBand := applyDailyReset ? lowerBand : (close[1] < previousLowerBand ? math.min(lowerBand, previousLowerBand) : lowerBand)
+
+var int trend = 1
+int previousTrend = nz(trend[1], 1)
+int continuedTrend = previousTrend == -1 and close > previousLowerBand ? 1 : previousTrend == 1 and close < previousUpperBand ? -1 : previousTrend
+trend := applyDailyReset ? (close >= src ? 1 : -1) : continuedTrend
+
+bool bullishReversal = not applyDailyReset and trend == 1 and previousTrend == -1
+bool bearishReversal = not applyDailyReset and trend == -1 and previousTrend == 1
+bool freshBullishEntry = applyDailyReset and freshEntryAfterDailyReset and trend == 1
+bool freshBearishEntry = applyDailyReset and freshEntryAfterDailyReset and trend == -1
+bool buyCeSignal = bullishReversal or freshBullishEntry
+bool buyPeSignal = bearishReversal or freshBearishEntry
+
+signalId(string action) =>
+    "NOVA-ST-BROADCAST:" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action
+
+signalTime() =>
+    str.format_time(time_close, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+
+// No strategy_code, no per-user credential -- the URL path selects the
+// strategy, and every current subscriber is fanned out server-side from
+// this one signal (see backend/app/services/strategy_fanout.py).
+webhookPayload(string action) =>
+    '{"secret":"' + secret + '","action":"' + action + '","signal_id":"' + signalId(action) + '","signal_time":"' + signalTime() + '"}'
+
+bool productionAlertReady = barstate.isrealtime and barstate.isconfirmed and isFiveMinuteChart and secretReady
+
+var bool holdSent = false
+if not enableHoldTest
+    holdSent := false
+if productionAlertReady and enableHoldTest and not holdSent
+    alert(webhookPayload("HOLD"), alert.freq_once_per_bar_close)
+    holdSent := true
+
+if productionAlertReady and buyCeSignal
+    alert(webhookPayload("BUY_CE"), alert.freq_once_per_bar_close)
+if productionAlertReady and buyPeSignal
+    alert(webhookPayload("BUY_PE"), alert.freq_once_per_bar_close)
+
+int closeHourIst = hour(time_close, indiaTimezone)
+int closeMinuteIst = minute(time_close, indiaTimezone)
+string closeDateIst = str.format_time(time_close, "yyyy-MM-dd", indiaTimezone)
+bool eodExitEvent = enableEodExit and closeHourIst == eodExitHour and closeMinuteIst == eodExitMinute
+var string lastEodExitDate = ""
+if productionAlertReady and eodExitEvent and lastEodExitDate != closeDateIst
+    alert(webhookPayload("EXIT"), alert.freq_once_per_bar_close)
+    lastEodExitDate := closeDateIst
+
+upPlot = plot(trend == 1 ? upperBand : na, "Up Trend", color=color.green, linewidth=2, style=plot.style_linebr)
+downPlot = plot(trend == -1 ? lowerBand : na, "Down Trend", color=color.red, linewidth=2, style=plot.style_linebr)
+plotshape(showSignals and buyCeSignal ? upperBand : na, "BUY_CE", shape.labelup, location.absolute, color.green, text="CE", textcolor=color.white, size=size.tiny)
+plotshape(showSignals and buyPeSignal ? lowerBand : na, "BUY_PE", shape.labeldown, location.absolute, color.red, text="PE", textcolor=color.white, size=size.tiny)
+midPlot = plot(ohlc4, "", style=plot.style_circles, linewidth=1, color=color.new(color.white, 100))
+fill(midPlot, upPlot, color=highlightTrend and trend == 1 ? color.new(color.green, 85) : na)
+fill(midPlot, downPlot, color=highlightTrend and trend == -1 ? color.new(color.red, 85) : na)
+
+bgcolor(not isFiveMinuteChart ? color.new(color.orange, 88) : na, title="Five-minute timeframe warning")
+bgcolor(not secretReady ? color.new(color.red, 92) : na, title="Secret placeholder warning")

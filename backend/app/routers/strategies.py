@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
@@ -30,7 +30,6 @@ from app.services import (
     webhook_replay_store,
 )
 from app.services.execution_context import bind_user_execution_context
-from app.services.signal_parser import PayloadParseError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
 from app.services.user_context import CurrentUser
 from app.workers.strategy_job_worker import wake_strategy_job_worker
@@ -38,7 +37,6 @@ from app.workers.strategy_job_worker import wake_strategy_job_worker
 router = APIRouter(tags=["Strategies"])
 _WEBHOOK_REQUESTS: dict[str, list[float]] = {}
 _WEBHOOK_RATE_LOCK = threading.RLock()
-_FANOUT_QTY_PLACEHOLDER = 1
 _PRODUCTION_WEBHOOK_WINDOW_SECONDS = 300
 
 
@@ -58,14 +56,6 @@ def _webhook_rate_limited(client_host: str) -> bool:
         recent.append(now)
         _WEBHOOK_REQUESTS[client_host] = recent
         return False
-
-
-def _fanout_parse_body(body: dict) -> dict:
-    """Add parser-only defaults that are replaced before per-user execution."""
-    if body.get("qty") in (None, ""):
-        body = dict(body)
-        body["qty"] = _FANOUT_QTY_PLACEHOLDER
-    return body
 
 
 def _parse_webhook_timestamp(value: Any) -> float | None:
@@ -405,6 +395,9 @@ def trading_bootstrap(user: CurrentUser = Depends(get_current_user)):
     """One owner-scoped read model for setup restoration and terminal startup."""
     from app.services import automations_overview, risk_overview, user_preferences
 
+    if not database_configured():
+        raise HTTPException(status_code=503, detail="Trading database is not configured.")
+
     runtime = _owner_runtime(user)
     selected_configuration = setup_configuration.selected_configuration(user.id)
     mode = (
@@ -691,22 +684,29 @@ async def strategy_webhook(
         if nonce_response is not None:
             return nonce_response
 
-    try:
-        signal = parse_webhook_payload(_fanout_parse_body(body))
-    except PayloadParseError as exc:
+    action = str(body.get("action") or "").strip().upper()
+    if action not in strategy_fanout.BROADCAST_ACTIONS:
         return JSONResponse(
             status_code=422,
-            content={"ok": False, "error": str(exc)},
+            content={"ok": False, "error": f"Unsupported action: {action or 'missing'}."},
+        )
+    signal_id = str(body.get("signal_id") or "").strip()
+    if not signal_id:
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "error": "signal_id is required."},
+        )
+    signal_time = str(body.get("signal_time") or "")
+
+    if action == "HOLD":
+        # Connectivity-only acknowledgment: proves the secret and URL are
+        # correct without touching any subscriber's account or position.
+        return JSONResponse(
+            status_code=200,
+            content={"ok": True, "signal_id": signal_id, "status": "NO_OP", "reason": "HOLD"},
         )
 
-    payload_strategy = strategy_fanout.canonical_strategy_name(
-        signal.strategy_code
-    )
-    if path_strategy != payload_strategy:
-        return JSONResponse(
-            status_code=422,
-            content={"ok": False, "error": "Strategy path does not match payload."},
-        )
+    signal = strategy_fanout.build_broadcast_signal(path_strategy, action, signal_id, signal_time)
 
     valid, error = validate_signal(signal)
     if not valid:

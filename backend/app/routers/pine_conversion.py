@@ -13,6 +13,7 @@ from app.schemas.pine_conversion import (
     AdminPineSubmission,
     CreateConversionPayload,
     OwnerClaudeConversionPayload,
+    PublishStrategyPayload,
     RejectConversionPayload,
     RetryConversionPayload,
 )
@@ -73,7 +74,7 @@ def owner_claude_config(user: CurrentUser = Depends(get_current_user)):
         ),
         "provider": admin_service.PROVIDER,
         "model": settings.CLAUDE_CONVERSION_MODEL or None,
-        "prompt_version": "v4.0",
+        "prompt_version": "v4.1",
         "transport_version": None,
         "admin_review_required": True,
         "paper_verification_required": True,
@@ -250,6 +251,26 @@ def admin_approve(
 ):
     try:
         return {"ok": True, **admin_service.approve(admin.id, conversion_id, payload.reason if payload else None)}
+    except Exception as exc:
+        return _error(exc)
+
+
+@admin_router.post("/{conversion_id}/publish")
+def admin_publish(
+    conversion_id: uuid.UUID,
+    payload: PublishStrategyPayload,
+    admin: CurrentUser = Depends(require_admin),
+):
+    try:
+        return {
+            "ok": True,
+            **admin_service.publish_as_shared(
+                admin.id,
+                conversion_id,
+                catalog_code=payload.catalog_code,
+                display_name=payload.display_name,
+            ),
+        }
     except Exception as exc:
         return _error(exc)
 

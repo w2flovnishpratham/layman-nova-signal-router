@@ -55,6 +55,10 @@ def _signal(secret: str, signal_id: str = "fanout-1"):
     from app.config import DEFAULT_STRATEGY_CODE
     from app.schemas.signal import NormalizedSignal
 
+    # A pre-resolved contract (security_id set) so the worker's per-subscriber
+    # ATM-resolution enricher (wired for placeholder broadcast signals -- see
+    # build_broadcast_signal) leaves this signal untouched. These tests exist
+    # to verify fan-out/queueing/qty mechanics, not contract resolution.
     payload = {
         "secret": secret,
         "signal_id": signal_id,
@@ -74,6 +78,10 @@ def _signal(secret: str, signal_id: str = "fanout-1"):
         action="ENTRY",
         side="BUY",
         symbol="NIFTY",
+        security_id="TEST-SECURITY-ID",
+        strike=25000.0,
+        expiry="2026-12-31",
+        option_side="CE",
         qty=1,
         order_type="MARKET",
         product_type="INTRADAY",
@@ -729,7 +737,7 @@ def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
     mu_db,
     monkeypatch,
 ):
-    from app.config import DEFAULT_STRATEGY_CODE, settings
+    from app.config import settings
     from app.db import models
     from app.db.engine import session_scope
     from app.routers.strategies import router
@@ -751,12 +759,8 @@ def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
     body = {
         "secret": secret,
         "signal_id": "tv-shared-1",
-        "strategy_code": DEFAULT_STRATEGY_CODE,
-        "action": "ENTRY",
-        "side": "BUY",
-        "symbol": "NIFTY",
-        "order_type": "MARKET",
-        "product_type": "INTRADAY",
+        "action": "BUY_CE",
+        "signal_time": "2026-07-31T09:00:00Z",
     }
 
     response = client.post("/api/webhook/strategy/supertrend", json=body)

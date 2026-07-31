@@ -99,6 +99,10 @@ class ClaudePineConversionOutput(BaseModel):
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     status: Literal["CONVERTED", "MANUAL_REVIEW_REQUIRED", "BLOCKED"]
     strategy_layer: str = Field(min_length=1)
+    # Admin-only TradingView backtest preview for INDICATOR-mode CONVERTED
+    # candidates. Never wired to the frozen transport, never sent to NOVA's
+    # execution path -- see prompt v4.1's BACKTEST LAYER section.
+    backtest_layer: str | None = Field(default=None, max_length=200_000)
     signal_mapping: ClaudeSignalMapping
     behavior_preservation: ClaudeBehaviorPreservation
     capabilities: ClaudeCapabilityResult
@@ -110,6 +114,13 @@ class AdminManualResponsePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     response_json: str = Field(min_length=2)
+
+
+class PublishStrategyPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    catalog_code: str = Field(min_length=2, max_length=40, pattern=r"^[a-z][a-z0-9_-]*$")
+    display_name: str | None = Field(default=None, max_length=160)
 
 
 class AdminPineDecisionPayload(BaseModel):

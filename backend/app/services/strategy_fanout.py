@@ -15,7 +15,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.config import DEFAULT_STRATEGY_CODE, settings
+from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_STRATEGY_CODE, settings
 from app.db import crud, models
 from app.db.engine import database_configured, session_scope
 from app.schemas.signal import NormalizedSignal
@@ -49,6 +49,57 @@ def canonical_strategy_name(value: str | None) -> str:
         DEFAULT_STRATEGY_CODE.lower().replace("_", "-"): "supertrend",
     }
     return aliases.get(normalized, normalized)
+
+
+# BUY_CE/BUY_PE/EXIT only -- HOLD is a connectivity-only acknowledgment
+# handled by the router before it ever reaches signal construction.
+BROADCAST_ACTIONS = ("BUY_CE", "BUY_PE", "EXIT", "HOLD")
+_BROADCAST_ACTION_MAP = {
+    "BUY_CE": {"action": "ENTRY", "side": "BUY", "option_side": "CE"},
+    "BUY_PE": {"action": "ENTRY", "side": "BUY", "option_side": "PE"},
+    "EXIT": {"action": "EXIT", "side": "SELL", "option_side": None},
+}
+
+
+def build_broadcast_signal(
+    strategy_name: str,
+    action: str,
+    signal_id: str,
+    signal_time: str,
+) -> NormalizedSignal:
+    """Placeholder signal for the shared strategy-name webhook. Contract and
+    quantity are placeholders (qty=1, no security_id/strike/expiry) resolved
+    per-subscriber at dispatch time by the same enricher the private-webhook
+    path uses (private_webhook_execution._make_enricher) -- the sender (one
+    admin-operated TradingView chart) only ever states BUY_CE/BUY_PE/EXIT
+    intent, never a specific contract; server authority over strike/security
+    id is enforced the same way for both paths."""
+    mapping = _BROADCAST_ACTION_MAP[action]
+    return NormalizedSignal(
+        payload_format="NOVA",
+        secret="",
+        signal_id=signal_id,
+        strategy_code=canonical_strategy_name(strategy_name),
+        action=mapping["action"],
+        side=mapping["side"],
+        symbol="NIFTY",
+        instrument_type="OPTIDX",
+        exchange_segment=DEFAULT_EXCHANGE_SEGMENT,
+        option_side=mapping["option_side"],
+        security_id=None,
+        strike=None,
+        expiry=None,
+        qty=1,
+        order_type="MARKET",
+        product_type="INTRADAY",
+        source="tradingview",
+        raw_payload={
+            "strategy_name": strategy_name,
+            "action": action,
+            "signal_id": signal_id,
+            "signal_time": signal_time,
+        },
+    )
 
 
 def subscribe_user(

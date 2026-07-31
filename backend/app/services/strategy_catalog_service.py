@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.db import models
+from app.db import crud, models
 from app.db.engine import session_scope
 from app.domain.strategy_instance_state_machine import InstanceState
 from app.services import built_in_strategy_registry as built_ins
@@ -218,7 +218,73 @@ def _materialize_builtin(user_id: uuid.UUID, definition: dict[str, Any]) -> uuid
                 status_code=409,
                 code="BUILT_IN_INSTANCE_UNAVAILABLE",
             )
+        _ensure_managed_tradingview_setup(db, user_id, linked, catalog)
         return linked.id
+
+
+def _ensure_managed_tradingview_setup(
+    db,
+    user_id: uuid.UUID,
+    instance: models.StrategyInstance,
+    catalog: models.StrategyCatalog,
+) -> None:
+    """NOVA_SHARED strategies run on a NOVA-owned Pine script the subscriber
+    never receives -- self-managed TradingView setup (their own credential in
+    their own copy of the chart) is impossible for them. Every such instance
+    must start NOVA-managed, not default to self-managed and silently break.
+    """
+    existing = db.scalar(
+        select(models.TradingViewSetup).where(
+            models.TradingViewSetup.strategy_instance_id == instance.id,
+        )
+    )
+    if existing is not None:
+        return
+    version = db.scalar(
+        select(models.StrategyVersion)
+        .where(
+            models.StrategyVersion.strategy_id == catalog.id,
+            models.StrategyVersion.status == "approved",
+        )
+        .order_by(models.StrategyVersion.approved_at.desc())
+    )
+    if version is None:
+        return
+    # (user_id, approved_version_id, pine_conversion_request_id=NULL) is
+    # unique -- a prior instance of this same shared strategy for this user
+    # may already have a setup row pointing at the same approved version.
+    # Check first rather than insert-and-catch: this runs inside the same
+    # transaction as the instance creation above, and Postgres aborts the
+    # whole transaction (not just the failed statement) on an IntegrityError,
+    # which would roll back that instance creation too.
+    duplicate = db.scalar(
+        select(models.TradingViewSetup).where(
+            models.TradingViewSetup.user_id == user_id,
+            models.TradingViewSetup.approved_version_id == version.id,
+            models.TradingViewSetup.pine_conversion_request_id.is_(None),
+        )
+    )
+    if duplicate is not None:
+        return
+    row = models.TradingViewSetup(
+        user_id=user_id,
+        strategy_instance_id=instance.id,
+        approved_version_id=version.id,
+        setup_type="NOVA_MANAGED_TRADINGVIEW",
+    )
+    db.add(row)
+    db.flush()
+    crud.add_audit_log(
+        db,
+        user_id=user_id,
+        action="TRADINGVIEW_SETUP_CREATED",
+        metadata={
+            "setup_id": str(row.id),
+            "instance_id": str(instance.id),
+            "setup_type": "NOVA_MANAGED_TRADINGVIEW",
+            "source": "nova_shared_auto_managed",
+        },
+    )
 
 
 def select_strategy(user_id: uuid.UUID, strategy_key: str) -> dict[str, Any]:

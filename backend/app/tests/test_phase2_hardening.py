@@ -170,17 +170,11 @@ def _shared_strategy_body(
     timestamp: int | None = None,
     nonce: str | None = "phase2-prod-nonce",
 ):
-    from app.config import DEFAULT_STRATEGY_CODE
-
     body = {
         "secret": secret,
         "signal_id": signal_id,
-        "strategy_code": DEFAULT_STRATEGY_CODE,
-        "action": "ENTRY",
-        "side": "BUY",
-        "symbol": "NIFTY",
-        "order_type": "MARKET",
-        "product_type": "INTRADAY",
+        "action": "BUY_CE",
+        "signal_time": "2026-07-31T09:00:00Z",
     }
     if timestamp is not None:
         body["timestamp"] = timestamp
@@ -215,7 +209,7 @@ def test_user_webhook_nonce_replay_is_durable_after_cache_clear(mu_db, monkeypat
 
 
 def test_strategy_webhook_event_claim_blocks_duplicate_and_body_mismatch(mu_db, monkeypatch):
-    from app.config import DEFAULT_STRATEGY_CODE, settings
+    from app.config import settings
     from app.db import models
     from app.db.engine import session_scope
     from app.routers.strategies import router
@@ -232,12 +226,8 @@ def test_strategy_webhook_event_claim_blocks_duplicate_and_body_mismatch(mu_db, 
     body = {
         "secret": secret,
         "signal_id": "phase2-shared-signal",
-        "strategy_code": DEFAULT_STRATEGY_CODE,
-        "action": "ENTRY",
-        "side": "BUY",
-        "symbol": "NIFTY",
-        "order_type": "MARKET",
-        "product_type": "INTRADAY",
+        "action": "BUY_CE",
+        "signal_time": "2026-07-31T09:00:00Z",
     }
 
     assert client.post("/api/webhook/strategy/supertrend", json=body).status_code == 202

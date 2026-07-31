@@ -164,11 +164,11 @@ def test_user_cannot_read_another_users_session(mu_db):
 
 
 def test_duplicate_strategy_signal_creates_one_job_and_one_execution(mu_db, monkeypatch):
-    from app.config import DEFAULT_STRATEGY_CODE, settings
+    from app.config import settings
     from app.db import models
     from app.db.engine import session_scope
     from app.routers.strategies import router
-    from app.services import strategy_fanout
+    from app.services import private_webhook_execution, strategy_fanout
     from app.workers.strategy_job_worker import process_queued_jobs_once
 
     secret = "phase1-strategy-secret-1234567890"
@@ -187,6 +187,18 @@ def test_duplicate_strategy_signal_creates_one_job_and_one_execution(mu_db, monk
         or {"success": True},
     )
     monkeypatch.setattr(strategy_fanout, "init_runtime_files", lambda: None)
+    # The broadcast signal carries no contract (see build_broadcast_signal);
+    # the worker's per-subscriber enricher resolves one before routing.
+    monkeypatch.setattr(
+        private_webhook_execution,
+        "_resolve_entry_contract",
+        lambda option_side, lots: {
+            "security_id": "TEST-SECURITY-ID",
+            "trading_symbol": "NIFTY TEST",
+            "strike": 25000.0,
+            "expiry": "2026-12-31",
+        },
+    )
 
     app = FastAPI()
     app.include_router(router)
@@ -194,12 +206,8 @@ def test_duplicate_strategy_signal_creates_one_job_and_one_execution(mu_db, monk
     body = {
         "secret": secret,
         "signal_id": "phase1-duplicate-signal",
-        "strategy_code": DEFAULT_STRATEGY_CODE,
-        "action": "ENTRY",
-        "side": "BUY",
-        "symbol": "NIFTY",
-        "order_type": "MARKET",
-        "product_type": "INTRADAY",
+        "action": "BUY_CE",
+        "signal_time": "2026-07-31T09:00:00Z",
     }
 
     assert client.post("/api/webhook/strategy/supertrend", json=body).status_code == 202

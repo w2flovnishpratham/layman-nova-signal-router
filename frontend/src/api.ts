@@ -1260,6 +1260,7 @@ export interface AdminPineConversion {
   action_mapping: Record<string, string>
   original_source?: string
   strategy_layer?: string | null
+  backtest_layer?: string | null
   final_candidate?: string | null
   transport_source?: string | null
   diff?: AdminPineDiffLine[]
@@ -1326,6 +1327,20 @@ export const requestChangesAdminPineConversion = async (id: string, reason: stri
     'POST',
     { reason },
   )).conversion
+export interface PublishedStrategy {
+  strategy_id: string
+  catalog_code: string
+  display_name: string
+  version: string
+  webhook_path: string
+  broadcast_pine: string
+}
+export const publishAdminPineConversion = async (id: string, catalogCode: string, displayName?: string) =>
+  pineCall<PublishedStrategy>(
+    `/api/admin/pine-conversions/${id}/publish` as `/${string}`,
+    'POST',
+    { catalog_code: catalogCode, display_name: displayName || null },
+  )
 
 export const getOwnerClaudeConversionConfig = () =>
   pineCall<OwnerClaudeConversionConfig>('/api/personal-pine-claude-conversions/config')

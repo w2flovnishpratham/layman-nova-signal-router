@@ -246,6 +246,12 @@ def _execute_job(job: dict[str, Any]) -> None:
                     configuration=configuration,
                 )
             else:
+                # Shared/NOVA_SHARED broadcast jobs (strategy_fanout.enqueue_strategy_signal)
+                # carry a placeholder signal (no security_id/strike/expiry --
+                # see build_broadcast_signal) resolved here per-subscriber,
+                # same as the private-webhook path's own enricher. A signal
+                # that already has a contract (none do today, but future
+                # sources might) is left untouched.
                 result = strategy_fanout.dispatch_signal_job(
                     user_id=job["user_id"],
                     strategy_name=job["strategy_name"],
@@ -253,6 +259,11 @@ def _execute_job(job: dict[str, Any]) -> None:
                     execution_mode=job["execution_mode"],
                     signal=signal,
                     configuration=configuration,
+                    signal_enricher=(
+                        private_webhook_execution._make_enricher(job["lots"])
+                        if signal.security_id is None
+                        else None
+                    ),
                 )
         except Exception as exc:
             logger.exception("Strategy job %s failed", job["id"])

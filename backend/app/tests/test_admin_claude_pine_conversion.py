@@ -43,6 +43,19 @@ plot(fast)
 plot(slow)
 """
 
+BACKTEST_LAYER = """//@version=6
+strategy("C1 NIFTY backtest", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)
+fast = ta.ema(close, 5)
+slow = ta.ema(close, 13)
+bool novaBuyCeSignal = ta.crossover(fast, slow)
+bool novaBuyPeSignal = ta.crossunder(fast, slow)
+bool novaExitSignal = false
+if novaBuyCeSignal
+    strategy.entry("CE", strategy.long)
+if novaBuyPeSignal
+    strategy.entry("PE", strategy.short)
+"""
+
 
 def _client(user_model):
     from app.auth.dependencies import get_current_user
@@ -81,13 +94,14 @@ def _submit(client: TestClient, source: str = SOURCE, name: str = "C1 Test"):
     return response.json()["conversion"]
 
 
-def _output(conversion: dict, *, layer: str = LAYER, **changes):
+def _output(conversion: dict, *, layer: str = LAYER, backtest_layer: str | None = BACKTEST_LAYER, **changes):
     matched = conversion["analysis"]["matched_capabilities"]
     value = {
         "schema_version": "nova.claude-pine-conversion.v1",
         "source_sha256": conversion["source_sha256"],
         "status": "CONVERTED",
         "strategy_layer": layer,
+        "backtest_layer": backtest_layer,
         "signal_mapping": {
             "buy_ce_source": "ta.crossover(fast, slow)",
             "buy_pe_source": "ta.crossunder(fast, slow)",
@@ -247,6 +261,98 @@ def test_success_appends_transport_validates_and_approves_exact_hashes(mu_db, mo
     assert approved["conversion_status"] == "APPROVED_FOR_TRADINGVIEW_COMPILE"
     assert approved["review_status"] == "APPROVED_FOR_TRADINGVIEW_COMPILE"
     assert approved["approval_integrity"] is True
+
+
+def test_approved_candidate_can_be_published_and_appears_ready_in_registry(mu_db, monkeypatch):
+    from app.services import built_in_strategy_registry, signal_validator
+    from app.schemas.signal import NormalizedSignal
+
+    _enable(monkeypatch)
+    client = _client(make_user("c1-publish-admin@example.com", is_admin=True))
+    conversion = _submit(client, name="Bollinger Squeeze")
+    fake = pine_conversion_provider.FakePineConversionProvider(_output(conversion))
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
+    client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert")
+    client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/approve",
+        json={"reason": "Reviewed for TradingView compile only"},
+    )
+
+    # Not selectable under its randomly generated private code before publish.
+    assert built_in_strategy_registry.get_built_in("nova-bollinger-squeeze") is None
+
+    published = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/publish",
+        json={"catalog_code": "bollinger-squeeze", "display_name": "Bollinger Squeeze"},
+    )
+    assert published.status_code == 200, published.text
+    body = published.json()
+    assert body["ok"] is True
+    assert body["catalog_code"] == "bollinger-squeeze"
+    assert body["webhook_path"] == "/api/webhook/strategy/bollinger-squeeze"
+
+    # Transport swap: the private per-user credential shape is gone, replaced
+    # by the single-admin-secret broadcast shape, and the layer's canonical
+    # booleans/webhook function are still wired up so it compiles unchanged.
+    broadcast_pine = body["broadcast_pine"]
+    assert "REPLACE_WITH_NOVA_MANAGED_SECRET" in broadcast_pine
+    assert '"secret":"' in broadcast_pine
+    assert "REPLACE_WITH_PRIVATE_CREDENTIAL" not in broadcast_pine
+    assert "nwk_" not in broadcast_pine
+    assert '"credential":"' not in broadcast_pine
+    assert "novaBuyCeSignal" in broadcast_pine
+    assert "novaWebhookPayload" in broadcast_pine
+
+    entry = built_in_strategy_registry.get_built_in("nova-bollinger-squeeze")
+    assert entry is not None
+    assert entry["availability"] == "READY"
+    assert entry["execution_adapter"] == "strategy_webhook:bollinger-squeeze"
+
+    # The shared webhook validator now accepts this newly published code too.
+    signal = NormalizedSignal(
+        payload_format="NOVA",
+        secret="",
+        signal_id="publish-test-1",
+        strategy_code="bollinger-squeeze",
+        action="ENTRY",
+        side="BUY",
+        symbol="NIFTY",
+        qty=1,
+        order_type="MARKET",
+        product_type="INTRADAY",
+        raw_payload={},
+    )
+    ok, error = signal_validator.validate_signal(signal)
+    assert ok, error
+
+    # Publishing twice with a different code the second time re-codes the
+    # same underlying strategy rather than erroring.
+    republish = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/publish",
+        json={"catalog_code": "bollinger-squeeze-v2"},
+    )
+    assert republish.status_code == 200, republish.text
+    assert built_in_strategy_registry.get_built_in("nova-bollinger-squeeze") is None
+    assert built_in_strategy_registry.get_built_in("nova-bollinger-squeeze-v2") is not None
+
+
+def test_publish_rejects_unapproved_or_taken_code(mu_db, monkeypatch):
+    _enable(monkeypatch)
+    client = _client(make_user("c1-publish-guard-admin@example.com", is_admin=True))
+    conversion = _submit(client, name="Not Yet Approved")
+
+    pending = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/publish",
+        json={"catalog_code": "not-yet"},
+    )
+    assert pending.status_code == 409
+    assert pending.json()["reason"] == "NOT_APPROVED"
+
+    invalid_code = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/publish",
+        json={"catalog_code": "Not_Valid!"},
+    )
+    assert invalid_code.status_code == 422
 
 
 def test_source_sha_mismatch_and_logic_changed_reach_admin_review_as_info(mu_db, monkeypatch):
@@ -741,6 +847,7 @@ def test_logic_changed_manual_response_cannot_become_review_ready(mu_db, monkeyp
     conversion = _submit(client, SOURCE + "\n// logic changed\n", "Logic changed")
     raw = _output(conversion).model_dump()
     raw["status"] = "MANUAL_REVIEW_REQUIRED"
+    raw["backtest_layer"] = None  # only ever set alongside status=CONVERTED
     raw["behavior_preservation"] = {
         "logic_changed": True,
         "change_summary": ["Source behavior could not be preserved."],

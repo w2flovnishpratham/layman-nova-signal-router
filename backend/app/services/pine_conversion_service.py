@@ -28,9 +28,22 @@ TRANSPORT_V2_VERSION = "pine_transport_v2"
 TRANSPORT_V2_PATH = PROMPT_DIR / f"{TRANSPORT_V2_VERSION}.txt"
 TRANSPORT_V2_SHA256 = "18a3247c93c0c17e2bb70847a635c721bacf6e231d8d14c14db7871da56ef96f"
 PROMPT_V4_SHA256 = "96708cdca3cc5fb6c224eaf4310d285ebc355565ed391f085274815a93707087"
+PROMPT_V41_SHA256 = "9b025ac35013e0a137f16b0816e60b8f0a53fc044a713e9d1a32b8e7c00e4e49"
 TRANSPORT_V3_STRATEGY_FILL_VERSION = "pine_transport_v3_fill"  # <=30 chars: TradingViewCompileEvidence.transport_version is VARCHAR(30)
 TRANSPORT_V3_STRATEGY_FILL_PATH = PROMPT_DIR / f"{TRANSPORT_V3_STRATEGY_FILL_VERSION}.txt"
 TRANSPORT_V3_STRATEGY_FILL_SHA256 = "9450968b40589cf9d3f9d5dcafa70e3dd4b79cac6a81e14afca3739cebde01f5"
+# Broadcast counterparts: same layer contract (same novaWebhookPayload
+# signature the STRATEGY/INDICATOR layer calls), swapped to the single
+# NOVA-managed secret instead of a per-user nwk_ credential. Used only to
+# rewrite an already-approved candidate's transport block at publish time
+# (see admin_pine_conversion_service.publish_as_shared) -- never sent to the
+# LLM, so no prompt-side placeholders needed.
+TRANSPORT_V2_BCAST_VERSION = "pine_transport_v2_bcast"
+TRANSPORT_V2_BCAST_PATH = PROMPT_DIR / f"{TRANSPORT_V2_BCAST_VERSION}.txt"
+TRANSPORT_V2_BCAST_SHA256 = "fd2d200626cb91a7b7b340a7b23f5741fbe8f1a645fb80ff1cc5e7c127ca0d25"
+TRANSPORT_V3_STRATEGY_FILL_BCAST_VERSION = "pine_transport_v3_fill_bcast"
+TRANSPORT_V3_STRATEGY_FILL_BCAST_PATH = PROMPT_DIR / f"{TRANSPORT_V3_STRATEGY_FILL_BCAST_VERSION}.txt"
+TRANSPORT_V3_STRATEGY_FILL_BCAST_SHA256 = "2da20e9d616f216ed06daa4341bd955d1bb5955ac5d1551b3b5f1e28d201b93c"
 QUALIFICATION_PACKAGES = {
     "v3": (PROMPT_V3_SHA256, TRANSPORT_VERSION, TRANSPORT_PATH, TRANSPORT_V1_SHA256),
     "v3.1": (PROMPT_V31_SHA256, TRANSPORT_V2_VERSION, TRANSPORT_V2_PATH, TRANSPORT_V2_SHA256),

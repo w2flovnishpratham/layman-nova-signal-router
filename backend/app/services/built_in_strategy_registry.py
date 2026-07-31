@@ -120,21 +120,92 @@ _BUILT_INS: tuple[dict[str, Any], ...] = (
 )
 
 
+def _live_nova_shared_entries() -> list[dict[str, Any]]:
+    """Strategies published via admin approval (see
+    admin_pine_conversion_service.publish_as_shared). Read live from the
+    database, not the static tuple above, so a new publish is selectable
+    immediately -- no code change or deploy required. Each entry needs a
+    StrategyCatalog row (owner_user_id IS NULL, visibility=nova_shared,
+    status=active) and its latest approved StrategyVersion."""
+    from sqlalchemy import select
+
+    from app.db import models
+    from app.db.engine import session_scope
+
+    with session_scope() as db:
+        rows = db.execute(
+            select(models.StrategyCatalog, models.StrategyVersion)
+            .join(
+                models.StrategyVersion,
+                models.StrategyVersion.strategy_id == models.StrategyCatalog.id,
+            )
+            .where(
+                models.StrategyCatalog.owner_user_id.is_(None),
+                models.StrategyCatalog.visibility == "nova_shared",
+                models.StrategyCatalog.status == "active",
+                models.StrategyVersion.status == "approved",
+            )
+            .order_by(models.StrategyVersion.approved_at.asc())
+        ).all()
+        # Later (more recently approved) rows overwrite earlier ones for the
+        # same code, so each catalog code resolves to its latest approval.
+        entries: dict[str, dict[str, Any]] = {}
+        for catalog, version in rows:
+            entries[catalog.code] = {
+                "strategy_key": f"nova-{catalog.code}",
+                "catalog_code": catalog.code,
+                "name": catalog.display_name,
+                "version": version.version,
+                "description": catalog.description or catalog.display_name,
+                "availability": "READY",
+                "disabled_reason": None,
+                "paper_eligible": True,
+                "live_eligible": True,
+                "execution_adapter": f"strategy_webhook:{catalog.code}",
+                "setup_schema": _standard_setup_schema(),
+            }
+        return list(entries.values())
+
+
 def list_built_ins() -> list[dict[str, Any]]:
-    return deepcopy(list(_BUILT_INS))
+    # Static entries are the default/placeholder menu (COMING_SOON stubs) and
+    # stay authoritative for their own product flags (live_eligible,
+    # paper_eligible, description, ...) -- tests and future config rely on
+    # patching _BUILT_INS directly. A live published row only flips
+    # availability/adapter/version for a code that already has a stub; a
+    # code with no static stub at all (a brand-new published strategy) is
+    # added wholesale with the DB-derived defaults.
+    merged: dict[str, dict[str, Any]] = {
+        item["catalog_code"]: deepcopy(item) for item in _BUILT_INS
+    }
+    for live in _live_nova_shared_entries():
+        code = live["catalog_code"]
+        if code in merged:
+            merged[code].update(
+                availability="READY",
+                disabled_reason=None,
+                execution_adapter=live["execution_adapter"],
+                version=live["version"],
+            )
+        else:
+            merged[code] = live
+    return list(merged.values())
 
 
 def get_built_in(strategy_key: str) -> dict[str, Any] | None:
     normalized = str(strategy_key or "").strip().lower()
     return next(
-        (deepcopy(item) for item in _BUILT_INS if item["strategy_key"] == normalized),
+        (item for item in list_built_ins() if item["strategy_key"] == normalized),
         None,
     )
 
 
 def key_for_catalog_code(code: str | None) -> str | None:
     normalized = str(code or "").strip().lower()
-    item = next((item for item in _BUILT_INS if item["catalog_code"] == normalized), None)
+    item = next(
+        (item for item in list_built_ins() if item["catalog_code"] == normalized),
+        None,
+    )
     return str(item["strategy_key"]) if item else None
 
 
