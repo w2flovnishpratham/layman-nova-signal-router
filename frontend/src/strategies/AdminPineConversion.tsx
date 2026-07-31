@@ -242,7 +242,7 @@ function ConversionDetail({
       </div>
     ) : null}
     <div className="ps-actions">
-      <Button variant="unstyled" className="ps-primary" type="button" disabled={!canConvert || !!busy} onClick={() => void onConvert()}><Sparkles size={14} /> Run AI Conversion</Button>
+      <Button variant="unstyled" className="ps-primary" type="button" disabled={!canConvert || !!busy} onClick={() => void onConvert()}>{busy === 'AI conversion' ? <Loader2 className="ps-spin" size={14} /> : <Sparkles size={14} />} {busy === 'AI conversion' ? 'Converting… up to a minute' : 'Run AI Conversion'}</Button>
       <Button variant="unstyled" className="secondary-button" type="button" disabled={!canManual || !!busy} onClick={() => void onManualPackage()}><Copy size={14} /> Open Manual Fallback</Button>
     </div>
     {manualPackage ? <details open className="c1-transport"><summary>Current C1 manual package</summary><pre>{manualPackage}</pre></details> : null}
