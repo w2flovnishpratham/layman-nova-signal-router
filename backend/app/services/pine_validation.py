@@ -300,7 +300,7 @@ def validate_source(source: str, *, mode: str = "INDICATOR") -> dict[str, Any]:
     else:
         declaration = _call_spans(code[declarations[0].start():], ("indicator", "strategy"))
         declaration_text = declaration[0][1] if declaration else ""
-        if not re.search(r"\(\s*[\"'][^\"']+[\"']", declaration_text):
+        if not re.search(r"\(\s*[\"'][^\"']+[\"']|\btitle\s*=\s*[\"'][^\"']+[\"']", declaration_text):
             add("DECLARATION_TITLE_MISSING", "ERROR", "Script title is missing", "The declaration needs a non-empty title.", "Add a quoted title as the first declaration argument.", offset=declarations[0].start())
         if not re.search(r"\boverlay\s*=\s*true\b", declaration_text, re.I):
             add("OVERLAY_UNCONFIRMED", "WARNING", "Overlay mode is not confirmed", "NOVA chart setup normally expects overlay=true.", "Confirm the intended chart behavior and set overlay=true when appropriate.", offset=declarations[0].start())

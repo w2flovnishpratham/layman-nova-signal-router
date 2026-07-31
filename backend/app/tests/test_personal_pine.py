@@ -71,6 +71,22 @@ def test_validator_valid_v6_and_v5_warning():
     assert "PINE_V5_UPGRADE_RECOMMENDED" in {row["code"] for row in v5["findings"]}
 
 
+def test_validator_accepts_named_title_argument():
+    """Regression: title="X" (named arg) is valid Pine and must not be
+    flagged DECLARATION_TITLE_MISSING just because it isn't positional."""
+    from app.services.pine_validation import validate_source
+
+    named = validate_source(VALID_PINE.replace(
+        'indicator("NOVA Imported NIFTY", overlay=true)',
+        'indicator(title="NOVA Imported NIFTY", overlay=true)',
+    ))
+    assert "DECLARATION_TITLE_MISSING" not in {row["code"] for row in named["findings"]}
+    missing = validate_source(VALID_PINE.replace(
+        'indicator("NOVA Imported NIFTY", overlay=true)', "indicator(overlay=true)",
+    ))
+    assert "DECLARATION_TITLE_MISSING" in {row["code"] for row in missing["findings"]}
+
+
 @pytest.mark.parametrize(
     ("source", "code"),
     [
