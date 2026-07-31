@@ -112,7 +112,7 @@ describe('AdminPineConversionWorkspace', () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(BACKTEST_LAYER)
   })
 
-  it('submits pasted or uploaded UTF-8 Pine with safe fixed options and no model or prompt controls', async () => {
+  it('submits pasted or uploaded UTF-8 Pine with no options, model, or prompt controls', async () => {
     const user = userEvent.setup()
     api.list.mockResolvedValue([])
     render(<AdminPineConversionWorkspace />)
@@ -122,10 +122,12 @@ describe('AdminPineConversionWorkspace', () => {
     fireEvent.change(screen.getByLabelText('Upload Pine source for conversion'), { target: { files: [uploaded] } })
     await waitFor(() => expect(screen.getByLabelText('Admin Pine source')).toHaveValue(SOURCE))
     await user.click(screen.getByRole('button', { name: /submit and analyze/i }))
-    await waitFor(() => expect(api.submit).toHaveBeenCalledWith(expect.objectContaining({
-      strategy_name: 'New strategy', source: SOURCE, original_filename: 'source.pine',
-      options: { requested_setup_type: 'USER_MANAGED_TRADINGVIEW', intended_symbol: 'NIFTY', intended_timeframe: '5' },
-    })))
+    await waitFor(() => expect(api.submit).toHaveBeenCalledWith({
+      strategy_name: 'New strategy', source: SOURCE, original_filename: 'source.pine', internal_notes: undefined,
+    }))
+    expect(screen.queryByLabelText(/symbol/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/timeframe/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/setup type/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/model/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/prompt/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/api key/i)).not.toBeInTheDocument()

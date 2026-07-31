@@ -1,6 +1,5 @@
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { NativeSelect } from "@/components/ui/native-select"
 import { Button } from '@/components/ui/button'
 import { useCallback, useEffect, useState } from 'react'
 import { Check, Copy, FileCode2, Loader2, RefreshCcw, Sparkles, Upload, X } from 'lucide-react'
@@ -29,9 +28,6 @@ export function AdminPineConversionWorkspace() {
   const [source, setSource] = useState(EMPTY_SOURCE)
   const [filename, setFilename] = useState('strategy.pine')
   const [notes, setNotes] = useState('')
-  const [symbol, setSymbol] = useState('NIFTY')
-  const [timeframe, setTimeframe] = useState('5')
-  const [setupType, setSetupType] = useState<'USER_MANAGED_TRADINGVIEW' | 'NOVA_MANAGED_TRADINGVIEW'>('USER_MANAGED_TRADINGVIEW')
   const [manualResponse, setManualResponse] = useState('')
   const [manualPackage, setManualPackage] = useState('')
   const [reviewReason, setReviewReason] = useState('')
@@ -95,11 +91,6 @@ export function AdminPineConversionWorkspace() {
         source,
         original_filename: filename,
         internal_notes: notes.trim() || undefined,
-        options: {
-          requested_setup_type: setupType,
-          intended_symbol: symbol.trim(),
-          intended_timeframe: timeframe.trim(),
-        },
       })
       setSelected(await getAdminPineConversion(conversion.id))
       setStrategyName(''); setNotes('')
@@ -133,11 +124,6 @@ export function AdminPineConversionWorkspace() {
           <label>Strategy name<Input variant="unstyled" aria-label="Conversion strategy name" value={strategyName} maxLength={160} onChange={(event) => setStrategyName(event.target.value)} /></label>
           <label>Original filename<Input variant="unstyled" aria-label="Original Pine filename" value={filename} maxLength={120} onChange={(event) => setFilename(event.target.value)} /></label>
           <label>Internal notes<Textarea variant="unstyled" aria-label="Internal conversion notes" value={notes} maxLength={2000} onChange={(event) => setNotes(event.target.value)} /></label>
-          <div className="c1-options">
-            <label>Symbol<Input variant="unstyled" aria-label="Intended symbol" value={symbol} maxLength={30} onChange={(event) => setSymbol(event.target.value)} /></label>
-            <label>Timeframe<Input variant="unstyled" aria-label="Intended timeframe" value={timeframe} maxLength={20} onChange={(event) => setTimeframe(event.target.value)} /></label>
-            <label>Setup type<NativeSelect variant="unstyled" aria-label="Requested setup type" value={setupType} onChange={(event) => setSetupType(event.target.value as typeof setupType)}><option value="USER_MANAGED_TRADINGVIEW">User managed</option><option value="NOVA_MANAGED_TRADINGVIEW">NOVA managed</option></NativeSelect></label>
-          </div>
           <label className="secondary-button c1-file-button"><Upload size={14} /> Upload Pine<Input variant="unstyled" className="pine-file-input" aria-label="Upload Pine source for conversion" type="file" accept=".pine,.txt,text/plain" onChange={(event) => void readFile(event.target.files?.[0])} /></label>
         </div>
         <label className="c1-source-label">Exact Pine source<Textarea variant="unstyled" aria-label="Admin Pine source" className="pine-source" value={source} onChange={(event) => setSource(event.target.value)} /></label>

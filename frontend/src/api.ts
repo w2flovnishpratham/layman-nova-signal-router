@@ -1283,11 +1283,6 @@ export interface AdminPineSubmissionPayload {
   source: string
   original_filename: string
   internal_notes?: string
-  options: {
-    requested_setup_type: 'USER_MANAGED_TRADINGVIEW' | 'NOVA_MANAGED_TRADINGVIEW'
-    intended_symbol: string
-    intended_timeframe: string
-  }
 }
 
 export const listAdminPineConversions = async () =>
