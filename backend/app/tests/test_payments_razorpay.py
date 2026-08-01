@@ -22,7 +22,7 @@ PREMIUM_PLAN = "plan_premium_monthly"
 LIVE_PLAN = "plan_live_monthly"
 STATIC_PLAN = "plan_static_ip_monthly"
 STRATEGY_PLAN = "plan_strategy_monthly"
-NOW = datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+NOW = datetime.now(timezone.utc)
 PERIOD_START = int((NOW - timedelta(days=1)).timestamp())
 PERIOD_END = int((NOW + timedelta(days=30)).timestamp())
 

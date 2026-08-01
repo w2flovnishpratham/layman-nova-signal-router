@@ -14,8 +14,19 @@ from app.services import state_store
 @pytest.fixture()
 def runtime_state(tmp_path, monkeypatch):
     monkeypatch.setattr(state_store, "RUNTIME_STATE_DIR", tmp_path, raising=False)
-    monkeypatch.setattr(state_store, "APP_STATE_FILE", tmp_path / "app_state.json", raising=False)
     monkeypatch.setattr(state_store, "_scoped_dir", lambda: tmp_path, raising=False)
+    # Each *_FILE constant is computed once at import time from the original
+    # RUNTIME_STATE_DIR, so patching RUNTIME_STATE_DIR alone doesn't redirect
+    # them (matches _isolate_runtime in test_chat_production_bridge.py).
+    monkeypatch.setattr(state_store, "APP_STATE_FILE", tmp_path / "app_state.json", raising=False)
+    monkeypatch.setattr(state_store, "OPEN_POSITION_FILE", tmp_path / "open_position.json", raising=False)
+    monkeypatch.setattr(state_store, "PAPER_POSITION_FILE", tmp_path / "paper_position.json", raising=False)
+    monkeypatch.setattr(state_store, "PAPER_PORTFOLIO_FILE", tmp_path / "paper_portfolio.json", raising=False)
+    monkeypatch.setattr(state_store, "EXTERNAL_POSITIONS_FILE", tmp_path / "external_positions.json", raising=False)
+    monkeypatch.setattr(state_store, "SEEN_SIGNALS_FILE", tmp_path / "seen_signals.json", raising=False)
+    monkeypatch.setattr(state_store, "SETTINGS_FILE", tmp_path / "settings.json", raising=False)
+    monkeypatch.setattr(state_store, "PAPER_SETTINGS_FILE", tmp_path / "paper_settings.json", raising=False)
+    monkeypatch.setattr(state_store, "LIVE_SETTINGS_FILE", tmp_path / "live_settings.json", raising=False)
     return tmp_path
 
 
