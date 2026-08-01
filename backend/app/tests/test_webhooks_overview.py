@@ -1,11 +1,14 @@
 """Webhooks overview: owner scoping, masked secret, no fabricated endpoints."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from app.db import models
 from app.db.engine import session_scope
-from app.services import webhooks_overview
+from app.routers import signals
+from app.services import credential_vault, user_credential_vault, webhooks_overview
+from app.services.user_context import current_user_from_model, dev_user
 from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 
 
@@ -40,12 +43,62 @@ def test_delivery_stats_are_scoped_to_the_owner(mu_db):  # noqa: F811
 
 def test_secret_is_masked_and_never_raw(mu_db):  # noqa: F811
     user = make_user("secret-hooks@example.com")
+    raw_secret = "secret-hooks-value-with-enough-entropy-9274"
+    user_credential_vault.save_user_credentials(user.id, webhook_secret=raw_secret)
     result = webhooks_overview.build_webhooks_overview(user.id)
     secret = result["secret"]
     # Only metadata is exposed; there is no field carrying the secret value.
     assert set(secret.keys()) == {"set", "masked", "source"}
     assert "value" not in secret
     assert "webhook_secret" not in repr(result)
+    assert raw_secret not in repr(result)
+    assert secret["source"] == "account"
+
+
+def test_rotate_replaces_encrypted_account_secret_and_returns_it_once(mu_db):  # noqa: F811
+    user = make_user("rotate-hooks@example.com")
+    current_user = current_user_from_model(user)
+    user_credential_vault.save_user_credentials(
+        user.id, webhook_secret="old-secret-value-with-enough-entropy-9274"
+    )
+
+    response = signals.rotate_webhook_secret(current_user)
+    body = json.loads(response.body)
+
+    assert response.headers["cache-control"] == "no-store"
+    assert body["secret"] == user_credential_vault.get_user_webhook_secret(user.id)
+    assert "old-secret" not in body["secret"]
+
+
+def test_dev_rotation_updates_the_legacy_backend_vault(monkeypatch):
+    saved: list[str] = []
+    monkeypatch.setattr(
+        credential_vault,
+        "webhook_secret_metadata",
+        lambda: {"set": True, "masked": "old", "source": "vault"},
+    )
+    monkeypatch.setattr(credential_vault, "save_webhook_secret", lambda secret: saved.append(secret))
+
+    response = signals.rotate_webhook_secret(dev_user())
+    body = json.loads(response.body)
+
+    assert saved == [body["secret"]]
+
+
+def test_local_without_database_keeps_the_legacy_endpoints(monkeypatch):
+    monkeypatch.setattr(webhooks_overview.settings, "BACKEND_PUBLIC_BASE_URL", "https://hooks.test")
+    monkeypatch.setattr(
+        credential_vault,
+        "webhook_secret_metadata",
+        lambda: {"set": False, "masked": None, "source": None},
+    )
+
+    result = webhooks_overview.build_webhooks_overview(dev_user().id)
+
+    assert {endpoint["url"] for endpoint in result["endpoints"]} == {
+        "https://hooks.test/webhook/tradingview",
+        "https://hooks.test/api/webhooks/private",
+    }
 
 
 def test_endpoints_are_the_real_ones_not_per_strategy(mu_db):  # noqa: F811

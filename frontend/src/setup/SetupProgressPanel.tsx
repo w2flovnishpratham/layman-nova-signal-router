@@ -1,3 +1,5 @@
+import { Button } from '@/components/ui/button'
+import { Progress } from '@/components/ui/progress'
 import { Check } from 'lucide-react'
 import type { SetupStep } from './setupFields'
 import { setupProgress } from './setupFields'
@@ -15,6 +17,27 @@ export function SetupStepRail({ steps }: { steps: SetupStep[] }) {
         </li>
       ))}
     </ol>
+  )
+}
+
+/** Compact progress shown when the desktop rail and configuration panel are hidden. */
+export function SetupCompactProgress({ steps }: { steps: SetupStep[] }) {
+  const pct = setupProgress(steps)
+
+  return (
+    <div className="nova-setup-mobile-progress">
+      <div className="nova-setup-progress-head">
+        <span>Setup progress</span>
+        <strong>{pct}%</strong>
+      </div>
+      <Progress
+        value={pct}
+        className="block"
+        trackClassName="nova-setup-progress-track"
+        indicatorClassName="nova-setup-progress-fill"
+        aria-label="Compact setup progress"
+      />
+    </div>
   )
 }
 
@@ -54,24 +77,21 @@ export function SetupConfigPanel({ steps, canArm, armLabel, onArm }: {
           <span>Setup progress</span>
           <strong>{pct}%</strong>
         </div>
-        <div
-          className="nova-setup-progress-track"
-          role="progressbar"
-          aria-valuenow={pct}
-          aria-valuemin={0}
-          aria-valuemax={100}
+        <Progress
+          value={pct}
+          className="block"
+          trackClassName="nova-setup-progress-track"
+          indicatorClassName="nova-setup-progress-fill"
           aria-label="Setup progress"
-        >
-          <div className="nova-setup-progress-fill" style={{ width: `${pct}%` }} />
-        </div>
+        />
         <p className="nova-setup-remaining">
           {remaining.length === 0 ? 'All steps answered.' : `Remaining: ${remaining.join(', ')}.`}
         </p>
       </div>
 
-      <button type="button" className="nova-setup-arm" disabled={!canArm} onClick={onArm}>
+      <Button variant="unstyled" type="button" className="nova-setup-arm" disabled={!canArm} onClick={onArm}>
         {armLabel}
-      </button>
+      </Button>
       <p className="nova-setup-note">
         You can edit any answer later from Risk &amp; Settings. Nothing routes until you arm the engine.
       </p>

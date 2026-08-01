@@ -389,6 +389,10 @@ def _persist_trades_best_effort(trades: list[dict[str, Any]]) -> None:
                     PortfolioTrade(
                         user_id=user.id,
                         mode="live",
+                        strategy_name=(
+                            None if t.get("origin") == "MANUAL"
+                            else t.get("strategy_name") or t.get("strategy")
+                        ),
                         symbol=t.get("symbol"),
                         option_side=t.get("option_side"),
                         qty=int(t.get("qty") or 0),
@@ -541,6 +545,10 @@ def persist_paper_trade(closed_trade: dict[str, Any]) -> None:
                 PortfolioTrade(
                     user_id=user.id,
                     mode="paper",
+                    strategy_name=(
+                        None if closed_trade.get("origin") == "MANUAL"
+                        else closed_trade.get("strategy_name") or closed_trade.get("strategy")
+                    ),
                     symbol=symbol,
                     option_side=option_side,
                     qty=int(closed_trade.get("qty") or 0),

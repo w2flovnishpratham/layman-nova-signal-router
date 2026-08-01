@@ -29,14 +29,29 @@ afterEach(() => { cleanup(); apiMocks.getSignals.mockReset() })
 
 describe('SignalsPage', () => {
   it('renders only real rows returned by the API', async () => {
-    apiMocks.getSignals.mockResolvedValue(page())
+    apiMocks.getSignals.mockResolvedValue(page({
+      items: [{
+        ...page().items[0],
+        summary: {
+          action: 'ENTRY',
+          side: 'BUY',
+          option_side: 'CE',
+          symbol: 'NIFTY',
+          strike: 22950,
+          alert: 'ST_FLIP_UP',
+        },
+      }],
+    }))
     render(<SignalsPage />)
     expect(await screen.findByText('nova-supertrend')).toBeInTheDocument()
-    expect(screen.getByText('evt-1')).toBeInTheDocument()
+    expect(screen.getByText('ST_FLIP_UP')).toBeInTheDocument()
+    expect(screen.getByText('BUY CE')).toBeInTheDocument()
+    expect(screen.getByText('NIFTY 22950 CE')).toBeInTheDocument()
     expect(screen.getByText('verified')).toBeInTheDocument() // non-colour label
-    // Status renders inside the row (the word also appears as a filter/count chip).
-    const row = screen.getByText('evt-1').closest('tr')!
+    const row = screen.getByText('ST_FLIP_UP').closest('tr')!
     expect(row.textContent).toContain('accepted')
+    expect(screen.queryByPlaceholderText(/search/i)).toBeNull()
+    expect(screen.queryByText(/latency/i)).toBeNull()
   })
 
   it('shows a truthful empty state rather than placeholder rows', async () => {
@@ -65,5 +80,33 @@ describe('SignalsPage', () => {
     // "routed"/"duplicate" are not persisted states, so they are not offered.
     expect(screen.queryByRole('button', { name: 'routed' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'duplicate' })).toBeNull()
+  })
+
+  it('pages through the real cursor API and can return to the previous page', async () => {
+    const user = userEvent.setup()
+    const firstItem = page().items[0]
+    const secondItem = { ...firstItem, id: 'r2', event_id: 'evt-2' }
+    apiMocks.getSignals
+      .mockResolvedValueOnce(page({ next_cursor: 'cursor-2' }))
+      .mockResolvedValueOnce(page({ items: [secondItem], next_cursor: null }))
+      .mockResolvedValueOnce(page({ next_cursor: 'cursor-2' }))
+
+    render(<SignalsPage />)
+    await screen.findByText('evt-1')
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    await waitFor(() => expect(apiMocks.getSignals).toHaveBeenCalledWith({
+      status: 'all',
+      cursor: 'cursor-2',
+      limit: 10,
+    }))
+    expect(await screen.findByText('evt-2')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Previous page' }))
+    await waitFor(() => expect(apiMocks.getSignals).toHaveBeenLastCalledWith({
+      status: 'all',
+      cursor: null,
+      limit: 10,
+    }))
+    expect(await screen.findByText('evt-1')).toBeInTheDocument()
   })
 })

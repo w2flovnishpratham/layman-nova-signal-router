@@ -1,3 +1,5 @@
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { ChevronDown, Copy, ExternalLink, RotateCcw, ShieldCheck, Wifi } from 'lucide-react'
 import { useState } from 'react'
 import { verifyEgressIp } from '../../api'
@@ -97,7 +99,7 @@ export function OrderErrorCard({ message }: { message: RenderableMessage }) {
     <article className={`rich-event-card order-error-card severity-${error.severity}`}>
       <div className="error-card-topline">
         <EventEyebrow label="Rejected" mode={mode} />
-        <span className={`severity-badge severity-${error.severity}`}>{error.severity}</span>
+        <Badge variant="unstyled" className={`severity-badge severity-${error.severity}`}>{error.severity}</Badge>
       </div>
       <h3>{error.userTitle}</h3>
       <p>{error.userMessage}</p>
@@ -130,7 +132,7 @@ export function OrderErrorCard({ message }: { message: RenderableMessage }) {
 
       <div className="error-action-row">
         {actionButtons(error).map((action) => (
-          <button
+          <Button variant="unstyled"
             key={action}
             type="button"
             className="event-action-button"
@@ -141,7 +143,7 @@ export function OrderErrorCard({ message }: { message: RenderableMessage }) {
           >
             {actionIcon(action, busyAction === action)}
             {actionLabel(action)}
-          </button>
+          </Button>
         ))}
       </div>
       {copied || actionStatus ? <p className="event-action-status">{copied ? 'Debug pack copied.' : actionStatus}</p> : null}
@@ -161,9 +163,9 @@ export function RecentActivityCard() {
       <EventEyebrow label="History" mode={null} />
       <h3>Show recent backend activity</h3>
       <p>{hiddenCount > 0 ? `${hiddenCount} restored event${hiddenCount === 1 ? '' : 's'} are hidden from this fresh chat.` : 'Recent backend activity is available.'}</p>
-      <button type="button" className="secondary-button" onClick={showRecentActivity} disabled={hiddenCount === 0}>
+      <Button variant="unstyled" type="button" className="secondary-button" onClick={showRecentActivity} disabled={hiddenCount === 0}>
         Show recent backend activity
-      </button>
+      </Button>
     </article>
   )
 }
@@ -241,14 +243,14 @@ function EventEyebrow({ label, mode }: { label: string; mode: string | null }) {
 function ReconfigureAction({ label }: { label: string }) {
   return (
     <div className="event-action-row">
-      <button
+      <Button variant="unstyled"
         type="button"
         className="event-action-button"
         onClick={() => window.dispatchEvent(new CustomEvent('nova:reconfigure-request'))}
       >
         <RotateCcw size={13} />
         {label}
-      </button>
+      </Button>
     </div>
   )
 }

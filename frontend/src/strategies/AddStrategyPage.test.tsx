@@ -51,7 +51,7 @@ describe('AddStrategyPage', () => {
     await pasteAndValidate()
 
     expect(await screen.findByText('Static validation passed')).toBeInTheDocument()
-    expect(screen.getByText(/TradingView compilation pending/i)).toBeInTheDocument()
+    expect(screen.getByText(/TradingView compilation is pending/i)).toBeInTheDocument()
     expect(screen.queryByText(/compiled (successfully|on TradingView)/i)).toBeNull()
   })
 

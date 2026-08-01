@@ -182,6 +182,15 @@ def _active_exit_levels(position: dict[str, Any]) -> tuple[float, float] | None:
     return sl_price, tp_price
 
 
+def _cash_loss_stop(position: dict[str, Any], entry_price: float, sl_price: float) -> float:
+    rule = position.get("maximum_loss_rule")
+    amount = _as_float(rule.get("amount")) if isinstance(rule, dict) else None
+    qty = _as_int(position.get("qty"), 0)
+    if amount is None or amount <= 0 or qty <= 0:
+        return sl_price
+    return max(sl_price, entry_price - amount / qty)
+
+
 def _broker_managed_exit(position: dict[str, Any]) -> bool:
     return str(position.get("exit_management") or "").upper() == "DHAN_SUPER"
 
@@ -191,14 +200,37 @@ def _display_exit_levels(position: dict[str, Any], entry_price: float, runtime: 
     active_levels = _active_exit_levels(position)
     if active_levels is not None:
         sl_price, tp_price = active_levels
+        sl_price = _cash_loss_stop(position, entry_price, sl_price)
         sl_percent = max(round(((entry_price - sl_price) / entry_price) * 100, 2), 0.0)
         tp_percent = max(round(((tp_price - entry_price) / entry_price) * 100, 2), 0.0)
         return sl_percent, tp_percent, sl_price, tp_price
+    stop_rule = position.get("entry_stop_rule")
+    target_rule = position.get("entry_target_rule")
+    if isinstance(stop_rule, dict) and isinstance(target_rule, dict):
+        mode = str(stop_rule.get("mode") or "CUSTOM_SL_TP").upper()
+        stop_value = _as_float(stop_rule.get("value"), 0.0) or 0.0
+        target_value = _as_float(target_rule.get("value"), 0.0) or 0.0
+        sl_price = 0.1 if mode in {"FLIPS_ONLY", "TARGET_PROFIT"} else (
+            max(0.1, entry_price - stop_value)
+            if str(stop_rule.get("basis") or "").upper() == "POINTS"
+            else max(0.1, entry_price * (1 - stop_value / 100))
+        )
+        tp_price = 1_000_000.0 if mode == "FLIPS_ONLY" else (
+            entry_price + target_value
+            if str(target_rule.get("basis") or "").upper() == "POINTS"
+            else entry_price * (1 + target_value / 100)
+        )
+        sl_price = _cash_loss_stop(position, entry_price, sl_price)
+        sl_percent = max(round((entry_price - sl_price) / entry_price * 100, 2), 0.0)
+        tp_percent = max(round((tp_price - entry_price) / entry_price * 100, 2), 0.0)
+        return sl_percent, tp_percent, round(sl_price, 2), round(tp_price, 2)
     if _runtime_bool(runtime, "option_disable_sl", True):
         sl_price = max(0.10, round(entry_price * DISABLED_OPTION_SL_PRICE_FRACTION, 2))
     if _broker_managed_exit(position):
         sl_price = _as_float(position.get("broker_sl_price"), sl_price) or sl_price
         tp_price = _as_float(position.get("broker_tp_price"), tp_price) or tp_price
+    sl_price = _cash_loss_stop(position, entry_price, sl_price)
+    sl_percent = max(round(((entry_price - sl_price) / entry_price) * 100, 2), 0.0)
     return sl_percent, tp_percent, sl_price, tp_price
 
 

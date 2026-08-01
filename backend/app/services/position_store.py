@@ -393,6 +393,12 @@ def _apply_json_to_row(row: models.StrategyInstancePosition, position: dict[str,
         "super_order_post_fill_update": position.get("super_order_post_fill_update"),
         "active_exit_levels": position.get("active_exit_levels"),
     }
+    risk_version_id = position.get("risk_configuration_version_id")
+    row.risk_configuration_version_id = uuid.UUID(str(risk_version_id)) if risk_version_id else None
+    row.entry_stop_rule = position.get("entry_stop_rule")
+    row.entry_target_rule = position.get("entry_target_rule")
+    row.position_sizing_rule = position.get("position_sizing_rule")
+    row.maximum_loss_rule = position.get("maximum_loss_rule")
     sync = position.get("broker_restart_sync") or position.get("broker_sync")
     row.reconciliation_status = (sync or {}).get("status") if isinstance(sync, dict) else None
     if isinstance(sync, dict) and sync.get("checked_at"):

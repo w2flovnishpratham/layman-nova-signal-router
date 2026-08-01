@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button'
 /* eslint-disable @typescript-eslint/no-explicit-any -- preserved landing source:
    gsap timeline handles and DOM element casts in this orbital animation are typed
    as any; precise typing of the imported animation code is out of scope. */
@@ -376,7 +377,7 @@ export function PlanetaryEcosystem({ onEnterApp }: { onEnterApp?: () => void }) 
                       }}
                       className="orbit-card-hover pointer-events-auto will-change-transform"
                     >
-                      <button
+                      <Button variant="unstyled"
                         ref={(el) => {
                           cardContentRefs.current[index] = el
                         }}
@@ -394,7 +395,7 @@ export function PlanetaryEcosystem({ onEnterApp }: { onEnterApp?: () => void }) 
                         <small className="text-[10px] text-white/60 font-normal leading-tight mt-0.5 max-w-[130px] sm:max-w-[150px] block">
                           {module.subDesc}
                         </small>
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -428,7 +429,7 @@ export function PlanetaryEcosystem({ onEnterApp }: { onEnterApp?: () => void }) 
               className="absolute inset-0 rounded-full bg-[#2F6BED]/25 animate-ping pointer-events-none"
               aria-hidden="true"
             />
-            <button
+            <Button variant="unstyled"
               type="button"
               onClick={onEnterApp}
               className="nova-core nova-core-bounce relative !rounded-full !border !border-[#2F6BED]/60 hover:!border-[#2F6BED] w-36 h-36 sm:w-44 sm:h-44 !bg-[#06070B] transition-colors duration-300 flex flex-col items-center justify-center text-center p-4 shadow-[0_0_30px_rgba(47,107,237,0.35),inset_0_0_20px_rgba(47,107,237,0.08)] cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#2F6BED]"
@@ -439,7 +440,7 @@ export function PlanetaryEcosystem({ onEnterApp }: { onEnterApp?: () => void }) 
               <strong className="text-sm sm:text-base font-semibold text-[#2F6BED] mt-1 leading-tight">
                 Try NOVA Yourself
               </strong>
-            </button>
+            </Button>
           </div>
         </div>
       </div>

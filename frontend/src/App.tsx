@@ -1,13 +1,17 @@
+import { Button } from '@/components/ui/button'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { BarChart3, ChevronLeft, ChevronRight, LineChart, Loader2, Sliders, Wallet, Webhook } from 'lucide-react'
+import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { toast } from '@/components/ui/toast'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { AuthScreen } from './components/AuthScreen'
 import { EngineLeftPanel } from './components/EngineLeftPanel'
-import { EngineListening } from './components/EngineListening'
 import { NiftyLiveChart } from './components/NiftyLiveChart'
 import { EngineSidebar } from './components/EngineSidebar'
 import { Header } from './components/Header'
-import { MotionPulseText, MotionSpinner, softEase, useAppReducedMotion } from './components/MotionPrimitives'
+import { softEase, useAppReducedMotion } from './components/MotionPrimitives'
+import { PageSkeleton } from './components/PageSkeleton'
+import { TerminalMobileBar, type TerminalMobileSection } from './components/TerminalMobileBar'
 import { SetupPanel } from './components/setup/SetupPanel'
 import { PortfolioDashboard } from './dashboard/PortfolioDashboard'
 import { PersonalStrategiesPage } from './strategies/PersonalStrategiesPage'
@@ -24,6 +28,7 @@ import { AddStrategyPage } from './strategies/AddStrategyPage'
 import { SettingsPage } from './settings/SettingsPage'
 import { AutomationsPage } from './automations/AutomationsPage'
 import { TradingActivityTabs } from './trading/TradingActivityTabs'
+import type { EngineConfigValues } from './trading/EngineConfigCard'
 import { SetupPage, type SetupSnapshot } from './setup/SetupPage'
 import { getConfigurationState, saveConfiguration } from './setup/configurationApi'
 import { attemptAfterFailure, attemptKeyFor } from './lib/engineStartIdempotency'
@@ -36,7 +41,6 @@ import {
   googleLoginUrl,
   logout,
   prepareReconfigure,
-  refreshRuntimeAccount,
   resetPaperRuntime,
   saveRuntimeConfig,
   selectCatalogStrategy,
@@ -86,6 +90,7 @@ function App() {
   const [runtimeError, setRuntimeError] = useState('')
   const [managedStrategyId, setManagedStrategyId] = useState<string | null>(null)
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false)
+  const [riskDrawerOpen, setRiskDrawerOpen] = useState(false)
   const [rightDrawerOpen, setRightDrawerOpen] = useState(false)
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false)
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false)
@@ -262,6 +267,11 @@ function App() {
 
   async function reconfigure() {
     setBootError('')
+    const toastId = toast.add({
+      title: 'Stopping the engine and preparing reconfiguration…',
+      type: 'loading',
+      timeout: 0,
+    })
     try {
       await prepareReconfigure()
       const status = await getTradingBootstrap()
@@ -270,14 +280,22 @@ function App() {
       setRuntimeError('')
       if (status.position.has_open_position) {
         setBootError('Engine stopped. Configuration changes remain blocked until the tracked position is flat.')
+        toast.update(toastId, {
+          title: 'Engine stopped, but reconfiguration is blocked until the position is flat.',
+          type: 'warning',
+          timeout: 5000,
+        })
         return
       }
       wsRef.current?.close()
       resetSession()
       setSnapshotLoaded(false)
       setBootNonce((current) => current + 1)
+      toast.update(toastId, { title: 'Ready to reconfigure.', type: 'success', timeout: 5000 })
     } catch (error) {
-      setBootError(error instanceof Error ? error.message : 'Could not reconfigure Nova')
+      const message = error instanceof Error ? error.message : 'Could not reconfigure Nova'
+      setBootError(message)
+      toast.update(toastId, { title: message, type: 'error', timeout: 5000 })
     }
   }
 
@@ -346,6 +364,27 @@ function App() {
     setRuntimeError('')
   }
 
+  async function saveTerminalConfig(values: EngineConfigValues) {
+    const selected = runtimeStatus?.selected_configuration
+    const strategyKey = runtimeStatus?.strategy_catalog?.selected_strategy_key
+    if (!selected || !strategyKey) throw new Error('No saved strategy configuration is selected.')
+    await configureTradingStrategy(
+      strategyKey,
+      {
+        ...selected.configuration,
+        lots: values.lots,
+        stop_loss_percent: values.stopLossPercent,
+        take_profit_percent: values.takeProfitPercent,
+      } as Record<string, string | number>,
+      {
+        ...selected.risk,
+        max_trades_per_day: values.maxTradesPerDay,
+        option_sl_percent: values.stopLossPercent,
+        option_tp_percent: values.takeProfitPercent,
+      } as Record<string, string | number>,
+    )
+  }
+
   async function startTradingStrategy(instanceId: string, liveAcknowledged: boolean) {
     if (runtimeStatus?.selected_strategy?.instance_id !== instanceId) {
       throw new Error('The selected strategy changed. Refresh before starting.')
@@ -393,7 +432,7 @@ function App() {
   const engineLive = sessionEngineLive
   const panelLayoutTransition = reduceMotion
     ? { duration: 0 }
-    : { type: 'spring' as const, stiffness: 380, damping: 42, mass: 0.8 }
+    : { duration: 0.4, ease: softEase }
   const panelContentTransition = reduceMotion
     ? { duration: 0 }
     : { duration: 0.18, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] }
@@ -407,30 +446,31 @@ function App() {
     ? { opacity: 0, x: 14, filter: 'blur(2px)', transitionEnd: { visibility: 'hidden' as const } }
     : { opacity: 1, x: 0, filter: 'blur(0px)', visibility: 'visible' as const }
   const renderLeftCollapseButton = () => (
-    <button
-      type="button"
-      className="panel-collapse-button"
-      aria-label={leftPanelCollapsed ? 'Expand market and manual order panel' : 'Collapse market and manual order panel'}
-      title={leftPanelCollapsed ? 'Expand panel' : 'Collapse panel'}
-      onClick={() => setLeftPanelCollapsed((collapsed) => !collapsed)}
-    >
-      {leftPanelCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-    </button>
+    <CollapsibleTrigger asChild>
+      <Button variant="unstyled"
+        type="button"
+        className="panel-collapse-button"
+        aria-label={leftPanelCollapsed ? 'Expand market and manual order panel' : 'Collapse market and manual order panel'}
+        title={leftPanelCollapsed ? 'Expand panel' : 'Collapse panel'}
+      >
+        {leftPanelCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+      </Button>
+    </CollapsibleTrigger>
   )
   const renderRightCollapseButton = () => (
-    <button
-      type="button"
-      className="panel-collapse-button"
-      aria-label={rightPanelCollapsed ? 'Expand account and controls panel' : 'Collapse account and controls panel'}
-      title={rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'}
-      onClick={() => setRightPanelCollapsed((collapsed) => !collapsed)}
-    >
-      {rightPanelCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-    </button>
+    <CollapsibleTrigger asChild>
+      <Button variant="unstyled"
+        type="button"
+        className="panel-collapse-button"
+        aria-label={rightPanelCollapsed ? 'Expand account and controls panel' : 'Collapse account and controls panel'}
+        title={rightPanelCollapsed ? 'Expand panel' : 'Collapse panel'}
+      >
+        {rightPanelCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+      </Button>
+    </CollapsibleTrigger>
   )
   const setupPanel = (
     <SetupPanel
-      state={effectiveSetupState}
       flowStep={setupFlowStep}
       draft={setupDraft}
       lastError={lastSetupError}
@@ -469,25 +509,14 @@ function App() {
         engineLive={engineLive}
         engineMode={engineMode}
         setupState={effectiveSetupState}
-        health={systemHealth}
         user={authUser}
         market={displayedMarketSnapshot}
         onNavigate={goToRoute}
         onKill={() => void updateRuntime(squareOffRuntime)}
-        onStop={() => void updateRuntime(stopRuntimeEngine)}
-        onReconfigure={reconfigure}
         onLogout={handleLogout}
         onMode={(mode) => void updateRuntime(() => switchRuntimeMode(mode))}
         onSaveConfig={(mode, lots, sl, tp) => void updateRuntime(() => saveRuntimeConfig(mode, lots, sl, tp))}
         onPaperReset={() => void updateRuntime(() => resetPaperRuntime())}
-        onAccountRefresh={async () => {
-          const result = await refreshRuntimeAccount()
-          const message = String(result.message || result.status || 'Account refresh completed.')
-          setBootError(result.ok === false ? message : '')
-           const latest = await getTradingBootstrap()
-           setRuntimeStatus(latest)
-           applyRuntimeHydration(latest)
-        }}
       />
 
       {runtimeStatus?.position.has_open_position && runtimeStatus.engine.state === 'STOPPED' ? (
@@ -496,19 +525,9 @@ function App() {
         </div>
       ) : null}
 
-      {engineLive && view === 'trading' ? (
-        <div className="router-banner-slot">
-          <EngineListening
-            paused={effectiveSetupState === 'PAUSED'}
-            activeTrade={activeTrade}
-            side={config.risk?.side ?? 'BOTH'}
-            engineMode={engineMode}
-          />
-        </div>
-      ) : null}
-
       {/* A page-level boundary: a crash in the routed page shows a retry card
           instead of blanking the header and the whole shell. */}
+      <div className="nova-page">
       <PageErrorBoundary resetKey={route}>
       {!isImplemented(route) ? (
         <PlaceholderPage route={route} />
@@ -517,15 +536,15 @@ function App() {
       ) : route === 'webhooks' ? (
         <WebhooksPage />
       ) : route === 'risk' ? (
-        <RiskPage />
+        <RiskPage runtime={runtimeStatus} />
       ) : route === 'credentials' ? (
         <CredentialsPage />
       ) : route === 'reports' ? (
-        <ReportsPage />
+        <ReportsPage initialMode={engineMode} />
       ) : route === 'strategies/new' ? (
         <AddStrategyPage />
       ) : route === 'settings' ? (
-        <SettingsPage />
+        <SettingsPage user={authUser} onNavigate={goToRoute} onLogout={() => void handleLogout('keep_running')} />
       ) : route === 'automations' ? (
         <AutomationsPage />
       ) : view === 'dashboard' ? (
@@ -539,14 +558,14 @@ function App() {
       ) : view === 'strategies' ? (
         <PersonalStrategiesPage user={authUser} focusInstanceId={managedStrategyId} />
       ) : !engineLive ? (
-        <SetupPage conversation={setupPanel} snapshot={setupSnapshot} />
+        <SetupPage conversation={setupPanel} snapshot={setupSnapshot} unavailable={Boolean(runtimeError)} />
       ) : (
         <motion.section
           layout
           transition={panelLayoutTransition}
           className={
             engineLive
-              ? `engine-shell engine-shell-grid ${leftPanelCollapsed ? 'left-panel-collapsed' : ''} ${rightPanelCollapsed ? 'right-panel-collapsed' : ''} px-4 w-full max-w-[1480px] mx-auto lg:h-[calc(100vh-120px)] lg:min-h-0 min-h-screen items-stretch`
+              ? `engine-shell engine-shell-grid ${leftPanelCollapsed ? 'left-panel-collapsed' : ''} ${rightPanelCollapsed ? 'right-panel-collapsed' : ''}`
               : 'chat-shell'
           }
           aria-label="Nova trading session"
@@ -555,11 +574,17 @@ function App() {
         {!session && !bootError ? <div className="system-chip col-span-full">Starting session</div> : null}
 
         {engineLive ? (
+          <Collapsible
+            asChild
+            open={!leftPanelCollapsed}
+            onOpenChange={(open) => setLeftPanelCollapsed(!open)}
+          >
           <motion.aside
             layout
             transition={panelLayoutTransition}
             className={`desktop-engine-panel engine-panel-left ${leftPanelCollapsed ? 'is-collapsed' : ''}`}
           >
+            {renderLeftCollapseButton()}
             <div className="engine-panel-shell">
               {leftPanelCollapsed ? (
                 <motion.div
@@ -568,7 +593,6 @@ function App() {
                   animate={{ opacity: 1 }}
                   transition={panelContentTransition}
                 >
-                  {renderLeftCollapseButton()}
                   <motion.span
                     className="panel-rail-label"
                     initial={{ opacity: 0, y: -4 }}
@@ -579,6 +603,7 @@ function App() {
                   </motion.span>
                 </motion.div>
               ) : (
+                <CollapsibleContent asChild forceMount>
                 <motion.div
                   className="panel-scroll"
                   animate={leftPanelContentMotion}
@@ -586,18 +611,21 @@ function App() {
                   transition={panelContentTransition}
                 >
                   <EngineLeftPanel
-                    marketSnapshot={displayedMarketSnapshot}
                     engineMode={engineMode}
                     runtime={runtimeStatus}
                     activeTrade={activeTrade}
                     runtimePositionOpen={Boolean(runtimeStatus?.position.has_open_position)}
-                    collapseControl={renderLeftCollapseButton()}
                     onStop={() => void updateRuntime(stopRuntimeEngine)}
+                    onSaveConfig={saveTerminalConfig}
+                    side={config.risk?.side ?? 'BOTH'}
+                    onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
                   />
                 </motion.div>
+                </CollapsibleContent>
               )}
             </div>
           </motion.aside>
+          </Collapsible>
         ) : null}
 
         <motion.div
@@ -606,12 +634,7 @@ function App() {
           className={`engine-main-pane lg:h-full flex flex-col min-h-[450px] lg:min-h-0${engineLive ? ' engine-live-layout' : ''}`}
         >
           {!snapshotLoaded && !bootError ? (
-            <div className="flex flex-col items-center justify-center flex-grow min-h-[350px] gap-3 text-white/40">
-              <MotionSpinner className="text-[#2F6BED]">
-                <Loader2 className="w-8 h-8" />
-              </MotionSpinner>
-              <MotionPulseText className="text-xs font-semibold tracking-widest uppercase">Initializing Session...</MotionPulseText>
-            </div>
+            <PageSkeleton label="Initializing trading session" variant="terminal" />
           ) : (
             <>
               <div className="live-engine-stack">
@@ -622,34 +645,22 @@ function App() {
                 <TradingActivityTabs mode={engineMode} />
               </div>
 
-              {/* Mobile-only inline active position & routing controls below main chat */}
-              {engineLive ? (
-                <div className="block lg:hidden mt-6">
-                  <EngineSidebar
-                    state={effectiveSetupState}
-                    wallet={wallet}
-                    marginUtilized={marginUtilized}
-                    realizedPnl={realizedPnl}
-                    activeTrade={activeTrade}
-                    lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
-                    side={config.risk?.side ?? 'BOTH'}
-                    engineMode={engineMode}
-                    runtime={runtimeStatus}
-                    onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
-                    hideMargin={true}
-                  />
-                </div>
-              ) : null}
             </>
           )}
         </motion.div>
 
         {engineLive ? (
+          <Collapsible
+            asChild
+            open={!rightPanelCollapsed}
+            onOpenChange={(open) => setRightPanelCollapsed(!open)}
+          >
           <motion.aside
             layout
             transition={panelLayoutTransition}
             className={`desktop-engine-panel engine-panel-right ${rightPanelCollapsed ? 'is-collapsed' : ''}`}
           >
+            {renderRightCollapseButton()}
             <div className="engine-panel-shell">
               {rightPanelCollapsed ? (
                 <motion.div
@@ -658,7 +669,6 @@ function App() {
                   animate={{ opacity: 1 }}
                   transition={panelContentTransition}
                 >
-                  {renderRightCollapseButton()}
                   <motion.span
                     className="panel-rail-label"
                     initial={{ opacity: 0, y: -4 }}
@@ -669,6 +679,7 @@ function App() {
                   </motion.span>
                 </motion.div>
               ) : (
+                <CollapsibleContent asChild forceMount>
                 <motion.div
                   className="panel-scroll"
                   animate={rightPanelContentMotion}
@@ -686,16 +697,19 @@ function App() {
                     engineMode={engineMode}
                     runtime={runtimeStatus}
                     onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
-                    collapseControl={renderRightCollapseButton()}
+                    marketSnapshot={displayedMarketSnapshot}
                   />
                 </motion.div>
+                </CollapsibleContent>
               )}
             </div>
           </motion.aside>
+          </Collapsible>
         ) : null}
       </motion.section>
       )}
       </PageErrorBoundary>
+      </div>
 
       {/* Mobile-only sliding drawers and floating action bar */}
       {engineLive && (
@@ -728,28 +742,89 @@ function App() {
               <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
               <div className="flex justify-between items-center pb-3 border-b border-white/5">
                 <span className="font-bold text-sm text-white tracking-wide">Market & Order</span>
-                <button
+                <Button variant="unstyled"
                   type="button"
-                  className="text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer text-sm font-semibold transition-colors"
+                  aria-label="Close market and order drawer"
+                  className="terminal-drawer-close text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer font-semibold transition-colors"
                   onClick={() => setLeftDrawerOpen(false)}
                 >
+                  <X size={16} />
                   ✕
-                </button>
+                </Button>
               </div>
               <EngineLeftPanel
-                marketSnapshot={displayedMarketSnapshot}
                 engineMode={engineMode}
                 activeTrade={activeTrade}
                 runtimePositionOpen={Boolean(runtimeStatus?.position.has_open_position)}
                 runtime={runtimeStatus}
                 onStop={() => void updateRuntime(stopRuntimeEngine)}
+                onSaveConfig={saveTerminalConfig}
+                side={config.risk?.side ?? 'BOTH'}
+                onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
               />
                 </motion.div>
               </motion.div>
             ) : null}
           </AnimatePresence>
 
-          {/* Bottom-to-Top Drawer: Margin & Balance */}
+          {/* Bottom-to-Top Drawer: Market Bias & Risk */}
+          <AnimatePresence initial={false}>
+            {riskDrawerOpen ? (
+              <motion.div
+                className="fixed inset-0 z-[110] block lg:hidden"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={drawerTransition}
+              >
+                <motion.div
+                  className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+                  onClick={() => setRiskDrawerOpen(false)}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={drawerTransition}
+                />
+                <motion.div
+                  className="fixed inset-x-0 bottom-0 max-h-[85vh] h-auto bg-[#0f0e1c] border-t border-white/10 rounded-t-2xl p-5 pb-8 overflow-y-auto shadow-2xl flex flex-col gap-4 z-[120]"
+                  initial={{ y: '100%' }}
+                  animate={{ y: 0 }}
+                  exit={{ y: '100%' }}
+                  transition={drawerTransition}
+                >
+                  <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
+                  <div className="flex justify-between items-center pb-3 border-b border-white/5">
+                    <span className="font-bold text-sm text-white tracking-wide">Bias &amp; Risk</span>
+                    <Button variant="unstyled"
+                      type="button"
+                      aria-label="Close bias and risk drawer"
+                      className="terminal-drawer-close text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer font-semibold transition-colors"
+                      onClick={() => setRiskDrawerOpen(false)}
+                    >
+                      <X size={16} />
+                      âœ•
+                    </Button>
+                  </div>
+                  <EngineSidebar
+                    state={effectiveSetupState}
+                    wallet={wallet}
+                    marginUtilized={marginUtilized}
+                    realizedPnl={realizedPnl}
+                    activeTrade={activeTrade}
+                    lotSize={session?.lotSize ?? DEFAULT_NIFTY_LOT_SIZE}
+                    side={config.risk?.side ?? 'BOTH'}
+                    engineMode={engineMode}
+                    runtime={runtimeStatus}
+                    onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
+                    section="risk"
+                    marketSnapshot={displayedMarketSnapshot}
+                  />
+                </motion.div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+
+          {/* Bottom-to-Top Drawer: Account & P&L */}
           <AnimatePresence initial={false}>
             {rightDrawerOpen ? (
               <motion.div
@@ -776,14 +851,16 @@ function App() {
                 >
               <div className="w-12 h-1.5 bg-white/15 rounded-full mx-auto mb-1 flex-shrink-0" />
               <div className="flex justify-between items-center pb-3 border-b border-white/5">
-                <span className="font-bold text-sm text-white tracking-wide">Account & Balance</span>
-                <button
+                <span className="font-bold text-sm text-white tracking-wide">Account &amp; P&amp;L</span>
+                <Button variant="unstyled"
                   type="button"
-                  className="text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer text-sm font-semibold transition-colors"
+                  aria-label="Close account and P&L drawer"
+                  className="terminal-drawer-close text-white/40 hover:text-white hover:bg-white/5 w-7 h-7 flex items-center justify-center rounded-md border-0 cursor-pointer font-semibold transition-colors"
                   onClick={() => setRightDrawerOpen(false)}
                 >
+                  <X size={16} />
                   ✕
-                </button>
+                </Button>
               </div>
               <EngineSidebar
                 state={effectiveSetupState}
@@ -796,80 +873,22 @@ function App() {
                 engineMode={engineMode}
                 runtime={runtimeStatus}
                 onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
-                onlyMargin={true}
+                section="account"
+                marketSnapshot={displayedMarketSnapshot}
               />
                 </motion.div>
               </motion.div>
             ) : null}
           </AnimatePresence>
 
-          {/* Sticky Bottom Navigation Bar on Mobile */}
-          <div className="fixed bottom-0 left-0 right-0 h-16 bg-[#0c0a14]/95 backdrop-blur-md border-t border-white/10 flex items-center justify-around z-[90] lg:hidden px-2">
-            <button
-              type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'trading' && !leftDrawerOpen && !rightDrawerOpen ? 'bg-[rgba(47,107,237,0.14)] text-[#2F6BED] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
-              onClick={() => {
-                setView('trading')
-                setLeftDrawerOpen(false)
-                setRightDrawerOpen(false)
-              }}
-            >
-              <LineChart size={18} />
-              <span className="text-[10px]">Trading</span>
-            </button>
-
-            <button
-              type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'dashboard' ? 'bg-[rgba(47,107,237,0.14)] text-[#2F6BED] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
-              onClick={() => {
-                setView('dashboard')
-                setLeftDrawerOpen(false)
-                setRightDrawerOpen(false)
-              }}
-            >
-              <BarChart3 size={18} />
-              <span className="text-[10px]">Dashboard</span>
-            </button>
-
-            <button
-              type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${view === 'strategies' ? 'bg-[rgba(47,107,237,0.14)] text-[#2F6BED] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
-              onClick={() => {
-                setView('strategies')
-                setLeftDrawerOpen(false)
-                setRightDrawerOpen(false)
-              }}
-            >
-              <Webhook size={18} />
-              <span className="text-[10px]">Strategies</span>
-            </button>
-
-            <button
-              type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${leftDrawerOpen ? 'bg-[rgba(47,107,237,0.14)] text-[#2F6BED] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
-              onClick={() => {
-                setView('trading')
-                setLeftDrawerOpen(true)
-                setRightDrawerOpen(false)
-              }}
-            >
-              <Sliders size={18} />
-              <span className="text-[10px]">Market & Trade</span>
-            </button>
-
-            <button
-              type="button"
-              className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 mx-1 h-[80%] rounded-xl border-0 transition-all cursor-pointer ${rightDrawerOpen ? 'bg-[rgba(47,107,237,0.14)] text-[#2F6BED] font-semibold' : 'bg-transparent text-white/40 hover:text-white/70'}`}
-              onClick={() => {
-                setView('trading')
-                setLeftDrawerOpen(false)
-                setRightDrawerOpen(true)
-              }}
-            >
-              <Wallet size={18} />
-              <span className="text-[10px]">Account</span>
-            </button>
-          </div>
+          <TerminalMobileBar
+            active={leftDrawerOpen ? 'market' : riskDrawerOpen ? 'risk' : rightDrawerOpen ? 'account' : null}
+            onSelect={(section: TerminalMobileSection) => {
+              setLeftDrawerOpen(section === 'market')
+              setRiskDrawerOpen(section === 'risk')
+              setRightDrawerOpen(section === 'account')
+            }}
+          />
         </>
       )}
 

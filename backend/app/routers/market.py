@@ -147,7 +147,9 @@ def nifty_markers(
     legs = [
         ev
         for ev in events
-        if isinstance(ev, dict) and _is_filled(ev) and str(ev.get("mode") or "").lower() == active_mode
+        if isinstance(ev, dict)
+        and _is_filled(ev)
+        and str(ev.get("mode") or ev.get("engine_mode") or "").lower() == active_mode
     ]
     legs = _dedupe_legs_by_order_id(legs)
 
@@ -170,19 +172,32 @@ def nifty_markers(
         option_side = str(ev.get("normalized_option_side") or ev.get("option_side") or "").upper() or None
         markers.append(
             {
+                "id": str(ev.get("order_id") or ev.get("signal_id") or f"{epoch}-{action}"),
                 "time": epoch,
                 "side": side,
                 "option_side": option_side,
                 "label": f"{side} {option_side}" if option_side else side,
-                # Execution price is the option premium, not the index level, so
-                # the frontend snaps the marker to the nearest NIFTY candle.
-                "price": None,
-                "approximate": True,
+                "price": _marker_number(ev.get("nifty_price")),
+                "stop_price": _marker_number(ev.get("nifty_sl_level")),
+                "target_price": _marker_number(ev.get("nifty_target_level")),
+                "execution_price": _marker_number(ev.get("avg_price")),
+                "contract": ev.get("trading_symbol") or ev.get("normalized_symbol"),
+                "pnl": _marker_number(ev.get("realized_pnl") or ev.get("pnl")),
+                "exit_kind": str(ev.get("exit_kind") or "EXIT").upper(),
+                "approximate": ev.get("nifty_price") is None,
                 "mode": active_mode,
                 "source": "paper_trade" if active_mode == "paper" else "trade_execution",
             }
         )
     return {**base, "markers": markers}
+
+
+def _marker_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 @router.get("/system/health-strip")

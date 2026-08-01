@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button'
 import { CheckCircle2, Copy, LoaderCircle, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getEgressOptions, selectEgressIp, verifyEgressIp, type EgressOptionsResponse } from '../../api'
@@ -112,13 +113,13 @@ export function SetupInfoCard({ autoAssign = true, onReadyChange, refreshKey = 0
                 <code>{assignedIp}</code>
                 <span>{assignedNode?.selected ? 'Assigned to this account' : 'Assigned Nova Static IP'}</span>
               </div>
-              <button type="button" disabled>
+              <Button variant="unstyled" type="button" disabled>
                 <CheckCircle2 size={13} />
                 Assigned
-              </button>
-              <button type="button" className="static-ip-copy" aria-label={`Copy ${assignedIp}`} onClick={() => void navigator.clipboard?.writeText(assignedIp)}>
+              </Button>
+              <Button variant="unstyled" type="button" className="static-ip-copy" aria-label={`Copy ${assignedIp}`} onClick={() => void navigator.clipboard?.writeText(assignedIp)}>
                 <Copy size={13} />
-              </button>
+              </Button>
             </div>
         ) : !loading && options ? (
           <p className="static-ip-pending">Payment confirmation is pending. This panel refreshes after Razorpay webhook confirmation.</p>
@@ -129,19 +130,19 @@ export function SetupInfoCard({ autoAssign = true, onReadyChange, refreshKey = 0
           <p className={`static-ip-verification ${options.egress.verified ? 'verified' : ''}`}>
             {options.egress.verified ? 'Proxy verified. Add the selected IP to Dhan.' : options.egress.verification_error || 'Proxy verification is pending.'}
           </p>
-          <button type="button" onClick={() => void verifyIp()} disabled={verifying}>
+          <Button variant="unstyled" type="button" onClick={() => void verifyIp()} disabled={verifying}>
             {verifying ? <LoaderCircle size={13} /> : <RefreshCw size={13} />}
             Verify
-          </button>
+          </Button>
         </div>
       ) : null}
       {error ? (
         <div className="static-ip-error-row">
           <p className="static-ip-error">{error}</p>
-          <button type="button" onClick={() => void loadOptions()} disabled={loading}>
+          <Button variant="unstyled" type="button" onClick={() => void loadOptions()} disabled={loading}>
             <RefreshCw size={13} />
             Refresh
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button'
 import type { ClientCommand, RiskConfig, SetupState, SideFilter } from '../types'
 
 interface Props {
@@ -11,20 +12,20 @@ export function QuickActions({ state, risk, onSend }: Props) {
 
   return (
     <div className="quick-actions">
-      <button type="button" onClick={() => onSend({ type: state === 'LIVE' ? 'session.pause' : 'session.resume', data: {} })}>
+      <Button variant="unstyled" type="button" onClick={() => onSend({ type: state === 'LIVE' ? 'session.pause' : 'session.resume', data: {} })}>
         {state === 'LIVE' ? 'Pause after this trade' : 'Resume'}
-      </button>
+      </Button>
       {(['CE', 'PE', 'BOTH'] as SideFilter[]).map((side) => (
-        <button
+        <Button variant="unstyled"
           key={side}
           className={risk?.side === side ? 'selected' : ''}
           type="button"
           onClick={() => onSend({ type: 'session.patch_risk', data: { side } })}
         >
           {side === 'BOTH' ? 'Both' : `${side} only`}
-        </button>
+        </Button>
       ))}
-      <button type="button">EOD report</button>
+      <Button variant="unstyled" type="button">EOD report</Button>
     </div>
   )
 }

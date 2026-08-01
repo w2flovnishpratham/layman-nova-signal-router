@@ -2,10 +2,12 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const apiMocks = vi.hoisted(() => ({ getAutomations: vi.fn(), saveAutomations: vi.fn() }))
+const toastApi = vi.hoisted(() => ({ add: vi.fn() }))
 vi.mock('./automationsApi', async (importOriginal) => ({
   ...await importOriginal<typeof import('./automationsApi')>(),
   ...apiMocks,
 }))
+vi.mock('@/components/ui/toast', () => ({ toast: toastApi }))
 
 import { AutomationsPage } from './AutomationsPage'
 
@@ -117,6 +119,9 @@ describe('AutomationsPage', () => {
     fireEvent.change(await screen.findByLabelText('Daily loss cap'), { target: { value: '10000' } })
     fireEvent.click(screen.getByRole('button', { name: 'Review Changes' }))
     fireEvent.click(screen.getByRole('button', { name: 'Confirm Update' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent(/changed elsewhere/i)
+    await waitFor(() => expect(toastApi.add).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringMatching(/changed elsewhere/i),
+      type: 'error',
+    })))
   })
 })

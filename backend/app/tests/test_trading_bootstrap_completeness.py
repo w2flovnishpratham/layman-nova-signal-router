@@ -39,3 +39,18 @@ def test_trading_bootstrap_includes_every_runtime_status_field(mu_db):
     # empty/None for a fresh user -- only presence matters, not truthiness.
     for key in ("eligible_strategies", "selected_strategy", "selection_issue"):
         assert key in body, f"missing key: {key}"
+
+
+def test_trading_bootstrap_reports_unconfigured_database():
+    from app.auth.dependencies import get_current_user
+    from app.routers import strategies
+    from app.services.user_context import dev_user
+
+    app = FastAPI()
+    app.include_router(strategies.router)
+    app.dependency_overrides[get_current_user] = dev_user
+
+    response = TestClient(app).get("/api/trading/bootstrap")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Trading database is not configured."}

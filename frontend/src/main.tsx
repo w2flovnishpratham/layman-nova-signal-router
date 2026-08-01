@@ -5,6 +5,8 @@ import '@fontsource-variable/inter/index.css'
 import '@fontsource-variable/jetbrains-mono/index.css'
 import './index.css'
 import { AppRouter } from './AppRouter.tsx'
+import { Toaster } from './components/ui/toast'
+import { SmoothScroll } from './components/SmoothScroll'
 import { initializePreferences, motionConfigMode } from './state/sessionStore'
 
 initializePreferences()
@@ -12,7 +14,8 @@ initializePreferences()
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <MotionConfig reducedMotion={motionConfigMode()}>
-      <AppRouter />
+      <SmoothScroll><AppRouter /></SmoothScroll>
+      <Toaster />
     </MotionConfig>
   </StrictMode>,
 )

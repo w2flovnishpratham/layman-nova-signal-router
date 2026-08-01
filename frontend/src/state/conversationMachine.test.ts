@@ -195,6 +195,17 @@ describe('conversation machine — editing & explicit engine start', () => {
     expect(s.draft).toEqual({ direction: 'CE', lots: 2 })
   })
 
+  it('updates one valid review answer without rewinding the flow', () => {
+    let s = selectStrategy(COMPLETE_SAVED)
+    s = conversationReducer(s, { type: 'RESUME' })
+    s = conversationReducer(s, { type: 'COMMIT_ANSWER', key: 'lots', value: 4 })
+
+    expect(s.phase).toBe('SETUP_REVIEW')
+    expect(s.activeQuestionKey).toBeNull()
+    expect(s.draft.lots).toBe(4)
+    expect(s.draft.direction).toBe('CE')
+  })
+
   it('engine start is explicit and requires a complete review', () => {
     let s = finishTyping(selectStrategy({}))
     // not complete yet -> START_ENGINE is a no-op

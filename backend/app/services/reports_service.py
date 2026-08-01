@@ -19,7 +19,8 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import date, datetime, time, timedelta
+from collections import defaultdict
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -31,7 +32,9 @@ from app.db.engine import database_configured, session_scope
 IST = ZoneInfo("Asia/Kolkata")
 
 CSV_COLUMNS = [
+    "trading_date_ist",
     "closed_at_ist",
+    "origin",
     "strategy",
     "symbol",
     "option_side",
@@ -41,14 +44,15 @@ CSV_COLUMNS = [
     "gross_pnl",
     "charges",
     "realized_pnl",
+    "exit_trigger",
 ]
 
 
 def _day_bounds(start: date, end: date) -> tuple[datetime, datetime]:
     """Inclusive IST day range converted to instants."""
     return (
-        datetime.combine(start, time.min, tzinfo=IST),
-        datetime.combine(end + timedelta(days=1), time.min, tzinfo=IST),
+        datetime.combine(start, time.min, tzinfo=IST).astimezone(timezone.utc),
+        datetime.combine(end + timedelta(days=1), time.min, tzinfo=IST).astimezone(timezone.utc),
     )
 
 
@@ -112,6 +116,79 @@ def _max_drawdown(trades: list[models.PortfolioTrade]) -> dict[str, Any]:
     }
 
 
+def _strategy_label(trade: models.PortfolioTrade) -> str:
+    if trade.origin == "MANUAL":
+        return "Manual Orders"
+    return (trade.strategy_name or "Unattributed automated").strip()
+
+
+def _trade_day(trade: models.PortfolioTrade) -> date:
+    assert trade.closed_at is not None
+    closed = trade.closed_at
+    if closed.tzinfo is None:
+        closed = closed.replace(tzinfo=timezone.utc)
+    return closed.astimezone(IST).date()
+
+
+def _win_rate(wins: int, losses: int) -> dict[str, Any]:
+    decided = wins + losses
+    return (
+        {"value": round(wins / decided * 100.0, 1), "reason": None}
+        if decided
+        else {"value": None, "reason": "No non-zero closed trades in this period."}
+    )
+
+
+def _daily_sessions(trades: list[models.PortfolioTrade], mode: str) -> list[dict[str, Any]]:
+    buckets: dict[date, list[models.PortfolioTrade]] = defaultdict(list)
+    for trade in trades:
+        buckets[_trade_day(trade)].append(trade)
+    sessions: list[dict[str, Any]] = []
+    for trade_date in sorted(buckets, reverse=True):
+        rows = buckets[trade_date]
+        wins = sum(float(row.realized_pnl or 0.0) > 0 for row in rows)
+        losses = sum(float(row.realized_pnl or 0.0) < 0 for row in rows)
+        strategies = list(dict.fromkeys(_strategy_label(row) for row in rows))
+        sessions.append({
+            "date": trade_date.isoformat(),
+            "strategy_mix": strategies,
+            "trades": len(rows),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": _win_rate(wins, losses),
+            "max_drawdown": _max_drawdown(rows),
+            "net_pnl": _round(sum(float(row.realized_pnl or 0.0) for row in rows)),
+            "manual_orders": sum(row.origin == "MANUAL" for row in rows),
+            "mode": mode,
+        })
+    return sessions
+
+
+def _strategy_breakdown(trades: list[models.PortfolioTrade]) -> list[dict[str, Any]]:
+    buckets: dict[str, list[models.PortfolioTrade]] = defaultdict(list)
+    for trade in trades:
+        buckets[_strategy_label(trade)].append(trade)
+    total_absolute = sum(abs(float(trade.realized_pnl or 0.0)) for trade in trades)
+    result: list[dict[str, Any]] = []
+    for label, rows in buckets.items():
+        pnl = sum(float(row.realized_pnl or 0.0) for row in rows)
+        wins = sum(float(row.realized_pnl or 0.0) > 0 for row in rows)
+        losses = sum(float(row.realized_pnl or 0.0) < 0 for row in rows)
+        result.append({
+            "display_name": label,
+            "realized_pnl": _round(pnl),
+            "closed_trades": len(rows),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": _win_rate(wins, losses),
+            "contribution_percentage": round(
+                sum(abs(float(row.realized_pnl or 0.0)) for row in rows) / total_absolute * 100.0,
+                1,
+            ) if total_absolute else 0.0,
+        })
+    return sorted(result, key=lambda row: row["realized_pnl"], reverse=True)
+
+
 def build_report(
     user_id: uuid.UUID,
     *,
@@ -128,6 +205,7 @@ def build_report(
     gross_profit = sum(float(t.realized_pnl or 0.0) for t in wins)
     gross_loss = abs(sum(float(t.realized_pnl or 0.0) for t in losses))
     net = sum(float(t.realized_pnl or 0.0) for t in trades)
+    daily_sessions = _daily_sessions(trades, mode)
 
     return {
         "ok": True,
@@ -142,11 +220,12 @@ def build_report(
             "gross_profit": _round(gross_profit),
             "gross_loss": _round(gross_loss),
             "net_pnl": _round(net),
+            "sessions": len(daily_sessions),
         },
         "win_rate": (
-            {"value": None, "reason": "No closed trades in this period."}
-            if not trades
-            else {"value": round(len(wins) / len(trades) * 100.0, 1), "reason": None}
+            _win_rate(len(wins), len(losses))
+            if trades
+            else {"value": None, "reason": "No closed trades in this period."}
         ),
         "average_winner": (
             {"value": _round(gross_profit / len(wins)), "reason": None}
@@ -164,10 +243,15 @@ def build_report(
             else {"value": None, "reason": "Undefined without a losing trade."}
         ),
         "max_drawdown": _max_drawdown(trades),
+        "daily_sessions": daily_sessions,
+        "by_strategy": _strategy_breakdown(trades),
         "trades": [
             {
+                "trading_date_ist": _trade_day(t).isoformat(),
+                "opened_at": t.opened_at.isoformat() if t.opened_at else None,
                 "closed_at": t.closed_at.isoformat() if t.closed_at else None,
-                "strategy": t.strategy_name,
+                "origin": t.origin,
+                "strategy": _strategy_label(t),
                 "symbol": t.symbol,
                 "option_side": t.option_side,
                 "qty": int(t.qty or 0),
@@ -176,6 +260,7 @@ def build_report(
                 "charges": _round(float(t.entry_charges or 0.0) + float(t.exit_charges or 0.0)),
                 "gross_pnl": _round(float(t.gross_pnl or 0.0)),
                 "realized_pnl": _round(float(t.realized_pnl or 0.0)),
+                "exit_trigger": t.exit_trigger,
             }
             for t in trades
         ],
@@ -183,9 +268,55 @@ def build_report(
 
 
 def report_csv(report: dict[str, Any]) -> str:
-    """CSV of the report's trades. Carries no credential or secret field."""
+    """Filter-scoped summary, sessions, strategy totals and closed trades."""
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(["NOVA REPORT"])
+    writer.writerow(["mode", report["mode"]])
+    writer.writerow(["trade_origin", report["trade_origin"]])
+    writer.writerow(["period", report["period"]["start"], report["period"]["end"], report["period"]["timezone"]])
+    writer.writerow([])
+    writer.writerow(["SUMMARY"])
+    writer.writerow(["sessions", "closed_trades", "wins", "losses", "net_pnl", "profit_factor", "max_drawdown"])
+    writer.writerow([
+        report["totals"]["sessions"],
+        report["totals"]["trades"],
+        report["totals"]["winning_trades"],
+        report["totals"]["losing_trades"],
+        report["totals"]["net_pnl"],
+        report["profit_factor"]["value"] if report["profit_factor"]["value"] is not None else "",
+        report["max_drawdown"]["value"] if report["max_drawdown"]["value"] is not None else "",
+    ])
+    writer.writerow([])
+    writer.writerow(["DAILY SESSIONS"])
+    writer.writerow(["date", "strategy_mix", "closed_trades", "wins", "losses", "win_rate", "max_drawdown", "net_pnl", "mode"])
+    for session in report["daily_sessions"]:
+        writer.writerow([
+            session["date"],
+            " · ".join(session["strategy_mix"]),
+            session["trades"],
+            session["wins"],
+            session["losses"],
+            session["win_rate"]["value"] if session["win_rate"]["value"] is not None else "",
+            session["max_drawdown"]["value"] if session["max_drawdown"]["value"] is not None else "",
+            session["net_pnl"],
+            session["mode"],
+        ])
+    writer.writerow([])
+    writer.writerow(["BY STRATEGY"])
+    writer.writerow(["category", "realized_pnl", "closed_trades", "wins", "losses", "win_rate", "contribution_percentage"])
+    for strategy in report["by_strategy"]:
+        writer.writerow([
+            strategy["display_name"],
+            strategy["realized_pnl"],
+            strategy["closed_trades"],
+            strategy["wins"],
+            strategy["losses"],
+            strategy["win_rate"]["value"] if strategy["win_rate"]["value"] is not None else "",
+            strategy["contribution_percentage"],
+        ])
+    writer.writerow([])
+    writer.writerow(["CLOSED TRADES"])
     writer.writerow(CSV_COLUMNS)
     for trade in report["trades"]:
         closed = trade["closed_at"]
@@ -195,7 +326,9 @@ def report_csv(report: dict[str, Any]) -> str:
             else ""
         )
         writer.writerow([
+            trade["trading_date_ist"],
             closed_ist,
+            trade["origin"] or "",
             trade["strategy"] or "",
             trade["symbol"] or "",
             trade["option_side"] or "",
@@ -205,5 +338,109 @@ def report_csv(report: dict[str, Any]) -> str:
             trade["gross_pnl"],
             trade["charges"],
             trade["realized_pnl"],
+            trade["exit_trigger"] or "",
         ])
     return buffer.getvalue()
+
+
+def report_pdf(report: dict[str, Any]) -> bytes:
+    """Compact PDF export; ReportLab is used only for this actual PDF surface."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    output = io.BytesIO()
+    document = SimpleDocTemplate(
+        output,
+        pagesize=A4,
+        rightMargin=14 * mm,
+        leftMargin=14 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title=f"NOVA {report['mode']} report",
+    )
+    styles = getSampleStyleSheet()
+    story = [
+        Paragraph("NOVA Performance Report", styles["Title"]),
+        Paragraph(
+            f"{report['mode'].title()} · {report['trade_origin'].title()} · "
+            f"{report['period']['start']} to {report['period']['end']} · Asia/Kolkata",
+            styles["BodyText"],
+        ),
+        Spacer(1, 6 * mm),
+    ]
+    totals = report["totals"]
+    summary = [
+        ["Sessions", "Closed trades", "Wins", "Losses", "Net P&L", "Profit factor", "Max drawdown"],
+        [
+            totals["sessions"], totals["trades"], totals["winning_trades"], totals["losing_trades"],
+            f"Rs {totals['net_pnl']:,.2f}",
+            report["profit_factor"]["value"] if report["profit_factor"]["value"] is not None else "N/A",
+            f"Rs {report['max_drawdown']['value']:,.2f}" if report["max_drawdown"]["value"] is not None else "N/A",
+        ],
+    ]
+    story.append(Table(summary, repeatRows=1))
+    story.append(Spacer(1, 6 * mm))
+    story.append(Paragraph("Daily sessions", styles["Heading2"]))
+    daily = [["Date", "Strategy mix", "Trades", "Win rate", "Max DD", "Net P&L"]]
+    for row in report["daily_sessions"]:
+        daily.append([
+            row["date"],
+            ", ".join(row["strategy_mix"]),
+            row["trades"],
+            f"{row['win_rate']['value']}%" if row["win_rate"]["value"] is not None else "N/A",
+            f"Rs {row['max_drawdown']['value']:,.2f}" if row["max_drawdown"]["value"] is not None else "N/A",
+            f"Rs {row['net_pnl']:,.2f}",
+        ])
+    table = Table(daily, repeatRows=1, colWidths=[24 * mm, 58 * mm, 15 * mm, 20 * mm, 23 * mm, 27 * mm])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2F6BED")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D1D5DB")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 6 * mm))
+    story.append(Paragraph("By strategy", styles["Heading2"]))
+    strategy_rows = [["Category", "Realized P&L", "Closed trades", "Wins", "Losses", "Win rate"]]
+    for row in report["by_strategy"]:
+        strategy_rows.append([
+            row["display_name"],
+            f"Rs {row['realized_pnl']:,.2f}",
+            row["closed_trades"],
+            row["wins"],
+            row["losses"],
+            f"{row['win_rate']['value']}%" if row["win_rate"]["value"] is not None else "N/A",
+        ])
+    story.append(Table(strategy_rows, repeatRows=1))
+    story.append(Spacer(1, 6 * mm))
+    story.append(Paragraph("Detailed closed trades", styles["Heading2"]))
+    trade_rows = [["Date", "Origin", "Strategy", "Instrument", "Qty", "Charges", "Net P&L"]]
+    for row in report["trades"]:
+        trade_rows.append([
+            row["trading_date_ist"],
+            "Manual" if row["origin"] == "MANUAL" else "Automated",
+            row["strategy"],
+            f"{row['symbol'] or ''} {row['option_side'] or ''}".strip(),
+            row["qty"],
+            f"Rs {row['charges']:,.2f}",
+            f"Rs {row['realized_pnl']:,.2f}",
+        ])
+    trade_table = Table(
+        trade_rows,
+        repeatRows=1,
+        colWidths=[22 * mm, 20 * mm, 38 * mm, 42 * mm, 12 * mm, 22 * mm, 24 * mm],
+    )
+    trade_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2F6BED")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D1D5DB")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.append(trade_table)
+    document.build(story)
+    return output.getvalue()

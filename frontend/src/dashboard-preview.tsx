@@ -21,7 +21,6 @@ export function DashboardPreview() {
           engineLive={true}
           engineMode="paper"
           setupState="LIVE"
-          health={dashboardPreviewHealth}
           user={{ id: 'preview', email: 'alfikri@example.com', name: 'Alfikri Djati', picture_url: null, is_admin: false, is_dev: false }}
           market={{
             niftySpot: 22_948.35,
@@ -33,13 +32,10 @@ export function DashboardPreview() {
           }}
           onNavigate={() => undefined}
           onKill={() => undefined}
-          onStop={() => undefined}
-          onReconfigure={() => undefined}
           onLogout={() => undefined}
           onMode={() => undefined}
           onSaveConfig={() => undefined}
           onPaperReset={() => undefined}
-          onAccountRefresh={() => undefined}
         />
           <PortfolioDashboard
             runtime={dashboardPreviewRuntime}

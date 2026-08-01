@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const chartMocks = vi.hoisted(() => {
-  const series = { setData: vi.fn(), update: vi.fn() }
+  const series = { setData: vi.fn(), update: vi.fn(), createPriceLine: vi.fn((options) => options), removePriceLine: vi.fn() }
   const chart = {
     addSeries: vi.fn(() => series),
     resize: vi.fn(),
@@ -24,6 +24,7 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('lightweight-charts', () => ({
   CandlestickSeries: {}, CrosshairMode: { Hidden: 0 },
+  LineStyle: { Dashed: 2 },
   createChart: chartMocks.createChart,
   createSeriesMarkers: vi.fn(() => ({ setMarkers: chartMocks.setMarkers })),
 }))
@@ -58,6 +59,9 @@ beforeEach(() => {
   chartMocks.createChart.mockClear()
   chartMocks.series.setData.mockClear()
   chartMocks.series.update.mockClear()
+  chartMocks.series.createPriceLine.mockClear()
+  chartMocks.series.removePriceLine.mockClear()
+  apiMocks.getNiftyMarkers.mockResolvedValue({ trading_date: '2026-07-21', markers: [] })
 })
 
 afterEach(() => {
@@ -84,5 +88,22 @@ describe('NiftyLiveChart responsive runtime', () => {
     render(<NiftyLiveChart engineMode="paper" defaultTimeframe="1h" />)
     await waitFor(() => expect(apiMocks.getNiftyCandles).toHaveBeenCalledWith('5m', expect.any(AbortSignal)))
     expect(screen.getByRole('button', { name: '5m' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('draws entry, stop, and target lines for the latest open marker', async () => {
+    apiMocks.getNiftyMarkers.mockResolvedValue({
+      trading_date: '2026-07-21',
+      markers: [{
+        id: 'entry-1',
+        time: Date.parse('2026-07-21T09:15:30+05:30') / 1000,
+        side: 'BUY', option_side: 'CE', label: 'BUY CE', mode: 'paper',
+        price: 24110, stop_price: 24060, target_price: 24210,
+      }],
+    })
+    render(<NiftyLiveChart engineMode="paper" />)
+    await waitFor(() => expect(chartMocks.series.createPriceLine).toHaveBeenCalledTimes(3))
+    expect(chartMocks.series.createPriceLine).toHaveBeenCalledWith(expect.objectContaining({ price: 24110, title: 'BUY CE', color: '#34d399' }))
+    expect(chartMocks.series.createPriceLine).toHaveBeenCalledWith(expect.objectContaining({ price: 24060, title: 'SL', color: '#ef4444' }))
+    expect(chartMocks.series.createPriceLine).toHaveBeenCalledWith(expect.objectContaining({ price: 24210, title: 'TP', color: '#22c55e' }))
   })
 })

@@ -1,3 +1,7 @@
+import { Input } from "@/components/ui/input"
+import { NativeSelect } from "@/components/ui/native-select"
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Check, ChevronDown, ExternalLink, Loader2, Pencil, Target, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useState } from 'react'
@@ -66,6 +70,9 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
   const activeExitLevels = savedExitLevels ?? trade.activeExitLevels ?? null
   const displayQty = savedQty ?? trade.qty
   const displayLots = lotsForQuantity(displayQty, lotSize)
+  const riskPoints = trade.avgPrice - (activeExitLevels?.stopLossPrice ?? Number.NaN)
+  const rewardPoints = (activeExitLevels?.targetPrice ?? Number.NaN) - trade.avgPrice
+  const riskRewardRatio = riskPoints > 0 && rewardPoints > 0 ? rewardPoints / riskPoints : null
   const positionVersion = savedPositionVersion ?? trade.positionVersion
   const srAccepted = Boolean(srSuggestion?.accepted || activeExitLevels?.source === 'sr_suggestion')
   const quoteUnavailable = trade.quoteStatus != null && !['ready', 'stale'].includes(trade.quoteStatus)
@@ -227,10 +234,48 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
         animate={{ opacity: 1, y: 0 }}
         transition={reduceMotion ? { duration: 0 } : { duration: 0.24, ease: softEase }}
       >
+        {compact ? (
+          <>
+            <div className="compact-position-header">
+              <h2>Active Position</h2>
+              <Badge variant="unstyled" className={clsx('compact-position-status', `pill-${tone}`)}>{trade.status}</Badge>
+            </div>
+            <div className="compact-position-instrument">
+              <Badge variant="unstyled" className={clsx('compact-side-pill', `pill-${tone}`)}>BUY {trade.optType}</Badge>
+              <strong>{trade.symbol}</strong>
+              {trade.mode ? <Badge variant="unstyled" className={clsx('paper-trade-pill', trade.mode)}>{trade.mode}</Badge> : null}
+            </div>
+            <div className="compact-position-metrics">
+              <TradeCell label="Qty / Lots" value={`${displayQty} / ${displayLots}`} />
+              <TradeCell label="Avg Price" value={trade.avgPrice.toFixed(2)} />
+              <TradeCell label="LTP" value={quoteUnavailable ? 'Unavailable' : trade.ltp.toFixed(2)} />
+            </div>
+            <div className="compact-position-pnl">
+              <div>
+                <span>Unrealized P&amp;L</span>
+                <strong className={`text-${tone}`}>
+                  <TickingNumber value={trade.pnl} decimals={2} signed />
+                  {' ('}<TickingNumber value={pnlPct} kind="percent" decimals={2} signed />{')'}
+                </strong>
+              </div>
+              <div>
+                <span>R:R</span>
+                <strong>{riskRewardRatio === null ? '—' : `1:${riskRewardRatio.toFixed(2)}`}</strong>
+              </div>
+            </div>
+            <div className="position-operation-actions compact-position-actions" aria-label="Active position actions">
+              <Button variant="unstyled" type="button" onClick={openExitLevelEditor} disabled={Boolean(positionOperation)}>Edit SL/TP</Button>
+              <Button variant="unstyled" type="button" onClick={() => setExitOptionsOpen((current) => !current)} disabled={Boolean(positionOperation)}>
+                {positionOperation ? 'Exiting…' : 'Exit Position'}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
         <div className="trade-card-top">
           <div className="trade-title-block">
-              <span className={clsx('trade-state-pill', `pill-${tone}`)}>ACTIVE {trade.optType}</span>
-            {trade.mode === 'paper' ? <span className="paper-trade-pill">PAPER</span> : null}
+              <Badge variant="unstyled" className={clsx('trade-state-pill', `pill-${tone}`)}>ACTIVE {trade.optType}</Badge>
+            {trade.mode === 'paper' ? <Badge variant="unstyled" className="paper-trade-pill">PAPER</Badge> : null}
             <div>
               <h2>{trade.symbol}</h2>
               <p>{trade.expiry ?? 'weekly expiry'} / Order {trade.orderId}</p>
@@ -275,28 +320,30 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
           <TradeCell
             label="SL / TP"
             value={exitLevelText}
-            action={<button type="button" className="trade-cell-action" onClick={openExitLevelEditor} title="Edit SL/TP levels"><Pencil size={12} /></button>}
+            action={<Button variant="unstyled" type="button" className="trade-cell-action" onClick={openExitLevelEditor} title="Edit SL/TP levels"><Pencil size={12} /></Button>}
           />
         </div>
 
         <div className="position-operation-actions" aria-label="Active position actions">
-          <button
+          <Button variant="unstyled"
             type="button"
             onClick={openQuantityEditor}
             disabled={!sizingOperationsAvailable || Boolean(positionOperation)}
             title={sizingOperationsAvailable ? undefined : 'Unavailable until broker verification'}
           >
             {sizingOperationsAvailable ? 'Add Lots' : 'Unavailable until broker verification'}
-          </button>
-          <button
+          </Button>
+          <Button variant="unstyled"
             type="button"
             onClick={() => setExitOptionsOpen((current) => !current)}
             disabled={Boolean(positionOperation)}
           >
             {positionOperation ? 'Exiting…' : 'Exit / Reduce'}
-          </button>
-          <button type="button" onClick={openExitLevelEditor} disabled={Boolean(positionOperation)}>Edit Current SL/TP</button>
+          </Button>
+          <Button variant="unstyled" type="button" onClick={openExitLevelEditor} disabled={Boolean(positionOperation)}>Edit Current SL/TP</Button>
         </div>
+          </>
+        )}
 
         <AnimatePresence initial={false}>
           {exitOptionsOpen ? (
@@ -309,7 +356,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
               transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: softEase }}
             >
               {exitLotOptions(displayLots).map((option) => (
-                <button
+                <Button variant="unstyled"
                   key={option.label}
                   type="button"
                   className={option.lots === null ? 'is-danger' : undefined}
@@ -328,7 +375,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
                   )}
                 >
                   {option.label}
-                </button>
+                </Button>
               ))}
             </motion.div>
           ) : null}
@@ -345,7 +392,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
             >
               <label>
                 <span>Additional lots</span>
-                <input
+                <Input variant="unstyled"
                   type="number"
                   min="1"
                   step="1"
@@ -357,7 +404,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
               </label>
               <label>
                 <span>Protection after fill</span>
-                <select
+                <NativeSelect variant="unstyled"
                   value={protectionMode}
                   disabled={savingQuantity}
                   onChange={(event) => setProtectionMode(event.target.value as typeof protectionMode)}
@@ -366,13 +413,13 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
                   <option value="KEEP_EXISTING">Keep existing trigger prices</option>
                   <option value="RECALCULATE_FROM_AVERAGE">Recalculate from new average</option>
                   <option value="CUSTOM">Custom SL/TP</option>
-                </select>
+                </NativeSelect>
               </label>
               {protectionMode === 'CUSTOM' ? (
                 <>
                   <label>
                     <span>Custom SL</span>
-                    <input
+                    <Input variant="unstyled"
                       type="number"
                       min="0.05"
                       step="0.05"
@@ -384,7 +431,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
                   </label>
                   <label>
                     <span>Custom TP</span>
-                    <input
+                    <Input variant="unstyled"
                       type="number"
                       min="0.05"
                       step="0.05"
@@ -396,12 +443,12 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
                   </label>
                 </>
               ) : null}
-              <button type="button" onClick={() => void saveQuantity()} disabled={savingQuantity}>
+              <Button variant="unstyled" type="button" onClick={() => void saveQuantity()} disabled={savingQuantity}>
                 {savingQuantity ? <MotionSpinner><Loader2 size={13} /></MotionSpinner> : <Check size={13} />}
-              </button>
-              <button type="button" onClick={() => setEditingQuantity(false)} disabled={savingQuantity} aria-label="Cancel qty edit">
+              </Button>
+              <Button variant="unstyled" type="button" onClick={() => setEditingQuantity(false)} disabled={savingQuantity} aria-label="Cancel qty edit">
                 <X size={13} />
-              </button>
+              </Button>
             </motion.div>
           ) : null}
         </AnimatePresence>
@@ -418,7 +465,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
             >
               <label>
                 <span>Unit</span>
-                <select
+                <NativeSelect variant="unstyled"
                   value={exitLevelUnit}
                   disabled={savingExitLevels}
                   onChange={(event) => setExitLevelUnit(event.target.value as typeof exitLevelUnit)}
@@ -427,11 +474,11 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
                   <option value="PERCENTAGE">Percentage</option>
                   <option value="POINTS">Points</option>
                   <option value="ABSOLUTE_TRIGGER">Absolute Trigger</option>
-                </select>
+                </NativeSelect>
               </label>
               <label>
                 <span>SL value</span>
-                <input
+                <Input variant="unstyled"
                   type="number"
                   min="0.05"
                   step="0.05"
@@ -443,7 +490,7 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
               </label>
               <label>
                 <span>TP value</span>
-                <input
+                <Input variant="unstyled"
                   type="number"
                   min="0.05"
                   step="0.05"
@@ -453,18 +500,18 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
                   aria-label="Target value"
                 />
               </label>
-              <button type="button" onClick={() => void saveExitLevels()} disabled={savingExitLevels}>
+              <Button variant="unstyled" type="button" onClick={() => void saveExitLevels()} disabled={savingExitLevels}>
                 {savingExitLevels ? <MotionSpinner><Loader2 size={13} /></MotionSpinner> : <Check size={13} />}
-              </button>
-              <button type="button" onClick={() => setEditingExitLevels(false)} disabled={savingExitLevels} aria-label="Cancel SL/TP edit">
+              </Button>
+              <Button variant="unstyled" type="button" onClick={() => setEditingExitLevels(false)} disabled={savingExitLevels} aria-label="Cancel SL/TP edit">
                 <X size={13} />
-              </button>
+              </Button>
             </motion.div>
           ) : null}
         </AnimatePresence>
         {exitLevelStatus ? <p className="trade-edit-status">{exitLevelStatus}</p> : null}
 
-        {srReady ? (
+        {!compact && srReady ? (
           <div className={clsx('sr-suggestion-panel', srAccepted && 'sr-suggestion-armed')}>
             <div>
               <span>Suggested S/R SL/TP</span>
@@ -473,34 +520,34 @@ function ActiveTradeCardContent({ trade, lotSize, compact = false, onApplySrSugg
             {srAccepted ? (
               <span className="sr-suggestion-status">Armed</span>
             ) : (
-              <button type="button" onClick={onApplySrSuggestion} disabled={!onApplySrSuggestion}>
+              <Button variant="unstyled" type="button" onClick={onApplySrSuggestion} disabled={!onApplySrSuggestion}>
                 <Target size={14} />
                 Use Suggested SL/TP
-              </button>
+              </Button>
             )}
           </div>
         ) : null}
 
         <div className="trade-actions">
           {trade.mode === 'paper' ? (
-            <button type="button" onClick={() => setDetailsOpen((current) => !current)}>
+            <Button variant="unstyled" type="button" onClick={() => setDetailsOpen((current) => !current)}>
               View paper order
               <motion.span animate={{ rotate: detailsOpen ? 180 : 0 }} transition={reduceMotion ? { duration: 0 } : { duration: 0.18, ease: softEase }}>
                 <ChevronDown size={14} />
               </motion.span>
-            </button>
+            </Button>
           ) : (
             <>
               <a href={trade.verifyUrl ?? 'https://web.dhan.co/'} target="_blank" rel="noreferrer">
                 Verify on Dhan
                 <ExternalLink size={13} />
               </a>
-              <button type="button" onClick={() => setDetailsOpen((current) => !current)}>
+              <Button variant="unstyled" type="button" onClick={() => setDetailsOpen((current) => !current)}>
                 Details
                 <motion.span animate={{ rotate: detailsOpen ? 180 : 0 }} transition={reduceMotion ? { duration: 0 } : { duration: 0.18, ease: softEase }}>
                   <ChevronDown size={14} />
                 </motion.span>
-              </button>
+              </Button>
             </>
           )}
         </div>

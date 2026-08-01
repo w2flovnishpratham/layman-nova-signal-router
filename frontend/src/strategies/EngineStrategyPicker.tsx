@@ -1,6 +1,11 @@
-import { Check, Loader2, Lock, Play, Settings2, ShieldCheck } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
+import { toast } from '@/components/ui/toast'
+import { Check, Lock, Play, Settings2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { getEngineStrategies, setEngineSelection, type EngineStrategy } from '../api'
+import { PageSkeleton } from '../components/PageSkeleton'
 import { blockerText } from './strategyBlockers'
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -46,77 +51,99 @@ export function EngineStrategyPicker({ onManage }: { onManage: (instanceId: stri
   }, [])
 
   async function select(instanceId: string) {
-    setBusy(instanceId); setError('')
+    setBusy(instanceId)
     try {
       await setEngineSelection(instanceId)
       await load()
+      toast.add({ title: 'Engine strategy selected.', type: 'success' })
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not select strategy.')
+      toast.add({
+        title: reason instanceof Error ? reason.message : 'Could not select strategy.',
+        type: 'error',
+      })
     } finally {
       setBusy('')
     }
   }
 
-  if (loading) return <div className="ps-page-state"><Loader2 className="ps-spin" size={20} /> Loading engine strategies…</div>
+  if (loading) return <PageSkeleton label="Loading engine strategies" variant="cards" />
 
   const ready = strategies.filter((s) => s.selectable)
   const pending = strategies.filter((s) => !s.selectable)
   const selected = strategies.find((s) => s.instance_id === selectedId) ?? null
 
   return (
-    <div className="ps-page">
-      <div className="ps-heading">
-        <div>
-          <span className="ps-eyebrow"><ShieldCheck size={13} /> Verified strategies only</span>
-          <h1>Engine strategy picker</h1>
-          <p>Only strategies that cleared genuine HOLD and the server's Paper-readiness checks are selectable.</p>
-        </div>
-      </div>
+    <div className="ps-picker">
+      <p className="ps-note">Only strategies that cleared genuine HOLD and the server's Paper-readiness checks are selectable.</p>
       {error ? <div className="ps-message error" role="alert">{error}</div> : null}
 
-      <section className="ps-card">
-        <div className="ps-card-head"><div><span>Engine</span><h2>Currently selected</h2></div></div>
+      <section className="ps-picker-section">
+        <h3>Currently selected</h3>
         {selected ? (
-          <div className={`ps-picker-item ${selected.selectable ? 'ready' : 'pending'}`}>
-            <div><strong>{selected.display_name}</strong><span>{sourceLabel(selected)} · {selected.selectable ? 'Ready for paper' : blockerText(selected.blocking_reason)}</span></div>
-            <button type="button" className="secondary-button" onClick={() => onManage(selected.instance_id)}><Settings2 size={14} /> Manage</button>
-          </div>
+          <Card className={selected.selectable ? 'ps-strategy-card selected' : 'ps-strategy-card'}>
+            <CardHeader>
+              <CardTitle>{selected.display_name}</CardTitle>
+              <CardDescription>{sourceLabel(selected)}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {selected.selectable
+                ? <Badge variant="outline" className="ps-badge-ready"><Check size={12} /> Ready for paper</Badge>
+                : <Badge variant="secondary">{blockerText(selected.blocking_reason)}</Badge>}
+            </CardContent>
+            <CardFooter>
+              <Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage(selected.instance_id)}><Settings2 size={14} /> Manage</Button>
+            </CardFooter>
+          </Card>
         ) : <div className="ps-empty-small"><Lock size={22} /><strong>No strategy selected</strong><span>Select a verified strategy below to point the engine at it.</span></div>}
       </section>
 
-      <section className="ps-card">
-        <div className="ps-card-head"><div><span>Ready to run</span><h2>Selectable</h2></div><strong>{ready.length}</strong></div>
+      <section className="ps-picker-section">
+        <h3>Selectable <span className="ps-count">{ready.length}</span></h3>
         {ready.length ? (
-          <ul className="ps-picker-list">
+          <div className="ps-strategy-grid">
             {ready.map((strategy) => {
               const isSelected = strategy.instance_id === selectedId
               return (
-                <li key={strategy.instance_id} className="ps-picker-item ready">
-                  <div><strong>{strategy.display_name}</strong><span>{sourceLabel(strategy)} · <span className="ps-picker-ready"><Check size={12} /> READY</span></span></div>
-                  <div className="ps-actions">
+                <Card key={strategy.instance_id} className={isSelected ? 'ps-strategy-card selected' : 'ps-strategy-card'}>
+                  <CardHeader>
+                    <CardTitle>{strategy.display_name}</CardTitle>
+                    <CardDescription>{sourceLabel(strategy)}</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <Badge variant="outline" className="ps-badge-ready"><Check size={12} /> READY</Badge>
+                  </CardContent>
+                  <CardFooter>
                     {isSelected
                       ? <span className="ps-credential-status"><Check size={14} /> Selected</span>
-                      : <button type="button" className="ps-primary" disabled={busy === strategy.instance_id} onClick={() => void select(strategy.instance_id)}><Play size={14} /> Select strategy</button>}
-                    <button type="button" className="secondary-button" onClick={() => onManage(strategy.instance_id)}>Manage</button>
-                  </div>
-                </li>
+                      : <Button variant="unstyled" type="button" className="ps-primary" disabled={busy === strategy.instance_id} onClick={() => void select(strategy.instance_id)}><Play size={14} /> Select strategy</Button>}
+                    <Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage(strategy.instance_id)}>Manage</Button>
+                  </CardFooter>
+                </Card>
               )
             })}
-          </ul>
+          </div>
         ) : <div className="ps-empty-small"><Lock size={22} /><strong>No verified strategies yet</strong><span>Finish TradingView setup and paper verification to unlock a strategy.</span></div>}
       </section>
 
       {pending.length ? (
-        <section className="ps-card">
-          <div className="ps-card-head"><div><span>Setup in progress</span><h2>Not selectable</h2></div><strong>{pending.length}</strong></div>
-          <ul className="ps-picker-list">
+        <section className="ps-picker-section">
+          <h3>Setup in progress <span className="ps-count">{pending.length}</span></h3>
+          <div className="ps-strategy-grid">
             {pending.map((strategy) => (
-              <li key={strategy.instance_id} className="ps-picker-item pending">
-                <div><strong>{strategy.display_name}</strong><span>{sourceLabel(strategy)} · {blockerText(strategy.blocking_reason)}</span></div>
-                <button type="button" className="secondary-button" onClick={() => onManage(strategy.instance_id)}>Continue setup</button>
-              </li>
+              <Card key={strategy.instance_id} className="ps-strategy-card pending">
+                <CardHeader>
+                  <CardTitle>{strategy.display_name}</CardTitle>
+                  <CardDescription>{sourceLabel(strategy)}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Badge variant="secondary">{blockerText(strategy.blocking_reason)}</Badge>
+                </CardContent>
+                <CardFooter>
+                  <Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage(strategy.instance_id)}>Continue setup</Button>
+                </CardFooter>
+              </Card>
             ))}
-          </ul>
+          </div>
         </section>
       ) : null}
     </div>

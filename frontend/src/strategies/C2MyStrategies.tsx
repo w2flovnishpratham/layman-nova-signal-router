@@ -1,3 +1,6 @@
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { toast } from '@/components/ui/toast'
 import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, Copy, KeyRound, RefreshCw, RotateCw, ShieldOff } from 'lucide-react'
 import {
@@ -18,7 +21,7 @@ export function C2MyStrategies() {
   const [revealed, setRevealed] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const [search, setSearch] = useState('')
 
   const refresh = useCallback(async (preferredId?: string) => {
     const rows = await listMyC2Installations()
@@ -52,13 +55,13 @@ export function C2MyStrategies() {
   }
 
   async function run(name: string, action: () => Promise<void>) {
-    setBusy(name); setError(''); setNotice('')
+    setBusy(name)
     try {
       await action()
-      setNotice(`${name} completed.`)
+      toast.add({ title: `${name} completed.`, type: 'success' })
       await refresh(selectedId)
     } catch (reason) {
-      setError(messageOf(reason))
+      toast.add({ title: messageOf(reason), type: 'error' })
     } finally {
       setBusy('')
     }
@@ -74,22 +77,21 @@ export function C2MyStrategies() {
   }
 
   return (
-    <section className="ps-card c2-my-strategies" aria-label="My Strategies">
-      <div className="ps-card-head">
-        <div><span>C2 · owner-only</span><h2>My Strategies</h2></div>
-        <button className="secondary-button" type="button" disabled={!!busy} onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</button>
+    <div className="c2-my-strategies" aria-label="My Strategies">
+      <div className="ps-toolbar-row">
+        <p className="ps-note">Only Paper-eligible strategies appear in your engine picker. Selecting one never starts the engine, and Live eligibility remains unavailable.</p>
+        <Button variant="unstyled" className="secondary-button" type="button" disabled={!!busy} onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</Button>
       </div>
-      <p className="ps-note">Only Paper-eligible strategies appear in your engine picker. Selecting one never starts the engine, and Live eligibility remains unavailable.</p>
       {error ? <div className="ps-message error" role="alert">{error}</div> : null}
-      {notice ? <div className="ps-message success" role="status">{notice}</div> : null}
 
       {installations.length ? <div className="pine-managed-grid">
         <aside className="ps-list" aria-label="My strategy installations">
-          {installations.map((item) => <button type="button" className={`ps-list-item${item.id === selectedId ? ' active' : ''}`} key={item.id} onClick={() => void open(item.id)}>
+          <div className="ps-list-toolbar"><Input variant="unstyled" aria-label="Search installations" placeholder="Search strategies…" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+          {installations.filter((item) => item.strategy_name.toLowerCase().includes(search.toLowerCase())).map((item) => <Button variant="unstyled" type="button" className={`ps-list-item${item.id === selectedId ? ' active' : ''}`} key={item.id} onClick={() => void open(item.id)}>
             <strong>{item.strategy_name}</strong>
             <span>{item.instance_label} · {item.mode}</span>
             <span>{ownerStatus(item)}</span>
-          </button>)}
+          </Button>)}
         </aside>
         {detail ? <article className="pine-managed-detail">
           <div className="ps-card-head"><div><span>{detail.strategy_version} · {detail.candidate_sha256.slice(0, 12)}…</span><h2>{detail.instance_label}</h2></div><span className="ps-status">{ownerStatus(detail)}</span></div>
@@ -110,14 +112,14 @@ export function C2MyStrategies() {
               <span>{detail.setup_package.expected_hold_behavior}</span>
             </div>
             <div className="ps-actions">
-              <button className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(detail.setup_package?.approved_pine ?? '')}><Copy size={14} /> Copy approved Pine</button>
-              <button className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(detail.setup_package?.alert_message ?? '')}><Copy size={14} /> Copy alert template</button>
+              <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(detail.setup_package?.approved_pine ?? '')}><Copy size={14} /> Copy approved Pine</Button>
+              <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(detail.setup_package?.alert_message ?? '')}><Copy size={14} /> Copy alert template</Button>
             </div>
             <details><summary>Exact approved Pine</summary><pre className="pine-review-source">{detail.setup_package.approved_pine}</pre></details>
             <details><summary>HOLD alert JSON template</summary><pre>{detail.setup_package.alert_message}</pre></details>
             <div className="ps-actions">
-              {detail.credential_status !== 'ACTIVE' ? <button className="ps-primary" type="button" disabled={!!busy} onClick={() => void run('Credential generation', async () => issue(false))}><KeyRound size={14} /> Generate one-time credential</button> : <button className="secondary-button" type="button" disabled={!!busy} onClick={() => { if (window.confirm('Rotate this credential? The old TradingView alert will stop and HOLD must be verified again.')) void run('Credential rotation', async () => issue(true)) }}><RotateCw size={14} /> Rotate credential</button>}
-              {detail.credential_status === 'ACTIVE' ? <button className="ps-danger" type="button" disabled={!!busy} onClick={() => { if (window.confirm('Revoke this credential and remove Paper eligibility?')) void run('Credential revocation', async () => { await revokeSelfC2Credential(detail.id) }) }}><ShieldOff size={14} /> Revoke credential</button> : null}
+              {detail.credential_status !== 'ACTIVE' ? <Button variant="unstyled" className="ps-primary" type="button" disabled={!!busy} onClick={() => void run('Credential generation', async () => issue(false))}><KeyRound size={14} /> Generate one-time credential</Button> : <Button variant="unstyled" className="secondary-button" type="button" disabled={!!busy} onClick={() => { if (window.confirm('Rotate this credential? The old TradingView alert will stop and HOLD must be verified again.')) void run('Credential rotation', async () => issue(true)) }}><RotateCw size={14} /> Rotate credential</Button>}
+              {detail.credential_status === 'ACTIVE' ? <Button variant="unstyled" className="ps-danger" type="button" disabled={!!busy} onClick={() => { if (window.confirm('Revoke this credential and remove Paper eligibility?')) void run('Credential revocation', async () => { await revokeSelfC2Credential(detail.id) }) }}><ShieldOff size={14} /> Revoke credential</Button> : null}
             </div>
             <p className="ps-note">After installing the exact Pine, configure the alert with the one-time JSON and send one real HOLD. Do not put the credential in the webhook URL.</p>
           </> : <p className="ps-note">Managed setup is handled by NOVA administrators. Its private credential and admin notes are never shown here.</p>}
@@ -127,11 +129,11 @@ export function C2MyStrategies() {
       {issued ? <div className="ps-secret-panel" role="dialog" aria-label="One-time self credential">
         <div><strong>Shown only now</strong><span>Copy the alert JSON before dismissing. This secret cannot be reopened.</span></div>
         <code>{revealed ? issued.token : '••••••••••••••••••••••••••••••••'}</code>
-        <button type="button" className="secondary-button" onClick={() => setRevealed((value) => !value)}>{revealed ? 'Hide' : 'Reveal'}</button>
-        <button type="button" className="secondary-button" onClick={() => void navigator.clipboard.writeText(issued.setup_package.alert_message)}><Copy size={14} /> Copy complete alert JSON</button>
-        <button type="button" className="ps-primary" onClick={() => { setIssued(null); setRevealed(false) }}>Dismiss permanently</button>
+        <Button variant="unstyled" type="button" className="secondary-button" onClick={() => setRevealed((value) => !value)}>{revealed ? 'Hide' : 'Reveal'}</Button>
+        <Button variant="unstyled" type="button" className="secondary-button" onClick={() => void navigator.clipboard.writeText(issued.setup_package.alert_message)}><Copy size={14} /> Copy complete alert JSON</Button>
+        <Button variant="unstyled" type="button" className="ps-primary" onClick={() => { setIssued(null); setRevealed(false) }}>Dismiss permanently</Button>
       </div> : null}
-    </section>
+    </div>
   )
 }
 

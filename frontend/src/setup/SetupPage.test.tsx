@@ -110,9 +110,22 @@ describe('SetupPage authoritative saved revision hydration', () => {
       'aria-valuenow',
       '100',
     )
+    expect(screen.getByRole('progressbar', { name: 'Compact setup progress' })).toHaveAttribute(
+      'aria-valuenow',
+      '100',
+    )
     expect(screen.getByText('All steps answered.')).toBeInTheDocument()
     expect(screen.getByText('CE + PE · 1 lot')).toBeInTheDocument()
     expect(screen.getByText('SL 10% · TP 20%')).toBeInTheDocument()
     expect(screen.getByText('₹25,000 · max 6 trades · 15:15 IST')).toBeInTheDocument()
+    expect(screen.queryByText(/Guided engine setup/i)).toBeNull()
+  })
+
+  it('hides setup progress when bootstrap data is unavailable', () => {
+    const view = render(<SetupPage conversation={<div>Trading database is not configured.</div>} snapshot={null} unavailable />)
+
+    expect(view.getByText('Trading database is not configured.')).toBeInTheDocument()
+    expect(view.container.querySelector('[role="progressbar"]')).toBeNull()
+    expect(view.container.querySelector('[aria-label="Setup steps"]')).toBeNull()
   })
 })

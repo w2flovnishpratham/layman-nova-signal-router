@@ -1,3 +1,9 @@
+import { Input } from "@/components/ui/input"
+import { NativeSelect } from "@/components/ui/native-select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toast'
+import { PageSkeleton } from '@/components/PageSkeleton'
 import {
   AlertTriangle,
   Check,
@@ -21,7 +27,6 @@ import {
   Webhook,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { ReactNode } from 'react'
 import type { AuthUser } from '../api'
 import { ImportedPinePage } from './ImportedPinePage'
 import {
@@ -47,6 +52,7 @@ import { backendHttpUrl } from '../lib/backend'
 import { EngineStrategyPicker } from './EngineStrategyPicker'
 import { C2MyStrategies } from './C2MyStrategies'
 import { blockerText } from './strategyBlockers'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import './personalStrategies.css'
 
 const ACTIONS = ['BUY_CE', 'BUY_PE', 'EXIT', 'HOLD'] as const
@@ -78,21 +84,32 @@ export function PersonalStrategiesPage({ user, focusInstanceId: requestedFocusId
   }, [])
   return (
     <div className="ps-page">
-      <nav className="ps-journey-tabs" aria-label="Personal strategy type">
-        <button type="button" className={journey === 'engine' ? 'active' : ''} onClick={() => setJourney('engine')}>Engine picker</button>
-        <button type="button" className={journey === 'webhook' ? 'active' : ''} onClick={() => setJourney('webhook')}>TradingView webhooks</button>
-        {c2Enabled ? <button type="button" className={journey === 'c2' ? 'active' : ''} onClick={() => setJourney('c2')}>My Strategies</button> : null}
-        <button type="button" className={journey === 'pine' ? 'active' : ''} onClick={() => setJourney('pine')}>Imported Pine scripts</button>
-      </nav>
-      {journey === 'engine' ? (
-        <EngineStrategyPicker onManage={(id) => { setFocusInstanceId(id); setJourney('webhook') }} />
-      ) : journey === 'pine' ? (
-        <ImportedPinePage isAdmin={Boolean(user?.is_admin)} />
-      ) : journey === 'c2' ? (
-        <C2MyStrategies />
-      ) : (
-        <TradingViewStrategiesPage focusInstanceId={focusInstanceId} />
-      )}
+      <Tabs
+        value={journey}
+        onValueChange={(value) => setJourney(value as typeof journey)}
+        className="ps-tabs"
+      >
+        <TabsList variant="line" aria-label="Personal strategy type">
+          <TabsTrigger value="engine">Engine picker</TabsTrigger>
+          <TabsTrigger value="webhook">TradingView webhooks</TabsTrigger>
+          {c2Enabled ? <TabsTrigger value="c2">My Strategies</TabsTrigger> : null}
+          <TabsTrigger value="pine">Imported Pine scripts</TabsTrigger>
+        </TabsList>
+        <TabsContent value="engine" className="ps-tab-panel">
+          <EngineStrategyPicker onManage={(id) => { setFocusInstanceId(id); setJourney('webhook') }} />
+        </TabsContent>
+        <TabsContent value="webhook" className="ps-tab-panel">
+          <TradingViewStrategiesPage focusInstanceId={focusInstanceId} />
+        </TabsContent>
+        {c2Enabled ? (
+          <TabsContent value="c2" className="ps-tab-panel">
+            <C2MyStrategies />
+          </TabsContent>
+        ) : null}
+        <TabsContent value="pine" className="ps-tab-panel">
+          <ImportedPinePage isAdmin={Boolean(user?.is_admin)} />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -108,7 +125,6 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
   const [newName, setNewName] = useState('')
   const [newLots, setNewLots] = useState(1)
   const [paperAccepted, setPaperAccepted] = useState(false)
@@ -119,6 +135,7 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
   const [actionFilter, setActionFilter] = useState('ALL')
   const [statusFilter, setStatusFilter] = useState('ALL')
   const [dateFilter, setDateFilter] = useState('')
+  const [listSearch, setListSearch] = useState('')
 
   const loadList = useCallback(async (preferId?: string) => {
     const rows = (await listStrategyInstances()).filter(
@@ -192,13 +209,11 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
 
   const run = useCallback(async (label: string, action: () => Promise<unknown>) => {
     setBusy(label)
-    setError('')
-    setNotice('')
     try {
       await action()
-      setNotice(`${label} completed.`)
+      toast.add({ title: `${label} completed.`, type: 'success' })
     } catch (reason) {
-      setError(messageOf(reason))
+      toast.add({ title: messageOf(reason), type: 'error' })
     } finally {
       setBusy('')
     }
@@ -228,7 +243,6 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
     setRevealed(false)
     setCopied('')
     setError('')
-    setNotice('')
   }
 
   async function refresh() {
@@ -282,7 +296,7 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
   }
 
   if (loading) {
-    return <PageState icon={<Loader2 className="ps-spin" />} text="Loading personal strategies…" />
+    return <PageSkeleton label="Loading personal strategies" variant="form" />
   }
 
   return (
@@ -294,17 +308,16 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
           <p>Create a private route, paste four alert messages, test safely, then activate.</p>
         </div>
         <div className="ps-heading-actions">
-          <button type="button" className="secondary-button" onClick={() => void refresh()} disabled={!selectedId || !!busy}>
+          <Button variant="unstyled" type="button" className="secondary-button" onClick={() => void refresh()} disabled={!selectedId || !!busy}>
             <RefreshCw size={14} /> Refresh
-          </button>
-          <button type="button" className="ps-primary" onClick={() => setShowCreate((open) => !open)}>
+          </Button>
+          <Button variant="unstyled" type="button" className="ps-primary" onClick={() => setShowCreate((open) => !open)}>
             <Plus size={15} /> New strategy
-          </button>
+          </Button>
         </div>
       </div>
 
       {error ? <div className="ps-message error" role="alert">{error}</div> : null}
-      {notice ? <div className="ps-message success" role="status">{notice}</div> : null}
 
       {showCreate ? (
         <section className="ps-card ps-create" aria-labelledby="create-strategy-title">
@@ -315,36 +328,37 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
           <div className="ps-form-grid">
             <label>
               Strategy name
-              <input autoComplete="off" value={newName} maxLength={120} onChange={(event) => setNewName(event.target.value)} placeholder="My NIFTY strategy" />
+              <Input variant="unstyled" autoComplete="off" value={newName} maxLength={120} onChange={(event) => setNewName(event.target.value)} placeholder="My NIFTY strategy" />
             </label>
             <label>
               Lots
-              <input type="number" min="1" max="1000" value={newLots} onChange={(event) => setNewLots(Number(event.target.value))} />
+              <Input variant="unstyled" type="number" min="1" max="1000" value={newLots} onChange={(event) => setNewLots(Number(event.target.value))} />
             </label>
           </div>
           <label className="ps-check">
-            <input type="checkbox" checked={paperAccepted} onChange={(event) => setPaperAccepted(event.target.checked)} />
+            <Input variant="unstyled" type="checkbox" checked={paperAccepted} onChange={(event) => setPaperAccepted(event.target.checked)} />
             I understand this strategy is paper-only and cannot place live orders.
           </label>
           <div className="ps-actions">
-            <button type="button" className="ps-primary" disabled={!newName.trim() || !paperAccepted || newLots < 1 || !!busy} onClick={() => void createPersonalStrategy()}>
+            <Button variant="unstyled" type="button" className="ps-primary" disabled={!newName.trim() || !paperAccepted || newLots < 1 || !!busy} onClick={() => void createPersonalStrategy()}>
               {busy === 'Strategy creation' ? <Loader2 className="ps-spin" size={14} /> : <Plus size={14} />} Create strategy
-            </button>
-            <button type="button" className="secondary-button" onClick={() => setShowCreate(false)}>Cancel</button>
+            </Button>
+            <Button variant="unstyled" type="button" className="secondary-button" onClick={() => setShowCreate(false)}>Cancel</Button>
           </div>
         </section>
       ) : null}
 
       <div className="ps-layout">
         <aside className="ps-list" aria-label="Personal strategies">
-          {instances.length ? instances.map((instance) => (
-            <button key={instance.id} type="button" className={`ps-list-item${selectedId === instance.id ? ' active' : ''}`} onClick={() => selectInstance(instance.id)}>
+          {instances.length ? <div className="ps-list-toolbar"><Input variant="unstyled" aria-label="Search strategies" placeholder="Search strategies…" value={listSearch} onChange={(event) => setListSearch(event.target.value)} /></div> : null}
+          {instances.length ? instances.filter((instance) => instance.label.toLowerCase().includes(listSearch.toLowerCase())).map((instance) => (
+            <Button variant="unstyled" key={instance.id} type="button" className={`ps-list-item${selectedId === instance.id ? ' active' : ''}`} onClick={() => selectInstance(instance.id)}>
               <span className="ps-list-top"><strong>{instance.label}</strong><StatusBadge status={instance.status} /></span>
               <span>{instance.current_lots} lot{instance.current_lots === 1 ? '' : 's'} · Paper</span>
               <span>{instance.credential_status === 'revoked' ? 'Credential revoked' : instance.webhook_credential ? 'Credential active' : 'Needs webhook'}</span>
               <span>Last signal: {formatDate(instance.last_signal_time)}</span>
               <span>Last result: {instance.last_execution_status ? friendlyStatus(instance.last_execution_status) : 'None'} · Created {formatDate(instance.created_at)}</span>
-            </button>
+            </Button>
           )) : (
             <div className="ps-empty-small"><Webhook size={22} /><strong>No personal strategies</strong><span>Create one to begin.</span></div>
           )}
@@ -506,7 +520,7 @@ function StrategyDetail(props: DetailProps) {
           ) : managed ? (
             <p className="ps-note">A NOVA administrator starts and completes verification for managed strategies.</p>
           ) : (
-            <button type="button" className="ps-primary" disabled={!!props.busy} onClick={() => void props.onStartVerification()}>Start verification (paper-only)</button>
+            <Button variant="unstyled" type="button" className="ps-primary" disabled={!!props.busy} onClick={() => void props.onStartVerification()}>Start verification (paper-only)</Button>
           )
         ) : null}
       </section>
@@ -515,8 +529,8 @@ function StrategyDetail(props: DetailProps) {
         <StepTitle number="2" title="Configure paper lots" />
         <div className="ps-inline-form">
           <label htmlFor="personal-lots">Lots</label>
-          <input id="personal-lots" type="number" min="1" max="1000" value={lots} onChange={(event) => syncLots(Number(event.target.value))} />
-          <button type="button" className="secondary-button" disabled={lots < 1 || lots === detail.current_lots || !!props.busy} onClick={() => void props.onLots(lots)}>Save lots</button>
+          <Input variant="unstyled" id="personal-lots" type="number" min="1" max="1000" value={lots} onChange={(event) => syncLots(Number(event.target.value))} />
+          <Button variant="unstyled" type="button" className="secondary-button" disabled={lots < 1 || lots === detail.current_lots || !!props.busy} onClick={() => void props.onLots(lots)}>Save lots</Button>
         </div>
         <p className="ps-note">Estimated quantity: {lots} × {detail.lot_size ?? 'current NIFTY lot size'} = {detail.lot_size ? lots * detail.lot_size : 'calculated at entry'}. Changes affect the next entry only; they never resize an open position, and same-side signals do not scale in.</p>
       </section>
@@ -526,7 +540,7 @@ function StrategyDetail(props: DetailProps) {
         {managed ? (
           <div className="ps-credential-status"><ShieldCheck size={16} /><span>{detail.webhook_credential ? 'Credential configured by NOVA' : detail.credential_status === 'revoked' ? 'Credential rotated — awaiting NOVA re-verification' : 'Credential provisioning pending with NOVA'}</span></div>
         ) : !detail.webhook_credential ? (
-          <button type="button" className="ps-primary" disabled={!!props.busy} onClick={() => void props.onIssue()}><KeyRound size={14} /> Generate credential</button>
+          <Button variant="unstyled" type="button" className="ps-primary" disabled={!!props.busy} onClick={() => void props.onIssue()}><KeyRound size={14} /> Generate credential</Button>
         ) : (
           <div className="ps-credential-status"><ShieldCheck size={16} /><span>Credential active · {detail.webhook_credential.token_prefix}…</span></div>
         )}
@@ -535,9 +549,9 @@ function StrategyDetail(props: DetailProps) {
           <div className="ps-secret-panel">
             <div><strong>Shown only now</strong><span>Update every TradingView alert before leaving this page.</span></div>
             <code>{props.revealed ? props.issuedToken : '••••••••••••••••••••••••••••••••••••••••'}</code>
-            <button type="button" className="secondary-button" aria-label={props.revealed ? 'Hide webhook credential' : 'Reveal webhook credential'} onClick={props.onReveal}>
+            <Button variant="unstyled" type="button" className="secondary-button" aria-label={props.revealed ? 'Hide webhook credential' : 'Reveal webhook credential'} onClick={props.onReveal}>
               {props.revealed ? <EyeOff size={14} /> : <Eye size={14} />} {props.revealed ? 'Hide' : 'Reveal'}
-            </button>
+            </Button>
           </div>
         ) : null}
         {!managed ? (
@@ -556,8 +570,8 @@ function StrategyDetail(props: DetailProps) {
             ) : null}
             {detail.has_open_position ? <div className="ps-warning"><AlertTriangle size={16} /><span>Revoking this credential disables TradingView exit signals. NOVA manual and protective exits remain available.</span></div> : null}
             <div className="ps-actions">
-              <button type="button" className="secondary-button" disabled={!!props.busy} onClick={() => void props.onRotate()}><RotateCw size={14} /> Replace TradingView credential</button>
-              <button type="button" className="ps-danger" disabled={!!props.busy} onClick={() => void props.onRevoke()}><Trash2 size={14} /> Revoke</button>
+              <Button variant="unstyled" type="button" className="secondary-button" disabled={!!props.busy} onClick={() => void props.onRotate()}><RotateCw size={14} /> Replace TradingView credential</Button>
+              <Button variant="unstyled" type="button" className="ps-danger" disabled={!!props.busy} onClick={() => void props.onRevoke()}><Trash2 size={14} /> Revoke</Button>
             </div>
           </>
         ) : null}
@@ -594,9 +608,9 @@ function StrategyDetail(props: DetailProps) {
       <section className="ps-card">
         <StepTitle number="5" title="Test connection" />
         <p className="ps-note">Sends a server-generated HOLD signal through the same durable ingestion path. HOLD cannot place an order.</p>
-        <button type="button" className="ps-primary" disabled={!detail.webhook_credential || !!props.busy || detail.execution_mode === 'real_orders'} onClick={() => void props.onTest()}>
+        <Button variant="unstyled" type="button" className="ps-primary" disabled={!detail.webhook_credential || !!props.busy || detail.execution_mode === 'real_orders'} onClick={() => void props.onTest()}>
           <Send size={14} /> Send paper HOLD test
-        </button>
+        </Button>
       </section>
       </>
       )}
@@ -604,10 +618,10 @@ function StrategyDetail(props: DetailProps) {
       <section className="ps-card">
         <StepTitle number="6" title="Control strategy" />
         <div className="ps-actions">
-          {detail.status === 'ready' ? <button type="button" className="ps-primary" disabled={!detail.readiness?.can_activate || !!props.busy} onClick={() => void props.onLifecycle('Activate')}><Play size={14} /> Activate</button> : null}
-          {detail.status === 'paused' ? <button type="button" className="ps-primary" disabled={!detail.readiness?.can_activate || !!props.busy} onClick={() => void props.onLifecycle('Resume')}><Play size={14} /> Resume</button> : null}
-          {detail.status === 'active' ? <button type="button" className="secondary-button" disabled={!!props.busy} onClick={() => void props.onLifecycle('Pause')}><Pause size={14} /> Pause</button> : null}
-          {['active', 'paused'].includes(detail.status) ? <button type="button" className="ps-danger" disabled={!!props.busy} onClick={() => { if (window.confirm('Stop this strategy? Stop is permitted only when the position is flat.')) void props.onLifecycle('Stop') }}><Square size={14} /> Stop</button> : null}
+          {detail.status === 'ready' ? <Button variant="unstyled" type="button" className="ps-primary" disabled={!detail.readiness?.can_activate || !!props.busy} onClick={() => void props.onLifecycle('Activate')}><Play size={14} /> Activate</Button> : null}
+          {detail.status === 'paused' ? <Button variant="unstyled" type="button" className="ps-primary" disabled={!detail.readiness?.can_activate || !!props.busy} onClick={() => void props.onLifecycle('Resume')}><Play size={14} /> Resume</Button> : null}
+          {detail.status === 'active' ? <Button variant="unstyled" type="button" className="secondary-button" disabled={!!props.busy} onClick={() => void props.onLifecycle('Pause')}><Pause size={14} /> Pause</Button> : null}
+          {['active', 'paused'].includes(detail.status) ? <Button variant="unstyled" type="button" className="ps-danger" disabled={!!props.busy} onClick={() => { if (window.confirm('Stop this strategy? Stop is permitted only when the position is flat.')) void props.onLifecycle('Stop') }}><Square size={14} /> Stop</Button> : null}
         </div>
         {detail.status === 'paused' ? <p className="ps-note"><strong>New entries are blocked.</strong> Exit signals and NOVA protective exits remain active.</p> : null}
         <p className="ps-note">Stopping is permitted only when flat. Close the open position from Trading first, or pause now to block new entries while keeping exits available. Stop never closes a position automatically.</p>
@@ -616,27 +630,27 @@ function StrategyDetail(props: DetailProps) {
       <section className="ps-card">
         <StepTitle number="7" title="Monitor signals" />
         <div className="ps-filters">
-          <label>Action<select value={props.actionFilter} onChange={(event) => props.onActionFilter(event.target.value)}><option>ALL</option>{ACTIONS.map((action) => <option key={action}>{action}</option>)}</select></label>
-          <label>Status<select value={props.statusFilter} onChange={(event) => props.onStatusFilter(event.target.value)}><option>ALL</option>{['Received', 'Queued', 'Processing', 'Executed', 'No action needed', 'Rejected', 'Failed'].map((status) => <option key={status}>{status}</option>)}</select></label>
-          <label>Date<input type="date" value={props.dateFilter} onChange={(event) => props.onDateFilter(event.target.value)} /></label>
+          <label>Action<NativeSelect variant="unstyled" value={props.actionFilter} onChange={(event) => props.onActionFilter(event.target.value)}><option>ALL</option>{ACTIONS.map((action) => <option key={action}>{action}</option>)}</NativeSelect></label>
+          <label>Status<NativeSelect variant="unstyled" value={props.statusFilter} onChange={(event) => props.onStatusFilter(event.target.value)}><option>ALL</option>{['Received', 'Queued', 'Processing', 'Executed', 'No action needed', 'Rejected', 'Failed'].map((status) => <option key={status}>{status}</option>)}</NativeSelect></label>
+          <label>Date<Input variant="unstyled" type="date" value={props.dateFilter} onChange={(event) => props.onDateFilter(event.target.value)} /></label>
         </div>
         <div className="ps-history-wrap">
-          <table className="ps-history">
-            <thead><tr><th>Received</th><th>Action</th><th>Status</th><th>Mode</th><th>Contract / quantity</th><th>Signal ID</th></tr></thead>
-            <tbody>{filtered.length ? filtered.map((entry) => (
-              <tr key={entry.signal_id}>
-                <td>{formatDate(entry.received_at)}</td><td>{entry.action ?? '—'}</td>
-                <td><span className="ps-history-status">{executionLabel(entry)}</span>{entry.reason ? <small>{safeReason(entry.reason)}</small> : null}</td>
-                <td>{entry.execution_mode === 'paper_live_data' ? 'Paper' : entry.execution_mode ?? '—'}</td>
-                <td>{contractLabel(entry)}</td><td><code>{entry.signal_id}</code></td>
-              </tr>
-            )) : <tr><td colSpan={6} className="ps-history-empty">No matching signals.</td></tr>}</tbody>
-          </table>
+          <Table variant="unstyled" className="ps-history">
+            <TableHeader><TableRow><TableHead>Received</TableHead><TableHead>Action</TableHead><TableHead>Status</TableHead><TableHead>Mode</TableHead><TableHead>Contract / quantity</TableHead><TableHead>Signal ID</TableHead></TableRow></TableHeader>
+            <TableBody>{filtered.length ? filtered.map((entry) => (
+              <TableRow key={entry.signal_id}>
+                <TableCell>{formatDate(entry.received_at)}</TableCell><TableCell>{entry.action ?? '—'}</TableCell>
+                <TableCell><span className="ps-history-status">{executionLabel(entry)}</span>{entry.reason ? <small>{safeReason(entry.reason)}</small> : null}</TableCell>
+                <TableCell>{entry.execution_mode === 'paper_live_data' ? 'Paper' : entry.execution_mode ?? '—'}</TableCell>
+                <TableCell>{contractLabel(entry)}</TableCell><TableCell><code>{entry.signal_id}</code></TableCell>
+              </TableRow>
+            )) : <TableRow><TableCell colSpan={6} className="ps-history-empty">No matching signals.</TableCell></TableRow>}</TableBody>
+          </Table>
         </div>
         <div className="ps-pagination">
-          <button type="button" className="secondary-button" disabled={props.offset === 0} onClick={() => void props.onPage(Math.max(0, props.offset - PAGE_SIZE))}><ChevronLeft size={14} /> Newer</button>
+          <Button variant="unstyled" type="button" className="secondary-button" disabled={props.offset === 0} onClick={() => void props.onPage(Math.max(0, props.offset - PAGE_SIZE))}><ChevronLeft size={14} /> Newer</Button>
           <span>Page {Math.floor(props.offset / PAGE_SIZE) + 1}</span>
-          <button type="button" className="secondary-button" disabled={props.history.length < PAGE_SIZE} onClick={() => void props.onPage(props.offset + PAGE_SIZE)}>Older <ChevronRight size={14} /></button>
+          <Button variant="unstyled" type="button" className="secondary-button" disabled={props.history.length < PAGE_SIZE} onClick={() => void props.onPage(props.offset + PAGE_SIZE)}>Older <ChevronRight size={14} /></Button>
         </div>
       </section>
     </>
@@ -653,16 +667,12 @@ function Summary({ label, value }: { label: string; value: string }) {
 
 function CopyButton({ label, copied, onClick }: { label: string; copied: string; onClick: () => Promise<void> }) {
   const done = copied === label
-  return <button type="button" className="secondary-button" aria-label={`Copy ${label}`} onClick={() => void onClick()}>{done ? <ClipboardCheck size={14} /> : <Copy size={14} />}{done ? 'Copied' : `Copy ${label}`}</button>
+  return <Button variant="unstyled" type="button" className="secondary-button" aria-label={`Copy ${label}`} onClick={() => void onClick()}>{done ? <ClipboardCheck size={14} /> : <Copy size={14} />}{done ? 'Copied' : `Copy ${label}`}</Button>
 }
 
 function StatusBadge({ status }: { status: string }) {
   const labels: Record<string, string> = { draft: 'Draft', ready: 'Needs setup', active: 'Active', paused: 'Paused', stopped: 'Stopped', error: 'Error' }
   return <span className={`ps-status ${status}`}>{labels[status] ?? status.replaceAll('_', ' ')}</span>
-}
-
-function PageState({ icon, text }: { icon: ReactNode; text: string }) {
-  return <div className="ps-page-state">{icon}<span>{text}</span></div>
 }
 
 function templates(credential: string): Record<(typeof ACTIONS)[number], string> {

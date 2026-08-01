@@ -1,3 +1,5 @@
+import { Input } from "@/components/ui/input"
+import { Button } from '@/components/ui/button'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { ClientCommand } from '../../types'
@@ -16,11 +18,11 @@ export function BrokerForm({ onSend }: { onSend: (command: ClientCommand) => voi
       <span className="eyebrow">Broker</span>
       <label>
         Client ID
-        <input value={clientId} onChange={(event) => setClientId(event.target.value)} required minLength={3} autoComplete="off" />
+        <Input variant="unstyled" value={clientId} onChange={(event) => setClientId(event.target.value)} required minLength={3} autoComplete="off" />
       </label>
       <label>
         Access Token
-        <input
+        <Input variant="unstyled"
           value={accessToken}
           onChange={(event) => setAccessToken(event.target.value)}
           required
@@ -29,7 +31,7 @@ export function BrokerForm({ onSend }: { onSend: (command: ClientCommand) => voi
           autoComplete="off"
         />
       </label>
-      <button type="submit">Securely connect</button>
+      <Button variant="unstyled" type="submit">Securely connect</Button>
     </form>
   )
 }

@@ -1,5 +1,8 @@
+import { Input } from "@/components/ui/input"
+import { Button } from '@/components/ui/button'
 import { AlertTriangle, Check, ChevronDown, Loader2, Play, Settings2 } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from '@/components/ui/toast'
 import type { FormEvent } from 'react'
 import type { EngineStrategy, RuntimeStatus } from '../../api'
 import { blockerText } from '../../strategies/strategyBlockers'
@@ -68,9 +71,15 @@ export function TradingStrategyCard({
     setBusy(name)
     setActionError('')
     try {
-      await action()
+      const request = action()
+      await (name === 'start' ? toast.promise(request, {
+        loading: { title: 'Starting the Paper engine…', type: 'loading', timeout: 0 },
+        success: { title: 'Paper engine started.', type: 'success' },
+        error: (reason) => ({ title: reason instanceof Error ? reason.message : 'The request could not be completed.', type: 'error' }),
+      }) : request)
     } catch (reason) {
-      setActionError(reason instanceof Error ? reason.message : 'The request could not be completed.')
+      const message = reason instanceof Error ? reason.message : 'The request could not be completed.'
+      setActionError(message)
     } finally {
       setBusy('')
     }
@@ -191,25 +200,25 @@ export function TradingStrategyCard({
       {showConfig ? (
         <form className="trading-strategy-config" onSubmit={(event) => void save(event)}>
           <span className="sr-only">Configure {selected.display_name}</span>
-          <label>Lots<input aria-label="Paper lots" type="number" min={1} max={20} value={editDraft.lots} onChange={(event) => setDraft({ ...editDraft, lots: Number(event.target.value) })} /></label>
-          <label>SL %<input aria-label="Paper stop loss" type="number" min={0} max={100} step="0.1" value={editDraft.stopLoss} onChange={(event) => setDraft({ ...editDraft, stopLoss: Number(event.target.value) })} /></label>
-          <label>TP %<input aria-label="Paper take profit" type="number" min={0} max={1000} step="0.1" value={editDraft.takeProfit} onChange={(event) => setDraft({ ...editDraft, takeProfit: Number(event.target.value) })} /></label>
-          <button type="submit" disabled={busy === 'configure' || switchingBlocked}>
+          <label>Lots<Input variant="unstyled" aria-label="Paper lots" type="number" min={1} max={20} value={editDraft.lots} onChange={(event) => setDraft({ ...editDraft, lots: Number(event.target.value) })} /></label>
+          <label>SL %<Input variant="unstyled" aria-label="Paper stop loss" type="number" min={0} max={100} step="0.1" value={editDraft.stopLoss} onChange={(event) => setDraft({ ...editDraft, stopLoss: Number(event.target.value) })} /></label>
+          <label>TP %<Input variant="unstyled" aria-label="Paper take profit" type="number" min={0} max={1000} step="0.1" value={editDraft.takeProfit} onChange={(event) => setDraft({ ...editDraft, takeProfit: Number(event.target.value) })} /></label>
+          <Button variant="unstyled" type="submit" disabled={busy === 'configure' || switchingBlocked}>
             {busy === 'configure' ? 'Saving…' : 'Save Paper Settings'}
-          </button>
+          </Button>
         </form>
       ) : null}
 
       <div className="trading-strategy-actions">
-        <button type="button" onClick={() => onManage(selected.instance_id)}><Settings2 size={14} /> Manage Strategy</button>
-        <button
+        <Button variant="unstyled" type="button" onClick={() => onManage(selected.instance_id)}><Settings2 size={14} /> Manage Strategy</Button>
+        <Button variant="unstyled"
           type="button"
           disabled={switchingBlocked}
           onClick={() => onConfigureRequested ? onConfigureRequested() : setShowConfig((visible) => !visible)}
         >
           Configure Paper Settings
-        </button>
-        <button
+        </Button>
+        <Button variant="unstyled"
           type="button"
           className="strategy-start"
           disabled={!canStart || busy === 'start'}
@@ -217,14 +226,14 @@ export function TradingStrategyCard({
         >
           {busy === 'start' ? <Loader2 className="strategy-card-spin" size={14} /> : <Play size={14} />}
           {runtime?.engine.running ? 'Paper Engine Running' : 'Start Paper Engine'}
-        </button>
-        <button
+        </Button>
+        <Button variant="unstyled"
           type="button"
           disabled={switchingBlocked || (!onChangeStrategy && alternatives.length === 0)}
           onClick={() => onChangeStrategy ? onChangeStrategy() : setShowChoices((visible) => !visible)}
         >
           Change Strategy <ChevronDown size={14} />
-        </button>
+        </Button>
       </div>
 
       {confirmStartOpen && canStart ? (
@@ -240,15 +249,15 @@ export function TradingStrategyCard({
             <div><dt>Take profit</dt><dd>{configuredTp}%</dd></div>
           </dl>
           <div className="strategy-start-confirm-actions">
-            <button type="button" className="strategy-start" disabled={busy === 'start'} onClick={() => void run('start', async () => {
+            <Button variant="unstyled" type="button" className="strategy-start" disabled={busy === 'start'} onClick={() => void run('start', async () => {
               await onStart(selected.instance_id)
               setConfirmStartOpen(false)
             })}>
               {busy === 'start' ? <Loader2 className="strategy-card-spin" size={14} /> : <Play size={14} />}
               Confirm and Start
-            </button>
-            <button type="button" onClick={() => { setConfirmStartOpen(false); setShowConfig(true) }}>Edit Settings</button>
-            <button type="button" onClick={() => setConfirmStartOpen(false)}>Cancel</button>
+            </Button>
+            <Button variant="unstyled" type="button" onClick={() => { setConfirmStartOpen(false); setShowConfig(true) }}>Edit Settings</Button>
+            <Button variant="unstyled" type="button" onClick={() => setConfirmStartOpen(false)}>Cancel</Button>
           </div>
         </section>
       ) : null}
@@ -282,7 +291,7 @@ function StrategyChoices({
   return (
     <div className="trading-strategy-choices" aria-label="Paper-ready strategies">
       {strategies.map((strategy) => (
-        <button
+        <Button variant="unstyled"
           key={strategy.instance_id}
           type="button"
           disabled={blocked || busy === `select-${strategy.instance_id}`}
@@ -290,7 +299,7 @@ function StrategyChoices({
         >
           <span><strong>{strategy.display_name}</strong><small>Ready for Paper · {strategy.lots} lot{strategy.lots === 1 ? '' : 's'}</small></span>
           <span>Select</span>
-        </button>
+        </Button>
       ))}
     </div>
   )

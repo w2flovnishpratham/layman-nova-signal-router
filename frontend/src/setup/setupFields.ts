@@ -38,11 +38,20 @@ export const RISK_FIELDS: StrategySetupField[] = [
 export const RISK_KEYS: readonly string[] = RISK_FIELDS.map((f) => f.key)
 
 /** Strategy schema fields followed by the engine safety fields, in ask order. */
-export function withRiskFields(fields: StrategySetupField[]): StrategySetupField[] {
+export function withRiskFields(
+  fields: StrategySetupField[],
+  defaults: Partial<Record<string, string | number>> = {},
+): StrategySetupField[] {
   // A strategy with no schema is unusable; don't dress it up with safety
   // questions it can never act on.
   if (fields.length === 0) return fields
-  return [...fields, ...RISK_FIELDS]
+  return [...fields, ...RISK_FIELDS.map((field): StrategySetupField => {
+    const value = defaults[field.key]
+    if (value === undefined) return field
+    return field.type === 'choice'
+      ? { ...field, default: String(value) }
+      : { ...field, default: Number(value) }
+  })]
 }
 
 /** Split a draft into the strategy setup values and the runtime risk settings,

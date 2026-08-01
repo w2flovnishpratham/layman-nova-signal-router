@@ -1,3 +1,7 @@
+import { Input } from "@/components/ui/input"
+import { Slider } from "@/components/ui/slider"
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { FlaskConical, Loader2, Zap } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
@@ -7,7 +11,7 @@ import { SetupInfoCard } from '../messages/SetupInfoCard'
 import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
-import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
+import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SideFilter } from '../../types'
 import type { SetupSnapshot } from '../../setup/SetupPage'
 import { ConversationController } from '../conversation/ConversationController'
 
@@ -15,7 +19,6 @@ const DISABLED_STOP_LOSS_PCT = 99.9
 const DEFAULT_CUSTOM_STOP_LOSS_PCT = 10
 
 interface Props {
-  state: SetupState
   flowStep: SetupFlowStep
   draft: SetupDraft
   lastError: string
@@ -43,7 +46,6 @@ interface Props {
 }
 
 export function SetupPanel({
-  state,
   flowStep,
   draft,
   lastError,
@@ -65,7 +67,7 @@ export function SetupPanel({
   onStep,
   onSetupState,
 }: Props) {
-  if (state === 'LIVE' || state === 'PAUSED' || state === 'ENDED' || flowStep === 'complete') return null
+  if (flowStep === 'complete') return null
   if (flowStep === 'live_access') return <LiveAccessStep onContinue={() => {
     onUserReply('Nova Static IP entitlement and proxy verification confirmed')
     onStep('strategy')
@@ -152,15 +154,15 @@ function SharedDataStep({ onContinue }: { onContinue: () => void }) {
   return (
     <article className="setup-card broker-panel">
       <div className="shared-data-step">
-        <span className="shared-data-badge"><FlaskConical size={14} /> Paper mode</span>
+        <Badge variant="unstyled" className="shared-data-badge"><FlaskConical size={14} /> Paper mode</Badge>
         <h3>No Dhan account needed</h3>
         <p className="form-hint">
           Paper mode runs on NOVA's shared live market data feed. Your trades are simulated against
           real NIFTY option prices — no Dhan Client ID or token required, and no real money is ever at risk.
         </p>
-        <button type="button" className="primary-button" onClick={onContinue}>
+        <Button variant="unstyled" type="button" className="primary-button" onClick={onContinue}>
           Continue with shared market data
-        </button>
+        </Button>
       </div>
     </article>
   )
@@ -258,9 +260,9 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
       )}
       {staticIpEntitled ? (
         <>
-          <button type="button" className="primary-button" disabled={!staticIpReady} onClick={onContinue}>
+          <Button variant="unstyled" type="button" className="primary-button" disabled={!staticIpReady} onClick={onContinue}>
             {staticIpReady ? 'Opening Strategy Setup...' : 'Continue to Strategy'}
-          </button>
+          </Button>
           {!staticIpReady ? <p className="form-hint">Whitelist and verify the assigned IP before strategy setup. Live and strategy access are checked again before deployment.</p> : null}
         </>
       ) : null}
@@ -297,11 +299,11 @@ function BrokerStep({
       <p className="form-hint">{mode === 'paper' ? 'Dhan credentials are used only for real market data. Paper mode never sends Dhan orders.' : 'Credentials are used for live market data and live order routing.'}</p>
       <label>
         Dhan Client ID
-        <input value={clientId} onChange={(event) => setClientId(event.target.value)} required minLength={3} autoComplete="off" disabled={pending} />
+        <Input variant="unstyled" value={clientId} onChange={(event) => setClientId(event.target.value)} required minLength={3} autoComplete="off" disabled={pending} />
       </label>
       <label>
         Access Token
-        <input
+        <Input variant="unstyled"
           value={accessToken}
           onChange={(event) => setAccessToken(event.target.value)}
           required
@@ -312,14 +314,14 @@ function BrokerStep({
         />
       </label>
       {error ? <p className="form-error">{error}</p> : null}
-      <button type="submit" disabled={pending}>
+      <Button variant="unstyled" type="submit" disabled={pending}>
         {pending ? (
           <MotionSpinner>
             <Loader2 size={14} />
           </MotionSpinner>
         ) : null}
         {pending ? 'Verifying Dhan Account' : 'Connect & Verify Dhan Account'}
-      </button>
+      </Button>
     </form>
   )
 }
@@ -329,9 +331,9 @@ function SideStep({ value, onSelect }: { value: SideFilter; onSelect: (side: Sid
     <article className="setup-card">
       <div className="choice-grid">
         {(['CE', 'PE', 'BOTH'] as SideFilter[]).map((side) => (
-          <button key={side} className={value === side ? 'selected' : ''} type="button" onClick={() => onSelect(side)}>
+          <Button variant="unstyled" key={side} className={value === side ? 'selected' : ''} type="button" onClick={() => onSelect(side)}>
             {sideLabel(side)}
-          </button>
+          </Button>
         ))}
       </div>
     </article>
@@ -343,12 +345,12 @@ function LotsStep({ value, lotSize, onSelect }: { value: number; lotSize: number
   return (
     <article className="setup-card">
       <div className="counter-row large-counter">
-        <button type="button" onClick={() => setLots((current) => Math.max(1, current - 1))}>-</button>
+        <Button variant="unstyled" type="button" onClick={() => setLots((current) => Math.max(1, current - 1))}>-</Button>
         <strong>{lots}</strong>
-        <button type="button" onClick={() => setLots((current) => current + 1)}>+</button>
+        <Button variant="unstyled" type="button" onClick={() => setLots((current) => current + 1)}>+</Button>
         <small>{contractsForLots(lots, lotSize)} contracts</small>
       </div>
-      <button type="button" onClick={() => onSelect(lots)}>Use {lots} lot</button>
+      <Button variant="unstyled" type="button" onClick={() => onSelect(lots)}>Use {lots} lot</Button>
     </article>
   )
 }
@@ -380,16 +382,16 @@ function ExitRulesStep({
   return (
     <article className="setup-card">
       <div className="choice-grid three">
-        <button className={exitMode === 'flip_only' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_only')}>Flips Only</button>
-        <button className={exitMode === 'flip_tp' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_tp')}>Target Profit</button>
-        <button className={exitMode === 'custom' ? 'selected' : ''} type="button" onClick={() => selectExitMode('custom')}>Custom SL & TP</button>
+        <Button variant="unstyled" className={exitMode === 'flip_only' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_only')}>Flips Only</Button>
+        <Button variant="unstyled" className={exitMode === 'flip_tp' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_tp')}>Target Profit</Button>
+        <Button variant="unstyled" className={exitMode === 'custom' ? 'selected' : ''} type="button" onClick={() => selectExitMode('custom')}>Custom SL & TP</Button>
       </div>
       {exitMode !== 'flip_only' ? (
         <div className="tp-control">
           <label>
             Target profit
             <span className="percent-input">
-              <input
+              <Input variant="unstyled"
                 type="number"
                 min={1}
                 max={100}
@@ -400,7 +402,7 @@ function ExitRulesStep({
               <span>%</span>
             </span>
           </label>
-          <input type="range" min={1} max={100} value={boundedTargetPct} onChange={(event) => setTargetPct(Number(event.target.value))} />
+          <Slider aria-label="Target profit percent" min={1} max={100} value={boundedTargetPct} onValueChange={setTargetPct} />
         </div>
       ) : null}
       {exitMode === 'custom' ? (
@@ -408,7 +410,7 @@ function ExitRulesStep({
           <label>
             Stop loss
             <span className="percent-input">
-              <input
+              <Input variant="unstyled"
                 type="number"
                 min={1}
                 max={79}
@@ -419,15 +421,15 @@ function ExitRulesStep({
               <span>%</span>
             </span>
           </label>
-          <input type="range" min={1} max={79} value={boundedStopLossPct} onChange={(event) => setStopLossPct(Number(event.target.value))} />
+          <Slider aria-label="Stop loss percent" min={1} max={79} value={boundedStopLossPct} onValueChange={setStopLossPct} />
         </div>
       ) : null}
-      <button
+      <Button variant="unstyled"
         type="button"
         onClick={() => onSubmit({ exitMode, targetPct: boundedTargetPct, stopLossPct: effectiveStopLossPct })}
       >
         Confirm Exits Rules -&gt;
-      </button>
+      </Button>
     </article>
   )
 }
@@ -454,11 +456,11 @@ function DailyLimitsStep({
     <form className="setup-card form-card launch-card" onSubmit={submit}>
       <label>
         Max trades per day
-        <input type="number" min={0} max={50} value={maxTrades} disabled={pending} onChange={(event) => setMaxTrades(Number(event.target.value))} />
+        <Input variant="unstyled" type="number" min={0} max={50} value={maxTrades} disabled={pending} onChange={(event) => setMaxTrades(Number(event.target.value))} />
       </label>
       <label>
         Max daily loss in INR
-        <input type="number" min={0} step={100} value={maxLoss} disabled={pending} onChange={(event) => setMaxLoss(Number(event.target.value))} />
+        <Input variant="unstyled" type="number" min={0} step={100} value={maxLoss} disabled={pending} onChange={(event) => setMaxLoss(Number(event.target.value))} />
       </label>
       <p className="form-hint">Use 0 for no limit.</p>
       <div className="trust-grid">
@@ -466,9 +468,9 @@ function DailyLimitsStep({
         <div><span>Margin check</span><strong>{draft.engineMode === 'paper' ? 'Virtual balance before fill' : 'Dhan margin API before order'}</strong></div>
         <div><span>Charges</span><strong>{draft.engineMode === 'paper' ? 'Simulated Dhan charge formula' : 'From real Dhan fills/reporting'}</strong></div>
       </div>
-      <button className="live-confirm" type="submit" disabled={pending}>
+      <Button variant="unstyled" className="live-confirm" type="submit" disabled={pending}>
         {pending ? 'Saving Setup...' : 'Save Limits & Finish'}
-      </button>
+      </Button>
     </form>
   )
 }
@@ -528,9 +530,9 @@ function DeploymentSummary({ draft, lotSize, strategyLabel, pending, onDeploy }:
           <strong>{draft.maxTrades ? `${draft.maxTrades} trades` : 'None'} | {draft.maxLoss ? formatCurrency(draft.maxLoss) : 'None'}</strong>
         </div>
       </div>
-      <button className="live-confirm" type="button" onClick={onDeploy} disabled={pending}>
+      <Button variant="unstyled" className="live-confirm" type="button" onClick={onDeploy} disabled={pending}>
         {pending ? 'Starting Engine...' : draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Trade Real Money - Confirm'}
-      </button>
+      </Button>
     </article>
   )
 }
@@ -578,14 +580,14 @@ function RazorpayTestCheckoutCard({
         </span>
       </div>
       <p>Premium includes live orders, Nova Static IP, and strategy access. Test mode only; access activates after Razorpay webhook confirms payment.</p>
-      <button className="checkout-button" type="button" disabled={pending} onClick={startCheckout}>
+      <Button variant="unstyled" className="checkout-button" type="button" disabled={pending} onClick={startCheckout}>
         {pending ? (
           <MotionSpinner>
             <Loader2 size={14} />
           </MotionSpinner>
         ) : null}
         {pending ? 'Creating Checkout' : 'Start Razorpay Test Checkout'}
-      </button>
+      </Button>
       {message ? <p className="subscription-status-row">{message}</p> : null}
       {error ? <p className="subscription-error">{error}</p> : null}
     </section>

@@ -6,8 +6,8 @@ Truthfulness notes (verified against the code, not the mockup):
   ``StrategySubscription`` has no webhook token/secret columns, so the mockup's
   "one endpoint per strategy, each with its own secret" does not exist and is not
   invented here.
-* The secret is never returned. Only ``webhook_secret_metadata()`` is exposed,
-  which yields ``{set, masked, source}``.
+* The secret is never returned. Only a masked projection of the signed-in
+  user's encrypted vault value is exposed.
 * Delivery history is the same ``WebhookEvent`` table the Signals page reads, so
   the recent list is delegated to ``signals_feed`` rather than duplicated.
 
@@ -24,41 +24,60 @@ from sqlalchemy import func, select
 from app.config import settings
 from app.db import models
 from app.db.engine import database_configured, session_scope
-from app.services import signals_feed
-from app.services.credential_vault import webhook_secret_metadata
+from app.services import credential_vault, signals_feed, user_credential_vault
+from app.services.credential_vault import mask_secret
 
 RECENT_LIMIT = 10
 WINDOW_HOURS = 24
 
 
-def _endpoints() -> list[dict[str, Any]]:
+def _endpoints(user_id: uuid.UUID, *, account_scoped: bool) -> list[dict[str, Any]]:
     """The inbound endpoints that actually exist in this deployment."""
     base = (settings.BACKEND_PUBLIC_BASE_URL or "").rstrip("/")
     out: list[dict[str, Any]] = []
-    if base:
+    if base and account_scoped:
         out.append({
             "key": "tradingview",
-            "label": "TradingView alerts",
-            "url": f"{base}/webhook/tradingview",
+            "label": "Account webhook",
+            "url": f"{base}/api/webhook/user/{user_id}",
             "method": "POST",
-            "description": "Public TradingView alert receiver, verified with your webhook secret.",
+            "description": "Signed account-specific receiver, verified with your webhook secret.",
         })
-        out.append({
-            "key": "private",
-            "label": "Private strategy webhook",
-            "url": f"{base}/api/webhooks/private",
-            "method": "POST",
-            "description": "Private strategy receiver for your own imported strategies.",
-        })
+    elif base:
+        out.extend([
+            {
+                "key": "tradingview",
+                "label": "TradingView alerts",
+                "url": f"{base}/webhook/tradingview",
+                "method": "POST",
+                "description": "Public TradingView alert receiver, verified with your webhook secret.",
+            },
+            {
+                "key": "private",
+                "label": "Private strategy webhook",
+                "url": f"{base}/api/webhooks/private",
+                "method": "POST",
+                "description": "Private strategy receiver for your own imported strategies.",
+            },
+        ])
     return out
 
 
 def build_webhooks_overview(user_id: uuid.UUID) -> dict[str, Any]:
-    secret = webhook_secret_metadata()
+    account_scoped = database_configured()
+    if account_scoped:
+        raw_secret = user_credential_vault.get_user_webhook_secret(user_id)
+        secret = {
+            "set": bool(raw_secret),
+            "masked": mask_secret(raw_secret),
+            "source": "account" if raw_secret else None,
+        }
+    else:
+        secret = credential_vault.webhook_secret_metadata()
     payload: dict[str, Any] = {
         "ok": True,
         "available": True,
-        "endpoints": _endpoints(),
+        "endpoints": _endpoints(user_id, account_scoped=account_scoped),
         # Masked metadata only - the raw secret is never serialised.
         "secret": {
             "set": bool(secret.get("set")),

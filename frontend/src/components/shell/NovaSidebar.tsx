@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button'
 import {
   Activity, BarChart3, Bot, FileText, Gauge, KeyRound, LayoutDashboard,
   LineChart, PanelLeftClose, PanelLeftOpen, Settings, ShieldCheck, Webhook,
@@ -37,7 +38,7 @@ export function NovaSidebar({ route, open, collapsed, onNavigate, onToggleCollap
     const Icon = ICONS[r] ?? Gauge
     const active = route === r || (r === 'strategies' && route === 'strategies/new')
     return (
-      <button
+      <Button variant="unstyled"
         key={r}
         type="button"
         className="nova-navitem"
@@ -48,7 +49,7 @@ export function NovaSidebar({ route, open, collapsed, onNavigate, onToggleCollap
         <span className="nova-navitem-label">{ROUTE_META[r].label}</span>
         {/* Truthful: routes without a real screen yet are labelled, not faked. */}
         {!isImplemented(r) ? <span className="nova-navitem-soon">Soon</span> : null}
-      </button>
+      </Button>
     )
   }
 
@@ -65,7 +66,7 @@ export function NovaSidebar({ route, open, collapsed, onNavigate, onToggleCollap
       <div className="nova-rail-group">Configure</div>
       {CONFIGURE.map(item)}
 
-      <button
+      <Button variant="unstyled"
         type="button"
         className="nova-navitem"
         style={{ marginTop: 'auto' }}
@@ -74,7 +75,7 @@ export function NovaSidebar({ route, open, collapsed, onNavigate, onToggleCollap
       >
         {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
         <span className="nova-navitem-label">Collapse</span>
-      </button>
+      </Button>
     </nav>
   )
 }

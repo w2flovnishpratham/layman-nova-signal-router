@@ -1,5 +1,9 @@
+import { Input } from "@/components/ui/input"
+import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toast'
 import { AlertTriangle, Check, Loader2, Lock } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { PageSkeleton } from '../components/PageSkeleton'
 import {
   getAutomations,
   saveAutomations,
@@ -27,7 +31,7 @@ function RuleEditor({
       <p className="nova-risk-note">{rule.basis}</p>
       <div className="nova-auto-edit">
         <label className="sr-only" htmlFor={`rule-${rule.key}`}>{rule.label}</label>
-        <input
+        <Input variant="unstyled"
           id={`rule-${rule.key}`}
           type={isTime ? 'time' : 'number'}
           value={value}
@@ -93,12 +97,15 @@ export function AutomationsPage() {
 
   async function confirmUpdate() {
     if (!data?.configuration_id || data.configuration_revision == null || changedKeys.length === 0) return
-    setError('')
     setSaving(true)
     try {
       hydrate(await saveAutomations(data.configuration_id, data.configuration_revision, changed))
+      toast.add({ title: 'Automation settings saved.', type: 'success' })
     } catch (exception) {
-      setError(exception instanceof Error ? exception.message : 'Could not save.')
+      toast.add({
+        title: exception instanceof Error ? exception.message : 'Could not save.',
+        type: 'error',
+      })
     } finally {
       setSaving(false)
     }
@@ -117,11 +124,11 @@ export function AutomationsPage() {
       </header>
 
       {loading ? (
-        <p className="nova-signals-state" role="status"><Loader2 size={16} /> Loading automations…</p>
+        <PageSkeleton label="Loading automations" variant="cards" />
       ) : error && !data ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}
-          <button type="button" className="conv-pill" onClick={() => void load()}>Retry</button>
+          <Button variant="unstyled" type="button" className="conv-pill" onClick={() => void load()}>Retry</Button>
         </p>
       ) : !data ? null : (
         <>
@@ -149,14 +156,14 @@ export function AutomationsPage() {
               </p>
             ) : null}
             <div className="nova-auto-actions">
-              <button
+              <Button variant="unstyled"
                 type="button"
                 className="conv-pill conv-pill--primary"
                 disabled={!data.configuration_id || changedKeys.length === 0}
                 onClick={() => setReviewing(true)}
               >
                 Review Changes
-              </button>
+              </Button>
             </div>
 
             {reviewing ? (
@@ -181,15 +188,15 @@ export function AutomationsPage() {
                   current open position, confirmed SL/TP, protection state, orders, or trade history.
                 </p>
                 <div className="nova-auto-actions">
-                  <button
+                  <Button variant="unstyled"
                     type="button"
                     className="conv-pill"
                     disabled={saving}
                     onClick={() => setReviewing(false)}
                   >
                     Cancel
-                  </button>
-                  <button
+                  </Button>
+                  <Button variant="unstyled"
                     type="button"
                     className="conv-pill conv-pill--primary"
                     disabled={saving}
@@ -197,7 +204,7 @@ export function AutomationsPage() {
                   >
                     {saving ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
                     Confirm Update
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : null}

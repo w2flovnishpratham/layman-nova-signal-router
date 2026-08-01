@@ -1,8 +1,12 @@
+import { NativeSelect } from "@/components/ui/native-select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Button } from '@/components/ui/button'
 import { motion } from 'framer-motion'
-import { Download, Loader2, RefreshCw, ShieldAlert } from 'lucide-react'
+import { Download, RefreshCw, ShieldAlert } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RuntimeStatus } from '../api'
-import { MotionProgressFill, MotionSpinner } from '../components/MotionPrimitives'
+import { MotionProgressFill } from '../components/MotionPrimitives'
+import { PageSkeleton } from '../components/PageSkeleton'
 import { formatCurrency } from '../lib/format'
 import { reportCsvUrl } from '../reports/reportsApi'
 import { getRiskOverview, type RiskOverview, type RiskStrategyRow } from '../risk/riskApi'
@@ -139,23 +143,16 @@ export function PortfolioDashboard({
   )
 
   if (loading && !data) {
-    return (
-      <div className="nv-dash-state">
-        <MotionSpinner className="text-purple-400">
-          <Loader2 size={32} />
-        </MotionSpinner>
-        <span>Loading portfolio truth…</span>
-      </div>
-    )
+    return <PageSkeleton label="Loading portfolio dashboard" variant="dashboard" />
   }
 
   if (error && !data) {
     return (
       <div className="nv-dash-state">
         <p className="nv-dash-error">{error}</p>
-        <button className="secondary-button" type="button" onClick={() => void load()}>
+        <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void load()}>
           <RefreshCw size={14} /> Retry
-        </button>
+        </Button>
       </div>
     )
   }
@@ -208,7 +205,7 @@ export function PortfolioDashboard({
         <div className="nv-dash-actions">
           <div className="nv-segmented" aria-label="Dashboard view mode" role="group">
             {(['paper', 'live'] as const).map((option) => (
-              <button
+              <Button variant="unstyled"
                 key={option}
                 type="button"
                 className={option === viewMode ? 'active' : ''}
@@ -216,12 +213,12 @@ export function PortfolioDashboard({
                 aria-pressed={option === viewMode}
               >
                 {titleCase(option)}
-              </button>
+              </Button>
             ))}
           </div>
           <div className="nv-segmented" aria-label="Trade origin filter" role="group">
             {(['all', 'automated', 'manual'] as const).map((option) => (
-              <button
+              <Button variant="unstyled"
                 key={option}
                 type="button"
                 className={option === tradeOrigin ? 'active' : ''}
@@ -229,10 +226,10 @@ export function PortfolioDashboard({
                 aria-pressed={option === tradeOrigin}
               >
                 {option === 'all' ? 'All Trades' : titleCase(option)}
-              </button>
+              </Button>
             ))}
           </div>
-          <select
+          <NativeSelect variant="unstyled"
             className="nv-range-select"
             aria-label="Export period"
             value={exportRange}
@@ -241,7 +238,7 @@ export function PortfolioDashboard({
             <option value="today">Today</option>
             <option value="7d">Last 7 days</option>
             <option value="30d">Last 30 days</option>
-          </select>
+          </NativeSelect>
           <a
             className="nv-export-button"
             href={reportCsvUrl(exportDates.start, exportDates.end, mode, tradeOrigin)}
@@ -250,7 +247,7 @@ export function PortfolioDashboard({
             <Download size={14} />
             Export Report
           </a>
-          <button
+          <Button variant="unstyled"
             className="nv-icon-refresh"
             type="button"
             onClick={() => void load(true, true)}
@@ -258,7 +255,7 @@ export function PortfolioDashboard({
             title="Refresh dashboard"
           >
             <RefreshCw size={15} className={refreshing ? 'is-spinning' : ''} />
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -324,14 +321,14 @@ export function PortfolioDashboard({
             </div>
             <div className="nv-segmented" aria-label="Equity range">
               {(['1w', '1m', '3m', 'all'] as const).map((range) => (
-                <button
+                <Button variant="unstyled"
                   key={range}
                   type="button"
                   className={range === equityRange ? 'active' : ''}
                   onClick={() => setEquityRange(range)}
                 >
                   {range === 'all' ? 'All' : range.toUpperCase()}
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -364,7 +361,7 @@ export function PortfolioDashboard({
         <motion.section className="nv-panel nv-strategy-panel" custom={3} variants={cardVariants} initial="hidden" animate="show">
           <div className="nv-panel-head">
             <h2>Strategy Performance</h2>
-            <button type="button" className="nv-panel-link" onClick={onManageStrategies}>Manage strategies →</button>
+            <Button variant="unstyled" type="button" className="nv-panel-link" onClick={onManageStrategies}>Manage strategies →</Button>
           </div>
           <StrategyPerformance rows={strategyRows} mode={mode} />
         </motion.section>
@@ -372,7 +369,7 @@ export function PortfolioDashboard({
         <motion.aside className="nv-panel nv-health-panel" custom={4} variants={cardVariants} initial="hidden" animate="show">
           <div className="nv-panel-head">
             <h2>System Health</h2>
-            <button type="button" className="nv-panel-link" onClick={onViewHealth}>Details →</button>
+            <Button variant="unstyled" type="button" className="nv-panel-link" onClick={onViewHealth}>Details →</Button>
           </div>
           <SystemHealthList health={health} runtime={runtime} webhooks={webhooks} />
           <KillSwitch runtime={runtime} onKill={onKill} />
@@ -422,29 +419,29 @@ function StrategyPerformance({ rows, mode }: { rows: StrategyPerformanceRow[]; m
 
   return (
     <div className="nv-table-wrap">
-      <table className="nv-performance-table">
-        <thead>
-          <tr>
-            <th>Strategy</th>
-            <th>Mode</th>
-            <th className="num">Orders</th>
-            <th>Loss risk</th>
-            <th className="num">Max lots</th>
-            <th className="num">Net P&L</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table variant="unstyled" className="nv-performance-table">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Strategy</TableHead>
+            <TableHead>Mode</TableHead>
+            <TableHead className="num">Orders</TableHead>
+            <TableHead>Loss risk</TableHead>
+            <TableHead className="num">Max lots</TableHead>
+            <TableHead className="num">Net P&L</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {rows.map((row) => (
-            <tr key={row.id}>
-              <td>
+            <TableRow key={row.id}>
+              <TableCell>
                 <span className="nv-strategy-name">
                   <span className="nv-strategy-tag">{row.selected ? 'ACTIVE' : 'NOVA'}</span>
                   {row.name}
                 </span>
-              </td>
-              <td className="nv-mode-cell">{titleCase(row.mode || mode)}</td>
-              <td className="num">{row.orders ?? '—'}</td>
-              <td>
+              </TableCell>
+              <TableCell className="nv-mode-cell">{titleCase(row.mode || mode)}</TableCell>
+              <TableCell className="num">{row.orders ?? '—'}</TableCell>
+              <TableCell>
                 {row.lossPct == null ? (
                   <span className="nv-muted">—</span>
                 ) : (
@@ -453,15 +450,15 @@ function StrategyPerformance({ rows, mode }: { rows: StrategyPerformanceRow[]; m
                     {row.lossPct.toFixed(0)}%
                   </span>
                 )}
-              </td>
-              <td className="num">{row.maxLots ?? '—'}</td>
-              <td className={`num ${row.pnl == null ? '' : row.pnl >= 0 ? 'pos' : 'neg'}`}>
+              </TableCell>
+              <TableCell className="num">{row.maxLots ?? '—'}</TableCell>
+              <TableCell className={`num ${row.pnl == null ? '' : row.pnl >= 0 ? 'pos' : 'neg'}`}>
                 {row.pnl == null ? '—' : signedCurrency(row.pnl)}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   )
 }
@@ -531,7 +528,7 @@ function KillSwitch({ runtime, onKill }: { runtime: RuntimeStatus | null; onKill
     <div className="nv-kill-switch">
       <strong><ShieldAlert size={14} /> Kill Switch</strong>
       <p>Stops new entries and squares off NOVA&apos;s tracked open position.</p>
-      <button
+      <Button variant="unstyled"
         type="button"
         disabled={!actionable}
         onPointerDown={begin}
@@ -547,7 +544,7 @@ function KillSwitch({ runtime, onKill }: { runtime: RuntimeStatus | null; onKill
       >
         {holding ? <MotionProgressFill durationSeconds={0.8} tone="danger" /> : null}
         <span>{actionable ? 'Hold to Stop & Square Off' : 'Engine stopped · position flat'}</span>
-      </button>
+      </Button>
     </div>
   )
 }

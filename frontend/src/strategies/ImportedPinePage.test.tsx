@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ImportedPinePage } from './ImportedPinePage'
+import { ImportedPinePage, claudeCompletionError } from './ImportedPinePage'
 
 const api = vi.hoisted(() => ({
   list: vi.fn(), get: vi.fn(), create: vi.fn(), version: vi.fn(), validate: vi.fn(), submit: vi.fn(),
@@ -14,6 +14,11 @@ const api = vi.hoisted(() => ({
   ownerClaudeConfig: vi.fn(), ownerClaudeCreate: vi.fn(),
   ownerClaudeList: vi.fn(), ownerClaudeGet: vi.fn(),
 }))
+const toastApi = vi.hoisted(() => ({
+  add: vi.fn(),
+  promise: vi.fn(async (request: Promise<unknown>) => request),
+}))
+vi.mock('@/components/ui/toast', () => ({ toast: toastApi }))
 vi.mock('../api', () => ({
   listPineStrategies: api.list, getPineStrategy: api.get, createPineStrategy: api.create,
   createPineVersion: api.version, validatePineVersion: api.validate, submitPineVersion: api.submit,
@@ -67,10 +72,19 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
+/** OwnerWorkspace now opens browse-only by default (read-only list + code
+ * viewer, matching the Strategies Redesign mockup) -- the editor only
+ * mounts after clicking Edit (existing script) or New (blank script). */
+async function openEditor(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: /^edit$/i }))
+}
+
 describe('ImportedPinePage', () => {
   it('renders untrusted source as text, findings navigate, and no browser persistence or URL state is used', async () => {
+    const user = userEvent.setup()
     const originalUrl = window.location.href
     render(<ImportedPinePage />)
+    await openEditor(user)
     const editor = await screen.findByLabelText('Pine source') as HTMLTextAreaElement
     await waitFor(() => expect(editor.value).toContain('<script>alert(1)</script>'))
     expect(document.querySelector('.pine-editor-card script')).toBeNull()
@@ -90,6 +104,7 @@ describe('ImportedPinePage', () => {
     api.validate.mockResolvedValue({ version, report: validation, reused: false })
     api.submit.mockResolvedValue({ version: { ...version, status: 'submitted' } })
     render(<ImportedPinePage />)
+    await openEditor(user)
     const editor = await screen.findByLabelText('Pine source')
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe(SOURCE))
     await user.type(editor, '\n// corrected')
@@ -110,7 +125,10 @@ describe('ImportedPinePage', () => {
   })
 
   it('accepts a UTF-8 .pine upload and rejects binary decoding', async () => {
-    render(<ImportedPinePage />); const editor = await screen.findByLabelText('Pine source')
+    const user = userEvent.setup()
+    render(<ImportedPinePage />)
+    await openEditor(user)
+    const editor = await screen.findByLabelText('Pine source')
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe(SOURCE))
     const input = document.querySelector('input[type=file]') as HTMLInputElement
     const good = new File([SOURCE], 'upload.pine', { type: 'text/plain' })
@@ -123,28 +141,34 @@ describe('ImportedPinePage', () => {
 
   it('generates the manual package without starting AI conversion', async () => {
     const user = userEvent.setup(); render(<ImportedPinePage />)
+    await openEditor(user)
     await waitFor(() => expect((screen.getByLabelText('Pine source') as HTMLTextAreaElement).value).toBe(SOURCE))
     await user.click(screen.getByRole('button', { name: /copy conversion package/i }))
     await waitFor(() => expect(api.conversionPackage).toHaveBeenCalledWith('s1', 'v1'))
     expect(api.convert).not.toHaveBeenCalled()
-    expect(await screen.findByRole('status')).toHaveTextContent('Package copy completed')
+    expect(toastApi.add).toHaveBeenCalledWith(expect.objectContaining({ title: 'Package copy completed.', type: 'success' }))
   })
 
   it('shows only the safe package-assembly error', async () => {
     const user = userEvent.setup()
     api.conversionPackage.mockRejectedValueOnce(new Error('The NOVA conversion package could not be generated safely. Please retry or contact NOVA support.'))
     render(<ImportedPinePage />)
+    await openEditor(user)
     await user.click(await screen.findByRole('button', { name: /copy conversion package/i }))
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('could not be generated safely')
-    expect(alert).not.toHaveTextContent('{{TRANSPORT}}')
-    expect(alert).not.toHaveTextContent('{{OPTIONS}}')
-    expect(alert).not.toHaveTextContent('{{SOURCE}}')
+    await waitFor(() => expect(toastApi.add).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringMatching(/could not be generated safely/i),
+      type: 'error',
+    })))
+    expect(JSON.stringify(toastApi.add.mock.calls)).not.toContain('{{TRANSPORT}}')
+    expect(JSON.stringify(toastApi.add.mock.calls)).not.toContain('{{OPTIONS}}')
+    expect(JSON.stringify(toastApi.add.mock.calls)).not.toContain('{{SOURCE}}')
   })
 
   it('shows layman V3 package guidance and keeps the admin manifest separate', async () => {
+    const user = userEvent.setup()
     api.conversionConfig.mockResolvedValue({ manual_package_enabled: true, ai_enabled: false, provider: null, model: null, prompt_version: 'v3.1', prompt_status: 'QUALIFICATION', transport_version: 'pine_transport_v2', contract_version: 1, daily_limit: 10 })
     render(<ImportedPinePage />)
+    await openEditor(user)
     expect(await screen.findByText(/Prompt v3.1 · QUALIFICATION/i)).toBeInTheDocument()
     expect(screen.getByText(/Copy this package into ChatGPT or Claude/i)).toBeInTheDocument()
     expect(screen.getByText(/Copy only Artifact 1 back into NOVA/i)).toBeInTheDocument()
@@ -172,7 +196,9 @@ describe('ImportedPinePage', () => {
       provenance: {}, validation, conversion_summary: 'Converted', warnings: [],
       unsupported_features: [], action_mapping: {},
     }, reused: false })
-    render(<ImportedPinePage />); await waitFor(() => expect((screen.getByLabelText('Pine source') as HTMLTextAreaElement).value).toBe(SOURCE))
+    render(<ImportedPinePage />)
+    await openEditor(user)
+    await waitFor(() => expect((screen.getByLabelText('Pine source') as HTMLTextAreaElement).value).toBe(SOURCE))
     const send = screen.getByRole('button', { name: /convert and send for admin review/i })
     expect(send).toBeDisabled()
     await user.click(screen.getByRole('checkbox', { name: /private pine version to claude/i })); await user.click(send)
@@ -181,9 +207,24 @@ describe('ImportedPinePage', () => {
       intended_symbol: 'NIFTY',
       intended_timeframe: '5',
     }))
+    expect(toastApi.promise).toHaveBeenCalledWith(
+      expect.any(Promise),
+      expect.objectContaining({
+        loading: expect.objectContaining({ title: 'Converting with Claude… this may take several minutes.' }),
+        success: expect.objectContaining({ title: 'Conversion finished and was sent for admin review.' }),
+      }),
+    )
     expect(await screen.findByText(/Claude conversion for Private script/i)).toBeInTheDocument()
     expect(screen.getByText(/admin must now review/i)).toBeInTheDocument()
     expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0)
+  })
+
+  it('reports a resolved safe Claude failure as an error instead of success', () => {
+    const conversion: Parameters<typeof claudeCompletionError>[0] = {
+      conversion_status: 'AI_FAILED_RETRYABLE',
+      safe_error_code: 'PROVIDER_TIMEOUT',
+    }
+    expect(claudeCompletionError(conversion)).toBe('Claude conversion stopped safely: provider timeout.')
   })
 
   it('shows distinct Premium and NOVA-managed setup paths without false readiness', async () => {
@@ -195,7 +236,9 @@ describe('ImportedPinePage', () => {
     api.link.mockResolvedValue({})
     api.createSetup.mockResolvedValue({ id: 'tv1', strategy_instance_id: 'i1', approved_version_id: 'v1', setup_type: 'NOVA_MANAGED_TRADINGVIEW', status: 'SETUP_PENDING', ready_for_paper: false, blocking_step: 'TradingView installation', who_acts_next: 'Admin', blocking_reason: null, user_reported_compiled_at: null, hold_verified_at: null, paper_entry_verified_at: null, paper_exit_verified_at: null, gates: {}, updated_at: null })
     render(<ImportedPinePage />)
-    await user.selectOptions(await screen.findByLabelText('Personal strategy instance'), 'i1')
+    await openEditor(user)
+    await user.click(await screen.findByRole('combobox', { name: 'Personal strategy instance' }))
+    await user.click(screen.getByRole('option', { name: /Paper strategy/i }))
     expect(screen.getByText(/You manage this strategy in your TradingView account/i)).toBeInTheDocument()
     await user.click(screen.getByRole('radio', { name: /I need NOVA-managed/i }))
     await user.click(screen.getByRole('button', { name: /save setup path/i }))
@@ -210,7 +253,9 @@ describe('ImportedPinePage', () => {
       review_history: [{ decision: 'rejected', note: 'Missing stop-loss handling.', previous_status: 'under_review', new_status: 'rejected', reviewed_at: '2026-07-27T10:00:00Z' }],
     }
     api.get.mockResolvedValue({ strategy, versions: [rejected] })
+    const user = userEvent.setup()
     render(<ImportedPinePage />)
+    await openEditor(user)
     expect(await screen.findByText(/Rejected by admin review/i)).toBeInTheDocument()
     expect(screen.getByText('Missing stop-loss handling.')).toBeInTheDocument()
   })
@@ -220,15 +265,17 @@ describe('ImportedPinePage', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     api.list.mockResolvedValueOnce([strategy]).mockResolvedValue([])
     render(<ImportedPinePage />)
+    await openEditor(user)
     await user.click(await screen.findByRole('button', { name: /withdraw script/i }))
     await waitFor(() => expect(api.deleteStrategy).toHaveBeenCalledWith('s1'))
-    expect(await screen.findByRole('status')).toHaveTextContent('Withdraw script completed')
+    expect(toastApi.add).toHaveBeenCalledWith(expect.objectContaining({ title: 'Withdraw script completed.', type: 'success' }))
   })
 
   it('does not withdraw when the confirmation is declined', async () => {
     const user = userEvent.setup()
     vi.spyOn(window, 'confirm').mockReturnValue(false)
     render(<ImportedPinePage />)
+    await openEditor(user)
     await user.click(await screen.findByRole('button', { name: /withdraw script/i }))
     expect(api.deleteStrategy).not.toHaveBeenCalled()
   })
@@ -238,7 +285,9 @@ describe('ImportedPinePage', () => {
       { id: 'c1', strategy_id: 's1', input_version_id: 'v1', status: 'succeeded', provider: 'nova-ai', model: 'pine-model', prompt_version: 'v1', consent_at: 'now', candidate_version_id: 'v2', conversion_summary: null, assumptions: [], unsupported_features: [], warnings: [], action_mapping: {}, safe_error_code: null },
       { id: 'c2', strategy_id: 's-other', input_version_id: 'v9', status: 'provider_failed', provider: 'nova-ai', model: 'pine-model', prompt_version: 'v1', consent_at: 'now', candidate_version_id: null, conversion_summary: null, assumptions: [], unsupported_features: [], warnings: [], action_mapping: {}, safe_error_code: 'PROVIDER_ERROR' },
     ])
+    const user = userEvent.setup()
     render(<ImportedPinePage />)
+    await openEditor(user)
     expect(await screen.findByText('Conversion history')).toBeInTheDocument()
     expect(screen.getByText('nova-ai · pine-model')).toBeInTheDocument()
     expect(screen.queryByText(/provider_failed/i)).not.toBeInTheDocument()
@@ -255,6 +304,7 @@ describe('ImportedPinePage', () => {
     api.managedCredential.mockResolvedValue({ id: 'c1', strategy_instance_id: 'i1', token_prefix: 'nwk_mng123', created_at: null, last_used_at: null, revoked_at: null, token: MANAGED_TOKEN })
     render(<ImportedPinePage isAdmin />)
     await user.click(screen.getByRole('button', { name: /admin review queue/i }))
+    await user.click(await screen.findByRole('button', { name: /managed setups/i }))
     await screen.findByText('Managed TradingView setup')
     await user.click(await screen.findByRole('button', { name: /generate managed credential/i }))
     await waitFor(() => expect(api.managedCredential).toHaveBeenCalledWith('tv1', false))

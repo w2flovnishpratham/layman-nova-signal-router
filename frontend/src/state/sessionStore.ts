@@ -436,7 +436,6 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
     const data = event.data as {
       wallet?: number | null
       availableBalance?: number | null
-      availabelBalance?: number | null
       utilizedAmount?: number | null
       sessionPnl?: number | null
       realizedPnl?: number | null
@@ -446,9 +445,9 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       return { wallet: null, marginUtilized: null }
     }
     return {
-      wallet: optionalNumber(data.wallet ?? data.availableBalance ?? data.availabelBalance, state.wallet),
+      wallet: optionalNumber(data.wallet ?? data.availableBalance, state.wallet),
       paperBalance: state.engineMode === 'paper'
-        ? optionalNumber(data.wallet ?? data.availableBalance ?? data.availabelBalance, state.paperBalance)
+        ? optionalNumber(data.wallet ?? data.availableBalance, state.paperBalance)
         : state.paperBalance,
       marginUtilized: optionalNumber(data.utilizedAmount, state.marginUtilized),
       sessionPnl: optionalNumber(data.sessionPnl, state.sessionPnl) ?? state.sessionPnl,

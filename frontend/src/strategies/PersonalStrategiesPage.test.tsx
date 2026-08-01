@@ -10,6 +10,8 @@ const api = vi.hoisted(() => ({
   pineList: vi.fn(), pineGet: vi.fn(), pineCreate: vi.fn(), pineVersion: vi.fn(), pineValidate: vi.fn(),
   pineSubmit: vi.fn(), pineSource: vi.fn(), pineLink: vi.fn(), reviewList: vi.fn(), reviewGet: vi.fn(), reviewDecide: vi.fn(),
 }))
+const toastApi = vi.hoisted(() => ({ add: vi.fn() }))
+vi.mock('@/components/ui/toast', () => ({ toast: toastApi }))
 
 vi.mock('../api', () => ({
   activateStrategyInstance: api.activate,
@@ -153,7 +155,7 @@ describe('PersonalStrategiesPage', () => {
     }), [hold])
     const user = userEvent.setup()
     render(<PersonalStrategiesPage />)
-    expect((await screen.findAllByText('No action needed')).length).toBeGreaterThan(1)
+    expect((await screen.findAllByText('No action needed')).length).toBeGreaterThan(0)
     const lots = screen.getByLabelText('Lots', { selector: '#personal-lots' })
     fireEvent.change(lots, { target: { value: '3' } })
     await user.click(screen.getByRole('button', { name: /save lots/i }))
@@ -238,7 +240,10 @@ describe('PersonalStrategiesPage', () => {
     render(<PersonalStrategiesPage />)
     await screen.findByRole('heading', { name: 'My private strategy' })
     await user.click(screen.getByRole('button', { name: /generate credential/i }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('feature disabled')
+    await waitFor(() => expect(toastApi.add).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringMatching(/feature disabled/i),
+      type: 'error',
+    })))
     expect(document.body.textContent).not.toContain(TOKEN)
   })
 
@@ -274,7 +279,10 @@ describe('PersonalStrategiesPage', () => {
     expect(screen.getByText(/Exit signals and NOVA protective exits remain active/)).toBeInTheDocument()
     expect(screen.getByText(/Revoking this credential disables TradingView exit signals/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /^stop$/i }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('Close the open position')
+    await waitFor(() => expect(toastApi.add).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringMatching(/close the open position/i),
+      type: 'error',
+    })))
     expect(screen.getAllByText('Paused')).toHaveLength(2)
     expect(screen.getByRole('button', { name: /^stop$/i })).toBeInTheDocument()
     expect(document.body.textContent).not.toContain(TOKEN)

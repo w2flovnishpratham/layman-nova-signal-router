@@ -115,6 +115,20 @@ bool novaBuyPeSignal = ta.crossover(close, upper)
 bool novaExitSignal = ta.crossover(close, upper) or ta.crossunder(close, lower)
 """
 
+BOLLINGER_BACKTEST_LAYER = """//@version=6
+strategy("Bollinger Bands backtest", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1)
+[middle, upper, lower] = ta.bb(close, 20, 2)
+bool novaBuyCeSignal = ta.crossunder(close, lower)
+bool novaBuyPeSignal = ta.crossover(close, upper)
+bool novaExitSignal = ta.crossover(close, upper) or ta.crossunder(close, lower)
+if novaBuyCeSignal
+    strategy.entry("CE", strategy.long)
+if novaBuyPeSignal
+    strategy.entry("PE", strategy.short)
+if novaExitSignal
+    strategy.close_all()
+"""
+
 
 def test_owner_bollinger_pending_orders_reach_claude_automatically_not_unsupported(
     mu_db, monkeypatch
@@ -166,6 +180,7 @@ def test_owner_bollinger_pending_orders_reach_claude_automatically_not_unsupport
         "source_sha256": _hashlib.sha256(BOLLINGER_SOURCE.encode()).hexdigest(),
         "status": "CONVERTED",
         "strategy_layer": BOLLINGER_LAYER,
+        "backtest_layer": BOLLINGER_BACKTEST_LAYER,
         "signal_mapping": {
             "buy_ce_source": "ta.crossunder(close, lower)",
             "buy_pe_source": "ta.crossover(close, upper)",
@@ -277,6 +292,7 @@ def test_owner_bollinger_realistic_claude_response_is_not_rejected_as_invalid(
         "source_sha256": _hashlib.sha256(BOLLINGER_SOURCE.encode()).hexdigest(),
         "status": "CONVERTED",
         "strategy_layer": BOLLINGER_LAYER,
+        "backtest_layer": BOLLINGER_BACKTEST_LAYER,
         "signal_mapping": {
             "buy_ce_source": "ta.crossunder(close, lower)",
             "buy_pe_source": "ta.crossover(close, upper)",

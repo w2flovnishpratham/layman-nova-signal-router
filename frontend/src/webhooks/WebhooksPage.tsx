@@ -1,6 +1,9 @@
-import { AlertTriangle, Check, Copy, Loader2 } from 'lucide-react'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Button } from '@/components/ui/button'
+import { AlertTriangle, Check, Copy, KeyRound, Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { getWebhooksOverview, type WebhooksOverview } from './webhooksApi'
+import { PageSkeleton } from '../components/PageSkeleton'
+import { getWebhooksOverview, rotateWebhookSecret, type WebhooksOverview } from './webhooksApi'
 
 function when(iso: string | null): string {
   if (!iso) return 'never'
@@ -8,11 +11,21 @@ function when(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? 'never' : d.toLocaleString()
 }
 
+function statusTone(status: string): string {
+  if (status === 'received') return 'nova-sig-info'
+  if (status === 'queued') return 'nova-sig-warn'
+  if (status === 'accepted' || status === 'fanned_out') return 'nova-sig-ok'
+  if (status === 'rejected') return 'nova-sig-bad'
+  return 'nova-sig-neutral'
+}
+
 export function WebhooksPage() {
   const [data, setData] = useState<WebhooksOverview | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState<string | null>(null)
+  const [rotatedSecret, setRotatedSecret] = useState('')
+  const [rotating, setRotating] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -41,6 +54,26 @@ export function WebhooksPage() {
     }
   }
 
+  async function rotateSecret() {
+    if (data?.secret.set && !window.confirm(
+      'Rotating this secret immediately invalidates the old one. Continue?',
+    )) return
+    setRotating(true)
+    setError('')
+    try {
+      const secret = await rotateWebhookSecret()
+      setRotatedSecret(secret)
+      setData((current) => current ? {
+        ...current,
+        secret: { set: true, masked: null, source: 'account' },
+      } : current)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not rotate the webhook secret.')
+    } finally {
+      setRotating(false)
+    }
+  }
+
   return (
     <div className="nova-signals">
       <header className="nova-signals-head">
@@ -51,10 +84,10 @@ export function WebhooksPage() {
       </header>
 
       {loading ? (
-        <p className="nova-signals-state" role="status"><Loader2 size={16} /> Loading webhooks…</p>
+        <PageSkeleton label="Loading webhooks" variant="table" />
       ) : error ? (
         <p className="nova-signals-state" role="alert"><AlertTriangle size={16} /> {error}
-          <button type="button" className="conv-pill" onClick={() => void load()}>Retry</button>
+          <Button variant="unstyled" type="button" className="conv-pill" onClick={() => void load()}>Retry</Button>
         </p>
       ) : !data ? null : (
         <>
@@ -70,9 +103,9 @@ export function WebhooksPage() {
                 <p>{ep.description}</p>
                 <div className="nova-hooks-url">
                   <code>{ep.url}</code>
-                  <button type="button" className="conv-pill" onClick={() => void copy(ep.url)}>
+                  <Button variant="unstyled" type="button" className="conv-pill" onClick={() => void copy(ep.url)}>
                     {copied === ep.url ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy</>}
-                  </button>
+                  </Button>
                 </div>
               </div>
             ))}
@@ -80,13 +113,35 @@ export function WebhooksPage() {
 
           <section aria-label="Webhook secret" className="nova-hooks-card">
             <div className="nova-hooks-card-head"><strong>Webhook secret</strong></div>
-            {/* One secret per account. The value is never sent to the browser. */}
             <p>
               {data.secret.set
-                ? `Configured (${data.secret.source ?? 'stored'}). Shown masked — the value is never sent to the browser and cannot be revealed here.`
-                : 'Not configured. Alerts will be rejected until a secret is set.'}
+                ? 'Configured. Rotate it if the current value is lost or compromised.'
+                : 'Not configured. Generate one before sending signed alerts.'}
             </p>
-            {data.secret.set ? <code className="nova-hooks-secret">{data.secret.masked}</code> : null}
+            <Button
+              variant="unstyled"
+              type="button"
+              className="conv-pill"
+              disabled={rotating}
+              onClick={() => void rotateSecret()}
+            >
+              {rotating
+                ? <><Loader2 size={13} /> Rotating...</>
+                : <><KeyRound size={13} /> {data.secret.set ? 'Rotate secret' : 'Generate secret'}</>}
+            </Button>
+            {rotatedSecret ? (
+              <>
+                <div className="nova-hooks-url nova-hooks-secret-once">
+                  <code className="nova-hooks-secret">{rotatedSecret}</code>
+                  <Button variant="unstyled" type="button" className="conv-pill" onClick={() => void copy(rotatedSecret)}>
+                    {copied === rotatedSecret
+                      ? <><Check size={13} /> Copied</>
+                      : <><Copy size={13} /> Copy secret</>}
+                  </Button>
+                </div>
+                <p role="status">Shown once. Copy it now and update every sender before leaving this page.</p>
+              </>
+            ) : null}
           </section>
 
           <section aria-label="Delivery activity" className="nova-signals-counts">
@@ -105,30 +160,34 @@ export function WebhooksPage() {
             <p className="nova-signals-state" role="status">No deliveries recorded yet for this account.</p>
           ) : (
             <div className="nova-signals-table-wrap">
-              <table className="nova-signals-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Received</th>
-                    <th scope="col">Event</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">Signature</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <Table variant="unstyled" className="nova-signals-table">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead scope="col">Received</TableHead>
+                    <TableHead scope="col">Event</TableHead>
+                    <TableHead scope="col">Status</TableHead>
+                    <TableHead scope="col">Signature</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {data.recent.map((row) => (
-                    <tr key={row.id}>
-                      <td>{when(row.received_at)}</td>
-                      <td className="nova-signals-event">{row.event_id}</td>
-                      <td>
-                        <span className={row.processed_status === 'rejected' ? 'nova-sig-bad' : 'nova-sig-ok'}>
+                    <TableRow key={row.id}>
+                      <TableCell>{when(row.received_at)}</TableCell>
+                      <TableCell className="nova-signals-event">{row.event_id}</TableCell>
+                      <TableCell>
+                        <span className={statusTone(row.processed_status)}>
                           {row.processed_status}
                         </span>
-                      </td>
-                      <td>{row.signature_ok ? 'verified' : 'unverified'}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell>
+                        <span className={row.signature_ok ? 'nova-sig-ok' : 'nova-sig-bad'}>
+                          {row.signature_ok ? 'verified' : 'unverified'}
+                        </span>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           )}
         </>

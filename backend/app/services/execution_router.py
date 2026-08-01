@@ -11,7 +11,7 @@ from app.config import (
     settings,
 )
 from app.schemas.signal import NormalizedSignal
-from app.services import order_idempotency, position_operations
+from app.services import order_idempotency, position_operations, risk_configuration
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.chat_event_publisher import publish_chat_result_from_sync
 from app.services.credential_vault import dhan_token_age_metadata, get_dhan_credentials
@@ -98,6 +98,7 @@ def _authoritative_ltp_result(*, exchange_segment: str, security_id: str) -> Dha
 
 
 def _normalized_log_fields(signal: NormalizedSignal) -> dict[str, Any]:
+    raw_payload = signal.raw_payload if isinstance(signal.raw_payload, dict) else {}
     return {
         "payload_format": signal.payload_format,
         "normalized_action": signal.action,
@@ -108,6 +109,10 @@ def _normalized_log_fields(signal: NormalizedSignal) -> dict[str, Any]:
         "normalized_expiry": signal.expiry,
         "normalized_option_side": signal.option_side,
         "source": signal.source,
+        "nifty_price": _raw_payload_number(signal, "nifty_price", "nifty", "spot", "niftySpot"),
+        "nifty_sl_level": _raw_payload_number(signal, "sl_level", "stop_level", "stopLoss"),
+        "nifty_target_level": _raw_payload_number(signal, "tp_level", "target_level", "takeProfit"),
+        "exit_kind": str(raw_payload.get("exit_reason") or raw_payload.get("exitKind") or "").upper() or None,
     }
 
 
@@ -227,6 +232,7 @@ def _claim_live_order_intent_or_result(
     place_method: str,
     request_payload: dict[str, Any],
     security_id_resolution: dict[str, Any],
+    runtime: dict[str, Any],
 ) -> order_idempotency.OrderIntentClaim | dict[str, Any] | None:
     if get_engine_mode() != "live":
         return None
@@ -278,11 +284,13 @@ def _claim_live_order_intent_or_result(
             side=signal.side,
             symbol=signal.symbol,
             broker_correlation_id=str(request_payload.get("correlationId") or "") or None,
+            risk_configuration_version_id=runtime.get("risk_configuration_version_id"),
             metadata={
                 "place_method": place_method,
                 "source": signal.source,
                 "payload_format": signal.payload_format,
                 "identity_hash": payload_hash,
+                "risk_configuration_version": runtime.get("risk_configuration_version"),
             },
         )
     except Exception:  # noqa: BLE001 - fail closed on any idempotency backend failure
@@ -1515,6 +1523,7 @@ def _place_order(
             place_method=place_method,
             request_payload=request_payload,
             security_id_resolution=security_id_resolution,
+            runtime=runtime,
         )
         if isinstance(intent_claim, dict):
             return intent_claim
@@ -1870,6 +1879,26 @@ def _entry_position(
             message = "Dhan Super Order SL/TP is active; backend is display-only."
     else:
         message = "Server-side option premium monitor is armed."
+    risk_exit_mode = str(runtime.get("risk_exit_mode") or "CUSTOM_SL_TP").upper()
+    stop_rule = {
+        "mode": risk_exit_mode,
+        "value": runtime.get("risk_stop_loss_value"),
+        "basis": runtime.get("risk_stop_loss_basis") or "PERCENT",
+    }
+    target_rule = {
+        "mode": risk_exit_mode,
+        "value": runtime.get("risk_take_profit_value"),
+        "basis": runtime.get("risk_take_profit_basis") or "PERCENT",
+    }
+    # Only synthesize exit levels when a real risk-configuration version was
+    # actually resolved (risk_configuration.overlay_for_current_entry ran).
+    # Otherwise risk_stop_loss_value/risk_take_profit_value default to 0,
+    # which would place the "stop" at the entry price itself.
+    active_risk_levels = (
+        _entry_risk_levels(float(entry_price), runtime, qty)
+        if entry_price is not None and runtime.get("risk_configuration_version_id") is not None
+        else None
+    )
     position = {
         "has_open_position": True,
         "strategy_code": signal.strategy_code,
@@ -1889,13 +1918,26 @@ def _entry_position(
         "entry_price": entry_price,
         "configuration_revision_id": runtime.get("configuration_revision_id"),
         "configuration_revision": runtime.get("configuration_revision"),
+        "risk_configuration_version_id": runtime.get("risk_configuration_version_id"),
+        "risk_configuration_version": runtime.get("risk_configuration_version"),
+        "entry_stop_rule": stop_rule,
+        "entry_target_rule": target_rule,
+        "position_sizing_rule": {
+            "lots_min": runtime.get("risk_lots_min"),
+            "lots_max": runtime.get("risk_lots_max"),
+            "configured_lots": runtime.get("configured_lots"),
+        },
+        "maximum_loss_rule": {
+            "amount": runtime.get("risk_max_loss_per_trade"),
+            "currency": "INR",
+        },
         "exit_management": exit_management,
         "broker_sl_price": broker_sl_price,
         "broker_tp_price": broker_tp_price,
         "broker_entry_reference_price": order_result.get("broker_entry_reference_price"),
         "broker_exit_levels": order_result.get("broker_exit_levels"),
         "sr_suggestion": sr_suggestion,
-        "active_exit_levels": None,
+        "active_exit_levels": active_risk_levels,
         "super_order_post_fill_update": order_result.get("super_order_post_fill_update"),
         "order_type": order_result.get("order_type") or signal.order_type or DEFAULT_ORDER_TYPE,
         "product_type": signal.product_type or DEFAULT_PRODUCT_TYPE,
@@ -1916,6 +1958,36 @@ def _entry_position(
     # compare-and-set writes can detect an intervening exit and never resurrect
     # a closed position.
     return stamp_new_open_position(position)
+
+
+def _entry_risk_levels(entry_price: float, runtime: dict[str, Any], qty: int) -> dict[str, Any]:
+    mode = str(runtime.get("risk_exit_mode") or "CUSTOM_SL_TP").upper()
+    stop_value = float(runtime.get("risk_stop_loss_value") or 0)
+    target_value = float(runtime.get("risk_take_profit_value") or 0)
+    stop_basis = str(runtime.get("risk_stop_loss_basis") or "PERCENT").upper()
+    target_basis = str(runtime.get("risk_take_profit_basis") or "PERCENT").upper()
+    if mode == "FLIPS_ONLY":
+        stop_price, target_price = 0.1, 1_000_000.0
+    else:
+        target_price = (
+            entry_price + target_value
+            if target_basis == "POINTS"
+            else entry_price * (1 + target_value / 100)
+        )
+        stop_price = 0.1 if mode == "TARGET_PROFIT" else (
+            entry_price - stop_value
+            if stop_basis == "POINTS"
+            else entry_price * (1 - stop_value / 100)
+        )
+    max_loss = float(runtime.get("risk_max_loss_per_trade") or 0)
+    if max_loss > 0 and qty > 0 and mode != "FLIPS_ONLY":
+        stop_price = max(stop_price, entry_price - max_loss / qty)
+    return {
+        "stopLossPrice": round(max(0.1, stop_price), 2),
+        "targetPrice": round(max(entry_price + 0.05, target_price), 2),
+        "source": "entry_risk_configuration",
+        "riskConfigurationVersionId": runtime.get("risk_configuration_version_id"),
+    }
 
 
 def _entry_filled_qty(order_result: dict[str, Any], requested_qty: int) -> int:
@@ -2060,6 +2132,7 @@ def route_reversal_signal(
     # SL%/TP% snapshot.
     if runtime is None:
         runtime = get_runtime_settings()
+    runtime = risk_configuration.overlay_for_current_entry(runtime)
 
     open_position = get_open_position()
     update_app_state(
@@ -2292,6 +2365,7 @@ def route_entry_signal(
     # values, even if a user changes settings mid-flight on another tab.
     if runtime is None:
         runtime = get_runtime_settings()
+    runtime = risk_configuration.overlay_for_current_entry(runtime)
 
     update_app_state(
         state="ENTRY_SIGNAL_RECEIVED",

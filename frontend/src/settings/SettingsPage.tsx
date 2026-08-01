@@ -1,11 +1,32 @@
-import { AlertTriangle, Check, Loader2 } from 'lucide-react'
+import { NativeSelect } from "@/components/ui/native-select"
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
+import { toast } from '@/components/ui/toast'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { AlertTriangle, Download } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import type { AppRoute } from '../appRoutes'
+import { PageSkeleton } from '../components/PageSkeleton'
+import type { AuthUser } from '../api'
 import {
   CHART_TIMEFRAMES,
   TABLE_DENSITIES,
+  exportTrades,
+  getCredentialsSummary,
   getPreferences,
   resetPaperSession,
   savePreferences,
+  type CredentialsSummary,
   type Preferences,
 } from './settingsApi'
 import {
@@ -16,13 +37,20 @@ import {
 
 const TIMEZONES = ['Asia/Kolkata', 'UTC', 'America/New_York', 'Europe/London', 'Asia/Singapore']
 
-export function SettingsPage() {
+export function SettingsPage({
+  user,
+  onNavigate,
+  onLogout,
+}: {
+  user?: AuthUser
+  onNavigate?: (route: AppRoute) => void
+  onLogout?: () => void
+}) {
   const [prefs, setPrefs] = useState<Preferences | null>(null)
+  const [connections, setConnections] = useState<CredentialsSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [saved, setSaved] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
-  const [resetMessage, setResetMessage] = useState('')
   const [notificationState, setNotificationState] = useState<BrowserNotificationState>(
     browserNotificationState,
   )
@@ -31,7 +59,12 @@ export function SettingsPage() {
     setLoading(true)
     setError('')
     try {
-      setPrefs(await getPreferences())
+      const [nextPrefs, nextConnections] = await Promise.all([
+        getPreferences(),
+        getCredentialsSummary().catch(() => null),
+      ])
+      setPrefs(nextPrefs)
+      setConnections(nextConnections)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load settings.')
     } finally {
@@ -45,24 +78,31 @@ export function SettingsPage() {
   }, [load])
 
   async function update(patch: Partial<Preferences>) {
-    setSaved(false)
-    setError('')
     try {
       setPrefs(await savePreferences(patch))
-      setSaved(true)
+      toast.add({ title: 'Settings saved.', type: 'success' })
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save settings.')
+      toast.add({
+        title: e instanceof Error ? e.message : 'Could not save settings.',
+        type: 'error',
+      })
     }
   }
 
   async function runReset() {
     setConfirmReset(false)
-    setResetMessage('')
     try {
       await resetPaperSession()
-      setResetMessage('Paper session reset. A final snapshot was recorded first.')
+      toast.add({
+        title: 'Paper session reset.',
+        description: 'A final snapshot was recorded first.',
+        type: 'success',
+      })
     } catch (e) {
-      setResetMessage(e instanceof Error ? e.message : 'Paper reset failed.')
+      toast.add({
+        title: e instanceof Error ? e.message : 'Paper reset failed.',
+        type: 'error',
+      })
     }
   }
 
@@ -81,77 +121,105 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="nova-signals">
+    <div className="nova-signals nova-settings">
       <header className="nova-signals-head">
         <div>
           <h1>Settings</h1>
-          <p>Display preferences and Paper account controls.</p>
+          <p>Account, trading preferences, notifications, security and data controls.</p>
         </div>
-        {saved ? <span className="nova-sig-ok"><Check size={14} /> Saved</span> : null}
       </header>
 
       {loading ? (
-        <p className="nova-signals-state" role="status"><Loader2 size={16} /> Loading settings…</p>
+        <PageSkeleton label="Loading settings" variant="cards" />
       ) : error && !prefs ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}
-          <button type="button" className="conv-pill" onClick={() => void load()}>Retry</button>
+          <Button variant="unstyled" type="button" className="conv-pill" onClick={() => void load()}>Retry</Button>
         </p>
       ) : !prefs ? null : (
         <>
           {error ? <p className="nova-signals-state" role="alert"><AlertTriangle size={16} /> {error}</p> : null}
 
-          <section className="nova-hooks-card" aria-label="Display">
-            <div className="nova-hooks-card-head"><strong>Display</strong></div>
-            <div className="nova-set-grid">
+          <div className="nova-settings-grid">
+            <div className="nova-settings-column">
+              <section className="nova-hooks-card nova-settings-card" aria-label="Profile and plan">
+                <div className="nova-hooks-card-head"><strong>Profile &amp; Plan</strong></div>
+                <div className="nova-profile">
+                  {user?.picture_url ? <img src={user.picture_url} alt="" /> : <span>{(user?.name || user?.email || 'N').slice(0, 2).toUpperCase()}</span>}
+                  <div><strong>{user?.name || 'NOVA user'}</strong><small>{user?.email || 'Signed in with Google'}</small></div>
+                  <Badge variant="unstyled" className="nova-verified">VERIFIED</Badge>
+                </div>
+                <div className="nova-setting-row"><span>Account</span><strong>Google account</strong></div>
+                <div className="nova-setting-row"><span>Plan</span><strong>Current NOVA access</strong></div>
+                <div className="nova-setting-row"><span>Timezone</span><strong>{prefs.timezone}</strong></div>
+                {onLogout ? <Button variant="unstyled" className="conv-pill" onClick={onLogout}>Log out</Button> : null}
+              </section>
+
+              <section className="nova-hooks-card nova-settings-card" aria-label="Trading preferences">
+                <div className="nova-hooks-card-head"><strong>Trading Preferences</strong></div>
+                <div className="nova-set-grid">
               <label htmlFor="pref-tz">Timezone
-                <select id="pref-tz" value={prefs.timezone} onChange={(e) => void update({ timezone: e.target.value })}>
+                <NativeSelect variant="unstyled" id="pref-tz" value={prefs.timezone} onChange={(e) => void update({ timezone: e.target.value })}>
                   {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-                </select>
+                </NativeSelect>
               </label>
               <label htmlFor="pref-density">Table density
-                <select id="pref-density" value={prefs.table_density} onChange={(e) => void update({ table_density: e.target.value })}>
+                <NativeSelect variant="unstyled" id="pref-density" value={prefs.table_density} onChange={(e) => void update({ table_density: e.target.value })}>
                   {TABLE_DENSITIES.map((d) => <option key={d} value={d}>{d}</option>)}
-                </select>
+                </NativeSelect>
               </label>
               <label htmlFor="pref-timeframe">Default chart timeframe
-                <select id="pref-timeframe" value={prefs.default_chart_timeframe} onChange={(e) => void update({ default_chart_timeframe: e.target.value })}>
+                <NativeSelect variant="unstyled" id="pref-timeframe" value={prefs.default_chart_timeframe} onChange={(e) => void update({ default_chart_timeframe: e.target.value })}>
                   {CHART_TIMEFRAMES.map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </label>
-              <label htmlFor="pref-motion" className="nova-set-toggle">
-                <input
-                  id="pref-motion"
-                  type="checkbox"
-                  checked={prefs.reduced_motion}
-                  onChange={(e) => void update({ reduced_motion: e.target.checked })}
-                />
-                Reduced motion
+                </NativeSelect>
               </label>
             </div>
-          </section>
+              </section>
 
-          <section className="nova-hooks-card" aria-label="Notifications">
+              <section className="nova-hooks-card nova-settings-card" aria-label="Display preferences">
+                <div className="nova-hooks-card-head"><strong>Display Preferences</strong></div>
+                <label htmlFor="pref-motion" className="nova-setting-row nova-switch-row">
+                  <span><strong>Reduce motion</strong><small>Limit non-essential interface animation.</small></span>
+                  <Switch id="pref-motion" aria-label="Reduced motion" checked={prefs.reduced_motion} onCheckedChange={(checked) => void update({ reduced_motion: checked })} />
+                </label>
+              </section>
+
+              <section className="nova-hooks-card nova-settings-card" aria-label="Data and exports">
+                <div className="nova-hooks-card-head"><strong>Data &amp; Exports</strong></div>
+                <div className="nova-setting-row">
+                  <span><strong>Trade history</strong><small>Owner-scoped Paper trades in CSV format.</small></span>
+                  <Button variant="unstyled" className="conv-pill" onClick={exportTrades}><Download size={14} /> Export</Button>
+                </div>
+              </section>
+            </div>
+
+            <div className="nova-settings-column">
+              <section className="nova-hooks-card nova-settings-card" aria-label="Connections and security">
+                <div className="nova-hooks-card-head"><strong>Connections &amp; Security</strong></div>
+                <div className="nova-setting-row"><span>Dhan</span><strong>{connections?.broker.connected ? 'Connected' : connections?.broker.connection_status?.replaceAll('_', ' ') || 'Not connected'}</strong></div>
+                {connections?.broker.client_id_masked ? <div className="nova-setting-row"><span>Dhan Client ID</span><code>{connections.broker.client_id_masked}</code></div> : null}
+                {connections?.static_ip.available ? <div className="nova-setting-row"><span>NOVA Static IP</span><code>{connections.static_ip.ip}</code></div> : null}
+                <div className="nova-cred-actions">
+                  <Button variant="unstyled" className="conv-pill" onClick={() => onNavigate?.('credentials')}>Manage credentials</Button>
+                </div>
+              </section>
+
+          <section className="nova-hooks-card nova-settings-card" aria-label="Notifications">
             <div className="nova-hooks-card-head"><strong>Notifications</strong></div>
             <p>
               Browser permission: <strong>{notificationState}</strong>. Notifications open the
               matching event in Trading and never alter engine behavior.
             </p>
             {prefs.channels.map((channel) => (
-              <label key={channel.key} className="nova-set-toggle">
-                <input
-                  type="checkbox"
-                  checked={Boolean(prefs.notification_preferences[channel.key])}
-                  onChange={(e) => void updateNotification(channel.key, e.target.checked)}
-                />
-                {channel.label}
-                <small>{channel.reason}</small>
+              <label key={channel.key} className="nova-setting-row nova-switch-row">
+                <span><strong>{channel.label}</strong><small>{channel.reason}</small></span>
+                <Switch checked={Boolean(prefs.notification_preferences[channel.key])} onCheckedChange={(checked) => void updateNotification(channel.key, checked)} />
               </label>
             ))}
           </section>
 
-          <section className="nova-hooks-card" aria-label="Paper account">
-            <div className="nova-hooks-card-head"><strong>Paper account</strong></div>
+          <section className="nova-hooks-card nova-settings-card nova-danger-zone" aria-label="Danger zone">
+            <div className="nova-hooks-card-head"><strong>Danger Zone</strong></div>
             <p>
               Resets the simulated balance and clears the Paper session after recording a
               final snapshot. The server refuses while the engine is running, a Paper
@@ -159,23 +227,29 @@ export function SettingsPage() {
               are never touched.
             </p>
             <div className="nova-cred-actions">
-              <button type="button" className="conv-pill nova-cred-danger" onClick={() => setConfirmReset(true)}>
+              <Button variant="unstyled" type="button" className="conv-pill nova-cred-danger" onClick={() => setConfirmReset(true)}>
                 Reset Paper account
-              </button>
+              </Button>
             </div>
-            {confirmReset ? (
-              <div className="nova-cred-confirm" role="alertdialog" aria-label="Confirm Paper reset">
-                <p>This clears your Paper trades and balance. It cannot be undone.</p>
-                <div className="nova-cred-actions">
-                  <button type="button" className="conv-pill nova-cred-danger" onClick={() => void runReset()}>
+            <AlertDialog open={confirmReset} onOpenChange={setConfirmReset}>
+              <AlertDialogContent className="border border-border bg-popover shadow-2xl">
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Reset Paper account?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This clears your Paper trades and balance. It cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel variant="unstyled" className="conv-pill">Cancel</AlertDialogCancel>
+                  <AlertDialogAction variant="unstyled" className="conv-pill nova-cred-danger" onClick={() => void runReset()}>
                     Yes, reset Paper
-                  </button>
-                  <button type="button" className="conv-pill" onClick={() => setConfirmReset(false)}>Cancel</button>
-                </div>
-              </div>
-            ) : null}
-            {resetMessage ? <p role="status" className="nova-risk-note">{resetMessage}</p> : null}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </section>
+            </div>
+          </div>
         </>
       )}
     </div>

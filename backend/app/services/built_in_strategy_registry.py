@@ -126,45 +126,59 @@ def _live_nova_shared_entries() -> list[dict[str, Any]]:
     database, not the static tuple above, so a new publish is selectable
     immediately -- no code change or deploy required. Each entry needs a
     StrategyCatalog row (owner_user_id IS NULL, visibility=nova_shared,
-    status=active) and its latest approved StrategyVersion."""
+    status=active) and its latest approved StrategyVersion.
+
+    list_built_ins() is called from validate_signal() on every webhook,
+    including the legacy private-credential path that predates NOVA_SHARED
+    and has nothing to do with it -- a DB outage or an environment with no
+    DATABASE_URL (most unit tests) must not turn into every signal 500ing.
+    Degrade to the static registry only (no newly-published strategies
+    visible) rather than raise.
+    """
     from sqlalchemy import select
+    from sqlalchemy.exc import SQLAlchemyError
 
     from app.db import models
-    from app.db.engine import session_scope
+    from app.db.engine import database_configured, session_scope
 
-    with session_scope() as db:
-        rows = db.execute(
-            select(models.StrategyCatalog, models.StrategyVersion)
-            .join(
-                models.StrategyVersion,
-                models.StrategyVersion.strategy_id == models.StrategyCatalog.id,
-            )
-            .where(
-                models.StrategyCatalog.owner_user_id.is_(None),
-                models.StrategyCatalog.visibility == "nova_shared",
-                models.StrategyCatalog.status == "active",
-                models.StrategyVersion.status == "approved",
-            )
-            .order_by(models.StrategyVersion.approved_at.asc())
-        ).all()
-        # Later (more recently approved) rows overwrite earlier ones for the
-        # same code, so each catalog code resolves to its latest approval.
-        entries: dict[str, dict[str, Any]] = {}
-        for catalog, version in rows:
-            entries[catalog.code] = {
-                "strategy_key": f"nova-{catalog.code}",
-                "catalog_code": catalog.code,
-                "name": catalog.display_name,
-                "version": version.version,
-                "description": catalog.description or catalog.display_name,
-                "availability": "READY",
-                "disabled_reason": None,
-                "paper_eligible": True,
-                "live_eligible": True,
-                "execution_adapter": f"strategy_webhook:{catalog.code}",
-                "setup_schema": _standard_setup_schema(),
-            }
-        return list(entries.values())
+    if not database_configured():
+        return []
+    try:
+        with session_scope() as db:
+            rows = db.execute(
+                select(models.StrategyCatalog, models.StrategyVersion)
+                .join(
+                    models.StrategyVersion,
+                    models.StrategyVersion.strategy_id == models.StrategyCatalog.id,
+                )
+                .where(
+                    models.StrategyCatalog.owner_user_id.is_(None),
+                    models.StrategyCatalog.visibility == "nova_shared",
+                    models.StrategyCatalog.status == "active",
+                    models.StrategyVersion.status == "approved",
+                )
+                .order_by(models.StrategyVersion.approved_at.asc())
+            ).all()
+    except SQLAlchemyError:
+        return []
+    # Later (more recently approved) rows overwrite earlier ones for the
+    # same code, so each catalog code resolves to its latest approval.
+    entries: dict[str, dict[str, Any]] = {}
+    for catalog, version in rows:
+        entries[catalog.code] = {
+            "strategy_key": f"nova-{catalog.code}",
+            "catalog_code": catalog.code,
+            "name": catalog.display_name,
+            "version": version.version,
+            "description": catalog.description or catalog.display_name,
+            "availability": "READY",
+            "disabled_reason": None,
+            "paper_eligible": True,
+            "live_eligible": True,
+            "execution_adapter": f"strategy_webhook:{catalog.code}",
+            "setup_schema": _standard_setup_schema(),
+        }
+    return list(entries.values())
 
 
 def list_built_ins() -> list[dict[str, Any]]:

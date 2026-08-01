@@ -49,6 +49,7 @@ import {
   type TradingViewSetupType,
 } from '../api'
 import { AdminPineConversionWorkspace } from './AdminPineConversion'
+import { PageSkeleton } from '../components/PageSkeleton'
 
 const MAX_BYTES = 256 * 1024
 
@@ -81,6 +82,7 @@ function OwnerWorkspace() {
   const [instanceId, setInstanceId] = useState('')
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState('')
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [conversionConfig, setConversionConfig] = useState<PineConversionConfig | null>(null)
   const [claudeConfig, setClaudeConfig] = useState<OwnerClaudeConversionConfig | null>(null)
@@ -94,6 +96,8 @@ function OwnerWorkspace() {
   const [setupType, setSetupType] = useState<TradingViewSetupType>('USER_MANAGED_TRADINGVIEW')
   const [tvSetup, setTvSetup] = useState<TradingViewSetup | null>(null)
   const [conversionHistory, setConversionHistory] = useState<PineConversion[]>([])
+  const [mode, setMode] = useState<'browse' | 'edit'>('browse')
+  const [search, setSearch] = useState('')
   const sourceRef = useRef<HTMLTextAreaElement>(null)
 
   const selected = versions.find((row) => row.id === versionId) ?? null
@@ -124,7 +128,7 @@ function OwnerWorkspace() {
       setClaudeConfig(ownerConfig)
       setClaudeHistory(ownerConversions)
       setClaudeConversion(ownerConversions[0] ?? null)
-    }).catch((reason) => setError(messageOf(reason)))
+    }).catch((reason) => setError(messageOf(reason))).finally(() => setLoading(false))
   }, [])
   useEffect(() => {
     if (!strategyId) return
@@ -254,10 +258,54 @@ function OwnerWorkspace() {
     }
   }
 
+  if (loading) return <PageSkeleton label="Loading imported Pine workspace" variant="form" />
+
+  if (mode === 'browse') {
+    const filteredStrategies = strategies.filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
+    const currentName = strategies.find((s) => s.id === strategyId)?.name
+    return (
+      <div className="pine-browse-grid">
+        <aside className="ps-list" aria-label="Imported Pine scripts">
+          <div className="ps-list-toolbar">
+            <Input variant="unstyled" aria-label="Search scripts" placeholder="Search scripts…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <Button variant="unstyled" type="button" className="ps-primary" onClick={() => { setStrategyId(''); setVersions([]); setVersionId(''); setMode('edit') }}><Plus size={14} /> New</Button>
+          </div>
+          {filteredStrategies.length ? filteredStrategies.map((s) => (
+            <Button variant="unstyled" type="button" key={s.id} className={`ps-list-item${strategyId === s.id ? ' active' : ''}`} onClick={() => setStrategyId(s.id)}>
+              <strong>{s.name}</strong>
+              <span>{s.latest_version ? `${s.latest_version.version} · ${s.latest_version.status}` : 'No version yet'}</span>
+            </Button>
+          )) : <div className="ps-empty-small"><FileCode2 size={20} /><strong>No scripts match</strong></div>}
+        </aside>
+        {strategyId && selected ? (
+          <div className="pine-grid">
+            <section className="ps-card">
+              <div className="ps-card-head">
+                <div><span>{selected.version} · {selected.source_sha256.slice(0, 12)}…</span><h2>{currentName}</h2></div>
+                <span className="ps-status">{selected.status}</span>
+              </div>
+              <div className="ps-actions">
+                <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void copySource()}><Copy size={14} /> Copy source</Button>
+                <Button variant="unstyled" className="secondary-button" type="button" onClick={() => setMode('edit')}><FileCode2 size={14} /> Edit</Button>
+                <Button variant="unstyled" className="ps-danger" type="button" disabled={!!busy} onClick={() => void withdrawStrategy()}><Trash2 size={14} /> Delete</Button>
+              </div>
+              <pre className="pine-review-source">{source.split('\n').map((line, i) => <span key={i}><i>{i + 1}</i>{line}{'\n'}</span>)}</pre>
+            </section>
+            <aside className="ps-card pine-findings">
+              <div className="ps-card-head"><div><span>NOVA Pine Contract v1</span><h2>Static findings</h2></div>{selected.validation ? <strong>{selected.validation.error_count}E · {selected.validation.warning_count}W</strong> : null}</div>
+              {findings.length ? findings.map((finding, index) => <div key={`${finding.code}-${index}`} className={`pine-finding ${finding.severity.toLowerCase()}`}><span>{finding.severity} · {finding.code}{finding.line ? ` · line ${finding.line}` : ''}</span><strong>{finding.title}</strong><small>{finding.explanation}</small><em>{finding.remediation}</em></div>) : <div className="ps-empty-small"><FileCode2 size={22} /><strong>No validation report</strong><span>Run deterministic static validation for this exact version.</span></div>}
+            </aside>
+          </div>
+        ) : <div className="ps-card ps-empty"><FileCode2 size={28} /><h2>Select a script</h2><p>Pick one from the list to view its source and static findings.</p></div>}
+      </div>
+    )
+  }
+
   return (
     <>
       {error ? <div className="ps-message error" role="alert">{error}</div> : null}
       <div className="pine-toolbar ps-card">
+        <Button variant="unstyled" className="secondary-button" type="button" onClick={() => setMode('browse')}>← Back to browse</Button>
         <label>Script<NativeSelect variant="unstyled" value={strategyId} onChange={(e) => { const id = e.target.value; setStrategyId(id); if (!id) { setVersions([]); setVersionId('') } }}><option value="">New script</option>{strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</NativeSelect></label>
         <label>Version<NativeSelect variant="unstyled" value={versionId} disabled={!strategyId} onChange={(e) => setVersionId(e.target.value)}>{versions.map((v) => <option key={v.id} value={v.id}>{v.version} · {v.status}</option>)}</NativeSelect></label>
         <label>New script name<Input variant="unstyled" value={name} maxLength={160} onChange={(e) => setName(e.target.value)} placeholder="My NIFTY Pine strategy" /></label>
@@ -331,13 +379,15 @@ function OwnerWorkspace() {
                   setConsent(false)
                   setClaudeConversion(result.conversion)
                   setClaudeHistory((rows) => [result.conversion, ...rows.filter((row) => row.id !== result.conversion.id)])
+                  const completionError = claudeCompletionError(result.conversion)
+                  if (completionError) throw new Error(completionError)
                 }, {
-                  loading: 'Converting with Claude… this can take up to a minute.',
+                  loading: 'Converting with Claude… this may take several minutes.',
                   success: 'Conversion finished and was sent for admin review.',
                 })}
               >
                 {busy === 'Claude conversion request' ? (
-                  <><Loader2 className="ps-spin" size={14} /> Converting with Claude… this can take up to a minute</>
+                  <><Loader2 className="ps-spin" size={14} /> Converting with Claude… please keep this page open</>
                 ) : (
                   <><Sparkles size={14} /> Convert and send for admin review</>
                 )}
@@ -384,6 +434,18 @@ function OwnerWorkspace() {
       {claudeConfig && !claudeConfig.enabled && selected?.status === 'approved' ? <section className="ps-card pine-link"><div><span>Legacy fallback · TradingView setup</span><h2>Link approved version and choose setup path</h2><p className="ps-note">Paper-only. NOVA never compiles or executes Pine.</p></div><NativeSelect variant="unstyled" aria-label="Personal strategy instance" value={instanceId} onChange={(e) => { setInstanceId(e.target.value); setTvSetup(null) }}><option value="">Choose an instance</option>{instances.map((i) => <option key={i.id} value={i.id}>{i.label} · {i.execution_mode}</option>)}</NativeSelect><fieldset><legend>TradingView setup type</legend><label className="ps-check"><Input variant="unstyled" type="radio" name="tv-setup" checked={setupType === 'USER_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('USER_MANAGED_TRADINGVIEW')} />I have TradingView Premium</label><small>You manage this strategy in your TradingView account.</small><label className="ps-check"><Input variant="unstyled" type="radio" name="tv-setup" checked={setupType === 'NOVA_MANAGED_TRADINGVIEW'} onChange={() => setSetupType('NOVA_MANAGED_TRADINGVIEW')} />I need NOVA-managed TradingView setup</label><small>NOVA-managed TradingView setup requested; installation remains a manual admin task.</small></fieldset><Button variant="unstyled" className="ps-primary" type="button" disabled={!instanceId || !!busy} onClick={() => void run('TradingView setup', async () => { await linkPineVersion(instanceId, strategyId, selected.id); setTvSetup(await createTradingViewSetup(instanceId, setupType)) })}>Save setup path</Button>{tvSetup ? <div className={`ps-message ${tvSetup.ready_for_paper ? 'success' : ''}`} role="status"><strong>{tvSetup.ready_for_paper ? 'READY FOR PAPER USE' : tvSetup.status.replaceAll('_', ' ')}</strong><span>{tvSetup.ready_for_paper ? 'All server-observed paper gates passed.' : `Pending: ${tvSetup.blocking_step ?? 'manual review'}. Next: ${tvSetup.who_acts_next}.`}</span>{tvSetup.blocking_reason ? <span>{tvSetup.blocking_reason}</span> : null}</div> : null}</section> : null}
     </>
   )
+}
+
+export function claudeCompletionError(
+  conversion: Pick<AdminPineConversion, 'safe_error_code' | 'conversion_status'>,
+): string | null {
+  if (conversion.safe_error_code) {
+    return `Claude conversion stopped safely: ${conversion.safe_error_code.replaceAll('_', ' ').toLowerCase()}.`
+  }
+  if (conversion.conversion_status !== 'READY_FOR_ADMIN_REVIEW') {
+    return `Claude conversion needs attention: ${conversion.conversion_status.replaceAll('_', ' ').toLowerCase()}.`
+  }
+  return null
 }
 
 function OwnerClaudeStatus({ conversion }: { conversion: AdminPineConversion }) {

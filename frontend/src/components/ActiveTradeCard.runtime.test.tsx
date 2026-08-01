@@ -15,6 +15,16 @@ const trade: ActiveTrade = {
 afterEach(() => cleanup())
 
 describe('ActiveTradeCard runtime truth', () => {
+  it('renders the compact terminal position summary with live risk/reward', () => {
+    render(<ActiveTradeCard trade={trade} lotSize={65} compact />)
+    expect(screen.getByRole('heading', { name: 'Active Position' })).toBeInTheDocument()
+    expect(screen.getByText('BUY CE')).toBeInTheDocument()
+    expect(screen.getByText('65 / 1')).toBeInTheDocument()
+    expect(screen.getByText('1:2.00')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit SL/TP' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Exit Position' })).toBeEnabled()
+  })
+
   it('offers Exit 1 through n-1 lots and one Exit All action', () => {
     expect(exitLotOptions(1)).toEqual([{ lots: null, label: 'Exit All' }])
     expect(exitLotOptions(2)).toEqual([
@@ -50,7 +60,8 @@ describe('ActiveTradeCard runtime truth', () => {
     render(<ActiveTradeCard trade={{ ...trade, positionVersion: 1 }} lotSize={65} />)
     await user.click(screen.getByRole('button', { name: 'Add Lots' }))
     const protection = screen.getByRole('combobox', { name: 'Protection after adding lots' })
-    expect(protection).toHaveValue('KEEP_EXISTING')
+    expect(protection).toHaveTextContent('Keep existing trigger prices')
+    await user.click(protection)
     expect(screen.getByRole('option', { name: 'Keep existing trigger prices' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Recalculate from new average' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Custom SL/TP' })).toBeInTheDocument()

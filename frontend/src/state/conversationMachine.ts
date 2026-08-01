@@ -198,9 +198,18 @@ export function conversationReducer(state: ConversationState, action: Conversati
       return beginQuestioning(state, {}, 'start_new')
 
     case 'COMMIT_ANSWER': {
-      if (state.activeQuestionKey !== action.key) return state // only the active question is interactive
       const field = state.fields.find((f) => f.key === action.key)
       if (!field || !isValidValue(field, action.value)) return state // reject invalid; stay put
+      // The review popover edits one valid value in place without rewinding the
+      // conversation or invalidating unrelated answers.
+      if (state.phase === 'SETUP_REVIEW' && state.activeQuestionKey === null) {
+        return {
+          ...state,
+          draft: { ...state.draft, [action.key]: action.value },
+          generation: state.generation + 1,
+        }
+      }
+      if (state.activeQuestionKey !== action.key) return state // only the active question is interactive
       const draft = { ...state.draft, [action.key]: action.value }
       const next = firstUnansweredField(state.fields, draft)
       if (next === null) {

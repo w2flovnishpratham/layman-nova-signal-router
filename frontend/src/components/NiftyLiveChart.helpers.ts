@@ -106,7 +106,7 @@ export function markerStyle(marker: NiftyTradeMarker): MarkerStyle {
   switch (marker.exit_kind) {
     case 'SL': return { position: 'aboveBar', shape: 'square', color: '#ef4444', text: 'SL EXIT' }
     case 'TARGET': return { position: 'aboveBar', shape: 'square', color: '#22c55e', text: 'TARGET' }
-    case 'REVERSAL': return { position: 'aboveBar', shape: 'circle', color: '#a78bfa', text: 'REV EXIT' }
+    case 'REVERSAL': return { position: 'aboveBar', shape: 'circle', color: '#2f6bed', text: 'REV EXIT' }
     case 'EOD': return { position: 'aboveBar', shape: 'circle', color: '#f59e0b', text: 'EOD EXIT' }
     default: return { position: 'aboveBar', shape: 'circle', color: '#94a3b8', text: marker.label || 'EXIT' }
   }

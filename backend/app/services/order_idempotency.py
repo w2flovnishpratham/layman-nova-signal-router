@@ -71,6 +71,7 @@ def claim_live_order_intent(
     side: str | None = None,
     symbol: str | None = None,
     broker_correlation_id: str | None = None,
+    risk_configuration_version_id: str | uuid.UUID | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> OrderIntentClaim:
     if not database_configured():
@@ -94,6 +95,11 @@ def claim_live_order_intent(
                 side=side,
                 symbol=symbol,
                 broker_correlation_id=broker_correlation_id,
+                risk_configuration_version_id=(
+                    uuid.UUID(str(risk_configuration_version_id))
+                    if risk_configuration_version_id
+                    else None
+                ),
                 intent_metadata=metadata or {},
                 created_at=now,
                 updated_at=now,

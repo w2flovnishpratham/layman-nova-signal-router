@@ -44,11 +44,11 @@ describe('CredentialsPage', () => {
   it('offers no way to reveal a secret', async () => {
     apiMocks.getCredentialsOverview.mockResolvedValue(overview())
     render(<CredentialsPage />)
-    await screen.findByText('Configured')
-    expect(screen.getByText(/cannot be revealed here/i)).toBeInTheDocument()
+    await screen.findByText('CONNECTED')
+    expect(screen.getByRole('img', { name: 'Dhan logo' })).toHaveAttribute('src', '/dhan.png')
+    expect(screen.getByText(/browser only ever sees masked values/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /reveal|show (secret|token)/i })).toBeNull()
-    // Stored secrets are reported as presence only.
-    expect(screen.getByText('Saved')).toBeInTheDocument()
+    expect(screen.getByText('••••••••••••')).toBeInTheDocument()
   })
 
   it('autofills the stored Client ID but never the Access Token', async () => {
@@ -56,7 +56,7 @@ describe('CredentialsPage', () => {
     render(<CredentialsPage />)
     const clientIdInput = await screen.findByLabelText(/dhan client id/i) as HTMLInputElement
     await waitFor(() => expect(clientIdInput.value).toBe('9107xxxx1097'))
-    const tokenInput = screen.getByLabelText(/dhan access token/i) as HTMLInputElement
+    const tokenInput = screen.getByLabelText(/^access token$/i) as HTMLInputElement
     expect(tokenInput.value).toBe('')
     expect(tokenInput.placeholder).toMatch(/leave blank to keep the existing token/i)
   })
@@ -66,8 +66,8 @@ describe('CredentialsPage', () => {
     apiMocks.saveCredentials.mockResolvedValue(undefined)
     apiMocks.verifyBroker.mockResolvedValue({ success: true, message: 'Dhan token valid.' })
     render(<CredentialsPage />)
-    await screen.findByText('Configured')
-    fireEvent.click(screen.getByRole('button', { name: /save and verify/i }))
+    await screen.findByText('CONNECTED')
+    fireEvent.click(screen.getByRole('button', { name: /connect & verify dhan account/i }))
     await waitFor(() => expect(apiMocks.saveCredentials).toHaveBeenCalledWith({ clientId: '9107xxxx1097', accessToken: '' }))
     await waitFor(() => expect(apiMocks.verifyBroker).toHaveBeenCalledTimes(1))
   })
@@ -83,14 +83,16 @@ describe('CredentialsPage', () => {
   it('does not invent a token expiry the broker never provided', async () => {
     apiMocks.getCredentialsOverview.mockResolvedValue(overview())
     render(<CredentialsPage />)
-    expect(await screen.findByText(/not recorded by the broker/i)).toBeInTheDocument()
+    await screen.findByText('CONNECTED')
+    expect(screen.queryByText(/expires in/i)).toBeNull()
+    expect(screen.queryByLabelText(/token expiring soon/i)).toBeNull()
   })
 
   it('reports the server verdict from Verify again', async () => {
     apiMocks.getCredentialsOverview.mockResolvedValue(overview())
     apiMocks.verifyBroker.mockResolvedValue({ success: false, message: 'Token rejected by Dhan.' })
     render(<CredentialsPage />)
-    fireEvent.click(await screen.findByRole('button', { name: /verify again/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /re-verify now/i }))
     expect(await screen.findByText('Token rejected by Dhan.')).toBeInTheDocument()
   })
 

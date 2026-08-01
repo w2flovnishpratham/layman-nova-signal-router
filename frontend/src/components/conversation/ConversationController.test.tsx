@@ -57,6 +57,7 @@ describe('ConversationController — mode selection in the machine', () => {
     render(<ConversationController {...props({ runtime: runtimeNoMode() })} />)
     expect(screen.getByText('How should NOVA trade for you?')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /start in paper/i })).toBeInTheDocument()
+    expect(screen.getByLabelText('Nova message')).toHaveAttribute('data-slot', 'message')
   })
 
   it('selecting Paper syncs the backend and advances into strategy selection', () => {
@@ -163,19 +164,20 @@ describe('ConversationController — error recovery', () => {
 })
 
 describe('ConversationController — edit answer & async safety', () => {
-  it('editing a field prefills its current value and hides Start until re-save', async () => {
+  it('edits a review value in place and hides Start until re-save', async () => {
     render(<ConversationController {...props()} />)
     choosePaperAndStrategy()
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700)) // review
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /save setup/i })) })
     expect(screen.getByRole('button', { name: /start paper/i })).toBeInTheDocument()
-    // Edit the direction field.
     fireEvent.click(screen.getByRole('button', { name: /edit direction/i }))
-    act(() => vi.advanceTimersByTime(700))
-    // Its current value is prefilled (CE pressed) and Start engine is gone.
     expect(screen.getByRole('button', { name: 'CE' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: 'PE' }))
+    expect(screen.queryByRole('button', { name: 'CE' })).toBeNull()
+    expect(screen.getByRole('group', { name: 'Setup review' })).toHaveTextContent('PE')
     expect(screen.queryByRole('button', { name: /start paper/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /save setup/i })).toBeInTheDocument()
   })
 
   it('ignores a save that resolves after the user edited (no stale saved state)', async () => {
@@ -186,9 +188,9 @@ describe('ConversationController — edit answer & async safety', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
     act(() => vi.advanceTimersByTime(700))
     fireEvent.click(screen.getByRole('button', { name: /save setup/i })) // save in flight
-    fireEvent.click(screen.getByRole('button', { name: /edit direction/i })) // generation bumps
+    fireEvent.click(screen.getByRole('button', { name: /edit direction/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'PE' })) // in-place edit bumps generation
     await act(async () => { resolveSave?.() }) // stale resolution
-    act(() => vi.advanceTimersByTime(700))
     expect(screen.queryByRole('button', { name: /start paper/i })).toBeNull() // not exposed by stale save
   })
 })
@@ -349,13 +351,13 @@ describe('ConversationController — sequential questions & save/start', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
     act(() => vi.advanceTimersByTime(700))
     // The engine safety questions follow the strategy schema.
-    for (const [label, value] of [['max_daily_loss', '25000'], ['max_trades_per_day', '6']] as const) {
-      const numeric = document.getElementById(`q-${label}`) as HTMLInputElement
-      expect(numeric).not.toBeNull()
-      fireEvent.change(numeric, { target: { value } })
-      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
-      act(() => vi.advanceTimersByTime(700))
-    }
+    fireEvent.click(screen.getByRole('button', { name: '₹25,000' }))
+    act(() => vi.advanceTimersByTime(700))
+    const maxTrades = document.getElementById('q-max_trades_per_day') as HTMLInputElement
+    expect(maxTrades).not.toBeNull()
+    fireEvent.change(maxTrades, { target: { value: '6' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    act(() => vi.advanceTimersByTime(700))
     fireEvent.click(screen.getByRole('button', { name: '15:15' }))
     act(() => vi.advanceTimersByTime(700))
     expect(screen.getByRole('button', { name: /save setup/i })).toBeInTheDocument()

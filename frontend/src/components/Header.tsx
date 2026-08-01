@@ -1,4 +1,6 @@
-import { Check, Copy, LogOut, RotateCcw, ShieldAlert, Wifi, X } from 'lucide-react'
+import { Input } from "@/components/ui/input"
+import { Button } from '@/components/ui/button'
+import { Check, Copy, LogOut, ShieldAlert, Wifi, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import type { AuthUser, LogoutEngineAction, RuntimeStatus } from '../api'
@@ -6,7 +8,7 @@ import { getEgressStatus } from '../api'
 import type { AppRoute } from '../appRoutes'
 import { modeBadgeText } from '../lib/mode'
 import { MotionPing, MotionProgressFill, softEase, useAppReducedMotion } from './MotionPrimitives'
-import type { EngineMode, MarketSnapshot, SetupState, SystemHealth, WsStatus } from '../types'
+import type { EngineMode, MarketSnapshot, SetupState, WsStatus } from '../types'
 
 interface Props {
   route: AppRoute
@@ -16,18 +18,14 @@ interface Props {
   engineLive: boolean
   engineMode: EngineMode | null
   setupState: SetupState
-  health: SystemHealth | null
   user: AuthUser
   market: MarketSnapshot | null
   onNavigate: (route: AppRoute) => void
   onKill: () => void
-  onStop: () => void
-  onReconfigure: () => void
   onLogout: (action: LogoutEngineAction) => void
   onMode: (mode: 'paper' | 'live') => void
   onSaveConfig: (mode: 'paper' | 'live', lots: number, sl: number, tp: number) => void
   onPaperReset: () => void
-  onAccountRefresh: () => void
 }
 
 export function Header({
@@ -38,24 +36,19 @@ export function Header({
   engineLive,
   engineMode,
   setupState,
-  health,
   user,
   market,
   onNavigate,
   onKill,
-  onStop,
-  onReconfigure,
   onLogout,
   onMode,
   onSaveConfig,
   onPaperReset,
-  onAccountRefresh,
 }: Props) {
   const [killDialogOpen, setKillDialogOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [holdingKill, setHoldingKill] = useState(false)
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false)
-  const [reconfigureDialogOpen, setReconfigureDialogOpen] = useState(false)
   const [lots, setLots] = useState<number | null>(null)
   const [slPercent, setSlPercent] = useState<number | null>(null)
   const [tpPercent, setTpPercent] = useState<number | null>(null)
@@ -135,7 +128,7 @@ export function Header({
 
         <nav className="top-navigation" aria-label="Primary navigation">
           {TOP_NAVIGATION.map((item) => (
-            <button
+            <Button variant="unstyled"
               type="button"
               key={item.label}
               className={route === item.route ? 'is-active' : ''}
@@ -143,7 +136,7 @@ export function Header({
               onClick={() => onNavigate(item.route)}
             >
               {item.label}
-            </button>
+            </Button>
           ))}
         </nav>
 
@@ -167,7 +160,7 @@ export function Header({
             {modeBadgeText(engineMode)} - {engineLive ? statusLabel(status, setupState) : 'Stopped'}
           </div>
 
-          <button
+          <Button variant="unstyled"
             type="button"
             className="header-user"
             onClick={() => setMenuOpen(!menuOpen)}
@@ -180,7 +173,7 @@ export function Header({
               <strong>{user.name || user.email}</strong>
               <small>{formatMoney(runtime?.pnl.available_balance)}</small>
             </span>
-          </button>
+          </Button>
 
           <AnimatePresence initial={false}>
             {menuOpen ? (
@@ -256,7 +249,7 @@ export function Header({
                     <span className="opacity-70 flex items-center gap-1.5"><Wifi size={12} /> Nova Static IP:</span>
                     <span className="flex items-center gap-2 min-w-0">
                       <strong className="font-mono truncate">{staticIp}</strong>
-                      <button
+                      <Button variant="unstyled"
                         type="button"
                         onClick={copyStaticIp}
                         aria-label="Copy static IP"
@@ -264,15 +257,8 @@ export function Header({
                         className="p-1 rounded-md border border-white/10 hover:bg-white/10 transition-colors text-white/70 hover:text-white"
                       >
                         {ipCopied ? <Check size={12} /> : <Copy size={12} />}
-                      </button>
+                      </Button>
                     </span>
-                  </div>
-                )}
-
-                {engineLive && (
-                  <div className="flex flex-col gap-2 py-1">
-                    <span className="text-[10px] uppercase font-bold tracking-wider text-white/40">System Health</span>
-                    <HealthStrip setupState={setupState} health={health} />
                   </div>
                 )}
 
@@ -282,60 +268,49 @@ export function Header({
                       <span className="text-[10px] uppercase font-bold tracking-wider text-white/40">Stopped configuration</span>
                       <div className="grid grid-cols-2 gap-2">
                         {(['paper', 'live'] as const).map((mode) => (
-                          <button
+                          <Button variant="unstyled"
                             key={mode}
                             type="button"
                             disabled={runtime.position.has_open_position}
                             onClick={() => chooseMode(mode)}
                             className={`py-1.5 rounded-lg border text-xs font-semibold ${
                               runtime.engine.mode === mode
-                                ? 'border-violet-400/60 bg-violet-500/20 text-white'
+                                ? 'border-[#2F6BED]/60 bg-[#2F6BED]/20 text-white'
                                 : 'border-white/10 bg-white/5 text-white/60'
                             } disabled:opacity-40`}
                           >
                             {mode === 'paper' ? 'Paper' : 'Live'}
-                          </button>
+                          </Button>
                         ))}
                       </div>
                       <div className="grid grid-cols-3 gap-1.5">
                         <label className="text-[10px] text-white/50">Lots
-                          <input aria-label="Runtime lots" type="number" min={1} max={20} value={displayedLots} onChange={(event) => setLots(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
+                          <Input variant="unstyled" aria-label="Runtime lots" type="number" min={1} max={20} value={displayedLots} onChange={(event) => setLots(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
                         </label>
                         <label className="text-[10px] text-white/50">SL %
-                          <input aria-label="Runtime stop loss percent" type="number" min={0} max={100} value={displayedSlPercent} onChange={(event) => setSlPercent(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
+                          <Input variant="unstyled" aria-label="Runtime stop loss percent" type="number" min={0} max={100} value={displayedSlPercent} onChange={(event) => setSlPercent(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
                         </label>
                         <label className="text-[10px] text-white/50">TP %
-                          <input aria-label="Runtime target profit percent" type="number" min={0} max={1000} value={displayedTpPercent} onChange={(event) => setTpPercent(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
+                          <Input variant="unstyled" aria-label="Runtime target profit percent" type="number" min={0} max={1000} value={displayedTpPercent} onChange={(event) => setTpPercent(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
                         </label>
                       </div>
-                      <button
+                      <Button variant="unstyled"
                         type="button"
                         disabled={!runtime.engine.mode || runtime.position.has_open_position}
                         onClick={() => runtime.engine.mode && onSaveConfig(runtime.engine.mode, displayedLots, displayedSlPercent, displayedTpPercent)}
                         className="secondary-button py-1.5 rounded-lg text-xs disabled:opacity-40"
                       >
                         Save {runtime.engine.mode?.toUpperCase() || ''} settings
-                      </button>
+                      </Button>
                       {runtime.engine.mode === 'paper' ? (
-                        <button type="button" disabled={runtime.position.has_open_position} onClick={onPaperReset} className="secondary-button py-1.5 rounded-lg text-xs disabled:opacity-40">
+                        <Button variant="unstyled" type="button" disabled={runtime.position.has_open_position} onClick={onPaperReset} className="secondary-button py-1.5 rounded-lg text-xs disabled:opacity-40">
                           Reset Paper session
-                        </button>
+                        </Button>
                       ) : null}
                     </div>
                   ) : null}
                   {engineLive && (
-                    <>
-                      <button
-                        className="secondary-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/80 bg-white/5 border border-white/10 text-sm font-medium"
-                        type="button"
-                        onClick={() => {
-                          setMenuOpen(false)
-                          onStop()
-                        }}
-                      >
-                        Stop Engine
-                      </button>
-                      <button
+                    <Button variant="unstyled"
                         className="kill-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-red-400 hover:text-white bg-red-950/30 hover:bg-red-900/40 border border-red-900/30 hover:border-red-500/40 transition-all font-medium text-sm"
                         type="button"
                         onClick={() => {
@@ -345,37 +320,9 @@ export function Header({
                       >
                         <ShieldAlert size={14} />
                         Stop & Square Off
-                      </button>
-                      <button
-                        className="secondary-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-sm font-medium"
-                        type="button"
-                        onClick={() => {
-                          setMenuOpen(false)
-                          setReconfigureDialogOpen(true)
-                        }}
-                      >
-                        <RotateCcw size={14} />
-                        Re-Configure
-                      </button>
-                    </>
+                    </Button>
                   )}
-                  {!engineLive && runtime?.engine.state === 'STOPPED' && (
-                    <button
-                      className="secondary-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/80 bg-white/5 border border-white/10 text-sm font-medium"
-                      type="button"
-                      onClick={() => {
-                        setMenuOpen(false)
-                        setReconfigureDialogOpen(true)
-                      }}
-                    >
-                      <RotateCcw size={14} />
-                      Re-Configure
-                    </button>
-                  )}
-                  <button type="button" onClick={onAccountRefresh} className="secondary-button w-full py-2 rounded-lg text-xs">
-                    Refresh Dhan account
-                  </button>
-                  <button
+                  <Button variant="unstyled"
                     className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/15 transition-all text-sm font-medium"
                     type="button"
                     onClick={() => {
@@ -385,7 +332,7 @@ export function Header({
                   >
                     <LogOut size={14} />
                     Log Out
-                  </button>
+                  </Button>
                 </div>
                 </motion.div>
               </>
@@ -417,14 +364,14 @@ export function Header({
               exit={{ opacity: 0, y: 8, scale: 0.98 }}
               transition={popTransition}
             >
-            <button
+            <Button variant="unstyled"
               className="absolute right-4 top-4 text-white/40 hover:text-white hover:bg-white/5 p-1.5 rounded-lg transition-colors border-0 cursor-pointer"
               type="button"
               aria-label="Close stop and square-off confirmation"
               onClick={closeDialog}
             >
               <X size={16} />
-            </button>
+            </Button>
 
             <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 mt-2">
               <ShieldAlert size={24} />
@@ -440,7 +387,7 @@ export function Header({
             </div>
 
             <div className="w-full flex flex-col gap-2 mt-2">
-              <button
+              <Button variant="unstyled"
                 className="hold-confirm w-full py-3 px-4 rounded-xl font-semibold border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm select-none cursor-pointer relative overflow-hidden"
                 type="button"
                 onPointerDown={startHold}
@@ -456,14 +403,14 @@ export function Header({
               >
                 {holdingKill ? <MotionProgressFill durationSeconds={0.8} tone="danger" /> : null}
                 <span className="hold-button-content">Hold to Stop & Square Off</span>
-              </button>
-              <button
+              </Button>
+              <Button variant="unstyled"
                 className="w-full py-2.5 px-4 rounded-xl text-white/50 hover:text-white bg-transparent hover:bg-white/5 transition-all text-xs font-semibold cursor-pointer border-0"
                 type="button"
                 onClick={closeDialog}
               >
                 Cancel
-              </button>
+              </Button>
             </div>
             </motion.section>
           </motion.div>
@@ -478,38 +425,20 @@ export function Header({
               <p className="text-xs text-white/60 m-0">
                 Choose what the server should do with your engine. Closing this browser alone never stops it.
               </p>
-              <button type="button" className="secondary-button py-3 rounded-xl text-sm" onClick={() => { setLogoutDialogOpen(false); onLogout('keep_running') }}>
+              <Button variant="unstyled" type="button" className="secondary-button py-3 rounded-xl text-sm" onClick={() => { setLogoutDialogOpen(false); onLogout('keep_running') }}>
                 Keep engine running and log out
-              </button>
-              <button type="button" className="secondary-button py-3 rounded-xl text-sm" onClick={() => { setLogoutDialogOpen(false); onLogout('stop_engine') }}>
+              </Button>
+              <Button variant="unstyled" type="button" className="secondary-button py-3 rounded-xl text-sm" onClick={() => { setLogoutDialogOpen(false); onLogout('stop_engine') }}>
                 Stop engine and log out
-              </button>
-              <button type="button" className="py-2 text-xs text-white/50" onClick={() => setLogoutDialogOpen(false)}>
+              </Button>
+              <Button variant="unstyled" type="button" className="py-2 text-xs text-white/50" onClick={() => setLogoutDialogOpen(false)}>
                 Cancel
-              </button>
+              </Button>
             </motion.section>
           </motion.div>
         ) : null}
       </AnimatePresence>
 
-      <AnimatePresence initial={false}>
-        {reconfigureDialogOpen ? (
-          <motion.div className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <motion.section className="kill-dialog w-full max-w-[420px] bg-[#12101c] border border-white/10 rounded-2xl shadow-2xl p-6 flex flex-col gap-4" role="dialog" aria-modal="true" aria-labelledby="reconfigure-dialog-title">
-              <h2 id="reconfigure-dialog-title" className="text-lg font-bold text-white m-0">Stop engine and reconfigure?</h2>
-              <p className="text-xs text-white/60 m-0">
-                The engine will stop and will not restart automatically. Any tracked open position is preserved; position-invalidating changes stay blocked until flat.
-              </p>
-              <button type="button" className="secondary-button py-3 rounded-xl text-sm" onClick={() => { setReconfigureDialogOpen(false); onReconfigure() }}>
-                Stop and continue
-              </button>
-              <button type="button" className="py-2 text-xs text-white/50" onClick={() => setReconfigureDialogOpen(false)}>
-                Cancel
-              </button>
-            </motion.section>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
     </>
   )
 }
@@ -541,62 +470,6 @@ function formatMoney(value: number | null | undefined): string {
   return `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-function HealthStrip({ setupState, health }: { setupState: SetupState; health: SystemHealth | null }) {
-  const chips = [
-    {
-      key: 'dhan',
-      label: 'Dhan',
-      value: dhanLabel(health?.dhan),
-      tone: health?.dhan === 'connected' ? 'ok' : health?.dhan === 'auth_issue' ? 'bad' : 'muted',
-    },
-    {
-      key: 'market',
-      label: 'Market',
-      value: health?.market === 'open' ? 'Open' : 'Closed',
-      tone: health?.market === 'open' ? 'ok' : 'muted',
-    },
-    {
-      key: 'feed',
-      label: 'Feed',
-      value: feedLabel(health?.feed),
-      tone: feedTone(health?.feed),
-      title: health?.feedReason ?? undefined,
-    },
-    {
-      key: 'engine',
-      label: 'Engine',
-      value: setupState === 'PAUSED' ? 'Paused' : health?.engine === 'listening' ? 'Listening' : 'Idle',
-      tone: setupState === 'PAUSED' ? 'warn' : health?.engine === 'listening' ? 'ok' : 'muted',
-    },
-  ] as Array<{ key: string; label: string; value: string; tone: string; title?: string }>
-
-  return (
-    <div className="health-strip" aria-label="System health">
-      {chips.map((chip) => (
-        <span key={chip.key} className={`health-chip ${chip.tone}`} title={chip.title ?? `${chip.label}: ${chip.value}`}>
-          <span>{chip.label}</span>
-          <strong>{chip.value}</strong>
-        </span>
-      ))}
-    </div>
-  )
-}
-
-function feedLabel(value: SystemHealth['feed'] | undefined): string {
-  if (value === 'live') return 'Live'
-  if (value === 'stale') return 'Stale'
-  if (value === 'down') return 'Down'
-  if (value === 'off') return 'Idle'
-  return 'Unknown'
-}
-
-function feedTone(value: SystemHealth['feed'] | undefined): string {
-  if (value === 'live') return 'ok'
-  if (value === 'stale') return 'warn'
-  if (value === 'down') return 'bad'
-  return 'muted'
-}
-
 function maskClientId(clientId: string): string {
   return `******${clientId.slice(-4).padStart(4, '*')}`
 }
@@ -605,10 +478,4 @@ function statusLabel(status: WsStatus, setupState: SetupState): string {
   if (status !== 'live') return 'reconnecting'
   if (setupState === 'PAUSED') return 'paused'
   return 'listening'
-}
-
-function dhanLabel(value: SystemHealth['dhan'] | undefined): string {
-  if (value === 'connected') return 'Connected'
-  if (value === 'auth_issue') return 'Auth Issue'
-  return 'Unknown'
 }

@@ -83,7 +83,6 @@ function props(status = runtime()) {
     engineLive: status.engine.running,
     engineMode: status.engine.mode,
     setupState: 'IDLE' as const,
-    health: null,
     market: null,
     user: {
       id: 'owner-1',
@@ -102,13 +101,10 @@ function props(status = runtime()) {
     },
     onNavigate: vi.fn(),
     onKill: vi.fn(),
-    onStop: vi.fn(),
-    onReconfigure: vi.fn(),
     onLogout: vi.fn(),
     onMode: vi.fn(),
     onSaveConfig: vi.fn(),
     onPaperReset: vi.fn(),
-    onAccountRefresh: vi.fn(),
   }
 }
 
@@ -129,11 +125,18 @@ describe('Header runtime reliability controls', () => {
     expect(screen.queryByRole('button', { name: 'Setup' })).not.toBeInTheDocument()
   })
 
-  it('renders the backend lifecycle display', async () => {
+  it('shows runtime details but keeps system health and secondary engine actions out of the account menu', async () => {
     const user = userEvent.setup()
-    render(<Header {...props()} />)
+    render(<Header {...props(runtime({ engine: { running: true, state: 'RUNNING', display: 'RUNNING' } as RuntimeStatus['engine'] }))} />)
     await openMenu(user)
-    expect(screen.getByText('STOPPED')).toBeInTheDocument()
+    expect(screen.getByText('RUNNING')).toBeInTheDocument()
+    expect(screen.getByText(/Flat — no active option position/)).toBeInTheDocument()
+    expect(screen.getByText('No active LTP')).toBeInTheDocument()
+    expect(screen.queryByText('System Health')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop Engine' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Re-Configure' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Refresh Dhan account' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop & Square Off' })).toBeInTheDocument()
   })
 
   it('renders only the server-masked Dhan client id', async () => {
@@ -141,58 +144,6 @@ describe('Header runtime reliability controls', () => {
     render(<Header {...props()} />)
     await openMenu(user)
     expect(screen.getByText('12••••78')).toBeInTheDocument()
-  })
-
-  it('shows an open-position stopped warning from backend state', async () => {
-    const user = userEvent.setup()
-    const status = runtime({
-      engine: { display: 'POSITION OPEN — ENGINE STOPPED' } as RuntimeStatus['engine'],
-      position: { has_open_position: true, trading_symbol: 'NIFTY CE', qty: 65 } as RuntimeStatus['position'],
-    })
-    render(<Header {...props(status)} />)
-    await openMenu(user)
-    expect(screen.getByText('POSITION OPEN — ENGINE STOPPED')).toBeInTheDocument()
-    expect(screen.getByText(/NIFTY CE · Qty 65/)).toBeInTheDocument()
-  })
-
-  it('labels stale LTP without inventing a fresh value', async () => {
-    const user = userEvent.setup()
-    const status = runtime({
-      position: { has_open_position: true, ltp: { value: 101.5, status: 'stale', stale: true } } as RuntimeStatus['position'],
-    })
-    render(<Header {...props(status)} />)
-    await openMenu(user)
-    expect(screen.getByText('LTP 101.5 · stale')).toBeInTheDocument()
-  })
-
-  it('renders flat as no active position instead of an LTP error', async () => {
-    const user = userEvent.setup()
-    render(<Header {...props()} />)
-    await openMenu(user)
-    expect(screen.getByText('Flat — no active option position')).toBeInTheDocument()
-    expect(screen.getByText('No active LTP')).toBeInTheDocument()
-    expect(screen.queryByText('Live option quote unavailable')).not.toBeInTheDocument()
-  })
-
-  it('shows source, timestamp, and age only for an open quote failure', async () => {
-    const user = userEvent.setup()
-    const status = runtime({
-      position: {
-        has_open_position: true,
-        ltp: {
-          value: null,
-          status: 'ltp_error',
-          stale: false,
-          source: 'dhan_marketfeed_ws',
-          received_at: '2026-07-21T08:00:00Z',
-          age_seconds: 17,
-        },
-      } as RuntimeStatus['position'],
-    })
-    render(<Header {...props(status)} />)
-    await openMenu(user)
-    expect(screen.getByText('Live option quote unavailable')).toBeInTheDocument()
-    expect(screen.getByText(/dhan_marketfeed_ws.*17s old/)).toBeInTheDocument()
   })
 
   it('does not expose stopped configuration while square-off is still stopping', async () => {
@@ -207,26 +158,7 @@ describe('Header runtime reliability controls', () => {
     })
     render(<Header {...props(status)} />)
     await openMenu(user)
-    expect(screen.getByText('EXIT PENDING — ENGINE STOPPING')).toBeInTheDocument()
     expect(screen.queryByLabelText('Runtime lots')).not.toBeInTheDocument()
-  })
-
-  it('shows Stop Engine only while running', async () => {
-    const user = userEvent.setup()
-    const status = runtime({ engine: { state: 'RUNNING', running: true, display: 'RUNNING' } as RuntimeStatus['engine'] })
-    render(<Header {...props(status)} />)
-    await openMenu(user)
-    expect(screen.getByRole('button', { name: 'Stop Engine' })).toBeInTheDocument()
-  })
-
-  it('normal Stop Engine calls the non-square-off action', async () => {
-    const user = userEvent.setup()
-    const callbacks = props(runtime({ engine: { running: true, state: 'RUNNING' } as RuntimeStatus['engine'] }))
-    render(<Header {...callbacks} />)
-    await openMenu(user)
-    await user.click(screen.getByRole('button', { name: 'Stop Engine' }))
-    expect(callbacks.onStop).toHaveBeenCalledOnce()
-    expect(callbacks.onKill).not.toHaveBeenCalled()
   })
 
   it('opens the Stop & Square Off confirmation', async () => {
@@ -248,25 +180,6 @@ describe('Header runtime reliability controls', () => {
     act(() => vi.advanceTimersByTime(801))
     expect(callbacks.onKill).toHaveBeenCalledOnce()
     vi.useRealTimers()
-  })
-
-  it('opens a reconfigure confirmation', async () => {
-    const user = userEvent.setup()
-    render(<Header {...props()} />)
-    await openMenu(user)
-    await user.click(screen.getByRole('button', { name: 'Re-Configure' }))
-    expect(screen.getByRole('dialog', { name: /stop engine and reconfigure/i })).toBeInTheDocument()
-  })
-
-  it('confirms reconfigure without auto-starting anything client-side', async () => {
-    const user = userEvent.setup()
-    const callbacks = props()
-    render(<Header {...callbacks} />)
-    await openMenu(user)
-    await user.click(screen.getByRole('button', { name: 'Re-Configure' }))
-    await user.click(screen.getByRole('button', { name: 'Stop and continue' }))
-    expect(callbacks.onReconfigure).toHaveBeenCalledOnce()
-    expect(callbacks.onMode).not.toHaveBeenCalled()
   })
 
   it('opens logout choices instead of immediately logging out', async () => {
@@ -392,13 +305,4 @@ describe('Header runtime reliability controls', () => {
     expect(callbacks.onPaperReset).toHaveBeenCalledOnce()
   })
 
-  it('refreshes broker account state without changing lifecycle locally', async () => {
-    const user = userEvent.setup()
-    const callbacks = props()
-    render(<Header {...callbacks} />)
-    await openMenu(user)
-    await user.click(screen.getByRole('button', { name: 'Refresh Dhan account' }))
-    expect(callbacks.onAccountRefresh).toHaveBeenCalledOnce()
-    expect(callbacks.onStop).not.toHaveBeenCalled()
-  })
 })

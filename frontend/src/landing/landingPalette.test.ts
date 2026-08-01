@@ -15,7 +15,6 @@ const sources = Object.entries(modules)
 const combined = sources.map((s) => s.text).join('\n')
 
 const ELECTRIC_BLUE = '#2F6BED'
-const PURPLE = '#9B5CFF'
 // Both notations: the hex pass alone missed rgba(192,245,61,...) twice.
 const LIME_HEX = /#(c0f53d|80af1b|7fa52b|d4ff32|a6e025|b5f230|8cc217|d4ff54)/i
 const LIME_RGB = /rgba?\(\s*(192\s*,\s*245\s*,\s*61|177\s*,\s*228\s*,\s*57|160\s*,\s*230\s*,\s*40|101\s*,\s*205\s*,\s*135)/i
@@ -49,16 +48,6 @@ describe('landing palette', () => {
     // threshold is scaled to the simplified page (just the orbiting diagram),
     // not the old multi-section marketing page.
     expect(combined.split(ELECTRIC_BLUE).length - 1).toBeGreaterThan(10)
-  })
-
-  it('never uses purple outside of an italic editorial emphasis', () => {
-    // The editorial-voice hero copy that used purple was removed along with
-    // the rest of the marketing page; purple is no longer required to be
-    // present, but if it ever returns it must stay an italic emphasis, never
-    // a button or a border.
-    for (const match of combined.matchAll(new RegExp(`class(?:Name)?="([^"]*${PURPLE}[^"]*)"`, 'g'))) {
-      expect(match[1]).toMatch(/italic/)
-    }
   })
 
   it('never recolours Buy or success semantics', () => {

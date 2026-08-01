@@ -38,7 +38,7 @@ from sqlalchemy import func, select
 
 from app.db import models
 from app.db.engine import session_scope
-from app.services import strategy_catalog_service
+from app.services import risk_configuration, strategy_catalog_service
 from app.services import strategy_instance_service as instances
 from app.services.audit_logger import log_audit_event
 from app.services.state_store import (
@@ -173,6 +173,12 @@ def save_configuration(
     schema = strategy_catalog_service.setup_schema_for(strategy_key)
     normalized_setup = strategy_catalog_service.validate_setup_values(schema, setup_values)
     normalized_risk = normalize_risk(risk_values)
+    shared_before = risk_configuration.configuration(user_id, normalized_mode)
+    shared_values = dict(shared_before["values"])
+    if "max_daily_loss" in normalized_risk:
+        shared_values["daily_loss_cap"] = normalized_risk["max_daily_loss"]
+    if "max_trades_per_day" in normalized_risk:
+        shared_values["max_trades_per_day"] = normalized_risk["max_trades_per_day"]
 
     settings_before = get_runtime_settings()
     current = _settings_revision(settings_before)
@@ -186,6 +192,7 @@ def save_configuration(
     settings_written = False
     saved_settings: dict[str, Any] = settings_before
     saved_setup: dict[str, Any] = {}
+    saved_risk_configuration: dict[str, Any] = shared_before
 
     try:
         with session_scope() as db:
@@ -284,6 +291,16 @@ def save_configuration(
             engine_config.updated_at = strategy_catalog_service._now()
             db.flush()
 
+            saved_risk_configuration = risk_configuration.save_configuration(
+                user_id,
+                mode=normalized_mode,
+                based_on_preset=shared_before["basedOnPreset"],
+                values=shared_values,
+                change_source="SETUP",
+                expected_version=shared_before["activeVersion"],
+                _db=db,
+            )
+
             # Written inside the transaction: a DB failure raised before this
             # point leaves the settings file untouched.
             merged = dict(settings_before)
@@ -327,6 +344,7 @@ def save_configuration(
         "mode": normalized_mode,
         "setup": saved_setup,
         "risk": {key: saved_settings.get(key) for key in normalized_risk},
+        "risk_configuration": saved_risk_configuration,
         "settings": saved_settings,
     }
 

@@ -322,6 +322,67 @@ class UserRiskControl(Base):
     )
 
 
+class UserRiskConfiguration(Base):
+    """The active owner-scoped risk version for one execution mode."""
+
+    __tablename__ = "user_risk_configurations"
+    __table_args__ = (
+        UniqueConstraint("user_id", "execution_mode", name="uq_user_risk_configuration_mode"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    execution_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    active_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("user_risk_configuration_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    based_on_preset: Mapped[str] = mapped_column(String(30), default="BALANCED", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class UserRiskConfigurationVersion(Base):
+    """Immutable audit history for one Paper or Live risk configuration."""
+
+    __tablename__ = "user_risk_configuration_versions"
+    __table_args__ = (
+        UniqueConstraint("risk_configuration_id", "version_number", name="uq_user_risk_version_number"),
+        Index("ix_user_risk_versions_configuration_created", "risk_configuration_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    risk_configuration_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("user_risk_configurations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    preset_key: Mapped[str] = mapped_column(String(30), nullable=False)
+    is_custom: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    daily_loss_cap_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    max_loss_per_trade_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    max_trades_per_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_open_positions: Mapped[int] = mapped_column(Integer, nullable=False)
+    lots_per_trade_min: Mapped[int] = mapped_column(Integer, nullable=False)
+    lots_per_trade_max: Mapped[int] = mapped_column(Integer, nullable=False)
+    cooldown_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    exit_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    stop_loss_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    take_profit_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_loss_basis: Mapped[str] = mapped_column(String(20), nullable=False)
+    take_profit_basis: Mapped[str] = mapped_column(String(20), nullable=False)
+    margin_exposure_cap_paise: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    change_source: Mapped[str] = mapped_column(String(30), nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class UserStrategyRiskControl(Base):
     """Per-user, per-strategy overrides for fan-out risk gates."""
 
@@ -549,6 +610,12 @@ class LiveOrderIntent(Base):
     symbol: Mapped[str | None] = mapped_column(String(120), nullable=True)
     broker_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     broker_correlation_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    risk_configuration_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("user_risk_configuration_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     intent_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -1396,6 +1463,16 @@ class StrategyInstancePosition(Base):
     pending_order_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     reversal_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     super_order_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    risk_configuration_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("user_risk_configuration_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    entry_stop_rule: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    entry_target_rule: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    position_sizing_rule: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    maximum_loss_rule: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     reconciliation_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     last_broker_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

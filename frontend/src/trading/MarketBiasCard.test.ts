@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deriveMarketBias } from './MarketBiasCard'
+import { deriveMarketBias, marketBiasMeter } from './MarketBiasCard'
 
 describe('deriveMarketBias', () => {
   it('derives a deterministic percentage from closed candles only', () => {
@@ -24,5 +24,12 @@ describe('deriveMarketBias', () => {
       bearish_percentage: 50,
       updated_at: null,
     })
+  })
+
+  it('uses five red-to-green strength bands while bearish stays red', () => {
+    expect(marketBiasMeter('Bullish', 78)).toEqual({ activeSegments: 4, tone: 'mint' })
+    expect(marketBiasMeter('Bullish', 92)).toEqual({ activeSegments: 5, tone: 'green' })
+    expect(marketBiasMeter('Bearish', 92)).toEqual({ activeSegments: 5, tone: 'red' })
+    expect(marketBiasMeter('Neutral', 0)).toEqual({ activeSegments: 0, tone: 'yellow' })
   })
 })

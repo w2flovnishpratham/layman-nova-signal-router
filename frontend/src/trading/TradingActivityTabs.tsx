@@ -1,6 +1,10 @@
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Button } from '@/components/ui/button'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { toast } from '@/components/ui/toast'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ServerEvent } from '../types'
-import { AutomationsPage } from '../automations/AutomationsPage'
+import { PageSkeleton } from '../components/PageSkeleton'
 import { getPreferences } from '../settings/settingsApi'
 import { notifyForServerEvent } from './browserNotifications'
 import {
@@ -14,14 +18,13 @@ import {
   type TerminalRow,
 } from './terminalApi'
 
-export type TradingTerminalTab = 'activity' | 'engine' | 'executions' | 'alerts' | 'automation'
+export type TradingTerminalTab = 'activity' | 'engine' | 'executions' | 'alerts'
 
 const TABS: Array<{ key: TradingTerminalTab; label: string }> = [
   { key: 'activity', label: 'Signal & Order Activity' },
   { key: 'engine', label: 'Engine Log' },
   { key: 'executions', label: 'Executions' },
   { key: 'alerts', label: 'Alerts' },
-  { key: 'automation', label: 'Automation Settings' },
 ]
 const TERMINAL_TABS = new Set(TABS.map((item) => item.key))
 
@@ -49,10 +52,6 @@ export function TradingActivityTabs({ mode = null, runId = null }: Props) {
     active: TradingTerminalTab,
     incremental = false,
   ) => {
-    if (active === 'automation') {
-      setLoading(false)
-      return
-    }
     if (!incremental) setLoading(true)
     try {
       const options = {
@@ -177,99 +176,114 @@ export function TradingActivityTabs({ mode = null, runId = null }: Props) {
     try {
       await acknowledgeHistoricalAlerts(historicalAlertIds)
       await load('alerts')
+      toast.add({ title: 'Historical alerts acknowledged.', type: 'success' })
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not acknowledge historical alerts.')
+      toast.add({
+        title: cause instanceof Error ? cause.message : 'Could not acknowledge historical alerts.',
+        type: 'error',
+      })
     }
   }
 
   return (
-    <section className="terminal-feed">
-      <div className="terminal-tabs" role="tablist" aria-label="Trading terminal views">
+    <Tabs
+      variant="unstyled"
+      className="terminal-feed"
+      value={tab}
+      onValueChange={(value) => selectTab(value as TradingTerminalTab)}
+    >
+      <TabsList variant="unstyled" className="terminal-tabs" aria-label="Trading terminal views">
         {TABS.map((item) => (
-          <button
-            type="button"
-            role="tab"
+          <TabsTrigger
+            variant="unstyled"
+            value={item.key}
             key={item.key}
-            aria-selected={tab === item.key}
             className={tab === item.key ? 'is-active' : ''}
-            onClick={() => selectTab(item.key)}
           >
             {item.label}
             {item.key === 'alerts' && alerts?.unacknowledged_count ? (
               <span className="terminal-alert-count">{alerts.unacknowledged_count}</span>
             ) : null}
-          </button>
+          </TabsTrigger>
         ))}
-      </div>
+      </TabsList>
 
       {notificationStatus ? <p className="terminal-notification-state">{notificationStatus}</p> : null}
-      {tab === 'automation' ? (
-        <div className="terminal-automation"><AutomationsPage /></div>
-      ) : loading && rows.length === 0 ? (
-        <p className="terminal-feed-state">Loading {TABS.find((item) => item.key === tab)?.label.toLowerCase()}…</p>
+      {loading && rows.length === 0 ? (
+        <PageSkeleton label={`Loading ${TABS.find((item) => item.key === tab)?.label.toLowerCase()}`} variant="table" compact />
       ) : error ? (
-        <p className="terminal-feed-state is-error">{error}<button type="button" onClick={() => void load(tab)}>Retry</button></p>
+        <p className="terminal-feed-state is-error">{error}<Button variant="unstyled" type="button" onClick={() => void load(tab)}>Retry</Button></p>
       ) : rows.length === 0 ? (
         <p className="terminal-feed-state">No persisted events yet.</p>
       ) : (
         <>
           {tab === 'alerts' ? (
             <div className="terminal-alert-summary">
-              <span>{alerts?.active_items.length ?? 0} active conditions</span>
-              <span>{alerts?.historical_items.length ?? 0} historical alerts</span>
+              <span className="is-active"><strong>{alerts?.active_items.length ?? 0}</strong> Active conditions</span>
+              <span><strong>{alerts?.historical_items.length ?? 0}</strong> Historical alerts</span>
               {historicalAlertIds.length ? (
-                <button type="button" onClick={() => void acknowledgeHistorical()}>
+                <Button variant="unstyled" type="button" onClick={() => void acknowledgeHistorical()}>
                   Acknowledge historical
-                </button>
+                </Button>
               ) : null}
             </div>
           ) : null}
           {tab === 'engine' && logPaused ? (
             <div className="terminal-log-paused">
               Paused while you read history.
-              <button type="button" onClick={jumpToLatest}>Jump to latest</button>
+              <Button variant="unstyled" type="button" onClick={jumpToLatest}>Jump to latest</Button>
             </div>
           ) : null}
-          <div className="terminal-table-wrap" ref={tableWrap} onScroll={onTableScroll}>
-            <table className="terminal-table">
-              <thead><tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={row.id}
-                    data-terminal-event={row.id}
-                    className={focusedEventId && rowMatchesFocus(row, focusedEventId) ? 'is-focused' : ''}
-                    onClick={() => {
-                      if (tab === 'activity') {
-                        setSelectedActivity(row)
-                        setFocusedEventId(row.id)
-                        updateDeepLink(tab, row.id)
-                      }
-                    }}
-                  >
-                    {columns.map((column) => (
-                      <td key={column.key}>
-                        {displayValue(column.key, row[column.key])}
-                        {tab === 'executions' && isCopyField(column.key) && row[column.key] ? (
-                          <button
-                            type="button"
-                            className="terminal-copy"
-                            aria-label={`Copy ${column.label}`}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void navigator.clipboard?.writeText(String(row[column.key]))
-                            }}
-                          >
-                            Copy
-                          </button>
-                        ) : null}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {tab === 'engine' ? (
+            <div className="terminal-engine-chat terminal-table-wrap" ref={tableWrap} onScroll={onTableScroll}>
+              {rows.map((row) => {
+                const user = engineLogIsUser(row)
+                return (
+                  <article key={row.id} data-terminal-event={row.id} className={user ? 'is-user' : ''}>
+                    {!user ? <span className="terminal-engine-avatar">N</span> : null}
+                    <div><time>{displayValue('occurred_at', row.occurred_at)}</time><p>{displayValue('message', row.message)}</p></div>
+                  </article>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="terminal-table-wrap" ref={tableWrap} onScroll={onTableScroll}>
+              <Table variant="unstyled" className="terminal-table">
+                <TableHeader><TableRow>{columns.map((column) => <TableHead key={column.key}>{column.label}</TableHead>)}</TableRow></TableHeader>
+                <TableBody>
+                  {rows.map((row) => (
+                    <TableRow
+                      key={row.id}
+                      data-terminal-event={row.id}
+                      className={[
+                        focusedEventId && rowMatchesFocus(row, focusedEventId) ? 'is-focused' : '',
+                        tab === 'alerts' && row.active ? 'is-alert-active' : '',
+                      ].filter(Boolean).join(' ')}
+                      onClick={() => {
+                        if (tab === 'activity') {
+                          setSelectedActivity(row)
+                          setFocusedEventId(row.id)
+                          updateDeepLink(tab, row.id)
+                        }
+                      }}
+                    >
+                      {columns.map((column) => {
+                        const value = terminalColumnValue(row, column.key)
+                        return (
+                          <TableCell key={column.key} className={`terminal-cell-${column.key}`}>
+                            {renderTerminalValue(column.key, value)}
+                            {tab === 'executions' && isCopyField(column.key) && value ? (
+                              <Button variant="unstyled" type="button" className="terminal-copy" aria-label={`Copy ${column.label}`} onClick={(event) => { event.stopPropagation(); void navigator.clipboard?.writeText(String(value)) }}>Copy</Button>
+                            ) : null}
+                          </TableCell>
+                        )
+                      })}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </>
       )}
 
@@ -277,7 +291,7 @@ export function TradingActivityTabs({ mode = null, runId = null }: Props) {
         <aside className="terminal-lifecycle-drawer" aria-label="Activity lifecycle">
           <div>
             <strong>Activity lifecycle</strong>
-            <button type="button" onClick={() => setSelectedActivity(null)}>Close</button>
+            <Button variant="unstyled" type="button" onClick={() => setSelectedActivity(null)}>Close</Button>
           </div>
           <p>{String(drawerActivity.correlation_id ?? drawerActivity.id)}</p>
           {(drawerActivity.lifecycle ?? []).map((stage, index) => (
@@ -289,7 +303,7 @@ export function TradingActivityTabs({ mode = null, runId = null }: Props) {
           ))}
         </aside>
       ) : null}
-    </section>
+    </Tabs>
   )
 }
 
@@ -348,14 +362,11 @@ function columnsFor(tab: TradingTerminalTab): Array<{ key: string; label: string
     { key: 'mode', label: 'Mode' },
     { key: 'instrument', label: 'Instrument' },
     { key: 'action', label: 'Action' },
-    { key: 'requested_qty', label: 'Requested' },
-    { key: 'filled_qty', label: 'Filled' },
+    { key: 'fill_quantity', label: 'Qty' },
     { key: 'average_price', label: 'Avg fill' },
     { key: 'charges', label: 'Charges' },
-    { key: 'slippage', label: 'Slippage' },
     { key: 'status', label: 'Status' },
-    { key: 'operation_id', label: 'Operation ID' },
-    { key: 'broker_order_id', label: 'Broker ID' },
+    { key: 'order_reference', label: 'Order ID' },
   ]
   if (tab === 'alerts') return [
     { key: 'occurred_at', label: 'Time' },
@@ -379,7 +390,21 @@ function columnsFor(tab: TradingTerminalTab): Array<{ key: string; label: string
 }
 
 function isCopyField(key: string): boolean {
-  return ['operation_id', 'order_id', 'broker_order_id', 'broker_correlation_id'].includes(key)
+  return key === 'order_reference'
+}
+
+function terminalColumnValue(row: TerminalRow, key: string): unknown {
+  if (key === 'fill_quantity') {
+    const filled = row.filled_qty ?? '—'
+    const requested = row.requested_qty ?? '—'
+    return `${filled} / ${requested}`
+  }
+  if (key === 'order_reference') return row.broker_order_id ?? row.order_id ?? row.operation_id
+  return row[key]
+}
+
+function engineLogIsUser(row: TerminalRow): boolean {
+  return /command|manual|user/i.test(String(row.event_type ?? ''))
 }
 
 function displayValue(key: string, value: unknown): string {
@@ -393,6 +418,23 @@ function displayValue(key: string, value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
   if (typeof value === 'number') return value.toLocaleString('en-IN')
   return String(value)
+}
+
+function renderTerminalValue(key: string, value: unknown) {
+  const text = displayValue(key, value)
+  if (text === '—') return text
+  if (key === 'strategy') return <span className="terminal-strategy-value"><b>NOVA</b>{text}</span>
+  if (key === 'signal') return <span className={`terminal-signal-value ${/sell|exit|sl/i.test(text) ? 'is-negative' : 'is-positive'}`}>{text}</span>
+  if (key === 'mode') return <span className={`terminal-badge is-${text.toLowerCase()}`}>{text.toUpperCase()}</span>
+  if (key === 'action') return <span className={`terminal-signal-value ${/sell|exit/i.test(text) ? 'is-negative' : 'is-positive'}`}>{text.replaceAll('_', ' ')}</span>
+  if (key === 'severity') return <span className={`terminal-badge is-${/critical|error/i.test(text) ? 'danger' : /warn/i.test(text) ? 'warning' : 'info'}`}>{text.toUpperCase()}</span>
+  if (key === 'category') return <span className="terminal-condition-value">{text.replaceAll('_', ' ')}</span>
+  if (key === 'active') return <span className={`terminal-badge ${value ? 'is-danger' : 'is-neutral'}`}>{text}</span>
+  if (key === 'acknowledged') return <span className={`terminal-badge ${value ? 'is-neutral' : 'is-warning'}`}>{text}</span>
+  if (key === 'status') return <span className={`terminal-status-value ${/reject|block|fail|error|expired/i.test(text) ? 'is-negative' : /fill|trade|route|accept|complete/i.test(text) ? 'is-positive' : ''}`}>{text}</span>
+  if (key === 'average_price' || key === 'charges') return `₹${Number(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  if (key === 'pnl') return <span className={Number(value) < 0 ? 'terminal-pnl-negative' : Number(value) > 0 ? 'terminal-pnl-positive' : ''}>{text}</span>
+  return text
 }
 
 function cssEscape(value: string): string {

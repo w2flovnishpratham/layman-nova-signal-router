@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import type { ConversationState } from '../state/conversationMachine'
 import { getBrokerStatus } from './brokerApi'
 import { deriveSteps } from './setupFields'
-import { SetupConfigPanel, SetupStepRail } from './SetupProgressPanel'
+import { SetupCompactProgress, SetupConfigPanel, SetupStepRail } from './SetupProgressPanel'
 
 export interface SetupSnapshot {
   state: ConversationState
@@ -14,7 +14,15 @@ export interface SetupSnapshot {
 
 /** The /app/setup screen: step rail, the setup conversation, and a live
     configuration panel. All three read the same conversation state. */
-export function SetupPage({ conversation, snapshot }: { conversation: ReactNode; snapshot: SetupSnapshot | null }) {
+export function SetupPage({
+  conversation,
+  snapshot,
+  unavailable = false,
+}: {
+  conversation: ReactNode
+  snapshot: SetupSnapshot | null
+  unavailable?: boolean
+}) {
   const [broker, setBroker] = useState<{ connected: boolean; masked: string | null }>({ connected: false, masked: null })
 
   const loadBroker = useCallback(async () => {
@@ -56,19 +64,15 @@ export function SetupPage({ conversation, snapshot }: { conversation: ReactNode;
   const allAnswered = steps.every((s) => s.status === 'done' || s.id === 'review')
 
   return (
-    <div className="nova-setup">
-      <SetupStepRail steps={steps} />
+    <div className={`nova-setup${unavailable ? ' is-unavailable' : ''}`}>
+      {!unavailable ? <SetupCompactProgress steps={steps} /> : null}
+      {!unavailable ? <SetupStepRail steps={steps} /> : null}
       <section className="nova-setup-main" aria-label="Setup conversation">
         <div className="nova-setup-conversation-inner">
-          <p className="nova-setup-kicker">
-            Guided engine setup <span aria-hidden="true">·</span> {mode === 'paper' ? 'Paper mode' : mode === 'live' ? 'Live mode' : 'Choose mode'}
-            {snapshot?.state.origin === 'resume' ? <> <span aria-hidden="true">·</span> resuming your saved setup</> : null}
-            {snapshot?.state.origin === 'start_new' ? <> <span aria-hidden="true">·</span> starting a new setup</> : null}
-          </p>
           {conversation}
         </div>
       </section>
-      <SetupConfigPanel
+      {!unavailable ? <SetupConfigPanel
         steps={steps}
         // Arming happens in the review step inside the conversation; this panel
         // never bypasses it, so the button only ever reports readiness.
@@ -78,7 +82,7 @@ export function SetupPage({ conversation, snapshot }: { conversation: ReactNode;
             ? `Arm Engine (${mode === 'live' ? 'Live' : 'Paper'}) — confirm in the review step`
             : `Arm Engine (${mode === 'live' ? 'Live' : 'Paper'}) — finish setup first`
         }
-      />
+      /> : null}
     </div>
   )
 }

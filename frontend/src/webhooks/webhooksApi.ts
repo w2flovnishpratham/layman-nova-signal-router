@@ -37,3 +37,15 @@ export async function getWebhooksOverview(): Promise<WebhooksOverview> {
   }
   return response.json() as Promise<WebhooksOverview>
 }
+
+export async function rotateWebhookSecret(): Promise<string> {
+  const response = await fetch(backendHttpUrl('/api/webhooks/secret/rotate'), {
+    method: 'POST',
+    credentials: 'include',
+    cache: 'no-store',
+  })
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>
+  if (!response.ok) throw new Error(String(body.error ?? `Could not rotate secret: ${response.status}`))
+  if (typeof body.secret !== 'string' || !body.secret) throw new Error('The server did not return a new secret.')
+  return body.secret
+}

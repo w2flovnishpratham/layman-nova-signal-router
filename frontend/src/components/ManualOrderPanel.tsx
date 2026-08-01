@@ -1,4 +1,7 @@
-import { Loader2, LogOut, Repeat2, ShoppingCart, Sliders } from 'lucide-react'
+import { Input } from "@/components/ui/input"
+import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toast'
+import { Loader2, LogOut, Repeat2, Sliders } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -26,6 +29,7 @@ type Stage = 'idle' | 'Submitting order' | 'Waiting for fresh LTP' | 'Paper orde
 
 export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen = false }: Props) {
   const [lots, setLots] = useState(1)
+  const [lotsInput, setLotsInput] = useState('1')
   const [side, setSide] = useState<'CE' | 'PE'>('CE')
   const [targetProfitPct, setTargetProfitPct] = useState(20)
   const [stopLossPct, setStopLossPct] = useState(10)
@@ -42,7 +46,6 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
   const [quotes, setQuotes] = useState<{ CE: OrderQuote | null; PE: OrderQuote | null }>({ CE: null, PE: null })
   const [quoteStatus, setQuoteStatus] = useState<'loading' | 'ready' | 'stale' | 'error'>('loading')
   const [lastQuoteError, setLastQuoteError] = useState<string | null>(null)
-  const [message, setMessage] = useState('')
   const [confirmed, setConfirmed] = useState<ManualOrderResponse | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
@@ -56,8 +59,10 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
   const live = engineMode === 'live'
   const quote = quotes[side]
   const marketClosed = quote?.atm?.marketOpen === false
-  const ceContract = getContractForSide(quotes.CE, 'CE')
-  const peContract = getContractForSide(quotes.PE, 'PE')
+  const entryContracts = {
+    CE: getContractForSide(quotes.CE, 'CE'),
+    PE: getContractForSide(quotes.PE, 'PE'),
+  }
   const currentPositionKey = activeTrade?.orderId ?? activeTrade?.symbol ?? 'runtime-position'
   const hasExposure = (runtimePositionOpen || Boolean(activeTrade)) && closedPositionKey !== currentPositionKey
   const advancedTransition = reduceMotion ? { duration: 0 } : { duration: 0.26, ease: softEase }
@@ -131,13 +136,16 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
     // side. The backend live guard would block it anyway; catch it here first.
     if (action === 'entry' && !getContractForSide(quotes[entrySide], entrySide)) {
       setStage('Order not placed')
-      setMessage(`Quote not ready for ${entrySide}. Please wait for ATM ${entrySide} contract to resolve.`)
+      toast.add({
+        title: `Quote not ready for ${entrySide}.`,
+        description: `Please wait for the ATM ${entrySide} contract to resolve.`,
+        type: 'warning',
+      })
       return
     }
     inFlightRef.current = true
     setActiveAction(action === 'entry' ? (entrySide === 'CE' ? 'entry-CE' : 'entry-PE') : action)
     setPending(true)
-    setMessage('')
     setConfirmed(null)
     const operationKey = `${action}:${entrySide}`
     const operationId = retryOperationRef.current?.key === operationKey
@@ -168,10 +176,18 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
       if (operationState !== 'PAPER_ORDER_ACCEPTED' && operationState !== 'RECONCILIATION_REQUIRED') {
         retryOperationRef.current = null
       }
-      setMessage(response.message)
+      toast.add({
+        title: response.message,
+        type: response.ok
+          ? operationState === 'RECONCILIATION_REQUIRED' ? 'warning' : 'success'
+          : 'error',
+      })
     } catch (error) {
       setStage('Order not placed')
-      setMessage(error instanceof Error ? error.message : 'Manual order failed.')
+      toast.add({
+        title: error instanceof Error ? error.message : 'Manual order failed.',
+        type: 'error',
+      })
     } finally {
       inFlightRef.current = false
       setPending(false)
@@ -207,43 +223,47 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
         <span className={`sidebar-mode-chip ${engineMode ?? 'unset'}`}>{engineMode ?? 'unset'}</span>
       </div>
 
-      <div className="manual-order-type" role="group" aria-label="Order type">
-        <button type="button" aria-pressed="true">Market</button>
-        <button type="button" disabled title="Limit orders are not available in this release">Limit</button>
+      <div className="manual-order-entry-grid">
+        <label className="manual-order-lots">
+          <span className="manual-order-field-label">Lots</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={100}
+            step={1}
+            value={lotsInput}
+            disabled={pending}
+            aria-label="Manual order lots"
+            onChange={(event) => {
+              const raw = event.currentTarget.value
+              if (!/^\d*$/.test(raw)) return
+              setLotsInput(raw)
+              const value = Number(raw)
+              if (Number.isInteger(value) && value >= 1 && value <= 100) setLots(value)
+            }}
+            onBlur={() => setLotsInput(String(lots))}
+          />
+        </label>
       </div>
 
-      {/* Main Order Action Buttons (Side-by-side CE and PE) */}
-      <div className="flex gap-2 mt-4">
-        <ActionButton
-          live={live}
-          disabled={pending || marketClosed || !ceContract}
-          onConfirm={() => void runOrder('entry', 'CE')}
-          loading={activeAction === 'entry-CE'}
-          loadingLabel="Buying CE…"
-          ariaLabel="Buy CE market"
-          className="flex-1 py-3 px-4 rounded-xl font-semibold border border-emerald-500/20 hover:border-emerald-500/50 bg-emerald-500/10 text-emerald-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-        >
-          <ShoppingCart size={13} />
-          Buy CE
-        </ActionButton>
-        <ActionButton
-          live={live}
-          disabled={pending || marketClosed || !peContract}
-          onConfirm={() => void runOrder('entry', 'PE')}
-          loading={activeAction === 'entry-PE'}
-          loadingLabel="Buying PE…"
-          ariaLabel="Buy PE market"
-          // Both CE and PE are BUY entries, so both use the reserved "buy" green.
-          // Red is reserved for Exit / Square-off / Stop — colouring Buy PE red made
-          // a purchase read as a destructive action. Direction stays legible from the
-          // CE/PE label, not from colour alone.
-          className="flex-1 py-3 px-4 rounded-xl font-semibold border border-emerald-500/20 hover:border-emerald-500/50 bg-emerald-500/10 text-emerald-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-        >
-          <ShoppingCart size={13} />
-          Buy PE
-        </ActionButton>
+      <div className="manual-order-actions">
+        {(['CE', 'PE'] as const).map((option) => (
+          <ActionButton
+            key={option}
+            live={live}
+            disabled={pending || quotes[option]?.atm?.marketOpen === false || !entryContracts[option]}
+            onConfirm={() => { setSide(option); void runOrder('entry', option) }}
+            loading={activeAction === `entry-${option}`}
+            loadingLabel={`Buying ${option}…`}
+            ariaLabel={`Buy ${option} market`}
+            className={`manual-order-submit is-${option.toLowerCase()}`}
+          >
+            Buy {option}
+          </ActionButton>
+        ))}
       </div>
-      {!marketClosed && (!ceContract || !peContract) ? (
+      {!marketClosed && !entryContracts.CE && !entryContracts.PE ? (
         <p className="manual-quote-hint mt-2" role="status">
           {quoteStatus === 'error' || quoteStatus === 'stale'
             ? 'ATM contract unavailable. Retrying quote…'
@@ -258,14 +278,14 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
             <strong>Position open</strong>
             <span>{activeTrade?.symbol ?? 'Backend-tracked Paper position'} · Qty {activeTrade?.qty ?? 'confirmed by server'}</span>
           </div>
-          <button
+          <Button variant="unstyled"
             type="button"
             className="manual-exit-button"
             disabled={pending}
             onClick={() => setExitConfirmOpen(true)}
           >
             <LogOut size={13} /> Exit Position
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -274,41 +294,17 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
           <strong>Exit the tracked position?</strong>
           <span>NOVA will submit one idempotent exit and confirm the position is flat.</span>
           <div>
-            <button type="button" className="manual-exit-button" disabled={pending} onClick={() => void runOrder('exit')}>
+            <Button variant="unstyled" type="button" className="manual-exit-button" disabled={pending} onClick={() => void runOrder('exit')}>
               {activeAction === 'exit' ? <Loader2 size={13} className="animate-spin" /> : <LogOut size={13} />}
               {activeAction === 'exit' ? 'Exit pending…' : 'Confirm Exit'}
-            </button>
-            <button type="button" className="secondary-button" disabled={pending} onClick={() => setExitConfirmOpen(false)}>Cancel</button>
+            </Button>
+            <Button variant="unstyled" type="button" className="secondary-button" disabled={pending} onClick={() => setExitConfirmOpen(false)}>Cancel</Button>
           </div>
         </div>
       ) : null}
 
-      {/* Lots Stepper Stepper Component */}
-      <div className="flex flex-col gap-1.5 mt-4 select-none">
-        <span className="text-xs text-white/50 font-medium">Lots</span>
-        <div className="flex items-center gap-1 bg-[#161421] border border-white/5 rounded-lg w-max p-1">
-          <button
-            type="button"
-            className="w-8 h-8 flex items-center justify-center hover:bg-white/5 active:scale-95 text-lg font-bold rounded-md transition-all border border-transparent disabled:opacity-30 cursor-pointer"
-            disabled={pending || lots <= 1}
-            onClick={() => setLots(prev => Math.max(1, prev - 1))}
-          >
-            -
-          </button>
-          <span className="text-sm font-semibold px-4 min-w-8 text-center text-white">{lots}</span>
-          <button
-            type="button"
-            className="w-8 h-8 flex items-center justify-center hover:bg-white/5 active:scale-95 text-lg font-bold rounded-md transition-all border border-transparent disabled:opacity-30 cursor-pointer"
-            disabled={pending || lots >= 20}
-            onClick={() => setLots(prev => Math.min(20, prev + 1))}
-          >
-            +
-          </button>
-        </div>
-      </div>
-
       {/* Collapsible Advanced Toggle */}
-      <button
+      <Button variant="unstyled"
         ref={advancedToggleRef}
         type="button"
         className="mt-4 text-[11px] font-semibold text-white/40 hover:text-white/70 flex items-center gap-1.5 transition-all bg-transparent border-0 p-0 self-start cursor-pointer"
@@ -318,7 +314,7 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
       >
         <Sliders size={12} />
         {showAdvanced ? 'Hide Advanced Options' : 'Show Advanced Options'}
-      </button>
+      </Button>
 
       {/* Collapsible Content */}
       <AnimatePresence initial={false}>
@@ -336,19 +332,12 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
             <div className="manual-advanced-content">
               <div className="manual-controls-grid">
                 <label>
-                  <span>Side</span>
-                  <select value={side} disabled={pending} onChange={(event) => setSide(event.target.value as 'CE' | 'PE')} aria-label="Manual order side">
-                    <option value="CE">CE</option>
-                    <option value="PE">PE</option>
-                  </select>
-                </label>
-                <label>
                   <span>Target %</span>
-                  <input type="number" min={0} value={targetProfitPct} disabled={pending} onChange={(event) => setTargetProfitPct(Number(event.target.value) || 0)} aria-label="Manual target profit percent" />
+                  <Input variant="unstyled" type="number" min={0} value={targetProfitPct} disabled={pending} onChange={(event) => setTargetProfitPct(Number(event.target.value) || 0)} aria-label="Manual target profit percent" />
                 </label>
                 <label>
                   <span>Stop %</span>
-                  <input type="number" min={0} value={stopLossPct} disabled={pending} onChange={(event) => setStopLossPct(Number(event.target.value) || 0)} aria-label="Manual stop loss percent" />
+                  <Input variant="unstyled" type="number" min={0} value={stopLossPct} disabled={pending} onChange={(event) => setStopLossPct(Number(event.target.value) || 0)} aria-label="Manual stop loss percent" />
                 </label>
               </div>
 
@@ -387,7 +376,6 @@ export function ManualOrderPanel({ engineMode, activeTrade, runtimePositionOpen 
           <span>{stage}</span>
         </div>
       )}
-      {message ? <p className="manual-status-message mt-2">{message}</p> : null}
       {confirmed?.operationState === 'POSITION_OPEN' && confirmed.position ? (
         <div className="manual-position-proof mt-3" aria-label="Confirmed open position">
           <strong>Position opened</strong>
@@ -416,9 +404,9 @@ function ActionButton({ live, disabled, loading = false, loadingLabel, onConfirm
     : children
   if (!live) {
     return (
-      <button type="button" className={className || "manual-action-button"} disabled={disabled || loading} aria-busy={loading} onClick={onConfirm} aria-label={ariaLabel}>
+      <Button variant="unstyled" type="button" className={className || "manual-action-button"} disabled={disabled || loading} aria-busy={loading} onClick={onConfirm} aria-label={ariaLabel}>
         {content}
-      </button>
+      </Button>
     )
   }
   return (
@@ -459,7 +447,7 @@ function HoldButton({ disabled, loading = false, onConfirm, ariaLabel, className
   }
 
   return (
-    <button
+    <Button variant="unstyled"
       type="button"
       className={`${className || "manual-action-button hold-live"} ${holding ? 'holding' : ''}`}
       disabled={disabled}
@@ -479,7 +467,7 @@ function HoldButton({ disabled, loading = false, onConfirm, ariaLabel, className
     >
       {holding ? <MotionProgressFill durationSeconds={0.9} tone="live" /> : null}
       <span className="hold-button-content">{children}</span>
-    </button>
+    </Button>
   )
 }
 

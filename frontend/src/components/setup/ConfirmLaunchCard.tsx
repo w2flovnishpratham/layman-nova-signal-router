@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button'
 import { formatCurrency, exitModeLabel, sideLabel } from '../../lib/format'
 import type { ClientCommand, TradeConfig } from '../../types'
 import { contractsForLots, DEFAULT_NIFTY_LOT_SIZE } from '../../lib/trading'
@@ -31,9 +32,9 @@ export function ConfirmLaunchCard({ config, strategyLabel = 'Selected owner stra
         <div><span>Est. margin</span><strong>{formatCurrency(estimatedMargin)}</strong></div>
         <div><span>Round-trip charges</span><strong>{formatCurrency(estimatedCharges)}</strong></div>
       </div>
-      <button className="live-confirm" type="button" onClick={() => onSend({ type: 'setup.confirm_live', data: {} })}>
+      <Button variant="unstyled" className="live-confirm" type="button" onClick={() => onSend({ type: 'setup.confirm_live', data: {} })}>
         Confirm trade real money
-      </button>
+      </Button>
     </article>
   )
 }

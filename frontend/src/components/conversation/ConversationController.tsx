@@ -1,3 +1,6 @@
+import { Input } from "@/components/ui/input"
+import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/components/ui/popover'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Check, Loader2, Pencil } from 'lucide-react'
 import type { CatalogStrategy, RuntimeStatus, StrategySetupField } from '../../api'
@@ -10,6 +13,7 @@ import { useConversation } from '../../state/useConversation'
 import { applicableFields, type SetupValues } from '../../state/conversationMachine'
 import type { ConversationState } from '../../state/conversationMachine'
 import { splitDraft, withRiskFields } from '../../setup/setupFields'
+import { getRiskConfiguration, type RiskConfiguration } from '../../risk/riskApi'
 import { projectTranscript } from '../../state/conversationTranscript'
 import { useConversationScroll } from '../../state/useConversationScroll'
 
@@ -77,6 +81,27 @@ function labelFor(fields: StrategySetupField[], key: string): string {
   return fields.find((f) => f.key === key)?.label ?? key
 }
 
+const QUESTION_COPY: Record<string, string> = {
+  direction: 'Which signals should NOVA trade?',
+  lots: 'How many lots should be used?',
+  max_daily_loss: "Now the safety net. What's your max daily loss? The engine hard-stops and squares off if it's hit.",
+  max_trades_per_day: 'How many trades should NOVA take at most each day?',
+}
+
+function questionFor(fields: StrategySetupField[], key: string): string {
+  const copy = QUESTION_COPY[key] ?? labelFor(fields, key)
+  return /[?.!]$/.test(copy) ? copy : `${copy}?`
+}
+
+function answerFor(key: string | undefined, value: unknown): string {
+  if (key === 'max_daily_loss') return `₹${Number(value).toLocaleString('en-IN')}`
+  if (key === 'max_trades_per_day') return `${value} trades a day`
+  if (key === 'lots') return `${value} lot${Number(value) === 1 ? '' : 's'}`
+  if (key === 'entry_cutoff_ist' && value !== 'No cutoff') return `${value} IST`
+  if (key?.endsWith('_percent')) return `${value}%`
+  return String(value)
+}
+
 function toSaveValues(draft: SetupValues): Record<string, string | number> {
   const out: Record<string, string | number> = {}
   for (const [k, v] of Object.entries(draft)) {
@@ -97,9 +122,29 @@ function ActiveQuestion({ field, currentValue, onCommit }: { field: StrategySetu
       <div className="conv-question" role="group" aria-label={field.label}>
         <div className="conv-choices">
           {field.options.map((opt) => (
-            <button key={opt} type="button" className={`conv-pill${prefill === opt ? ' conv-pill--current' : ''}`} aria-pressed={prefill === opt} onClick={() => onCommit(opt)}>
+            <Button variant="unstyled" key={opt} type="button" className={`conv-pill${prefill === opt ? ' conv-pill--current' : ''}`} aria-pressed={prefill === opt} onClick={() => onCommit(opt)}>
               {opt}
-            </button>
+            </Button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (field.key === 'max_daily_loss') {
+    return (
+      <div className="conv-question" role="group" aria-label={field.label}>
+        <div className="conv-choices">
+          {[25000, 10000, 50000].map((amount, index) => (
+            <Button
+              variant="unstyled"
+              key={amount}
+              type="button"
+              className={`conv-pill${index === 0 ? ' conv-pill--primary' : ''}`}
+              onClick={() => onCommit(amount)}
+            >
+              ₹{amount.toLocaleString('en-IN')}
+            </Button>
           ))}
         </div>
       </div>
@@ -120,7 +165,7 @@ function ActiveQuestion({ field, currentValue, onCommit }: { field: StrategySetu
     <div className="conv-question">
       <div className="conv-numeric">
         <label className="sr-only" htmlFor={`q-${field.key}`}>{field.label}</label>
-        <input
+        <Input variant="unstyled"
           id={`q-${field.key}`}
           type="number"
           inputMode="decimal"
@@ -133,13 +178,40 @@ function ActiveQuestion({ field, currentValue, onCommit }: { field: StrategySetu
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') commitNumber() }}
         />
-        <button type="button" className="conv-pill conv-pill--primary" onClick={commitNumber}>Confirm</button>
+        <Button variant="unstyled" type="button" className="conv-pill conv-pill--primary" onClick={commitNumber}>Confirm</Button>
         {field.default !== undefined ? (
           <span className="conv-suggestion">Suggested: {field.default}</span>
         ) : null}
       </div>
       {err ? <p id={`q-${field.key}-err`} className="conv-error" role="alert">{err}</p> : null}
     </div>
+  )
+}
+
+function InlineReviewEdit({ field, value, onCommit }: {
+  field: StrategySetupField
+  value: unknown
+  onCommit: (value: string | number) => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={<Button variant="unstyled" type="button" className="conv-edit" aria-label={`Edit ${field.label}`} />}
+      >
+        <Pencil size={13} />
+      </PopoverTrigger>
+      <PopoverContent className="conv-edit-popover" align="end" side="left" sideOffset={10}>
+        <PopoverTitle>Edit {field.label}</PopoverTitle>
+        <ActiveQuestion
+          key={`${field.key}-${String(value)}-${open}`}
+          field={field}
+          currentValue={value}
+          onCommit={(next) => { onCommit(next); setOpen(false) }}
+        />
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -158,7 +230,7 @@ function StrategyGroup({ title, strategies, mode, onPick }: {
           const usable = s.availability === 'READY'
             && (mode === 'live' ? s.live_eligible : s.paper_eligible)
           return (
-            <button
+            <Button variant="unstyled"
               key={s.strategy_key}
               type="button"
               className="conv-strategy-card"
@@ -170,7 +242,7 @@ function StrategyGroup({ title, strategies, mode, onPick }: {
               <span className="sr-only">
                 {usable ? `Paper ready${s.live_eligible ? ' · Live eligible' : ''}` : (s.disabled_reason ?? s.availability)}
               </span>
-            </button>
+            </Button>
           )
         })}
       </div>
@@ -199,6 +271,7 @@ export function ConversationController({
   const [saved, setSaved] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [liveAcknowledged, setLiveAcknowledged] = useState(false)
+  const [sharedRisk, setSharedRisk] = useState<RiskConfiguration | null>(null)
   const restoredRevisionRef = useRef<string | null>(null)
   // Once the user has explicitly interacted this mount (picked a mode,
   // picked a strategy, clicked Start New/Resume/Review), the restore effect
@@ -229,6 +302,23 @@ export function ConversationController({
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty, setupSaved])
+
+  useEffect(() => {
+    if (!mode) {
+      setSharedRisk(null)
+      return
+    }
+    let current = true
+    getRiskConfiguration(mode)
+      .then((configuration) => { if (current) setSharedRisk(configuration) })
+      .catch(() => { if (current) setSharedRisk(null) })
+    return () => { current = false }
+  }, [mode])
+
+  const riskDefaults = useMemo(() => sharedRisk ? {
+    max_daily_loss: sharedRisk.values.daily_loss_cap,
+    max_trades_per_day: sharedRisk.values.max_trades_per_day,
+  } : {}, [sharedRisk])
 
   useEffect(() => {
     onStateChange?.({
@@ -267,14 +357,15 @@ export function ConversationController({
     restoredRevisionRef.current = revisionKey
     conv.selectStrategy(
       strategy.strategy_key,
-      withRiskFields(strategy.setup_schema.fields),
+      withRiskFields(strategy.setup_schema.fields, riskDefaults),
       {
         ...(strategy.saved_setup?.[authoritativeMode] ?? {}),
         ...selectedConfiguration.configuration,
         ...selectedConfiguration.risk,
+        ...riskDefaults,
       },
     )
-  }, [catalog?.selected_strategy_key, conv.selectMode, conv.selectStrategy, runtime, state.mode, state.strategyKey, strategies])
+  }, [catalog?.selected_strategy_key, conv.selectMode, conv.selectStrategy, riskDefaults, runtime, sharedRisk, state.mode, state.strategyKey, strategies])
   // Synchronous guard so two rapid clicks (before the disabled state re-renders)
   // cannot fire a second save/start network request.
   const inFlightRef = useRef(false)
@@ -317,12 +408,12 @@ export function ConversationController({
     return (
       <article className="setup-card catalog-state" role="alert">
         <AlertTriangle size={18} /> <span>{error}</span>
-        {onRetry ? <button type="button" className="conv-pill" onClick={onRetry}>Retry</button> : null}
+        {onRetry ? <Button variant="unstyled" type="button" className="conv-pill" onClick={onRetry}>Retry</Button> : null}
       </article>
     )
   }
 
-  const fields = selectedStrategy ? withRiskFields(selectedStrategy.setup_schema.fields) : state.fields
+  const fields = selectedStrategy ? withRiskFields(selectedStrategy.setup_schema.fields, riskDefaults) : state.fields
   // A selected strategy that lost readiness, or that exposes no setup schema,
   // must halt progression — no review, save or start — with a truthful reason.
   const strategyUnavailable = !!selectedStrategy && !(selectedStrategy.availability === 'READY' && selectedStrategy.paper_eligible)
@@ -341,8 +432,16 @@ export function ConversationController({
     // Without this, picking a strategy that has a real saved config always
     // re-triggers the saved-setup decision card, no matter how many times
     // the user backs out via Start New Setup: an inescapable loop.
-    const savedValues = isFreshStartFlagged(runtime?.owner_user_id) ? {} : (s.saved_setup?.[mode] ?? {})
-    conv.selectStrategy(s.strategy_key, withRiskFields(s.setup_schema.fields), savedValues)
+    const currentRiskDefaults = sharedRisk ? {
+      max_daily_loss: sharedRisk.values.daily_loss_cap,
+      max_trades_per_day: sharedRisk.values.max_trades_per_day,
+    } : {}
+    const savedValues = isFreshStartFlagged(runtime?.owner_user_id)
+      ? {}
+      : { ...(s.saved_setup?.[mode] ?? {}), ...currentRiskDefaults }
+    conv.selectStrategy(s.strategy_key, withRiskFields(s.setup_schema.fields, {
+      ...currentRiskDefaults,
+    }), savedValues)
     try {
       await onSelect(s.strategy_key)
     } catch {
@@ -414,7 +513,7 @@ export function ConversationController({
     : state.phase === 'SAVED_SETUP_FOUND'
       ? `NOVA found your previous ${mode === 'paper' ? 'Paper' : 'Live'} configuration. Resume, review, or start new.`
       : state.phase === 'QUESTION_ACTIVE' && state.activeQuestionKey
-        ? `NOVA asks for ${labelFor(fields, state.activeQuestionKey)}.`
+        ? `NOVA asks: ${questionFor(fields, state.activeQuestionKey)}`
         : state.phase === 'SETUP_REVIEW' || state.phase === 'ENGINE_READY'
           ? 'NOVA setup is ready to review, save, and start.'
           : ''
@@ -423,25 +522,25 @@ export function ConversationController({
     <div ref={scrollRef} className="conv-canvas">
       <div className="sr-only" role="status" aria-live="polite">{announce}</div>
       {!state.mode ? (
-        <>
+        <div className="conv-turn">
           <BotBubble showAvatar>
             <strong>How should NOVA trade for you?</strong> I recommend Paper first — it uses real market data with simulated fills, and no order reaches Dhan.
           </BotBubble>
           <div className="conv-choices conv-mode-choices" aria-label="Choose trading mode">
-            <button type="button" className="conv-pill conv-pill--primary" onClick={() => pickMode('paper')}>Start in Paper</button>
-            <button type="button" className="conv-pill" disabled={!liveAvailable} aria-disabled={!liveAvailable} onClick={() => pickMode('live')}>
+            <Button variant="unstyled" type="button" className="conv-pill conv-pill--primary" onClick={() => pickMode('paper')}>Start in Paper</Button>
+            <Button variant="unstyled" type="button" className="conv-pill" disabled={!liveAvailable} aria-disabled={!liveAvailable} onClick={() => pickMode('live')}>
               {liveAvailable ? 'Configure Live' : 'Live unavailable'}
-            </button>
+            </Button>
           </div>
-        </>
+        </div>
       ) : null}
 
       {state.mode && (state.phase === 'STRATEGY_SELECTION' || !state.strategyKey) ? (
-        <>
+        <div className="conv-turn">
           <BotBubble showAvatar>Which strategy should NOVA run?</BotBubble>
           <StrategyGroup title="NOVA Strategies" mode={state.mode} strategies={strategies.filter((s) => s.source_type === 'BUILT_IN')} onPick={pickStrategy} />
           <StrategyGroup title="My Strategies" mode={state.mode} strategies={strategies.filter((s) => s.source_type === 'IMPORTED')} onPick={pickStrategy} />
-        </>
+        </div>
       ) : null}
 
       {setupBlocked ? (
@@ -452,7 +551,7 @@ export function ConversationController({
               : (selectedStrategy?.disabled_reason ?? 'This strategy is currently unavailable, so setup is paused.')}
           </BotBubble>
           <div className="conv-actions">
-            <button type="button" className="conv-pill" onClick={() => { userInteractedRef.current = true; if (state.mode) conv.selectMode(state.mode) }}>Choose another strategy</button>
+            <Button variant="unstyled" type="button" className="conv-pill" onClick={() => { userInteractedRef.current = true; if (state.mode) conv.selectMode(state.mode) }}>Choose another strategy</Button>
           </div>
         </div>
       ) : null}
@@ -466,9 +565,9 @@ export function ConversationController({
             ))}
           </div>
           <div className="conv-actions">
-            <button type="button" className="conv-pill conv-pill--primary" onClick={() => { userInteractedRef.current = true; clearFreshStartFlag(); conv.resume() }}>Resume</button>
-            <button type="button" className="conv-pill" onClick={() => { userInteractedRef.current = true; clearFreshStartFlag(); conv.review() }}>Review</button>
-            <button
+            <Button variant="unstyled" type="button" className="conv-pill conv-pill--primary" onClick={() => { userInteractedRef.current = true; clearFreshStartFlag(); conv.resume() }}>Resume</Button>
+            <Button variant="unstyled" type="button" className="conv-pill" onClick={() => { userInteractedRef.current = true; clearFreshStartFlag(); conv.review() }}>Review</Button>
+            <Button variant="unstyled"
               type="button"
               className="conv-pill"
               onClick={() => {
@@ -487,30 +586,30 @@ export function ConversationController({
               }}
             >
               Start New Setup
-            </button>
+            </Button>
           </div>
         </>
       ) : null}
 
       {transcript.filter((e) => e.type === 'user_answer').map((e) => (
-        <div key={e.id}>
-          <BotBubble showAvatar>{String(e.payload.label)}?</BotBubble>
-          <UserBubble text={`${String(e.payload.label)}: ${String(e.payload.value)}`} />
+        <div className="conv-turn" key={e.id}>
+          <BotBubble showAvatar>{questionFor(fields, e.fieldKey ?? '')}</BotBubble>
+          <UserBubble text={answerFor(e.fieldKey, e.payload.value)} />
         </div>
       ))}
 
       {state.phase === 'ASSISTANT_TYPING' ? <TypingDots /> : null}
 
       {!setupBlocked && state.phase === 'QUESTION_ACTIVE' && state.activeQuestionKey ? (
-        <>
-          <BotBubble showAvatar>{labelFor(fields, state.activeQuestionKey)}?</BotBubble>
+        <div className="conv-turn">
+          <BotBubble showAvatar>{questionFor(fields, state.activeQuestionKey)}</BotBubble>
           <ActiveQuestion
             key={`${state.activeQuestionKey}-${state.generation}`}
             field={fields.find((f) => f.key === state.activeQuestionKey)!}
             currentValue={state.draft[state.activeQuestionKey]}
             onCommit={commit}
           />
-        </>
+        </div>
       ) : null}
 
       {!setupBlocked && (state.phase === 'SETUP_REVIEW' || state.phase === 'ENGINE_READY') ? (
@@ -521,16 +620,23 @@ export function ConversationController({
               <div key={f.key} className="conv-summary-row">
                 <span>{f.label}</span>
                 <strong>{String(state.draft[f.key])}</strong>
-                <button type="button" className="conv-edit" aria-label={`Edit ${f.label}`} onClick={() => { restoredRevisionRef.current = null; setDirty(true); setSaved(false); conv.editAnswer(f.key) }}>
-                  <Pencil size={13} />
-                </button>
+                <InlineReviewEdit
+                  field={f}
+                  value={state.draft[f.key]}
+                  onCommit={(next) => {
+                    restoredRevisionRef.current = null
+                    setDirty(true)
+                    setSaved(false)
+                    conv.commitAnswer(f.key, next)
+                  }}
+                />
               </div>
             ))}
           </div>
           {saveError ? <p className="conv-error" role="alert">{saveError}</p> : null}
           {setupSaved && mode === 'live' ? (
             <label className="conv-live-ack">
-              <input
+              <Input variant="unstyled"
                 type="checkbox"
                 checked={liveAcknowledged}
                 onChange={(event) => setLiveAcknowledged(event.target.checked)}
@@ -540,18 +646,18 @@ export function ConversationController({
           ) : null}
           <div className="conv-actions">
             {!setupSaved ? (
-              <button type="button" className="conv-pill conv-pill--primary" disabled={pending !== 'idle'} onClick={saveSetup}>
+              <Button variant="unstyled" type="button" className="conv-pill conv-pill--primary" disabled={pending !== 'idle'} onClick={saveSetup}>
                 {pending === 'saving' ? 'Saving…' : 'Save setup'}
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button variant="unstyled"
                 type="button"
                 className="conv-pill conv-pill--primary"
                 disabled={pending !== 'idle' || (mode === 'live' && !liveAcknowledged)}
                 onClick={startEngine}
               >
                 {pending === 'starting' ? 'Starting…' : mode === 'live' ? 'Start Live' : 'Start Paper'}
-              </button>
+              </Button>
             )}
             {setupSaved ? <span className="conv-saved-badge"><Check size={14} /> Setup saved</span> : null}
           </div>
@@ -559,7 +665,7 @@ export function ConversationController({
       ) : null}
 
       {showJump ? (
-        <button type="button" className="conv-jump" onClick={jumpToLatest}>Jump to latest ↓</button>
+        <Button variant="unstyled" type="button" className="conv-jump" onClick={jumpToLatest}>Jump to latest ↓</Button>
       ) : null}
     </div>
   )

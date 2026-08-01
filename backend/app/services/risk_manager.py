@@ -87,8 +87,9 @@ def _entry_limit_checks(payload: NormalizedSignal, runtime: dict) -> RiskDecisio
             f"Trade blocked: {payload.option_side} entries are disabled by the configured side filter.",
         )
 
+    daily_risk = get_daily_risk()
     max_trades = _setting_int(runtime, "max_trades_per_day", 0)
-    if max_trades > 0 and int(get_daily_risk().get("entry_count") or 0) >= max_trades:
+    if max_trades > 0 and int(daily_risk.get("entry_count") or 0) >= max_trades:
         return RiskDecision(False, "Trade blocked: maximum entries for the day reached.")
 
     try:
@@ -98,6 +99,20 @@ def _entry_limit_checks(payload: NormalizedSignal, runtime: dict) -> RiskDecisio
     session_pnl = get_wallet_snapshot().get("session_pnl")
     if max_daily_loss > 0 and isinstance(session_pnl, (int, float)) and float(session_pnl) <= -max_daily_loss:
         return RiskDecision(False, "Trade blocked: maximum daily loss reached.")
+
+    cooldown_minutes = _setting_int(runtime, "risk_cooldown_minutes", 0)
+    last_loss_at = daily_risk.get("last_loss_exit_at")
+    if cooldown_minutes > 0 and last_loss_at:
+        try:
+            parsed = datetime.fromisoformat(str(last_loss_at).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            elapsed = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+            if elapsed.total_seconds() < cooldown_minutes * 60:
+                remaining = max(1, int((cooldown_minutes * 60 - elapsed.total_seconds() + 59) // 60))
+                return RiskDecision(False, f"Trade blocked: post-loss cooldown active for {remaining} more minute(s).")
+        except ValueError:
+            pass
 
     cutoff = _entry_cutoff_check(runtime)
     if cutoff:

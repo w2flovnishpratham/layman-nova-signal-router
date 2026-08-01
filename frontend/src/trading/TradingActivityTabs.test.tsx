@@ -94,7 +94,7 @@ describe('TradingActivityTabs', () => {
     }]))
     const { container } = render(<TradingActivityTabs mode="paper" />)
     await user.click(screen.getByRole('tab', { name: 'Engine Log' }))
-    await screen.findByText('ENGINE_STARTED')
+    await screen.findByText('Engine started.')
 
     const wrap = container.querySelector('.terminal-table-wrap') as HTMLDivElement
     Object.defineProperties(wrap, {
@@ -133,11 +133,27 @@ describe('TradingActivityTabs', () => {
       historical_items: [historical],
       unacknowledged_count: 2,
     })
-    render(<TradingActivityTabs mode="paper" />)
+    const { container } = render(<TradingActivityTabs mode="paper" />)
     await user.click(screen.getByRole('tab', { name: 'Alerts' }))
-    expect(await screen.findByText('1 active conditions')).toBeInTheDocument()
-    expect(screen.getByText('1 historical alerts')).toBeInTheDocument()
+    await screen.findByText('POSITION QUOTE STALE')
+    expect(container.querySelector('.terminal-alert-summary .is-active')).toHaveTextContent('1 Active conditions')
+    expect(container.querySelector('.terminal-alert-summary span:not(.is-active)')).toHaveTextContent('1 Historical alerts')
     await user.click(screen.getByRole('button', { name: 'Acknowledge historical' }))
     await waitFor(() => expect(api.acknowledge).toHaveBeenCalledWith(['history-1']))
+  })
+
+  it('presents executions with compact signal-style badges and quantity', async () => {
+    const user = userEvent.setup()
+    api.executions.mockResolvedValue(feed([{
+      id: 'execution-1', occurred_at: '2026-07-26T09:00:00Z', mode: 'paper',
+      instrument: 'NIFTY TEST CE', action: 'ENTRY', requested_qty: 75, filled_qty: 50,
+      average_price: 101.5, charges: 7.25, status: 'TRADED', order_id: 'ORDER-1',
+    }]))
+    render(<TradingActivityTabs mode="paper" />)
+    await user.click(screen.getByRole('tab', { name: 'Executions' }))
+    expect(await screen.findByText('50 / 75')).toBeInTheDocument()
+    expect(screen.getByText('PAPER')).toHaveClass('terminal-badge', 'is-paper')
+    expect(screen.getByText('ENTRY')).toHaveClass('terminal-signal-value', 'is-positive')
+    expect(screen.queryByRole('columnheader', { name: 'Slippage' })).toBeNull()
   })
 })

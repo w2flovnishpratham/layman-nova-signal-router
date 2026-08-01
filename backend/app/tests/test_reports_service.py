@@ -17,7 +17,15 @@ BASE = datetime(2026, 7, 24, 11, 0, tzinfo=reports_service.IST)
 
 
 def _trade(
-    user_id, pnl: float, *, minutes: int = 0, mode: str = "paper", symbol: str = "NIFTY CE", origin: str | None = None
+    user_id,
+    pnl: float,
+    *,
+    minutes: int = 0,
+    mode: str = "paper",
+    symbol: str = "NIFTY CE",
+    origin: str | None = None,
+    strategy: str | None = "supertrend",
+    closed_at: datetime | None = None,
 ):
     # `minutes` orders trades within the pinned day; later values close earlier.
     closed = BASE - timedelta(minutes=minutes)
@@ -25,7 +33,7 @@ def _trade(
         db.add(models.PortfolioTrade(
             user_id=user_id,
             mode=mode,
-            strategy_name="supertrend",
+            strategy_name=strategy,
             symbol=symbol,
             option_side="CE",
             qty=75,
@@ -36,7 +44,7 @@ def _trade(
             gross_pnl=pnl,
             realized_pnl=pnl,
             exit_order_id=f"x-{user_id}-{minutes}-{pnl}",
-            closed_at=closed,
+            closed_at=closed_at or closed,
             origin=origin,
         ))
 
@@ -126,8 +134,9 @@ def test_csv_contains_the_trades_and_no_secret_columns(mu_db):
 
     csv_text = reports_service.report_csv(_report(user.id))
     lines = csv_text.strip().splitlines()
-    assert lines[0] == ",".join(reports_service.CSV_COLUMNS)
-    assert len(lines) == 3
+    assert lines[0] == "NOVA REPORT"
+    assert "CLOSED TRADES" in lines
+    assert ",".join(reports_service.CSV_COLUMNS) in lines
     assert "300.0" in csv_text and "-120.0" in csv_text
     for forbidden in ("token", "secret", "client_id", "password"):
         assert forbidden not in csv_text.lower()
@@ -136,7 +145,8 @@ def test_csv_contains_the_trades_and_no_secret_columns(mu_db):
 def test_an_empty_csv_still_carries_its_header(mu_db):
     user = make_user("report-csv-empty@example.com")
     csv_text = reports_service.report_csv(_report(user.id))
-    assert csv_text.strip() == ",".join(reports_service.CSV_COLUMNS)
+    assert "NOVA REPORT" in csv_text
+    assert ",".join(reports_service.CSV_COLUMNS) in csv_text
 
 
 def test_trade_origin_filter_all_automated_manual(mu_db):
@@ -166,5 +176,44 @@ def test_default_trade_origin_is_all_and_export_honours_the_filter(mu_db):
     assert _report(user.id)["totals"]["trades"] == 2
 
     csv_text = reports_service.report_csv(_report(user.id, trade_origin="manual"))
-    lines = csv_text.strip().splitlines()
-    assert len(lines) == 2  # header + one manual trade
+    assert "Manual Orders" in csv_text
+    assert "BUILT_IN_STRATEGY" not in csv_text
+
+
+def test_daily_calendar_and_strategy_totals_reconcile(mu_db):
+    user = make_user("report-reconcile@example.com")
+    _trade(user.id, 300.0, minutes=30, origin="MANUAL", strategy=None)
+    _trade(user.id, -100.0, minutes=20, origin="BUILT_IN_STRATEGY", strategy="NOVA Supertrend")
+    _trade(user.id, 0.0, minutes=10, origin="USER_STRATEGY", strategy="Flat test")
+
+    report = _report(user.id)
+    assert report["totals"]["sessions"] == 1
+    assert report["daily_sessions"][0]["net_pnl"] == report["totals"]["net_pnl"] == 200.0
+    assert sum(row["realized_pnl"] for row in report["by_strategy"]) == 200.0
+    assert "Manual Orders" in report["daily_sessions"][0]["strategy_mix"]
+    manual = next(row for row in report["by_strategy"] if row["display_name"] == "Manual Orders")
+    assert manual["realized_pnl"] == 300.0
+    assert report["win_rate"]["value"] == 50.0  # scratch is excluded from the denominator
+
+
+def test_ist_midnight_boundary_assigns_the_correct_session(mu_db):
+    user = make_user("report-ist@example.com")
+    # 18:45 UTC is 00:15 on 25 July in India.
+    instant = datetime(2026, 7, 24, 18, 45, tzinfo=reports_service.ZoneInfo("UTC"))
+    _trade(user.id, 125.0, origin="MANUAL", strategy=None, closed_at=instant)
+    report = reports_service.build_report(
+        user.id,
+        start=date(2026, 7, 25),
+        end=date(2026, 7, 25),
+        mode="paper",
+    )
+    assert report["daily_sessions"][0]["date"] == "2026-07-25"
+    assert report["trades"][0]["trading_date_ist"] == "2026-07-25"
+
+
+def test_pdf_export_is_a_real_filter_scoped_pdf(mu_db):
+    user = make_user("report-pdf@example.com")
+    _trade(user.id, 75.0, origin="MANUAL", strategy=None)
+    pdf = reports_service.report_pdf(_report(user.id, trade_origin="manual"))
+    assert pdf.startswith(b"%PDF-")
+    assert len(pdf) > 1000

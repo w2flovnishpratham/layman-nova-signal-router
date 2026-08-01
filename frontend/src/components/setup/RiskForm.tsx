@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { formatCurrency } from '../../lib/format'
@@ -36,29 +37,29 @@ export function RiskForm({ initial, onSend }: Props) {
       />
       <div className="counter-row">
         <span>Lots</span>
-        <button type="button" onClick={() => setRisk((current) => ({ ...current, lots: Math.max(1, current.lots - 1) }))}>
+        <Button variant="unstyled" type="button" onClick={() => setRisk((current) => ({ ...current, lots: Math.max(1, current.lots - 1) }))}>
           -
-        </button>
+        </Button>
         <strong>{risk.lots}</strong>
-        <button type="button" onClick={() => setRisk((current) => ({ ...current, lots: current.lots + 1 }))}>
+        <Button variant="unstyled" type="button" onClick={() => setRisk((current) => ({ ...current, lots: current.lots + 1 }))}>
           +
-        </button>
+        </Button>
         <small>{contractsForLots(risk.lots, DEFAULT_NIFTY_LOT_SIZE)} qty</small>
       </div>
       <div className="chip-row">
         <span>Side</span>
         {(['CE', 'PE', 'BOTH'] as SideFilter[]).map((side) => (
-          <button
+          <Button variant="unstyled"
             key={side}
             className={risk.side === side ? 'selected' : ''}
             type="button"
             onClick={() => setRisk((current) => ({ ...current, side }))}
           >
             {side === 'BOTH' ? 'Both' : `${side} only`}
-          </button>
+          </Button>
         ))}
       </div>
-      <button type="submit">Lock risk</button>
+      <Button variant="unstyled" type="submit">Lock risk</Button>
     </form>
   )
 }
@@ -80,14 +81,14 @@ function ChipRow<TValue extends number | null>({
     <div className="chip-row">
       <span>{label}</span>
       {options.map((option) => (
-        <button
+        <Button variant="unstyled"
           key={String(option)}
           className={value === option ? 'selected' : ''}
           type="button"
           onClick={() => onChange(option)}
         >
           {format(option)}
-        </button>
+        </Button>
       ))}
     </div>
   )

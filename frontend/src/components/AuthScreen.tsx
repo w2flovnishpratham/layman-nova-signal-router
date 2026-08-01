@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button'
 import { Loader2, LogIn, ShieldCheck, Zap } from 'lucide-react'
 import { MotionPulseText, MotionSpinner } from './MotionPrimitives'
 
@@ -65,15 +66,15 @@ export function AuthScreen({ loading, error, onLogin, onRetry }: Props) {
 
           {loading ? (
             <div className="flex flex-col items-center gap-3 mt-4">
-              <MotionSpinner className="text-purple-400"><Loader2 size={30} /></MotionSpinner>
+              <MotionSpinner className="text-[#2F6BED]"><Loader2 size={30} /></MotionSpinner>
               <MotionPulseText className="text-xs text-white/50 font-medium">Verifying login, please wait…</MotionPulseText>
             </div>
           ) : (
             <div className="auth-actions">
-              <button className="google-login-button" type="button" onClick={onLogin}>
+              <Button variant="unstyled" className="google-login-button" type="button" onClick={onLogin}>
                 <LogIn size={17} /> Continue with Google
-              </button>
-              {error ? <button className="secondary-button" type="button" onClick={onRetry}>Retry</button> : null}
+              </Button>
+              {error ? <Button variant="unstyled" className="secondary-button" type="button" onClick={onRetry}>Retry</Button> : null}
             </div>
           )}
 

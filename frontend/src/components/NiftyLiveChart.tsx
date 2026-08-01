@@ -1,13 +1,16 @@
+import { Button } from '@/components/ui/button'
+import { PageSkeleton } from './PageSkeleton'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity } from 'lucide-react'
 import {
   CandlestickSeries,
   CrosshairMode,
   createChart,
   createSeriesMarkers,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
+  LineStyle,
   type SeriesMarker,
   type Time,
   type UTCTimestamp,
@@ -20,10 +23,8 @@ import {
   type NiftyCandleSeries,
   type NiftyTradeMarker,
 } from '../api'
-import { useSessionStore } from '../state/sessionStore'
 import type { EngineMode } from '../types'
 import {
-  chartConnectionLabel,
   markerCandleIndex,
   markerStyle,
   sameCandles,
@@ -69,13 +70,11 @@ export function NiftyLiveChart({
   const [loadFailed, setLoadFailed] = useState(false)
   const tradingDateRef = useRef<string | null>(null)
 
-  const snapshot = useSessionStore((state) => state.marketSnapshot)
-  const snapshotSource = useSessionStore((state) => state.marketSnapshotSource)
-  const wsStatus = useSessionStore((state) => state.wsStatus)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
+  const tradePriceLinesRef = useRef<IPriceLine[]>([])
   const candlesRef = useRef<NiftyCandle[]>([])
   const [containerReady, setContainerReady] = useState(false)
 
@@ -207,6 +206,7 @@ export function NiftyLiveChart({
       resizeObserver.disconnect()
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
       markersPluginRef.current = null
+      tradePriceLinesRef.current = []
       seriesRef.current = null
       chartRef.current = null
       candlesRef.current = []
@@ -238,12 +238,15 @@ export function NiftyLiveChart({
         )
         if (index === null) return null
         const style = markerStyle(marker)
+        const indexLevel = marker.price != null
+          ? marker.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : null
         const fill = [marker.contract, marker.execution_price != null ? `₹${marker.execution_price.toFixed(2)}` : null].filter(Boolean).join(' @ ')
         const details = [fill, marker.pnl != null ? `P&L ${marker.pnl >= 0 ? '+' : '-'}₹${Math.abs(marker.pnl).toLocaleString('en-IN')}` : null].filter(Boolean).join('\n')
         return {
           ...style,
           time: visibleCandles[index].time as UTCTimestamp,
-          text: `${style.text}${marker.mode === 'paper' ? ' (P)' : ''}${details ? `\n${details}` : ''}`,
+          text: `${style.text}${indexLevel ? `  ${indexLevel}` : ''}${marker.mode === 'paper' ? ' (P)' : ''}${details ? `\n${details}` : ''}`,
         }
       })
       .filter((marker): marker is SeriesMarker<Time> => marker !== null)
@@ -251,26 +254,40 @@ export function NiftyLiveChart({
     plugin.setMarkers(placed)
   }, [markers, candles, containerReady, hasCandles, series?.interval])
 
-  const tickReceivedAt = snapshot?.atm?.niftySpotReceivedAt
-  const lastPrice = (tickReceivedAt ? snapshot?.niftySpot : null) ?? (hasCandles ? candles[candles.length - 1].close : null)
-  const lastStampIso = tickReceivedAt ?? (series?.market_state === 'closed' ? series.updated_at : null)
-  const connectionLabel = chartConnectionLabel({
-    loading: !series && !loadFailed,
-    unavailable: loadFailed || series?.status === 'unavailable',
-    marketClosed: series?.market_state === 'closed' || snapshot?.marketStatus === 'closed',
-    stale: Boolean(series?.stale),
-    wsStatus,
-    feedConnected: snapshot?.atm?.marketfeed?.connected,
-    snapshotSource,
-    updatedAt: lastStampIso,
-  })
-  const connectionClass = connectionLabel.toLowerCase().replaceAll(' ', '-')
+  useEffect(() => {
+    const candleSeries = seriesRef.current
+    if (!candleSeries) return
+    tradePriceLinesRef.current.forEach((line) => candleSeries.removePriceLine(line))
+    tradePriceLinesRef.current = []
+    const latest = [...markers].sort((left, right) => left.time - right.time).at(-1)
+    if (!latest || latest.side !== 'BUY') return
+    const entryColor = latest.option_side === 'PE' ? '#fb7185' : '#34d399'
+    const levels = [
+      { price: latest.price, color: entryColor, title: `BUY ${latest.option_side ?? ''}`.trim() },
+      { price: latest.stop_price, color: '#ef4444', title: 'SL' },
+      { price: latest.target_price, color: '#22c55e', title: 'TP' },
+    ]
+    tradePriceLinesRef.current = levels.flatMap((level) => (
+      level.price != null && Number.isFinite(level.price) && level.price > 0
+        ? [candleSeries.createPriceLine({
+            price: level.price,
+            color: level.color,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            lineVisible: true,
+            axisLabelVisible: true,
+            title: level.title,
+          })]
+        : []
+    ))
+  }, [markers, containerReady, hasCandles])
+
   const header = (
     <div className="nifty-chart-header">
-      <span className="nifty-chart-title"><Activity size={14} />NIFTY 50 · {series?.interval ?? timeframe}</span>
+      <span className="nifty-chart-title">NIFTY 50 · {series?.interval ?? timeframe}</span>
       <div className="nifty-chart-timeframes" role="group" aria-label="Chart timeframe">
         {CHART_TIMEFRAMES.map((value) => (
-          <button
+          <Button variant="unstyled"
             key={value}
             type="button"
             className={timeframe === value ? 'is-active' : ''}
@@ -278,19 +295,15 @@ export function NiftyLiveChart({
             onClick={() => setTimeframe(value)}
           >
             {value}
-          </button>
+          </Button>
         ))}
+        <Button variant="unstyled" type="button" disabled title="Hourly candles are not available yet">1H</Button>
+        <Button variant="unstyled" type="button" disabled title="Daily candles are not available yet">D</Button>
       </div>
-      <span className="nifty-chart-meta">
-        {lastPrice != null ? <strong>{lastPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong> : null}
-        {lastPrice != null ? ' · ' : null}
-        <span className={`nifty-conn ${connectionClass}`}>{connectionLabel}</span>
-        {lastStampIso ? ` · Updated ${shortTime(lastStampIso)} IST` : ''}
-      </span>
     </div>
   )
 
-  if (!series && !loadFailed) return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">Loading authoritative NIFTY {timeframe} candles…</div></section>
+  if (!series && !loadFailed) return <section className="nifty-chart-card">{header}<PageSkeleton label={`Loading NIFTY ${timeframe} chart`} variant="cards" compact /></section>
   if (loadFailed || !series || series.status === 'unavailable') return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">{series?.message ?? `Authoritative NIFTY ${timeframe} candles unavailable.`}</div></section>
   if (!hasCandles) return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">No NIFTY {timeframe} candles available for this session.</div></section>
 
@@ -301,10 +314,4 @@ export function NiftyLiveChart({
       <div ref={containerRef} className="nifty-chart-canvas nova-live-chart" role="img" aria-label={`NIFTY ${series.interval} candlestick chart`} />
     </section>
   )
-}
-
-function shortTime(value: string): string {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Kolkata' })
 }

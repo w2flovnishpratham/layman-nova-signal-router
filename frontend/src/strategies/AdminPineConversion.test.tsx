@@ -104,12 +104,15 @@ describe('AdminPineConversionWorkspace', () => {
 
   it('shows the backtest layer with a working copy button', async () => {
     const user = userEvent.setup()
+    // userEvent.setup() replaces navigator.clipboard.writeText with jsdom's real
+    // implementation, so the mock must be (re-)captured after setup, not before.
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText')
     render(<AdminPineConversionWorkspace />)
     await screen.findAllByText('Legend MACD')
     expect(screen.getByText(/Backtest layer/)).toBeInTheDocument()
     expect(screen.getByText(/strategy\("NIFTY converted backtest"/)).toBeInTheDocument()
     await user.click(screen.getAllByRole('button', { name: /copy/i })[0])
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(BACKTEST_LAYER)
+    expect(writeText).toHaveBeenCalledWith(BACKTEST_LAYER)
   })
 
   it('submits pasted or uploaded UTF-8 Pine with no options, model, or prompt controls', async () => {

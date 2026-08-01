@@ -551,6 +551,8 @@ export interface NiftyTradeMarker {
   contract?: string | null
   execution_price?: number | null
   pnl?: number | null
+  stop_price?: number | null
+  target_price?: number | null
   exit_kind?: 'SL' | 'TARGET' | 'REVERSAL' | 'EOD' | 'EXIT' | string | null
 }
 

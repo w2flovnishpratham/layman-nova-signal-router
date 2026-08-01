@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button'
 import { AlertTriangle } from 'lucide-react'
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 
@@ -40,9 +41,9 @@ export class PageErrorBoundary extends Component<Props, State> {
           <AlertTriangle size={20} />
           <h2>This page hit an error</h2>
           <p>The rest of the app is still working. Try again, or switch to another page from the sidebar.</p>
-          <button type="button" className="conv-pill conv-pill--primary" onClick={() => this.setState({ error: null })}>
+          <Button variant="unstyled" type="button" className="conv-pill conv-pill--primary" onClick={() => this.setState({ error: null })}>
             Try again
-          </button>
+          </Button>
         </div>
       )
     }

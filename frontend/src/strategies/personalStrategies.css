@@ -98,6 +98,9 @@
 .pine-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; margin-bottom: 14px; }
 .pine-toolbar label, .pine-changelog { display: flex; flex-direction: column; gap: 6px; color: var(--text-2); font-size: 11px; font-weight: 600; }
 .pine-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, .75fr); gap: 14px; align-items: start; }
+.pine-browse-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 14px; align-items: start; }
+.ps-list-toolbar { display: flex; gap: 8px; margin-bottom: 8px; }
+.ps-list-toolbar input { flex: 1; min-width: 0; }
 .pine-editor-card { min-width: 0; }
 .pine-file-row { display: flex; gap: 9px; margin-bottom: 10px; }
 .pine-file-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }

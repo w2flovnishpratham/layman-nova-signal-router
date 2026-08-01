@@ -21,6 +21,25 @@ export function deriveMarketBias(candles: NiftyCandle[], updatedAt: string | nul
   }
 }
 
+export function marketBiasMeter(direction: 'Bullish' | 'Bearish' | 'Neutral', strength: number) {
+  const boundedStrength = Math.max(0, Math.min(100, strength))
+  const tone = direction === 'Bearish'
+    ? 'red'
+    : direction === 'Neutral'
+      ? 'yellow'
+    : boundedStrength <= 20
+      ? 'red'
+      : boundedStrength <= 40
+        ? 'orange'
+        : boundedStrength <= 60
+          ? 'yellow'
+          : boundedStrength <= 80
+            ? 'mint'
+            : 'green'
+
+  return { activeSegments: Math.ceil(boundedStrength / 20), tone }
+}
+
 export function MarketBiasCard() {
   const [bias, setBias] = useState<MarketBiasSnapshot>({ bullish_percentage: 50, bearish_percentage: 50, updated_at: null })
 
@@ -65,15 +84,31 @@ export function MarketBiasCard() {
       ? 'Bearish'
       : 'Neutral'
   const strength = Math.abs(bias.bullish_percentage - bias.bearish_percentage)
+  const meter = marketBiasMeter(direction, strength)
 
   return (
     <section className="sidebar-card market-bias-card" aria-label="Market Bias NIFTY">
-      <div className="sidebar-title"><span>Market Bias (NIFTY)</span><strong>{direction}</strong></div>
-      <div className="market-bias-bar" aria-label={`Bullish ${bias.bullish_percentage} percent, bearish ${bias.bearish_percentage} percent`}>
-        <span style={{ width: `${bias.bullish_percentage}%` }} />
-      </div>
+      <div className="sidebar-title"><span>Market Bias (NIFTY)</span><strong data-tone={meter.tone}>{direction}</strong></div>
       <dl>
-        <div><dt>Strength</dt><dd>{strength}%</dd></div>
+        <div className="market-bias-strength">
+          <dt>Strength</dt>
+          <dd>
+            <span
+              className="market-bias-bar"
+              data-tone={meter.tone}
+              role="progressbar"
+              aria-label={`${direction} market strength`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={strength}
+            >
+              {Array.from({ length: 5 }, (_, index) => (
+                <i key={index} data-active={index < meter.activeSegments} aria-hidden="true" />
+              ))}
+            </span>
+            <strong>{strength}%</strong>
+          </dd>
+        </div>
         <div><dt>Bullish</dt><dd>{bias.bullish_percentage}%</dd></div>
         <div><dt>Bearish</dt><dd>{bias.bearish_percentage}%</dd></div>
         <div><dt>Updated</dt><dd>{formatTime(bias.updated_at)}</dd></div>
