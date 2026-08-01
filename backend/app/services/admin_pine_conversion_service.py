@@ -16,7 +16,7 @@ from pathlib import PurePath
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.config import settings
 from app.db import crud, models
@@ -648,11 +648,21 @@ def _owned(
     *,
     lock: bool = False,
 ):
-    """Load a C1 conversion for an already-authorized admin actor."""
-    del admin_id
-    query = select(models.PineConversionRequest).where(
-        models.PineConversionRequest.id == uuid.UUID(str(conversion_id)),
-        models.PineConversionRequest.provider == PROVIDER,
+    """Load a C1 conversion visible to this admin: their own admin-authored
+    conversions stay private to them until published, but end-user-submitted
+    conversions (the admin review queue's actual purpose) stay visible to
+    every admin."""
+    query = (
+        select(models.PineConversionRequest)
+        .join(models.User, models.User.id == models.PineConversionRequest.owner_user_id)
+        .where(
+            models.PineConversionRequest.id == uuid.UUID(str(conversion_id)),
+            models.PineConversionRequest.provider == PROVIDER,
+            or_(
+                models.PineConversionRequest.owner_user_id == admin_id,
+                models.User.is_admin.is_(False),
+            ),
+        )
     )
     row = db.scalar(query.with_for_update() if lock else query)
     if row is None:
@@ -815,11 +825,18 @@ def _public(db, row: models.PineConversionRequest, *, include_source: bool) -> d
 
 
 def list_conversions(admin_id: uuid.UUID, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-    del admin_id
     limit, offset = max(1, min(int(limit), 100)), max(0, int(offset))
     with session_scope() as db:
-        query = select(models.PineConversionRequest).where(
-            models.PineConversionRequest.provider == PROVIDER,
+        query = (
+            select(models.PineConversionRequest)
+            .join(models.User, models.User.id == models.PineConversionRequest.owner_user_id)
+            .where(
+                models.PineConversionRequest.provider == PROVIDER,
+                or_(
+                    models.PineConversionRequest.owner_user_id == admin_id,
+                    models.User.is_admin.is_(False),
+                ),
+            )
         )
         total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
         rows = db.scalars(query.order_by(models.PineConversionRequest.created_at.desc()).limit(limit).offset(offset)).all()
