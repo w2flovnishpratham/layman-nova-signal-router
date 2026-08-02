@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 
@@ -38,6 +39,7 @@ REVOKE_SUBSCRIPTION_STATUS = {
 }
 USER_ID_NOTE_KEYS = ("nova_user_id", "user_id")
 PLAN_ID_NOTE_KEYS = ("razorpay_plan_id", "plan_id", "nova_plan_id")
+RAZORPAY_API_BASE = "https://api.razorpay.com/v1"
 
 
 class RazorpayWebhookError(RuntimeError):
@@ -172,6 +174,17 @@ def _process_with_session(
 
         user_id = _resolve_user_id(db, payload)
         plan_id = _extract_plan_id(payload)
+        if user_id is None or plan_id is None:
+            fallback_user_raw, fallback_plan_id = _resolve_via_invoice_subscription(payload)
+            if user_id is None and fallback_user_raw:
+                try:
+                    candidate_user_id = uuid.UUID(fallback_user_raw)
+                except (TypeError, ValueError):
+                    candidate_user_id = None
+                if candidate_user_id is not None and crud.get_user_by_id(db, candidate_user_id) is not None:
+                    user_id = candidate_user_id
+            if plan_id is None and fallback_plan_id:
+                plan_id = fallback_plan_id
         plan_features = _features_for_plan(plan_id)
         decision = _decide_entitlement_action(payload, event_type, plan_features, now)
         metadata = _safe_metadata(
@@ -318,6 +331,51 @@ def _resolve_user_id(db, payload: dict[str, Any]) -> uuid.UUID | None:
     return None
 
 
+def _resolve_via_invoice_subscription(payload: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Fallback for payment.captured/order.paid webhooks.
+
+    Confirmed via raw payload inspection: these event types only ever embed
+    the payment (and sometimes order) entity, never subscription -- so they
+    carry neither our notes nor a plan_id directly. Walks
+    payment.invoice_id -> invoice.subscription_id -> subscription via the
+    Razorpay API to recover both. Any failure here is swallowed; the caller
+    falls back to its existing unresolved_user/unknown_plan handling.
+    """
+    key_id = (settings.RAZORPAY_KEY_ID or "").strip()
+    key_secret = (settings.RAZORPAY_KEY_SECRET or "").strip()
+    invoice_id = _safe_string(_entity(payload, "payment").get("invoice_id"))
+    if not key_id or not key_secret or not invoice_id:
+        return None, None
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            invoice_response = client.get(
+                f"{RAZORPAY_API_BASE}/invoices/{invoice_id}", auth=(key_id, key_secret)
+            )
+            invoice_response.raise_for_status()
+            subscription_id = _safe_string(invoice_response.json().get("subscription_id"))
+            if not subscription_id:
+                return None, None
+            subscription_response = client.get(
+                f"{RAZORPAY_API_BASE}/subscriptions/{subscription_id}", auth=(key_id, key_secret)
+            )
+            subscription_response.raise_for_status()
+            subscription = subscription_response.json()
+    except Exception:
+        return None, None
+    if not isinstance(subscription, dict):
+        return None, None
+    plan_id = _safe_string(subscription.get("plan_id")) or None
+    notes = subscription.get("notes")
+    raw_user_id = None
+    if isinstance(notes, dict):
+        for key in USER_ID_NOTE_KEYS:
+            candidate = notes.get(key)
+            if candidate not in (None, ""):
+                raw_user_id = candidate
+                break
+    return (_safe_string(raw_user_id) or None), plan_id
+
+
 def _features_for_plan(plan_id: str | None) -> PlanFeatures | None:
     normalized = _safe_string(plan_id)
     if not normalized:
@@ -432,6 +490,43 @@ def _decide_entitlement_action(
                 reason="failed_payment",
             )
         return _activation_decision(subscription, now)
+
+    # One-time purchases (paper_premium, total_count=1) never emit a
+    # subscription.* event in practice -- confirmed via raw payload
+    # inspection, Razorpay only sends payment.authorized/payment.captured/
+    # order.paid for this flow, and the subscription entity (with its real
+    # current_start/current_end) is never embedded, unlike recurring plans.
+    # Activate directly off the captured payment instead of routing through
+    # _activation_decision's period-based logic, which this plan can never
+    # satisfy. Scoped to paper_trading_enabled only so the existing
+    # recurring-monthly flow (still driven by subscription.charged above)
+    # is untouched.
+    if (
+        event_type in ("payment.captured", "order.paid")
+        and plan_features is not None
+        and plan_features.paper_trading_enabled
+    ):
+        if payment_status != "captured":
+            return WebhookDecision(
+                action="stored",
+                event_status="failed_payment",
+                processed=False,
+                reason="failed_payment",
+            )
+        # paper_trading_enabled is a permanent grant read directly off the
+        # row, never gated by expires_at (see entitlements.has_paper_entitlement).
+        # expires_at must still be non-null for _activate_entitlement to
+        # write anything at all; using starts_at keeps the shared row-level
+        # expiry neutral -- it can only ever be raised, never lowered, by a
+        # real recurring plan's later expires_at via _latest_datetime.
+        return WebhookDecision(
+            action="activate",
+            event_status="active",
+            processed=True,
+            reason="entitlement_activated",
+            starts_at=now,
+            expires_at=now,
+        )
 
     return WebhookDecision(
         action="ignored_unknown_event",

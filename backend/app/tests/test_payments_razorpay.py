@@ -382,6 +382,109 @@ def test_subscription_activated_paper_plan_grants_only_paper_trading(razorpay_en
     assert entitlement["strategy_access_enabled"] is False
 
 
+class _FakeRazorpayLookupClient:
+    """payment.captured/order.paid never embed the subscription entity in
+    practice (confirmed against real Razorpay payloads) -- this fakes the
+    invoice -> subscription API hop _resolve_via_invoice_subscription makes
+    to recover the user/plan those events don't carry directly."""
+
+    invoice_response: dict = {}
+    subscription_response: dict = {}
+    calls: list[str] = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def get(self, url, *, auth):
+        self.__class__.calls.append(url)
+
+        class _Response:
+            def __init__(self, body):
+                self._body = body
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._body
+
+        if "/invoices/" in url:
+            return _Response(self.__class__.invoice_response)
+        if "/subscriptions/" in url:
+            return _Response(self.__class__.subscription_response)
+        raise AssertionError(f"Unexpected URL in test: {url}")
+
+
+def _payment_captured_payload(*, invoice_id: str = "inv_test_1") -> dict:
+    """Matches the real shape observed from Razorpay for a captured payment
+    on a total_count=1 (one-time) subscription: only the payment entity is
+    embedded, its notes are an empty list (not dict), and there is no
+    subscription entity at all."""
+    return {
+        "event": "payment.captured",
+        "contains": ["payment"],
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": "pay_test_1",
+                    "entity": "payment",
+                    "amount": 10000,
+                    "currency": "INR",
+                    "status": "captured",
+                    "order_id": "order_test_1",
+                    "invoice_id": invoice_id,
+                    "captured": True,
+                    "email": "customer@example.test",
+                    "contact": "+919999999999",
+                    "notes": [],
+                }
+            }
+        },
+    }
+
+
+def test_payment_captured_without_subscription_entity_resolves_via_invoice_fallback(razorpay_env, monkeypatch):
+    """The real-world case this exists for: Razorpay's one-time
+    (total_count=1) Paper Premium purchase never emits subscription.charged/
+    activated and never embeds the subscription entity in payment.captured/
+    order.paid -- both confirmed against live payloads. Without the
+    invoice -> subscription API fallback this webhook is permanently
+    unresolved_user and the entitlement never activates."""
+    from app.services import razorpay_webhooks
+
+    monkeypatch.setattr(settings, "RAZORPAY_KEY_ID", "rzp_test_fake_key", raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_KEY_SECRET", "fake_secret", raising=False)
+    user = make_user("razorpay-paper-payment-captured@example.com")
+
+    _FakeRazorpayLookupClient.invoice_response = {"subscription_id": "sub_test_1"}
+    _FakeRazorpayLookupClient.subscription_response = {
+        "plan_id": PAPER_PLAN,
+        "notes": {"nova_user_id": str(user.id), "nova_plan_code": "paper_premium"},
+    }
+    _FakeRazorpayLookupClient.calls = []
+    monkeypatch.setattr(razorpay_webhooks.httpx, "Client", _FakeRazorpayLookupClient)
+
+    response = _post_signed(
+        _client(),
+        _payment_captured_payload(),
+        event_id="evt_payment_captured_no_subscription",
+    )
+
+    assert response.status_code == 200
+    assert any("/invoices/inv_test_1" in call for call in _FakeRazorpayLookupClient.calls)
+    assert any("/subscriptions/sub_test_1" in call for call in _FakeRazorpayLookupClient.calls)
+    entitlement = _latest_entitlement(user.id)
+    assert entitlement is not None
+    assert entitlement["paper_trading_enabled"] is True
+    assert entitlement["status"] == "active"
+
+
 def test_live_plan_cancellation_does_not_revoke_a_separately_purchased_paper_entitlement(razorpay_env):
     """The exact real-world scenario this survives-unrelated-revoke logic
     exists for: a user buys Nova Paper Premium once, later subscribes to
