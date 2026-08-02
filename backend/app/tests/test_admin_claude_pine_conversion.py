@@ -952,6 +952,25 @@ def test_normal_user_cannot_generate_or_view_manual_package(mu_db, monkeypatch):
     assert normal.get(f"/api/admin/pine-conversions/{conversion['id']}").status_code == 403
 
 
+def test_manual_package_quotes_the_canonical_prompt_contract(mu_db, monkeypatch):
+    """The manual (copy-paste) package must reuse the same v4.2 prompt text
+    as the automated API path -- not a hand-written paraphrase that can
+    silently drift and pass a compliant-looking response the deterministic
+    validator still rejects (missed explicit `bool` typing, the
+    logic_changed+CONVERTED conflict, and the backtest_layer requirement
+    were all real gaps found this way)."""
+    _enable(monkeypatch)
+    admin = _client(make_user("c1-manual-contract-admin@example.com", is_admin=True))
+    conversion = _submit(admin, SOURCE + "\n// indicator package\n", "Manual contract check")
+    package = admin.post(f"/api/admin/pine-conversions/{conversion['id']}/manual-package").json()["package"]
+    assert "bool novaBuyCeSignal" in package
+    assert "bool novaBuyPeSignal" in package
+    assert "bool novaExitSignal" in package
+    assert "logic_changed=true with status=CONVERTED is invalid" in package
+    assert "backtest_layer" in package
+    assert "SERVER AUTHORITY" in package
+
+
 def test_candidate_mutation_invalidates_approval_binding(mu_db, monkeypatch):
     _enable(monkeypatch)
     client = _client(make_user("c1-binding-admin@example.com", is_admin=True))

@@ -267,6 +267,19 @@ def _prompt_material_v4(source_type: str) -> tuple[str, str, str, str]:
     return prompt, _hash(prompt), transport, _hash(transport)
 
 
+def _prompt_section(prompt: str, start_anchor: str, end_anchor: str) -> str:
+    """Slice a section out of the canonical v4.2 prompt by exact heading
+    text, so the manual (copy-paste) conversion package quotes the same
+    authoritative wording as the automated API prompt instead of a
+    hand-maintained paraphrase that can silently drift out of sync with
+    what the deterministic validator actually enforces. Raises ValueError
+    (surfacing loudly, not silently) if v4.2's headings ever change without
+    updating these anchors -- that coupling is deliberate."""
+    start = prompt.index(start_anchor) + len(start_anchor)
+    end = prompt.index(end_anchor, start)
+    return prompt[start:end].strip()
+
+
 def _cache_key(
     *,
     source_sha256: str,
@@ -1561,30 +1574,24 @@ def manual_package(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[
         source_type = _detect_source_type(source.content)
         analysis = (row.usage_summary or {}).get("analysis") or {}
         response_schema = ClaudePineConversionOutput.model_json_schema(mode="validation")
+        prompt, _, _, _ = _prompt_material_v4(source_type)
+        server_authority = _prompt_section(
+            prompt, "SERVER AUTHORITY\n==================================================\n", "\nCLASSIFICATION\n"
+        )
+        output_contract = _prompt_section(prompt, "OUTPUT CONTRACT\n", "\nFINAL CHECK BEFORE RETURN\n")
         if source_type == "STRATEGY":
-            layer_contract = """strategy_layer must contain the complete preserved strategy body: every
-original calculation, input, plot, and order call (strategy.entry/order/exit/
-close/close_all/cancel/cancel_all) unchanged, with alert_message=
-novaWebhookPayload("ACTION", "orderId") added to every order-producing call
-except cancel/cancel_all. Do not remove or reduce any original order call.
-Delete any bare alert()/alertcondition() call already present in the source
--- these are not part of the preserved logic, only an unwired reporting path
-NOVA never receives -- and do not add new ones. Do not include the transport
-block itself, webhook URLs, credentials, broker fields, lots, quantity,
-strike, expiry, security ID, or paper/live mode."""
+            layer_contract = _prompt_section(
+                prompt,
+                "STRATEGY MODE (source declares strategy(...))\n==================================================\n",
+                "\n==================================================\nINDICATOR MODE (source declares indicator(...))",
+            )
             transport_note = "appends hash-pinned pine_transport_v3_fill server-side"
         else:
-            layer_contract = """strategy_layer must contain one complete Pine v6 indicator declaring
-exactly these three booleans, using the literal explicit-type form shown
-(implicit typing, e.g. "novaBuyCeSignal = false", will fail validation):
-  bool novaBuyCeSignal
-  bool novaBuyPeSignal
-  bool novaExitSignal
-It must contain signal logic only -- map the boolean condition behind any
-existing alertcondition()/alert() call into those booleans and delete the
-call itself. Do not include transport, alert(), alertcondition(), webhook
-URLs, credentials, broker fields, lots, quantity, strike, expiry, security ID,
-or paper/live mode."""
+            layer_contract = _prompt_section(
+                prompt,
+                "INDICATOR MODE (source declares indicator(...))\n==================================================\n",
+                "\n==================================================\nSERVER AUTHORITY",
+            )
             transport_note = "appends hash-pinned pine_transport_v2 server-side"
         package = f"""# NOVA C1 ADMIN MANUAL CLAUDE CONVERSION
 
@@ -1593,24 +1600,23 @@ Source SHA-256: {row.input_source_sha256}
 Response schema: {RESPONSE_SCHEMA_VERSION}
 Detected source type: {source_type}
 
-OUTPUT CONTRACT
+RESPONSE FORMAT
 Return exactly one raw JSON object matching the authoritative schema below.
 Return no Markdown fence, explanatory prose, or additional artifact.
 Use schema_version {RESPONSE_SCHEMA_VERSION} and source_sha256
 {row.input_source_sha256} exactly. Unknown fields are forbidden.
 
+The following sections are quoted verbatim from NOVA's canonical v4.2
+conversion prompt -- the same one the automated API path uses -- so this
+manual package can never silently drift out of sync with what the
+deterministic validator actually enforces.
+
 {layer_contract}
 
-Set behavior_preservation.logic_changed=true only when a faithful,
-condition-preserving instrumentation genuinely was not possible for part of
-the source, and set status=MANUAL_REVIEW_REQUIRED in that case;
-logic_changed=true with status=CONVERTED is invalid and will be rejected.
-Removing transport, credentials, strike, expiry, or other server-authority
-fields (as required above) is not a logic change by itself -- only a change
-to the actual entry/exit trigger conditions is. When behavior genuinely
-cannot be preserved, explain the issue only through
-behavior_preservation.change_summary, user_summary, and admin_review_points.
-Do not invent or silently simplify logic.
+SERVER AUTHORITY
+{server_authority}
+
+{output_contract}
 
 NOVA validates this JSON with the same C1 model used by API conversion,
 extracts strategy_layer, {transport_note}, and runs the same deterministic
