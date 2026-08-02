@@ -254,7 +254,7 @@ _detect_source_type = pine_validation.detect_source_type
 
 def _prompt_material_v4(source_type: str) -> tuple[str, str, str, str]:
     prompt = base_conversion._read_canonical(
-        base_conversion.prompt_path("v4.1"), base_conversion.PROMPT_V41_SHA256
+        base_conversion.prompt_path("v4.2"), base_conversion.PROMPT_V42_SHA256
     )
     if source_type == "STRATEGY":
         transport = base_conversion._read_canonical(
@@ -410,7 +410,7 @@ def submit(admin_id: uuid.UUID, payload: AdminPineSubmission) -> dict[str, Any]:
             input_version_id=version.id,
             input_source_sha256=source_sha256,
             contract_version=pine.CONTRACT_VERSION,
-            prompt_version="v4.1",
+            prompt_version="v4.2",
             provider=PROVIDER,
             model=settings.CLAUDE_CONVERSION_MODEL or "not-configured",
             options=options,
@@ -423,7 +423,7 @@ def submit(admin_id: uuid.UUID, payload: AdminPineSubmission) -> dict[str, Any]:
                 **usage_summary,
                 "provenance": {
                     "source_sha256": source_sha256,
-                    "prompt_version": "v4.1",
+                    "prompt_version": "v4.2",
                     "prompt_sha256": prompt_sha,
                     "registry_version": registry.registry_version,
                     "registry_sha256": registry.sha256,
@@ -586,7 +586,7 @@ def submit_owner_source(
             input_version_id=version.id,
             input_source_sha256=source_sha256,
             contract_version=pine.CONTRACT_VERSION,
-            prompt_version="v4.1",
+            prompt_version="v4.2",
             provider=PROVIDER,
             model=settings.CLAUDE_CONVERSION_MODEL or "not-configured",
             options=options,
@@ -600,7 +600,7 @@ def submit_owner_source(
                 **owner_usage_summary,
                 "provenance": {
                     "source_sha256": source_sha256,
-                    "prompt_version": "v4.1",
+                    "prompt_version": "v4.2",
                     "prompt_sha256": prompt_sha,
                     "registry_version": registry.registry_version,
                     "registry_sha256": registry.sha256,
@@ -990,8 +990,10 @@ strategy.close_all/strategy.cancel/strategy.cancel_all), stop/limit/OCA
 parameter, and reversal preserved unchanged, plus an alert_message argument
 on every order-producing call (not cancel/cancel_all) calling the frozen
 novaWebhookPayload(action, orderId) helper. Do not remove or reduce any
-original order call. Do not include any bare alert() or alertcondition()
-call, the transport block itself, webhook URL, credential, or broker/lot/
+original order call. Delete any bare alert() or alertcondition() call already
+present in the source -- these are not part of the preserved logic, only an
+unwired reporting path NOVA never receives -- and do not add new ones. Do not
+include the transport block itself, webhook URL, credential, or broker/lot/
 quantity/strike/expiry/security-id/paper-live field. NOVA appends the frozen
 transport server-side; you only add alert_message arguments that call it.
 signal_mapping may describe order IDs/conditions in prose instead of literal
@@ -1003,10 +1005,12 @@ Return {RESPONSE_SCHEMA_VERSION} JSON with source_sha256 exactly
 Pine v6 script declaration and exactly one definition of each canonical boolean:
 novaBuyCeSignal, novaBuyPeSignal, novaExitSignal. The strategy_layer is signal
 logic only: express every entry and exit only by setting those canonical
-booleans. Do not include any alert() or alertcondition() call, the transport
-block itself, webhook URL, credential, or broker/lot/quantity/strike/expiry/
-security-id/paper-live field. Map the source's alert-based signals onto the
-canonical booleans; NOVA appends the frozen transport server-side."""
+booleans. Delete any alert() or alertcondition() call already present in the
+source and do not add new ones. Do not include the transport block itself,
+webhook URL, credential, or broker/lot/quantity/strike/expiry/
+security-id/paper-live field. Map the boolean condition behind the source's
+alert-based signals onto the canonical booleans, not the calls themselves;
+NOVA appends the frozen transport server-side."""
     prompt = f"""{contract}
 
 STATUS AND LOGIC PRESERVATION
@@ -1155,7 +1159,7 @@ def _validate_layer(
 
 
 def _validate_backtest_layer(output: ClaudePineConversionOutput, *, source_type: str) -> list[str]:
-    """Admin-only TradingView backtest preview (prompt v4.1). Required only
+    """Admin-only TradingView backtest preview (prompt v4.2). Required only
     for INDICATOR-mode CONVERTED candidates; must stay null otherwise. Never
     wired to the frozen transport -- these checks confirm it *can't* be,
     not that its trading logic is correct."""
@@ -1562,15 +1566,19 @@ def manual_package(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[
 original calculation, input, plot, and order call (strategy.entry/order/exit/
 close/close_all/cancel/cancel_all) unchanged, with alert_message=
 novaWebhookPayload("ACTION", "orderId") added to every order-producing call
-except cancel/cancel_all. Do not remove or reduce any original order call. Do
-not include the transport block itself, bare alert()/alertcondition() calls,
-webhook URLs, credentials, broker fields, lots, quantity, strike, expiry,
-security ID, or paper/live mode."""
+except cancel/cancel_all. Do not remove or reduce any original order call.
+Delete any bare alert()/alertcondition() call already present in the source
+-- these are not part of the preserved logic, only an unwired reporting path
+NOVA never receives -- and do not add new ones. Do not include the transport
+block itself, webhook URLs, credentials, broker fields, lots, quantity,
+strike, expiry, security ID, or paper/live mode."""
             transport_note = "appends hash-pinned pine_transport_v3_fill server-side"
         else:
             layer_contract = """strategy_layer must contain one complete Pine v6 indicator with exactly
 one bool definition for novaBuyCeSignal, novaBuyPeSignal, and novaExitSignal.
-It must contain signal logic only. Do not include transport, alert(), webhook
+It must contain signal logic only -- map the boolean condition behind any
+existing alertcondition()/alert() call into those booleans and delete the
+call itself. Do not include transport, alert(), alertcondition(), webhook
 URLs, credentials, broker fields, lots, quantity, strike, expiry, security ID,
 or paper/live mode."""
             transport_note = "appends hash-pinned pine_transport_v2 server-side"

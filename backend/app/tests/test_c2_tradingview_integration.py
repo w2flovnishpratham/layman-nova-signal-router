@@ -216,7 +216,7 @@ def test_exact_approval_compile_and_feature_flag_gates(c2_app, monkeypatch):
     compile_row = _compile(client, approved)
     assert compile_row["candidate_sha256"] == approved["candidate_sha256"]
     assert compile_row["source_sha256"] == approved["source_sha256"]
-    assert compile_row["prompt_version"] == "v4.1"
+    assert compile_row["prompt_version"] == "v4.2"
     assert compile_row["result"] == "SUCCESS"
     duplicate = client.post(
         f"/api/admin/pine-conversions/{approved['id']}/compile-success", json={}

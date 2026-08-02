@@ -101,7 +101,7 @@ class ClaudePineConversionOutput(BaseModel):
     strategy_layer: str = Field(min_length=1)
     # Admin-only TradingView backtest preview for INDICATOR-mode CONVERTED
     # candidates. Never wired to the frozen transport, never sent to NOVA's
-    # execution path -- see prompt v4.1's BACKTEST LAYER section.
+    # execution path -- see prompt v4.2's BACKTEST LAYER section.
     backtest_layer: str | None = Field(default=None, max_length=200_000)
     signal_mapping: ClaudeSignalMapping
     behavior_preservation: ClaudeBehaviorPreservation

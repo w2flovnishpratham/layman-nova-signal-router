@@ -74,7 +74,7 @@ def owner_claude_config(user: CurrentUser = Depends(get_current_user)):
         ),
         "provider": admin_service.PROVIDER,
         "model": settings.CLAUDE_CONVERSION_MODEL or None,
-        "prompt_version": "v4.1",
+        "prompt_version": "v4.2",
         "transport_version": None,
         "admin_review_required": True,
         "paper_verification_required": True,
