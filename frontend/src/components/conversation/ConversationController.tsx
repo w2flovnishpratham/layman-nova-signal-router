@@ -1,6 +1,16 @@
 import { Input } from "@/components/ui/input"
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/components/ui/popover'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Check, Loader2, Pencil } from 'lucide-react'
 import { createRazorpaySubscription, getPaymentEntitlementStatus } from '../../api'
@@ -555,7 +565,15 @@ export function ConversationController({
       conv.startEngine()
     } catch (e) {
       if (isStale(gen, strategyKey)) return
-      setSaveError(e instanceof Error ? e.message : 'Engine start failed.')
+      const rawMessage = e instanceof Error ? e.message : 'Engine start failed.'
+      // The backend's "no longer Paper-ready" text is accurate but doesn't
+      // say what to do -- the common cause is this instance being bound to
+      // Live mode rather than genuinely broken/unverified.
+      setSaveError(
+        mode === 'paper' && rawMessage.includes('no longer Paper-ready')
+          ? 'This strategy instance is not set up for Paper mode right now (it may be configured for Live instead). Pick a different strategy, or reconfigure this one for Paper before starting.'
+          : rawMessage,
+      )
     } finally {
       inFlightRef.current = false
       setPending('idle')
@@ -741,23 +759,24 @@ export function ConversationController({
             ) : null}
             {setupSaved ? <span className="conv-saved-badge"><Check size={14} /> Setup saved</span> : null}
           </div>
-          {paywallOpen ? (
-            <div role="alertdialog" aria-label="Nova Paper Premium required">
-              <BotBubble tone="normal" showAvatar>
-                Paper trading requires Nova Paper Premium — a one-time ₹100 purchase, not a subscription. Unlocks Paper mode permanently.
-              </BotBubble>
-              {checkoutStarted ? (
-                <BotBubble tone="normal">Complete checkout, then return here — NOVA checks payment confirmation automatically and starts the engine once it clears.</BotBubble>
-              ) : null}
+          <AlertDialog open={paywallOpen} onOpenChange={(next) => { if (!next) { setPaywallOpen(false); setCheckoutStarted(false); setCheckoutError('') } }}>
+            <AlertDialogContent className="border border-border bg-popover shadow-2xl">
+              <AlertDialogHeader>
+                <AlertDialogTitle>Nova Paper Premium required</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Paper trading requires Nova Paper Premium — a one-time ₹100 purchase, not a subscription. Unlocks Paper mode permanently.
+                  {checkoutStarted ? ' Complete checkout, then return here — NOVA checks payment confirmation automatically and starts the engine once it clears.' : ''}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
               {checkoutError ? <p className="conv-error" role="alert">{checkoutError}</p> : null}
-              <div className="conv-actions">
-                <Button variant="unstyled" type="button" className="conv-pill conv-pill--primary" disabled={checkoutPending} onClick={() => void startPaperCheckout()}>
+              <AlertDialogFooter>
+                <AlertDialogCancel variant="unstyled" className="conv-pill">Cancel</AlertDialogCancel>
+                <AlertDialogAction variant="unstyled" className="conv-pill conv-pill--primary" disabled={checkoutPending} onClick={() => void startPaperCheckout()}>
                   {checkoutPending ? 'Creating Checkout…' : checkoutStarted ? 'Reopen Razorpay Checkout' : 'Pay ₹100 & Continue'}
-                </Button>
-                <Button variant="unstyled" type="button" className="conv-pill" onClick={() => { setPaywallOpen(false); setCheckoutStarted(false); setCheckoutError('') }}>Cancel</Button>
-              </div>
-            </div>
-          ) : null}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       ) : null}
 
