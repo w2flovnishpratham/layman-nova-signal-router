@@ -500,6 +500,21 @@ def delete_strategy(user_id: uuid.UUID, strategy_id):
                 409,
                 "INSTANCE_LINKED",
             )
+        version_ids = [v.id for v in versions]
+        # input_version_id is ondelete="RESTRICT" (preserves conversion-request
+        # provenance), so a submitted-for-conversion strategy would otherwise
+        # hit an unhandled IntegrityError/500 here instead of a clean error.
+        has_conversion_request = bool(version_ids) and db.scalar(
+            select(models.PineConversionRequest.id).where(
+                models.PineConversionRequest.input_version_id.in_(version_ids)
+            )
+        ) is not None
+        if has_conversion_request:
+            raise PineWorkflowError(
+                "This strategy has been submitted for admin conversion and cannot be withdrawn.",
+                409,
+                "CONVERSION_REQUEST_EXISTS",
+            )
         _audit(db, user_id, "PERSONAL_PINE_STRATEGY_DELETED", strategy_id=str(strategy.id))
         db.delete(strategy)
         return {"deleted": True, "strategy_id": str(strategy.id)}

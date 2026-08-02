@@ -601,6 +601,38 @@ def _submit_for_conversion(client, name: str, source: str):
     return client.post(convert_url, json=payload)
 
 
+def test_withdrawing_a_strategy_submitted_for_claude_conversion_is_a_clean_409_not_a_500(owner_flow):
+    """Regression: input_version_id on pine_conversion_requests is
+    ondelete=RESTRICT, so a strategy still referenced by a (even
+    unapproved) conversion request used to hit an unhandled IntegrityError
+    -> 500 on withdraw instead of the same clean 409 an approved or
+    instance-linked strategy already gets."""
+    client, current, owner, other, admin, provider = owner_flow
+    created = client.post(
+        "/api/personal-pine-strategies",
+        json={"name": "Submitted for conversion", "source": SOURCE, "filename": "owner.pine"},
+    )
+    strategy = created.json()["strategy"]
+    version = created.json()["version"]
+    conversion_response = client.post(
+        f"/api/personal-pine-strategies/{strategy['id']}/versions/{version['id']}/claude-conversion",
+        json={
+            "consent": True,
+            "options": {
+                "requested_setup_type": "USER_MANAGED_TRADINGVIEW",
+                "intended_symbol": "NIFTY",
+                "intended_timeframe": "5",
+            },
+        },
+    )
+    assert conversion_response.status_code == 202, conversion_response.text
+
+    blocked = client.delete(f"/api/personal-pine-strategies/{strategy['id']}")
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["reason"] == "CONVERSION_REQUEST_EXISTS"
+    assert client.get(f"/api/personal-pine-strategies/{strategy['id']}").status_code == 200
+
+
 def test_strategy_mode_preserves_pending_orders_and_attaches_order_fill_alerts(mu_db, monkeypatch):
     """The core ask behind the v4.0 redesign: a real TradingView strategy with
     pending stop entries + OCA cancellation must come back with those exact
