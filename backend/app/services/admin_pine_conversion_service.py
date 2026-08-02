@@ -1574,8 +1574,12 @@ block itself, webhook URLs, credentials, broker fields, lots, quantity,
 strike, expiry, security ID, or paper/live mode."""
             transport_note = "appends hash-pinned pine_transport_v3_fill server-side"
         else:
-            layer_contract = """strategy_layer must contain one complete Pine v6 indicator with exactly
-one bool definition for novaBuyCeSignal, novaBuyPeSignal, and novaExitSignal.
+            layer_contract = """strategy_layer must contain one complete Pine v6 indicator declaring
+exactly these three booleans, using the literal explicit-type form shown
+(implicit typing, e.g. "novaBuyCeSignal = false", will fail validation):
+  bool novaBuyCeSignal
+  bool novaBuyPeSignal
+  bool novaExitSignal
 It must contain signal logic only -- map the boolean condition behind any
 existing alertcondition()/alert() call into those booleans and delete the
 call itself. Do not include transport, alert(), alertcondition(), webhook
@@ -1597,11 +1601,16 @@ Use schema_version {RESPONSE_SCHEMA_VERSION} and source_sha256
 
 {layer_contract}
 
-When behavior cannot be preserved, use status MANUAL_REVIEW_REQUIRED, set
-behavior_preservation.logic_changed=true, and explain the issue only through
+Set behavior_preservation.logic_changed=true only when a faithful,
+condition-preserving instrumentation genuinely was not possible for part of
+the source, and set status=MANUAL_REVIEW_REQUIRED in that case;
+logic_changed=true with status=CONVERTED is invalid and will be rejected.
+Removing transport, credentials, strike, expiry, or other server-authority
+fields (as required above) is not a logic change by itself -- only a change
+to the actual entry/exit trigger conditions is. When behavior genuinely
+cannot be preserved, explain the issue only through
 behavior_preservation.change_summary, user_summary, and admin_review_points.
-Do not invent or silently simplify logic. Such a response will not become
-review-ready until the strategy layer is corrected.
+Do not invent or silently simplify logic.
 
 NOVA validates this JSON with the same C1 model used by API conversion,
 extracts strategy_layer, {transport_note}, and runs the same deterministic
