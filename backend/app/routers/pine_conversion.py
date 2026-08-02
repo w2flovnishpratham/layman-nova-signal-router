@@ -275,6 +275,17 @@ def admin_publish(
         return _error(exc)
 
 
+@admin_router.post("/{conversion_id}/unpublish")
+def admin_unpublish(
+    conversion_id: uuid.UUID,
+    admin: CurrentUser = Depends(require_admin),
+):
+    try:
+        return {"ok": True, **admin_service.unpublish_shared(admin.id, conversion_id)}
+    except Exception as exc:
+        return _error(exc)
+
+
 @admin_router.post("/{conversion_id}/reject")
 def admin_reject(
     conversion_id: uuid.UUID,

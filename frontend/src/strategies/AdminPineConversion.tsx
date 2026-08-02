@@ -16,6 +16,7 @@ import {
   runAdminPineConversion,
   submitAdminPineConversion,
   submitAdminPineManualResponse,
+  unpublishAdminPineConversion,
 } from '../api'
 import type { AdminPineConversion } from '../api'
 import { C2AdminPanel } from './C2AdminPanel'
@@ -166,6 +167,15 @@ export function AdminPineConversionWorkspace() {
                 type: 'success',
               })
             })}
+            onUnpublish={() => run('Unpublish strategy', async () => {
+              if (!window.confirm('Unpublish this strategy? It stops appearing for new selection and every active subscriber is deactivated. Publishing it again reverses this.')) return
+              const result = await unpublishAdminPineConversion(selected.id)
+              await refresh(selected.id)
+              toast.add({
+                title: `Unpublished "${result.catalog_code}". ${result.deactivated_subscriptions} subscriber(s) deactivated.`,
+                type: 'success',
+              })
+            })}
           /> : <div className="ps-empty"><FileCode2 size={28} /><h2>Select a conversion</h2></div>}
         </main>
       </div>
@@ -175,7 +185,7 @@ export function AdminPineConversionWorkspace() {
 
 function ConversionDetail({
   conversion, busy, manualPackage, manualResponse, reviewReason, catalogCode, broadcastPine, onManualResponse, onReviewReason,
-  onCatalogCode, onConvert, onManualPackage, onSubmitManual, onApprove, onReject, onRequestChanges, onPublish,
+  onCatalogCode, onConvert, onManualPackage, onSubmitManual, onApprove, onReject, onRequestChanges, onPublish, onUnpublish,
 }: {
   conversion: AdminPineConversion
   busy: string
@@ -194,6 +204,7 @@ function ConversionDetail({
   onReject: () => Promise<void>
   onRequestChanges: () => Promise<void>
   onPublish: () => Promise<void>
+  onUnpublish: () => Promise<void>
 }) {
   const canConvert = ['READY_FOR_CONVERSION', 'AI_FAILED_RETRYABLE'].includes(conversion.conversion_status)
   const canManual = !['UNSUPPORTED_STRATEGY', 'APPROVED_FOR_TRADINGVIEW_COMPILE', 'REJECTED', 'CHANGES_REQUESTED'].includes(conversion.conversion_status)
@@ -301,12 +312,18 @@ function ConversionDetail({
       </div>
     ) : null}
     {conversion.webhook_path ? (
-      <div className="ps-message success">
-        <strong>Published as "{conversion.catalog_code}".</strong> Webhook URL for the admin-run TradingView alert:
+      <div className={conversion.strategy_published ? 'ps-message success' : 'ps-message warning'}>
+        <strong>{conversion.strategy_published ? `Published as "${conversion.catalog_code}".` : `Unpublished (was "${conversion.catalog_code}").`}</strong>
+        {' '}Webhook URL for the admin-run TradingView alert:
         <div className="ps-copy-row">
           <code>{backendHttpUrl(conversion.webhook_path as `/${string}`)}</code>
           <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(backendHttpUrl(conversion.webhook_path as `/${string}`))}><Copy size={14} /> Copy URL</Button>
         </div>
+        {conversion.strategy_published ? (
+          <Button variant="unstyled" className="ps-danger" type="button" disabled={!!busy} onClick={() => void onUnpublish()}><X size={14} /> Unpublish</Button>
+        ) : (
+          <p className="ps-note">Publish this candidate again under the same catalog code to bring it back.</p>
+        )}
       </div>
     ) : null}
     {broadcastPine || conversion.broadcast_pine ? (

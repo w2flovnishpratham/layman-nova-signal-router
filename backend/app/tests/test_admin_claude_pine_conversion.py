@@ -350,6 +350,72 @@ def test_approved_candidate_can_be_published_and_appears_ready_in_registry(mu_db
     assert built_in_strategy_registry.get_built_in("nova-bollinger-squeeze-v2") is not None
 
 
+def test_unpublish_archives_the_strategy_and_deactivates_subscribers_and_is_reversible(mu_db, monkeypatch):
+    from app.services import built_in_strategy_registry, strategy_fanout
+    from app.db import models
+    from app.db.engine import session_scope
+    from sqlalchemy import select
+
+    _enable(monkeypatch)
+    client = _client(make_user("c1-unpublish-admin@example.com", is_admin=True))
+    conversion = _submit(client, name="Unpublish Target")
+    fake = pine_conversion_provider.FakePineConversionProvider(_output(conversion))
+    monkeypatch.setattr(pine_conversion_provider, "get_claude_provider", lambda: fake)
+    client.post(f"/api/admin/pine-conversions/{conversion['id']}/convert")
+    client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/approve",
+        json={"reason": "Reviewed for TradingView compile only"},
+    )
+    published = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/publish",
+        json={"catalog_code": "unpublish-target"},
+    )
+    assert published.status_code == 200, published.text
+    assert built_in_strategy_registry.get_built_in("nova-unpublish-target") is not None
+
+    subscriber = make_user("c1-unpublish-subscriber@example.com")
+    strategy_fanout.subscribe_user(subscriber.id, "unpublish-target", lots=1, execution_mode="signal_only")
+    with session_scope() as db:
+        sub = db.scalar(select(models.StrategySubscription).where(
+            models.StrategySubscription.user_id == subscriber.id,
+            models.StrategySubscription.strategy_name == "unpublish-target",
+        ))
+        assert sub is not None and sub.active is True
+
+    # Only the submitting admin can unpublish -- same isolation as everything else.
+    foreign_admin = _client(make_user("c1-unpublish-foreign@example.com", is_admin=True))
+    assert foreign_admin.post(f"/api/admin/pine-conversions/{conversion['id']}/unpublish").status_code == 404
+
+    unpublished = client.post(f"/api/admin/pine-conversions/{conversion['id']}/unpublish")
+    assert unpublished.status_code == 200, unpublished.text
+    assert unpublished.json()["catalog_code"] == "unpublish-target"
+    assert unpublished.json()["deactivated_subscriptions"] == 1
+    assert built_in_strategy_registry.get_built_in("nova-unpublish-target") is None
+
+    with session_scope() as db:
+        sub = db.scalar(select(models.StrategySubscription).where(
+            models.StrategySubscription.user_id == subscriber.id,
+            models.StrategySubscription.strategy_name == "unpublish-target",
+        ))
+        assert sub is not None and sub.active is False
+
+    refetched = client.get(f"/api/admin/pine-conversions/{conversion['id']}").json()["conversion"]
+    assert refetched["strategy_published"] is False
+    assert refetched["catalog_code"] == "unpublish-target"  # still surfaced for reference
+
+    again = client.post(f"/api/admin/pine-conversions/{conversion['id']}/unpublish")
+    assert again.status_code == 409
+    assert again.json()["reason"] == "ALREADY_UNPUBLISHED"
+
+    # Reversible: publishing the same approved candidate again reactivates it.
+    republished = client.post(
+        f"/api/admin/pine-conversions/{conversion['id']}/publish",
+        json={"catalog_code": "unpublish-target"},
+    )
+    assert republished.status_code == 200, republished.text
+    assert built_in_strategy_registry.get_built_in("nova-unpublish-target") is not None
+
+
 def test_publish_rejects_unapproved_or_taken_code(mu_db, monkeypatch):
     _enable(monkeypatch)
     client = _client(make_user("c1-publish-guard-admin@example.com", is_admin=True))

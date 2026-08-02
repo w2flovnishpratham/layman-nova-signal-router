@@ -5,7 +5,7 @@ import { AdminPineConversionWorkspace } from './AdminPineConversion'
 
 const api = vi.hoisted(() => ({
   list: vi.fn(), get: vi.fn(), submit: vi.fn(), convert: vi.fn(), manualPackage: vi.fn(),
-  manualResponse: vi.fn(), approve: vi.fn(), reject: vi.fn(), requestChanges: vi.fn(), publish: vi.fn(),
+  manualResponse: vi.fn(), approve: vi.fn(), reject: vi.fn(), requestChanges: vi.fn(), publish: vi.fn(), unpublish: vi.fn(),
 }))
 const toastApi = vi.hoisted(() => ({
   add: vi.fn(),
@@ -24,6 +24,7 @@ vi.mock('../api', () => ({
   rejectAdminPineConversion: api.reject,
   requestChangesAdminPineConversion: api.requestChanges,
   publishAdminPineConversion: api.publish,
+  unpublishAdminPineConversion: api.unpublish,
   getC2Config: vi.fn().mockResolvedValue({ enabled: false }),
   getAdminC2Conversion: vi.fn(),
   listAdminC2Installations: vi.fn().mockResolvedValue({ installations: [] }),
@@ -69,7 +70,7 @@ const ready = {
   transport_source: TRANSPORT,
   diff: [{ kind: 'removed', text: 'indicator("NIFTY source", overlay=true)' }, { kind: 'added', text: 'indicator("NIFTY converted", overlay=true)' }],
   approval_integrity: null,
-  catalog_code: null, webhook_path: null,
+  catalog_code: null, webhook_path: null, strategy_published: false,
 }
 
 beforeEach(() => {
@@ -87,6 +88,7 @@ beforeEach(() => {
     strategy_id: 's1', catalog_code: 'orb', display_name: 'Legend MACD', version: 'v2',
     webhook_path: '/api/webhook/strategy/orb', broadcast_pine: `${LAYER}\n// broadcast transport\n`,
   })
+  api.unpublish.mockResolvedValue({ strategy_id: 's1', catalog_code: 'orb', deactivated_subscriptions: 2 })
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
   vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
@@ -263,7 +265,7 @@ describe('AdminPineConversionWorkspace', () => {
     // Simulates the persisted GET response after publish actually lands, not
     // just the one-time publish() response -- the regression this guards is
     // the URL only ever appearing in the toast, gone on the next refetch.
-    api.get.mockResolvedValue({ ...approved, catalog_code: 'orb', webhook_path: '/api/webhook/strategy/orb' })
+    api.get.mockResolvedValue({ ...approved, catalog_code: 'orb', webhook_path: '/api/webhook/strategy/orb', strategy_published: true })
     await user.click(screen.getByRole('button', { name: /^publish$/i }))
     expect(await screen.findByText(/api\/webhook\/strategy\/orb/)).toBeInTheDocument()
     expect(screen.getByText(/Published as "orb"/)).toBeInTheDocument()
@@ -272,7 +274,8 @@ describe('AdminPineConversionWorkspace', () => {
   it('shows the broadcast Pine and webhook URL for a published conversion reopened cold, with no publish click in this session', async () => {
     const published = {
       ...ready, conversion_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE', review_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE',
-      catalog_code: 'orb', webhook_path: '/api/webhook/strategy/orb', broadcast_pine: `${LAYER}\n// broadcast transport with REPLACE_WITH_NOVA_MANAGED_SECRET\n`,
+      catalog_code: 'orb', webhook_path: '/api/webhook/strategy/orb', strategy_published: true,
+      broadcast_pine: `${LAYER}\n// broadcast transport with REPLACE_WITH_NOVA_MANAGED_SECRET\n`,
     }
     api.list.mockResolvedValue([published])
     api.get.mockResolvedValue(published)
@@ -280,5 +283,25 @@ describe('AdminPineConversionWorkspace', () => {
     await screen.findAllByText('Legend MACD')
     expect(await screen.findByText(/api\/webhook\/strategy\/orb/)).toBeInTheDocument()
     expect(screen.getByText(/REPLACE_WITH_NOVA_MANAGED_SECRET/)).toBeInTheDocument()
+  })
+
+  it('unpublishes a published strategy after confirmation and reflects the archived state', async () => {
+    const user = userEvent.setup()
+    const published = {
+      ...ready, conversion_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE', review_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE',
+      catalog_code: 'orb', webhook_path: '/api/webhook/strategy/orb', strategy_published: true,
+    }
+    api.list.mockResolvedValue([published])
+    api.get.mockResolvedValue(published)
+    render(<AdminPineConversionWorkspace />)
+    await screen.findAllByText('Legend MACD')
+    expect(screen.getByText(/Published as "orb"/)).toBeInTheDocument()
+
+    api.get.mockResolvedValue({ ...published, strategy_published: false })
+    await user.click(screen.getByRole('button', { name: /^unpublish$/i }))
+    expect(window.confirm).toHaveBeenCalled()
+    expect(api.unpublish).toHaveBeenCalledWith('c1')
+    expect(await screen.findByText(/Unpublished \(was "orb"\)/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^unpublish$/i })).not.toBeInTheDocument()
   })
 })

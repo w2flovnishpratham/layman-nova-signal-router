@@ -1262,6 +1262,7 @@ export interface AdminPineConversion {
   action_mapping: Record<string, string>
   catalog_code: string | null
   webhook_path: string | null
+  strategy_published: boolean
   original_source?: string
   strategy_layer?: string | null
   backtest_layer?: string | null
@@ -1341,6 +1342,14 @@ export const publishAdminPineConversion = async (id: string, catalogCode: string
     'POST',
     { catalog_code: catalogCode, display_name: displayName || null },
   )
+
+export interface UnpublishedStrategy {
+  strategy_id: string
+  catalog_code: string
+  deactivated_subscriptions: number
+}
+export const unpublishAdminPineConversion = async (id: string) =>
+  pineCall<UnpublishedStrategy>(`/api/admin/pine-conversions/${id}/unpublish` as `/${string}`, 'POST')
 
 export const getOwnerClaudeConversionConfig = () =>
   pineCall<OwnerClaudeConversionConfig>('/api/personal-pine-claude-conversions/config')

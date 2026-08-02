@@ -807,6 +807,7 @@ def _public(db, row: models.PineConversionRequest, *, include_source: bool) -> d
         "completed_at": row.completed_at.isoformat() if row.completed_at else None,
         "catalog_code": strategy.code if strategy and strategy.visibility == "nova_shared" else None,
         "webhook_path": f"/api/webhook/strategy/{strategy.code}" if strategy and strategy.visibility == "nova_shared" else None,
+        "strategy_published": bool(strategy and strategy.visibility == "nova_shared" and strategy.status == "active"),
     }
     candidate = pine._artifact(db, row.candidate_version_id) if row.candidate_version_id else None
     layer = _layer_artifact(db, row.candidate_version_id)
@@ -1862,6 +1863,49 @@ def publish_as_shared(
             "webhook_path": f"/api/webhook/strategy/{code}",
             "broadcast_pine": broadcast_pine,
         }
+
+
+def unpublish_shared(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[str, Any]:
+    """Archive a published NOVA_SHARED strategy: stops it appearing in the
+    catalog for new selection and deactivates every active subscriber, but
+    keeps the strategy/version/review history intact. Reversible -- publish
+    the same (or a new) approved candidate under the same catalog_code to
+    bring it back; publish_as_shared() always resets status to "active"."""
+    from app.services import strategy_fanout
+
+    with session_scope() as db:
+        row = _owned(db, admin_id, conversion_id, lock=True)
+        strategy = db.get(models.StrategyCatalog, row.strategy_id)
+        if strategy is None or strategy.visibility != "nova_shared":
+            raise AdminConversionError("This strategy has not been published.", 409, "NOT_PUBLISHED")
+        if strategy.status != "active":
+            raise AdminConversionError("This strategy is already unpublished.", 409, "ALREADY_UNPUBLISHED")
+        code = strategy.code
+        strategy.status = "archived"
+        subscriber_ids = list(db.scalars(
+            select(models.StrategySubscription.user_id).where(
+                models.StrategySubscription.strategy_name == code,
+                models.StrategySubscription.active.is_(True),
+            )
+        ))
+        crud.add_audit_log(
+            db,
+            user_id=admin_id,
+            action="STRATEGY_UNPUBLISHED_NOVA_SHARED",
+            metadata={
+                "conversion_id": str(row.id),
+                "strategy_id": str(strategy.id),
+                "catalog_code": code,
+                "affected_subscribers": len(subscriber_ids),
+            },
+        )
+    for user_id in subscriber_ids:
+        strategy_fanout.set_subscription_active(user_id, code, False)
+    return {
+        "strategy_id": str(strategy.id),
+        "catalog_code": code,
+        "deactivated_subscriptions": len(subscriber_ids),
+    }
 
 
 def request_changes(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, reason: str | None) -> dict[str, Any]:
