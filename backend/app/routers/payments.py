@@ -1,6 +1,8 @@
 """Payment provider webhook routes."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
@@ -87,6 +89,14 @@ async def razorpay_webhook(request: Request) -> JSONResponse:
 
     signature = request.headers.get("X-Razorpay-Signature")
     raw_body = await request.body()
+    # TEMPORARY diagnostic logging to see the exact payload shape for
+    # payment.*/order.* events on one-time (total_count=1) subscriptions --
+    # remove once the user-resolution fallback is implemented.
+    logging.getLogger("app.payments.webhook_debug").warning(
+        "razorpay_webhook_payload event_id=%s body=%s",
+        request.headers.get("x-razorpay-event-id"),
+        raw_body.decode("utf-8", errors="replace"),
+    )
     try:
         verify_razorpay_signature(
             raw_body=raw_body,
