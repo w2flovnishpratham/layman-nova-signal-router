@@ -1,6 +1,7 @@
 import { Input } from "@/components/ui/input"
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/components/ui/popover'
+import { toast } from '@/components/ui/toast'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -361,6 +362,21 @@ export function ConversationController({
     return () => window.clearInterval(interval)
   }, [checkoutStarted, paperEntitled, refreshPaperEntitlement])
 
+  useEffect(() => {
+    if (!checkoutStarted || paperEntitled) return
+    // Razorpay checkout opens in a new tab -- catch the moment the user
+    // switches back instead of waiting out the polling interval.
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshPaperEntitlement()
+    }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener('focus', refreshWhenVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener('focus', refreshWhenVisible)
+    }
+  }, [checkoutStarted, paperEntitled, refreshPaperEntitlement])
+
   async function startPaperCheckout() {
     setCheckoutPending(true)
     setCheckoutError('')
@@ -458,6 +474,7 @@ export function ConversationController({
     if (!paywallOpen || !paperEntitled) return
     // Payment confirmed while the paywall was open -- retry the start the
     // user already asked for instead of leaving a stale modal up.
+    toast.add({ title: 'Payment confirmed — Nova Paper Premium is active.', type: 'success' })
     setPaywallOpen(false)
     setCheckoutStarted(false)
     void startEngine()
