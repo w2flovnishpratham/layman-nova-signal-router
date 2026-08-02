@@ -1692,24 +1692,16 @@ def submit_manual_response(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, 
     )
 
 
-def _expected_prompt_and_transport_sha(original_content: str) -> tuple[str, str]:
-    _, prompt_sha, _, transport_sha = _prompt_material_v4(_detect_source_type(original_content))
-    return prompt_sha, transport_sha
-
-
 def _approval_integrity(row, original, layer, candidate) -> bool | None:
     if row.status != "approved_for_tv_compile":
         return None
     provenance = ((row.usage_summary or {}).get("provenance") or {})
     if not (original and layer and candidate):
         return False
-    expected_prompt_sha, expected_transport_sha = _expected_prompt_and_transport_sha(original.content)
     return bool(
         _hash(original.content) == row.input_source_sha256 == provenance.get("source_sha256")
         and _hash(layer.content) == provenance.get("strategy_layer_sha256")
         and _hash(candidate.content) == provenance.get("candidate_sha256")
-        and provenance.get("prompt_sha256") == expected_prompt_sha
-        and provenance.get("transport_sha256") == expected_transport_sha
     )
 
 
@@ -1725,13 +1717,15 @@ def approve(admin_id: uuid.UUID, conversion_id: uuid.UUID | str, reason: str | N
         if not report or report.source_sha256 != candidate.content_sha256:
             raise AdminConversionError("Candidate validation is stale.", 409, "VALIDATION_STALE")
         provenance = ((row.usage_summary or {}).get("provenance") or {})
-        expected_prompt_sha, expected_transport_sha = _expected_prompt_and_transport_sha(original.content)
+        # Content self-consistency only: has the source/layer/candidate this
+        # admin is looking at drifted from what was actually converted. Not
+        # checked against today's live prompt/transport files -- a later
+        # prompt wording refinement must not retroactively block approving a
+        # candidate that already passed C1 review under an earlier prompt.
         if not (
             _hash(original.content) == row.input_source_sha256 == provenance.get("source_sha256")
             and layer and _hash(layer.content) == provenance.get("strategy_layer_sha256")
             and _hash(candidate.content) == provenance.get("candidate_sha256")
-            and provenance.get("prompt_sha256") == expected_prompt_sha
-            and provenance.get("transport_sha256") == expected_transport_sha
         ):
             raise AdminConversionError("Candidate SHA provenance changed.", 409, "CANDIDATE_SHA_MISMATCH")
         binding = {

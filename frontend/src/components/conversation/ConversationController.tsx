@@ -659,6 +659,27 @@ export function ConversationController({
                 {pending === 'starting' ? 'Starting…' : mode === 'live' ? 'Start Live' : 'Start Paper'}
               </Button>
             )}
+            {setupSaved ? (
+              <Button variant="unstyled"
+                type="button"
+                className="conv-pill"
+                disabled={pending !== 'idle'}
+                onClick={() => {
+                  userInteractedRef.current = true
+                  restoredRevisionRef.current = null
+                  setDirty(true)
+                  setSaved(false)
+                  setLiveAcknowledged(false)
+                  setFreshStartFlag(runtime?.owner_user_id)
+                  // Same full reset as "Start New Setup" — back to Step 1
+                  // (Choose Mode) so Paper/Live can be picked again. Nothing
+                  // here mutates the backend saved config.
+                  conv.reset()
+                }}
+              >
+                Reconfigure
+              </Button>
+            ) : null}
             {setupSaved ? <span className="conv-saved-badge"><Check size={14} /> Setup saved</span> : null}
           </div>
         </div>

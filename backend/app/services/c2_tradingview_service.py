@@ -21,8 +21,6 @@ from app.db import crud, models
 from app.db.engine import session_scope
 from app.services import admin_pine_conversion_service as c1
 from app.services import personal_pine_service as pine
-from app.services import pine_conversion_service as frozen
-from app.services import pine_validation
 from app.services.untrusted_text_sanitizer import sanitize_untrusted_operator_text
 
 SELF = "SELF"
@@ -180,20 +178,21 @@ def _approved_context(
         review_binding = json.loads(review.notes) if review and review.notes else {}
     except (TypeError, ValueError):
         review_binding = {}
-    source_type = pine_validation.detect_source_type(source.content) if source is not None else "INDICATOR"
-    expected_prompt_sha, expected_transport_sha = (
-        c1._expected_prompt_and_transport_sha(source.content) if source is not None else (None, None)
-    )
+    # Bind to what THIS conversion's own provenance recorded at conversion
+    # time, not to whichever prompt/transport is live today -- a later
+    # prompt wording refinement must not retroactively invalidate an
+    # approval that already passed C1 review. approval/review_binding are
+    # still cross-checked for agreement with provenance below, which
+    # continues to guard against tampering between the three recording
+    # points.
     expected = {
         "source_sha256": conversion.input_source_sha256,
         "strategy_layer_sha256": layer.content_sha256 if layer else None,
         "candidate_sha256": candidate.content_sha256 if candidate else None,
-        "prompt_version": "v4.1",
-        "prompt_sha256": expected_prompt_sha,
-        "transport_version": (
-            frozen.TRANSPORT_V3_STRATEGY_FILL_VERSION if source_type == "STRATEGY" else frozen.TRANSPORT_V2_VERSION
-        ),
-        "transport_sha256": expected_transport_sha,
+        "prompt_version": provenance.get("prompt_version"),
+        "prompt_sha256": provenance.get("prompt_sha256"),
+        "transport_version": provenance.get("transport_version"),
+        "transport_sha256": provenance.get("transport_sha256"),
     }
     binding_keys = tuple(expected)
     valid = bool(
@@ -205,7 +204,7 @@ def _approved_context(
         and layer is not None
         and report is not None
         and review is not None
-        and conversion.prompt_version == "v4.1"
+        and conversion.prompt_version == provenance.get("prompt_version")
         and summary.get("review_status") == "APPROVED_FOR_TRADINGVIEW_COMPILE"
         and candidate_version.source_sha256 == candidate.content_sha256 == _hash(candidate.content)
         and layer.content_sha256 == _hash(layer.content)

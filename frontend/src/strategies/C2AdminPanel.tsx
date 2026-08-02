@@ -41,6 +41,7 @@ export function C2AdminPanel({ conversion }: { conversion: AdminPineConversion }
   const [compileNotes, setCompileNotes] = useState('')
   const [compilerError, setCompilerError] = useState('')
   const [selectedId, setSelectedId] = useState('')
+  const [search, setSearch] = useState('')
   const [issued, setIssued] = useState<C2IssuedCredential | null>(null)
   const [revealed, setRevealed] = useState(false)
   const [busy, setBusy] = useState('')
@@ -174,7 +175,10 @@ export function C2AdminPanel({ conversion }: { conversion: AdminPineConversion }
 
           {installations.length ? (
             <div className="pine-managed-grid">
-              <aside className="ps-list">{installations.map((item) => <Button variant="unstyled" type="button" className={`ps-list-item${selectedId === item.id ? ' active' : ''}`} key={item.id} onClick={() => setSelectedId(item.id)}><strong>{item.instance_label}</strong><span>{item.mode} · {item.status.replaceAll('_', ' ')}</span><span>{item.credential_status} · HOLD {item.hold_status}</span></Button>)}</aside>
+              <aside className="ps-list">
+                <div className="ps-list-toolbar"><Input variant="unstyled" aria-label="Search installations" placeholder="Search installations…" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+                {installations.filter((item) => item.instance_label.toLowerCase().includes(search.toLowerCase())).map((item) => <Button variant="unstyled" type="button" className={`ps-list-item${selectedId === item.id ? ' active' : ''}`} key={item.id} onClick={() => setSelectedId(item.id)}><strong>{item.instance_label}</strong><span>{item.mode} · {item.status.replaceAll('_', ' ')}</span><span>{item.credential_status} · HOLD {item.hold_status}</span></Button>)}
+              </aside>
               {selected ? <div className="pine-managed-detail">
                 <p><strong>Owner:</strong> {selected.owner_user_id}</p>
                 <p><strong>Instance:</strong> {selected.strategy_instance_id}</p>

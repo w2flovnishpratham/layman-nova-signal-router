@@ -122,8 +122,9 @@ def _deactivate_selected_builtin(user) -> None:
     if not database_configured():
         return
     selected = strategy_instance_service.get_engine_selection(user.id).get("selected")
-    if selected and selected.get("source_type") == "NOVA_SHARED" and selected.get("strategy_code") == "supertrend":
-        strategy_fanout.set_subscription_active(user.id, "supertrend", False)
+    shared_strategy_code = str(selected.get("strategy_code") or "").strip() if selected else ""
+    if selected and selected.get("source_type") == "NOVA_SHARED" and shared_strategy_code:
+        strategy_fanout.set_subscription_active(user.id, shared_strategy_code, False)
 
 
 def _pause_selected_personal(user, *, reason: str) -> None:
@@ -710,11 +711,12 @@ def _runtime_start_selected_once(
                 lots=int(saved_setup["lots"]),
             )
         elif selected.get("source_type") == "NOVA_SHARED":
-            if selected.get("strategy_code") != "supertrend":
+            shared_strategy_code = str(selected.get("strategy_code") or "").strip()
+            if not shared_strategy_code:
                 raise ValueError("The selected built-in strategy has no supported execution adapter.")
             strategy_fanout.subscribe_user(
                 user.id,
-                "supertrend",
+                shared_strategy_code,
                 lots=int(saved_setup["lots"]),
                 execution_mode="paper_live_data" if body.mode == "paper" else "real_orders",
             )
