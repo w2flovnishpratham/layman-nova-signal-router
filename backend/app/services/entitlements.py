@@ -198,6 +198,21 @@ def require_strategy_entitlement(db, user_id: uuid.UUID | str, now: datetime | N
     return result
 
 
+def has_paper_entitlement(db, user_id: uuid.UUID | str) -> bool:
+    """paper_trading_enabled is a one-time, non-expiring grant (unlike the
+    monthly live/static-IP/strategy bundle above), so it is read directly off
+    the latest entitlement row rather than gated behind evaluate_entitlement's
+    shared status/expiry -- an unrelated monthly subscription lapsing must
+    never revoke a separately-paid, permanent paper unlock."""
+    entitlement = get_user_entitlement(db, user_id)
+    return bool(entitlement and entitlement.paper_trading_enabled)
+
+
+def require_paper_entitlement(db, user_id: uuid.UUID | str) -> None:
+    if not has_paper_entitlement(db, user_id):
+        raise EntitlementError("Paper trading entitlement required.")
+
+
 def has_live_entitlement_for_user(user_id: uuid.UUID | str, now: datetime | None = None) -> bool:
     if not database_configured():
         return False
@@ -265,3 +280,25 @@ def require_strategy_entitlement_for_user(
             return require_strategy_entitlement(db, user_id, now=now)
     except Exception as exc:
         raise EntitlementError("Strategy entitlement is required.") from exc
+
+
+def has_paper_entitlement_for_user(user_id: uuid.UUID | str) -> bool:
+    if not database_configured():
+        return False
+    try:
+        with session_scope() as db:
+            return has_paper_entitlement(db, user_id)
+    except Exception:
+        return False
+
+
+def require_paper_entitlement_for_user(user_id: uuid.UUID | str) -> None:
+    if not database_configured():
+        raise EntitlementError("Paper trading entitlement is required.")
+    try:
+        with session_scope() as db:
+            require_paper_entitlement(db, user_id)
+    except EntitlementError:
+        raise
+    except Exception as exc:
+        raise EntitlementError("Paper trading entitlement is required.") from exc

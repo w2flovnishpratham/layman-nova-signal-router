@@ -329,6 +329,9 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_SECRET: str = ""
     RAZORPAY_WEBHOOK_SECRET: str = ""
     RAZORPAY_PLAN_PREMIUM_MONTHLY: str = ""
+    # One-time purchase gating paper-mode engine start (independent of the
+    # live/static-IP/strategy-access bundle above).
+    RAZORPAY_PLAN_PAPER_PREMIUM: str = ""
     # Deprecated split-plan IDs retained only for legacy webhook compatibility.
     # New checkout creation uses RAZORPAY_PLAN_PREMIUM_MONTHLY.
     RAZORPAY_PLAN_LIVE_MONTHLY: str = ""

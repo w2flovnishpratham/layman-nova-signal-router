@@ -37,7 +37,7 @@ export interface EgressOptionsResponse {
   egress: EgressStatus
 }
 
-export type RazorpayPlanCode = 'premium_monthly'
+export type RazorpayPlanCode = 'premium_monthly' | 'paper_premium'
 
 export interface RazorpayCheckoutResponse {
   ok: boolean
@@ -59,6 +59,7 @@ export interface PaymentEntitlementStatus {
   live_orders_enabled: boolean
   static_ip_enabled: boolean
   strategy_access_enabled: boolean
+  paper_trading_enabled: boolean
   max_strategy_count: number | null
 }
 

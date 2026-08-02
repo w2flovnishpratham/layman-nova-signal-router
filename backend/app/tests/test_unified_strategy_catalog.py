@@ -236,6 +236,7 @@ def test_builtin_explicit_start_uses_supertrend_adapter(mu_db, runtime, monkeypa
     current = current_user_from_model(user)
     calls: list[tuple[str, int, str]] = []
     monkeypatch.setattr(engine, "_execution_user", lambda: current)
+    monkeypatch.setattr(engine.entitlements, "require_paper_entitlement_for_user", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         engine.runtime_reliability,
         "runtime_status",

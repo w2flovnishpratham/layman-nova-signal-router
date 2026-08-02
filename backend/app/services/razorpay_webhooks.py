@@ -63,6 +63,7 @@ class PlanFeatures:
     live_orders_enabled: bool = False
     static_ip_enabled: bool = False
     strategy_access_enabled: bool = False
+    paper_trading_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -322,6 +323,14 @@ def _features_for_plan(plan_id: str | None) -> PlanFeatures | None:
     if not normalized:
         return None
 
+    paper_plan_id = _safe_string(settings.RAZORPAY_PLAN_PAPER_PREMIUM)
+    if paper_plan_id and normalized == paper_plan_id:
+        return PlanFeatures(
+            plan_id=normalized,
+            plan_code="razorpay_paper_premium",
+            paper_trading_enabled=True,
+        )
+
     premium_plan_ids = _premium_plan_ids()
     if normalized in premium_plan_ids:
         return PlanFeatures(
@@ -478,6 +487,7 @@ def _activate_entitlement(
             live_orders_enabled=plan_features.live_orders_enabled,
             static_ip_enabled=plan_features.static_ip_enabled,
             strategy_access_enabled=plan_features.strategy_access_enabled,
+            paper_trading_enabled=plan_features.paper_trading_enabled,
             max_strategy_count=None,
             metadata_json=metadata,
             created_at=now,
@@ -495,6 +505,9 @@ def _activate_entitlement(
     entitlement.static_ip_enabled = bool(entitlement.static_ip_enabled or plan_features.static_ip_enabled)
     entitlement.strategy_access_enabled = bool(
         entitlement.strategy_access_enabled or plan_features.strategy_access_enabled
+    )
+    entitlement.paper_trading_enabled = bool(
+        entitlement.paper_trading_enabled or plan_features.paper_trading_enabled
     )
     entitlement.metadata_json = metadata
     entitlement.updated_at = now
@@ -521,6 +534,7 @@ def _revoke_entitlement(
             live_orders_enabled=False,
             static_ip_enabled=False,
             strategy_access_enabled=False,
+            paper_trading_enabled=False,
             max_strategy_count=None,
             metadata_json=metadata,
             created_at=now,
@@ -537,9 +551,17 @@ def _revoke_entitlement(
     entitlement.status = status
     entitlement.plan_code = _merge_plan_codes(entitlement.plan_code, plan_features.plan_code)
     entitlement.expires_at = now
-    entitlement.live_orders_enabled = False
-    entitlement.static_ip_enabled = False
-    entitlement.strategy_access_enabled = False
+    # Only clear what THIS plan actually grants -- paper_trading_enabled is a
+    # separate one-time purchase and must survive an unrelated live/static-IP/
+    # strategy-access subscription lapsing (and vice versa).
+    if plan_features.live_orders_enabled:
+        entitlement.live_orders_enabled = False
+    if plan_features.static_ip_enabled:
+        entitlement.static_ip_enabled = False
+    if plan_features.strategy_access_enabled:
+        entitlement.strategy_access_enabled = False
+    if plan_features.paper_trading_enabled:
+        entitlement.paper_trading_enabled = False
     entitlement.metadata_json = metadata
     entitlement.updated_at = now
 

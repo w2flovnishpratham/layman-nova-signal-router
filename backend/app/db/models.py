@@ -474,6 +474,7 @@ class UserEntitlement(Base):
     live_orders_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     static_ip_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     strategy_access_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    paper_trading_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     max_strategy_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Safe operational metadata only. Do not store raw provider payloads,
     # secrets, or full PII in this JSON field.

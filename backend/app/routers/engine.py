@@ -14,6 +14,7 @@ from app.db.engine import database_configured, session_scope
 from app.routers.setup import setup_readiness, setup_status_payload
 from app.services import (
     engine_start_operations,
+    entitlements,
     live_engine,
     runtime_reliability,
     setup_configuration,
@@ -664,6 +665,17 @@ def _runtime_start_selected_once(
                 "reason": "CONFLICTING_POSITION_OPERATION",
             },
         )
+    if body.mode == "paper":
+        try:
+            entitlements.require_paper_entitlement_for_user(user.id)
+        except entitlements.EntitlementError as exc:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "Paper trading requires the Nova Paper Premium one-time purchase.",
+                    "reason": "PAPER_ENTITLEMENT_REQUIRED",
+                },
+            ) from exc
     if body.mode == "live":
         readiness = live_engine.evaluate_live_readiness(
             user,

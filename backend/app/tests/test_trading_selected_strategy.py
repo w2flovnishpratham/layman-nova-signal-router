@@ -93,6 +93,7 @@ def test_selected_paper_engine_starts_only_after_explicit_endpoint_call(monkeypa
         "engine": {"state": "RUNNING", "mode": "paper"},
     }
     monkeypatch.setattr(engine, "_execution_user", lambda: user)
+    monkeypatch.setattr(engine.entitlements, "require_paper_entitlement_for_user", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         strategy_instance_service,
         "require_selected_engine_strategy",
@@ -157,6 +158,53 @@ def test_selected_paper_engine_starts_only_after_explicit_endpoint_call(monkeypa
     assert started[0].engine_mode == "paper"
     assert started[0].confirm_live_orders is False
     assert deactivated == [("supertrend", False)]
+
+
+def test_selected_paper_engine_start_requires_paper_entitlement(monkeypatch):
+    user = dev_user()
+    selected = {
+        "instance_id": "selected-owner-instance",
+        "selectable": True,
+        "paper_eligible": True,
+        "source_type": "PERSONAL_TRADINGVIEW",
+        "strategy_version_id": STRATEGY_VERSION_ID,
+    }
+    monkeypatch.setattr(engine, "_execution_user", lambda: user)
+    monkeypatch.setattr(
+        strategy_instance_service,
+        "require_selected_engine_strategy",
+        lambda user_id: selected,
+    )
+    monkeypatch.setattr(
+        engine.strategy_catalog_service,
+        "apply_selected_setup",
+        lambda user_id, current: {
+            "direction": "BOTH",
+            "lots": 1,
+            "stop_loss_percent": 10,
+            "take_profit_percent": 20,
+        },
+    )
+    monkeypatch.setattr(engine.runtime_reliability, "runtime_status", lambda current: _runtime())
+    monkeypatch.setattr(
+        engine.setup_configuration,
+        "get_configuration",
+        lambda *_args: _configuration("selected-owner-instance"),
+    )
+    monkeypatch.setattr(
+        engine.setup_configuration,
+        "selected_configuration",
+        lambda *_args: _configuration("selected-owner-instance"),
+    )
+    # Deliberately no bypass for entitlements.require_paper_entitlement_for_user
+    # -- no DB is configured in this unit-test context, so it fails closed,
+    # which is exactly the behavior a real unpaid user should see too.
+
+    with pytest.raises(HTTPException) as excinfo:
+        engine._runtime_start_selected_once(_request("selected-owner-instance"), user)
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail["reason"] == "PAPER_ENTITLEMENT_REQUIRED"
 
 
 def test_selected_engine_start_fails_closed_when_selection_is_not_ready(monkeypatch):

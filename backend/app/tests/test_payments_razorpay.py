@@ -22,6 +22,7 @@ PREMIUM_PLAN = "plan_premium_monthly"
 LIVE_PLAN = "plan_live_monthly"
 STATIC_PLAN = "plan_static_ip_monthly"
 STRATEGY_PLAN = "plan_strategy_monthly"
+PAPER_PLAN = "plan_paper_premium"
 NOW = datetime.now(timezone.utc)
 PERIOD_START = int((NOW - timedelta(days=1)).timestamp())
 PERIOD_END = int((NOW + timedelta(days=30)).timestamp())
@@ -35,6 +36,7 @@ def razorpay_env(mu_db, monkeypatch):
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_LIVE_MONTHLY", LIVE_PLAN, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_STATIC_IP_MONTHLY", STATIC_PLAN, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_STRATEGY_MONTHLY", STRATEGY_PLAN, raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_PLAN_PAPER_PREMIUM", PAPER_PLAN, raising=False)
 
 
 def _client() -> TestClient:
@@ -163,6 +165,7 @@ def _latest_entitlement(user_id):
             "live_orders_enabled": row.live_orders_enabled,
             "static_ip_enabled": row.static_ip_enabled,
             "strategy_access_enabled": row.strategy_access_enabled,
+            "paper_trading_enabled": row.paper_trading_enabled,
             "metadata": row.metadata_json,
         }
 
@@ -357,6 +360,63 @@ def test_subscription_activated_premium_plan_grants_all_entitlements(razorpay_en
     assert entitlement["static_ip_enabled"] is True
     assert entitlement["strategy_access_enabled"] is True
     assert entitlement["expires_at"] is not None
+
+
+def test_subscription_activated_paper_plan_grants_only_paper_trading(razorpay_env):
+    user = make_user("razorpay-paper-plan@example.com")
+
+    response = _post_signed(
+        _client(),
+        _subscription_payload(user.id, event="subscription.activated", plan_id=PAPER_PLAN),
+        event_id="evt_activate_paper",
+    )
+
+    assert response.status_code == 200
+    entitlement = _latest_entitlement(user.id)
+    assert entitlement is not None
+    assert entitlement["status"] == "active"
+    assert entitlement["plan_code"] == "razorpay_paper_premium"
+    assert entitlement["paper_trading_enabled"] is True
+    assert entitlement["live_orders_enabled"] is False
+    assert entitlement["static_ip_enabled"] is False
+    assert entitlement["strategy_access_enabled"] is False
+
+
+def test_live_plan_cancellation_does_not_revoke_a_separately_purchased_paper_entitlement(razorpay_env):
+    """The exact real-world scenario this survives-unrelated-revoke logic
+    exists for: a user buys Nova Paper Premium once, later subscribes to
+    Nova Premium Live Monthly, then lets the live subscription lapse. The
+    one-time paper purchase must not be swept away by the live plan's own
+    cancellation webhook."""
+    user = make_user("razorpay-paper-survives-live-cancel@example.com")
+    client = _client()
+    assert _post_signed(
+        client,
+        _subscription_payload(user.id, event="subscription.activated", plan_id=PAPER_PLAN),
+        event_id="evt_paper_before_live_cancel",
+    ).status_code == 200
+    assert _post_signed(
+        client,
+        _subscription_payload(user.id, event="subscription.activated", plan_id=LIVE_PLAN),
+        event_id="evt_live_before_cancel",
+    ).status_code == 200
+
+    response = _post_signed(
+        client,
+        _subscription_payload(
+            user.id,
+            event="subscription.cancelled",
+            plan_id=LIVE_PLAN,
+            subscription_status="cancelled",
+        ),
+        event_id="evt_live_cancel_after_paper",
+    )
+
+    assert response.status_code == 200
+    entitlement = _latest_entitlement(user.id)
+    assert entitlement is not None
+    assert entitlement["live_orders_enabled"] is False
+    assert entitlement["paper_trading_enabled"] is True
 
 
 def test_premium_activation_over_legacy_split_plan_row_uses_short_canonical_code(razorpay_env):
