@@ -41,6 +41,16 @@ function sourceLabel(strategy: EngineStrategy): string {
   return strategy.source_type === 'NOVA_SHARED' ? 'NOVA built-in' : 'Imported'
 }
 
+function paperReadinessText(strategy: EngineStrategy): string {
+  // A live-configured instance is selectable and has no blocking_reason of
+  // its own -- it just isn't the Paper one. blockerText(null) alone would
+  // read as a generic "Not ready yet", which is misleading here.
+  if (strategy.selectable && !strategy.paper_eligible && strategy.live_eligible) {
+    return 'This instance is set to Live — select or switch to a Paper instance'
+  }
+  return blockerText(strategy.blocking_reason)
+}
+
 export function TradingStrategyCard({
   runtime,
   loading,
@@ -228,7 +238,7 @@ export function TradingStrategyCard({
           </p>
         </div>
         <span className={`trading-readiness ${ready ? 'ready' : 'blocked'}`}>
-          {ready ? 'Ready for Paper' : blockerText(selected.blocking_reason)}
+          {ready ? 'Ready for Paper' : paperReadinessText(selected)}
         </span>
       </header>
 
@@ -243,7 +253,7 @@ export function TradingStrategyCard({
       {!ready ? (
         <div className="trading-strategy-warning" role="status">
           <AlertTriangle size={15} />
-          <span>{blockerText(selected.blocking_reason)}. This selection will not start.</span>
+          <span>{paperReadinessText(selected)}. This selection will not start.</span>
         </div>
       ) : null}
       {switchingBlocked ? (

@@ -1700,7 +1700,7 @@ export interface EngineStrategy {
   mode: 'paper' | 'live'
   execution_mode: string
   paper_eligible: boolean
-  live_eligible: false
+  live_eligible: boolean
   readiness: Record<string, boolean> | null
   lots: number
   credential_status: 'active' | 'revoked' | 'missing' | 'not_required'
