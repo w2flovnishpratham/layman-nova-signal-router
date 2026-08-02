@@ -1125,6 +1125,7 @@ def list_engine_strategies(user_id: uuid.UUID) -> dict[str, Any]:
             .where(
                 models.StrategyInstance.user_id == user_id,
                 models.StrategyInstance.status != InstanceState.ARCHIVED.value,
+                models.StrategyCatalog.code != "supertrend",
             )
             .order_by(models.StrategyInstance.created_at.desc())
         )
@@ -1134,7 +1135,9 @@ def list_engine_strategies(user_id: uuid.UUID) -> dict[str, Any]:
             entry = _engine_entry(db, row, decorated, selectable, blocking)
             entry["selected"] = selection is not None and str(row.id) == str(selection)
             strategies.append(entry)
-        return {"strategies": strategies, "selected_instance_id": str(selection) if selection else None}
+        visible_ids = {strategy["instance_id"] for strategy in strategies}
+        selected_id = str(selection) if selection and str(selection) in visible_ids else None
+        return {"strategies": strategies, "selected_instance_id": selected_id}
 
 
 # ---------------------------------------------------------------------------

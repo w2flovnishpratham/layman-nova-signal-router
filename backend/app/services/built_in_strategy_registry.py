@@ -51,21 +51,9 @@ def _standard_setup_schema() -> dict[str, Any]:
     }
 
 
-_BUILT_INS: tuple[dict[str, Any], ...] = (
-    {
-        "strategy_key": "nova-supertrend",
-        "catalog_code": "supertrend",
-        "name": "Supertrend",
-        "version": "1.0.0",
-        "description": "NOVA built-in NIFTY Supertrend strategy.",
-        "availability": "READY",
-        "disabled_reason": None,
-        "paper_eligible": True,
-        "live_eligible": True,
-        "execution_adapter": "strategy_webhook:supertrend",
-        "setup_schema": _standard_setup_schema(),
-    },
-)
+# User-visible strategies come only from admin-published NOVA_SHARED rows.
+_BUILT_INS: tuple[dict[str, Any], ...] = ()
+_RETIRED_CODES = {"supertrend"}
 
 
 def _live_nova_shared_entries() -> list[dict[str, Any]]:
@@ -101,6 +89,7 @@ def _live_nova_shared_entries() -> list[dict[str, Any]]:
                 )
                 .where(
                     models.StrategyCatalog.owner_user_id.is_(None),
+                    models.StrategyCatalog.code.not_in(_RETIRED_CODES),
                     models.StrategyCatalog.visibility == "nova_shared",
                     models.StrategyCatalog.status == "active",
                     models.StrategyVersion.status == "approved",
