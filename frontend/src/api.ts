@@ -1269,6 +1269,7 @@ export interface AdminPineConversion {
   transport_source?: string | null
   diff?: AdminPineDiffLine[]
   approval_integrity?: boolean | null
+  broadcast_pine?: string | null
 }
 
 export interface OwnerClaudeConversionConfig {

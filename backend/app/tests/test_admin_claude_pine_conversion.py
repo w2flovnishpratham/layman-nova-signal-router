@@ -315,6 +315,13 @@ def test_approved_candidate_can_be_published_and_appears_ready_in_registry(mu_db
     assert refetched["catalog_code"] == "bollinger-squeeze"
     assert refetched["webhook_path"] == "/api/webhook/strategy/bollinger-squeeze"
 
+    # Same for the actual broadcast script -- an admin who reopens the
+    # conversion (not just the tab that had the fresh publish response) must
+    # still be able to get the correct, secret-swapped Pine, not fall back to
+    # copying the pre-swap "Exact original source" panel which still has
+    # REPLACE_WITH_PRIVATE_CREDENTIAL in it.
+    assert refetched["broadcast_pine"] == broadcast_pine
+
     # The shared webhook validator now accepts this newly published code too.
     signal = NormalizedSignal(
         payload_format="NOVA",

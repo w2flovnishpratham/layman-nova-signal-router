@@ -309,11 +309,11 @@ function ConversionDetail({
         </div>
       </div>
     ) : null}
-    {broadcastPine ? (
+    {broadcastPine || conversion.broadcast_pine ? (
       <details open className="c1-transport">
         <summary>Broadcast-ready Pine (paste onto the admin-run chart)</summary>
-        <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(broadcastPine)}><Copy size={14} /> Copy again</Button>
-        <pre>{broadcastPine}</pre>
+        <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(broadcastPine || conversion.broadcast_pine || '')}><Copy size={14} /> Copy again</Button>
+        <pre>{broadcastPine || conversion.broadcast_pine}</pre>
       </details>
     ) : null}
     <C2AdminPanel conversion={conversion} />

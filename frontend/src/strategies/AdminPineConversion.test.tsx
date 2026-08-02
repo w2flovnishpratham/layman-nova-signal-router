@@ -268,4 +268,17 @@ describe('AdminPineConversionWorkspace', () => {
     expect(await screen.findByText(/api\/webhook\/strategy\/orb/)).toBeInTheDocument()
     expect(screen.getByText(/Published as "orb"/)).toBeInTheDocument()
   })
+
+  it('shows the broadcast Pine and webhook URL for a published conversion reopened cold, with no publish click in this session', async () => {
+    const published = {
+      ...ready, conversion_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE', review_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE',
+      catalog_code: 'orb', webhook_path: '/api/webhook/strategy/orb', broadcast_pine: `${LAYER}\n// broadcast transport with REPLACE_WITH_NOVA_MANAGED_SECRET\n`,
+    }
+    api.list.mockResolvedValue([published])
+    api.get.mockResolvedValue(published)
+    render(<AdminPineConversionWorkspace />)
+    await screen.findAllByText('Legend MACD')
+    expect(await screen.findByText(/api\/webhook\/strategy\/orb/)).toBeInTheDocument()
+    expect(screen.getByText(/REPLACE_WITH_NOVA_MANAGED_SECRET/)).toBeInTheDocument()
+  })
 })

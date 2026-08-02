@@ -823,6 +823,19 @@ def _public(db, row: models.PineConversionRequest, *, include_source: bool) -> d
         result["diff"] = _diff(original.content, candidate.content) if candidate else []
         result["approval_integrity"] = _approval_integrity(row, original, layer, candidate)
         result["backtest_layer"] = summary.get("backtest_layer")
+        # Recomputed on every fetch, same as approval_integrity above -- the
+        # broadcast script must survive a page reload, not just the one-time
+        # publish response, or an admin reopening a published conversion has
+        # no way to get back the actual install-ready Pine.
+        if strategy and strategy.visibility == "nova_shared" and candidate:
+            try:
+                result["broadcast_pine"] = _swap_to_broadcast_transport(
+                    candidate.content, _detect_source_type(original.content)
+                )
+            except AdminConversionError:
+                result["broadcast_pine"] = None
+        else:
+            result["broadcast_pine"] = None
     return result
 
 
