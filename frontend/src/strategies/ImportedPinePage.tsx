@@ -3,7 +3,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Button } from '@/components/ui/button'
 import { AlertTriangle, Check, Copy, Download, FileCode2, Loader2, Plus, Shield, Sparkles, Trash2, Upload, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from '@/components/ui/toast'
 import {
   acceptPineConversion,
@@ -11,7 +11,6 @@ import {
   createPineStrategy,
   createPineVersion,
   createTradingViewSetup,
-  decidePineReview,
   deletePineStrategy,
   generateManagedTradingViewCredential,
   generatePineConversionPackage,
@@ -20,7 +19,6 @@ import {
   getPineConversionConfig,
   getOwnerClaudeConversion,
   getOwnerClaudeConversionConfig,
-  getPineReview,
   getPineSource,
   getPineStrategy,
   getTradingViewSetup,
@@ -28,7 +26,6 @@ import {
   listManagedTradingViewSetups,
   listPineConversions,
   listOwnerClaudeConversions,
-  listPineReviews,
   listPineStrategies,
   listStrategyInstances,
   rejectPineConversion,
@@ -41,7 +38,6 @@ import {
   type PineConversionConfig,
   type AdminPineConversion,
   type OwnerClaudeConversionConfig,
-  type PineReview,
   type PineStrategy,
   type PineVersion,
   type StrategyInstance,
@@ -496,32 +492,8 @@ function ConversionReview({ conversion, busy, onAccept, onReject, onRetry }: { c
   return <section className="ps-card pine-conversion-review"><div className="ps-card-head"><div><span>{conversion.provider} · {conversion.model} · prompt {conversion.prompt_version}</span><h2>Conversion candidate</h2></div><span className="ps-status">{conversion.status}</span></div>{pending ? <div className="ps-page-state"><Loader2 className="ps-spin" size={20} /> Conversion is processing in the durable queue.</div> : null}{conversion.safe_error_code ? <div className="ps-message error" role="alert">Conversion failed safely: {conversion.safe_error_code.replaceAll('_', ' ').toLowerCase()}</div> : null}{conversion.candidate_source ? <><div className="pine-diff"><div><strong>Original source</strong><pre>{conversion.original_source}</pre></div><div><strong>Converted candidate</strong><pre>{conversion.candidate_source}</pre></div></div><div className="pine-conversion-meta"><p><strong>Summary:</strong> {conversion.conversion_summary}</p><p><strong>Assumptions:</strong> {conversion.assumptions.join('; ') || 'None reported'}</p><p><strong>Unsupported/removed:</strong> {conversion.unsupported_features.join('; ') || 'None reported'}</p><p><strong>AI warnings:</strong> {conversion.warnings.join('; ') || 'None reported'}</p><p><strong>Deterministic validation:</strong> {conversion.validation?.eligible_for_review ? 'Eligible for review' : 'Blocking findings remain'}</p></div><div className="ps-actions">{conversion.status === 'succeeded' ? <Button variant="unstyled" className="ps-primary" type="button" disabled={!!busy} onClick={() => void onAccept()}><Check size={14} /> Accept as new version</Button> : null}{['succeeded', 'validation_failed'].includes(conversion.status) ? <Button variant="unstyled" className="ps-danger" type="button" disabled={!!busy} onClick={() => void onReject()}><X size={14} /> Reject candidate</Button> : null}</div></> : null}{['provider_failed', 'canceled'].includes(conversion.status) ? <Button variant="unstyled" className="secondary-button" type="button" disabled={!!busy} onClick={() => void onRetry()}><Sparkles size={14} /> Request another conversion</Button> : null}</section>
 }
 
-function AdminReview() {
-  const [queue, setQueue] = useState<PineReview[]>([])
-  const [selected, setSelected] = useState<PineReview | null>(null)
-  const [note, setNote] = useState('')
-  const [acknowledge, setAcknowledge] = useState(false)
-  const [error, setError] = useState('')
-  const refresh = useCallback(async () => setQueue(await listPineReviews()), [])
-  useEffect(() => { listPineReviews().then(setQueue).catch((reason) => setError(messageOf(reason))) }, [])
-  const lines = useMemo(() => selected?.source?.split('\n') ?? [], [selected])
-  async function open(id: string) { try { setSelected(await getPineReview(id)); setError('') } catch (reason) { setError(messageOf(reason)) } }
-  async function decide(action: 'start' | 'approve' | 'request-changes' | 'reject') {
-    if (!selected) return
-    try {
-      await decidePineReview(selected.version.id, action, note, acknowledge)
-      await refresh()
-      await open(selected.version.id)
-      toast.add({ title: 'Review decision saved.', type: 'success' })
-    } catch (reason) {
-      toast.add({ title: messageOf(reason), type: 'error' })
-    }
-  }
-  return <div className="pine-admin-grid"><aside className="ps-list">{queue.map((item) => <Button variant="unstyled" className={`ps-list-item${selected?.version.id === item.version.id ? ' active' : ''}`} type="button" key={item.version.id} onClick={() => void open(item.version.id)}><strong>{item.strategy.name}</strong><span>{item.version.version} · {item.version.status}</span><span>{item.version.validation?.error_count ?? 0} errors · {item.version.validation?.warning_count ?? 0} warnings</span></Button>)}</aside><main className="ps-card">{error ? <div className="ps-message error">{error}</div> : null}{selected ? <><div className="ps-card-head"><div><span>Exact source {selected.version.source_sha256.slice(0, 12)}…</span><h2>{selected.strategy.name} · {selected.version.version}</h2></div><span className="ps-status">{selected.version.status}</span></div>{selected.acceptance ? <div className="pine-acceptance-panel"><strong>User acceptance recorded</strong><span>Prompt {selected.acceptance.prompt_version_id} · {selected.acceptance.setup_type.replaceAll('_', ' ')}</span><span>Validation {selected.acceptance.validation_report_sha256.slice(0, 12)}… · original version {selected.acceptance.original_version_id}</span><span>Accepted {new Date(selected.acceptance.accepted_at).toLocaleString()}</span><span>Assumptions: {selected.acceptance.assumptions.join('; ') || 'None supplied'}</span></div> : <div className="ps-message error">User acceptance evidence is missing. Review actions are blocked.</div>}<pre className="pine-review-source">{lines.map((line, i) => <span key={i}><i>{i + 1}</i>{line}{'\n'}</span>)}</pre><Textarea variant="unstyled" className="pine-review-note" aria-label="Review note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Review note" /><label className="ps-check"><Input variant="unstyled" type="checkbox" checked={acknowledge} onChange={(e) => setAcknowledge(e.target.checked)} />I reviewed and acknowledge all warnings on this exact source hash.</label><div className="ps-actions">{selected.version.status === 'submitted' ? <Button variant="unstyled" className="ps-primary" type="button" disabled={!selected.acceptance} onClick={() => void decide('start')}>Start review</Button> : null}{selected.version.status === 'under_review' ? <><Button variant="unstyled" className="ps-primary" type="button" disabled={!selected.acceptance} onClick={() => void decide('approve')}>Approve</Button><Button variant="unstyled" className="secondary-button" type="button" onClick={() => void decide('request-changes')}>Request changes</Button><Button variant="unstyled" className="ps-danger" type="button" onClick={() => void decide('reject')}>Reject</Button></> : null}</div></> : <div className="ps-empty"><FileCode2 size={28} /><h2>Select a review</h2></div>}</main></div>
-}
-
 function AdminWorkspace() {
-  return <><AdminConsole /><AdminReview /></>
+  return <AdminConsole />
 }
 
 function AdminConsole() {

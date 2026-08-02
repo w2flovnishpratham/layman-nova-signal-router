@@ -1352,6 +1352,26 @@ export interface UnpublishedStrategy {
 export const unpublishAdminPineConversion = async (id: string) =>
   pineCall<UnpublishedStrategy>(`/api/admin/pine-conversions/${id}/unpublish` as `/${string}`, 'POST')
 
+export interface StrategyMetadata {
+  id: string
+  name: string
+  description: string | null
+  visibility: string
+  status: string
+}
+export const updateAdminStrategy = async (strategyId: string, payload: { display_name?: string; description?: string }) =>
+  pineCall<StrategyMetadata>(`/api/admin/strategies/${strategyId}` as `/${string}`, 'PATCH', payload)
+export interface ForceDeletedStrategy {
+  deleted: boolean
+  strategy_id: string
+  instances: number
+  versions: number
+  conversion_requests: number
+  deleted_subscriptions: number
+}
+export const forceDeleteAdminStrategy = async (strategyId: string) =>
+  pineCall<ForceDeletedStrategy>(`/api/admin/strategies/${strategyId}/force-delete` as `/${string}`, 'POST')
+
 export const getOwnerClaudeConversionConfig = () =>
   pineCall<OwnerClaudeConversionConfig>('/api/personal-pine-claude-conversions/config')
 

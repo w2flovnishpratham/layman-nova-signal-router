@@ -16,7 +16,9 @@ from app.auth.dependencies import require_admin
 from app.config import settings
 from app.db import crud, models
 from app.db.engine import database_configured, session_scope
+from app.schemas.personal_pine import UpdateStrategyMetadataPayload
 from app.services import entitlements
+from app.services import personal_pine_service
 from app.services.user_context import CurrentUser
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -209,6 +211,38 @@ def list_all_runs(admin: CurrentUser = Depends(require_admin), limit: int = 200)
                 for r in rows
             ],
         }
+
+
+@router.patch("/strategies/{strategy_id}")
+def update_strategy_metadata(
+    strategy_id: uuid.UUID,
+    payload: UpdateStrategyMetadataPayload,
+    admin: CurrentUser = Depends(require_admin),
+) -> dict:
+    """Rename/redescribe any strategy -- personal or nova_shared. For a
+    published strategy this is visible to every user immediately.
+    """
+    try:
+        return {"ok": True, **personal_pine_service.update_strategy_metadata(
+            admin.id, strategy_id, is_admin=True,
+            display_name=payload.display_name, description=payload.description,
+        )}
+    except personal_pine_service.PineWorkflowError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"message": str(exc), "reason": exc.code}) from exc
+
+
+@router.post("/strategies/{strategy_id}/force-delete")
+def force_delete_strategy(strategy_id: uuid.UUID, admin: CurrentUser = Depends(require_admin)) -> dict:
+    """Permanently delete any strategy -- personal or nova_shared, approved
+    or draft, published or not -- regardless of history. Unlike unpublish
+    (conversion-owner-scoped, reversible), this is any admin, on any
+    strategy, with no undo. Blocked only while an instance is actively
+    running; see force_delete_strategy()'s docstring for the full cascade.
+    """
+    try:
+        return {"ok": True, **personal_pine_service.force_delete_strategy(admin.id, strategy_id, is_admin=True)}
+    except personal_pine_service.PineWorkflowError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"message": str(exc), "reason": exc.code}) from exc
 
 
 @router.get("/health")

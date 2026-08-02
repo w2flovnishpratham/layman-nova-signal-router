@@ -24,3 +24,8 @@ class ReviewNotePayload(BaseModel):
 class LinkPineVersionPayload(BaseModel):
     strategy_id: str
     version_id: str
+
+
+class UpdateStrategyMetadataPayload(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=4000)

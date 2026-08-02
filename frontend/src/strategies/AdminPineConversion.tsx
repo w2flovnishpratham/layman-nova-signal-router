@@ -1,12 +1,13 @@
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from '@/components/ui/button'
-import { useCallback, useEffect, useState } from 'react'
-import { Check, Copy, FileCode2, Loader2, RefreshCcw, Sparkles, Upload, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Check, Copy, FileCode2, Loader2, Pencil, RefreshCcw, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import { toast } from '@/components/ui/toast'
 import { backendHttpUrl } from '../lib/backend'
 import {
   approveAdminPineConversion,
+  forceDeleteAdminStrategy,
   getAdminPineConversion,
   getAdminPineManualPackage,
   listAdminPineConversions,
@@ -17,9 +18,17 @@ import {
   submitAdminPineConversion,
   submitAdminPineManualResponse,
   unpublishAdminPineConversion,
+  updateAdminStrategy,
 } from '../api'
 import type { AdminPineConversion } from '../api'
 import { C2AdminPanel } from './C2AdminPanel'
+
+const QUEUE_FILTERS = [
+  { key: 'all', label: 'All', test: () => true },
+  { key: 'ready', label: 'Ready', test: (s: string) => s === 'READY_FOR_ADMIN_REVIEW' },
+  { key: 'manual', label: 'Manual', test: (s: string) => s === 'MANUAL_CONVERSION_REQUIRED' },
+  { key: 'approved', label: 'Approved', test: (s: string) => s === 'APPROVED_FOR_TRADINGVIEW_COMPILE' },
+] as const
 
 const EMPTY_SOURCE = '//@version=6\nindicator("NIFTY strategy", overlay=true)\n'
 
@@ -38,6 +47,10 @@ export function AdminPineConversionWorkspace() {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
+  const [queueFilter, setQueueFilter] = useState<typeof QUEUE_FILTERS[number]['key']>('all')
+  const [editingStrategyId, setEditingStrategyId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editDescription, setEditDescription] = useState('')
 
   const refresh = useCallback(async (preferredId?: string) => {
     const conversions = await listAdminPineConversions()
@@ -45,6 +58,13 @@ export function AdminPineConversionWorkspace() {
     const id = preferredId ?? selected?.id ?? conversions[0]?.id
     if (id) setSelected(await getAdminPineConversion(id))
   }, [selected?.id])
+
+  const visibleItems = useMemo(() => {
+    const activeFilter = QUEUE_FILTERS.find((f) => f.key === queueFilter) ?? QUEUE_FILTERS[0]
+    return items
+      .filter((item) => item.strategy_name.toLowerCase().includes(search.toLowerCase()))
+      .filter((item) => activeFilter.test(item.conversion_status))
+  }, [items, search, queueFilter])
 
   useEffect(() => {
     let active = true
@@ -83,7 +103,37 @@ export function AdminPineConversionWorkspace() {
 
   async function open(id: string) {
     setManualPackage('')
+    setEditingStrategyId(null)
     await run('Conversion refresh', async () => setSelected(await getAdminPineConversion(id)))
+  }
+
+  function startEdit(item: AdminPineConversion) {
+    setEditingStrategyId(item.strategy_id)
+    setEditName(item.strategy_name)
+    setEditDescription('')
+  }
+
+  async function saveEdit(item: AdminPineConversion) {
+    await run('Strategy rename', async () => {
+      await updateAdminStrategy(item.strategy_id, {
+        display_name: editName.trim(),
+        description: editDescription.trim() || undefined,
+      })
+      setEditingStrategyId(null)
+      await refresh(item.id)
+    }, { loading: 'Saving…', success: 'Strategy updated.' })
+  }
+
+  async function forceDelete(item: AdminPineConversion) {
+    if (!window.confirm(
+      `Permanently delete "${item.strategy_name}"? This removes every version, conversion history, instance, position and signal record — including for other users if this strategy is published. This cannot be undone.`,
+    )) return
+    await run('Strategy deletion', async () => {
+      const result = await forceDeleteAdminStrategy(item.strategy_id)
+      if (selected?.strategy_id === item.strategy_id) setSelected(null)
+      await refresh()
+      toast.add({ title: `Deleted "${item.strategy_name}" permanently (${result.versions} version(s), ${result.deleted_subscriptions} subscriber(s)).`, type: 'success' })
+    })
   }
 
   async function submit() {
@@ -136,7 +186,26 @@ export function AdminPineConversionWorkspace() {
       <div className="c1-conversion-grid">
         <aside className="ps-list" aria-label="Conversion list">
           <div className="ps-list-toolbar"><Input variant="unstyled" aria-label="Search conversions" placeholder="Search conversions…" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
-          {items.length ? items.filter((item) => item.strategy_name.toLowerCase().includes(search.toLowerCase())).map((item) => <Button variant="unstyled" type="button" className={`ps-list-item${selected?.id === item.id ? ' active' : ''}`} key={item.id} onClick={() => void open(item.id)}><strong>{item.strategy_name}</strong><span>Owner {item.owner_user_id.slice(0, 8)} · {item.source_sha256.slice(0, 12)}…</span><span>{item.conversion_status.replaceAll('_', ' ')}</span><span>{item.provider_mode ?? 'No provider used'}</span></Button>) : <div className="ps-empty-small"><FileCode2 size={20} /><strong>No conversion submissions</strong></div>}
+          <div className="c1-list-filters" role="group" aria-label="Filter by status">
+            {QUEUE_FILTERS.map((f) => (
+              <button key={f.key} type="button" className={`c1-filter-pill${queueFilter === f.key ? ' active' : ''}`} onClick={() => setQueueFilter(f.key)}>{f.label}</button>
+            ))}
+          </div>
+          {items.length ? (visibleItems.length ? visibleItems.map((item) => (
+            <div className={`ps-list-item${selected?.id === item.id ? ' active' : ''}`} key={item.id}>
+              <button type="button" className="c1-list-item-main" onClick={() => void open(item.id)}>
+                <strong>{item.strategy_name}</strong>
+                <span>Owner {item.owner_user_id.slice(0, 8)} · {item.source_sha256.slice(0, 12)}…</span>
+                <span>{item.conversion_status.replaceAll('_', ' ')}</span>
+                <span>{item.provider_mode ?? 'No provider used'}</span>
+              </button>
+              <div className="c1-row-actions">
+                <Button variant="unstyled" type="button" className="secondary-button" disabled={!!busy} onClick={() => { void open(item.id); startEdit(item) }}><Pencil size={11} /> Edit</Button>
+                <Button variant="unstyled" type="button" className="ps-danger" disabled={!!busy} onClick={() => void forceDelete(item)}><Trash2 size={11} /> Delete</Button>
+              </div>
+            </div>
+          )) : <div className="ps-empty-small"><FileCode2 size={20} /><strong>No conversions match this filter</strong></div>) : <div className="ps-empty-small"><FileCode2 size={20} /><strong>No conversion submissions</strong></div>}
+          {items.length ? <p className="c1-list-count">{visibleItems.length} of {items.length} shown</p> : null}
         </aside>
         <main className="c1-detail">
           {selected ? <ConversionDetail
@@ -147,6 +216,15 @@ export function AdminPineConversionWorkspace() {
             reviewReason={reviewReason}
             catalogCode={catalogCode}
             broadcastPine={broadcastPine}
+            editing={editingStrategyId === selected.strategy_id}
+            editName={editName}
+            editDescription={editDescription}
+            onStartEdit={() => startEdit(selected)}
+            onCancelEdit={() => setEditingStrategyId(null)}
+            onEditName={setEditName}
+            onEditDescription={setEditDescription}
+            onSaveEdit={() => saveEdit(selected)}
+            onDelete={() => void forceDelete(selected)}
             onManualResponse={setManualResponse}
             onReviewReason={setReviewReason}
             onCatalogCode={setCatalogCode}
@@ -184,7 +262,9 @@ export function AdminPineConversionWorkspace() {
 }
 
 function ConversionDetail({
-  conversion, busy, manualPackage, manualResponse, reviewReason, catalogCode, broadcastPine, onManualResponse, onReviewReason,
+  conversion, busy, manualPackage, manualResponse, reviewReason, catalogCode, broadcastPine,
+  editing, editName, editDescription, onStartEdit, onCancelEdit, onEditName, onEditDescription, onSaveEdit, onDelete,
+  onManualResponse, onReviewReason,
   onCatalogCode, onConvert, onManualPackage, onSubmitManual, onApprove, onReject, onRequestChanges, onPublish, onUnpublish,
 }: {
   conversion: AdminPineConversion
@@ -194,6 +274,15 @@ function ConversionDetail({
   reviewReason: string
   catalogCode: string
   broadcastPine: string
+  editing: boolean
+  editName: string
+  editDescription: string
+  onStartEdit: () => void
+  onCancelEdit: () => void
+  onEditName: (value: string) => void
+  onEditDescription: (value: string) => void
+  onSaveEdit: () => void
+  onDelete: () => void
   onManualResponse: (value: string) => void
   onReviewReason: (value: string) => void
   onCatalogCode: (value: string) => void
@@ -214,7 +303,24 @@ function ConversionDetail({
   const codeValid = /^[a-z][a-z0-9_-]{1,39}$/.test(catalogCode.trim())
   const provenance = conversion.provenance ?? {}
   return <>
-    <div className="ps-card-head"><div><span>{conversion.source_sha256.slice(0, 12)}… · {new Date(conversion.submitted_at ?? '').toLocaleString()}</span><h2>{conversion.strategy_name}</h2></div><span className="ps-status">{conversion.conversion_status.replaceAll('_', ' ')}</span></div>
+    <div className="ps-card-head">
+      <div><span>{conversion.source_sha256.slice(0, 12)}… · {new Date(conversion.submitted_at ?? '').toLocaleString()}</span><h2>{conversion.strategy_name}</h2></div>
+      <div className="c1-detail-head-actions">
+        <span className="ps-status">{conversion.conversion_status.replaceAll('_', ' ')}</span>
+        <Button variant="unstyled" type="button" className="secondary-button" disabled={!!busy} onClick={onStartEdit}><Pencil size={13} /> Edit</Button>
+        <Button variant="unstyled" type="button" className="ps-danger" disabled={!!busy} onClick={onDelete}><Trash2 size={13} /> Delete</Button>
+      </div>
+    </div>
+    {editing ? (
+      <div className="c1-edit-form">
+        <label>Display name<Input variant="unstyled" aria-label="Strategy display name" value={editName} maxLength={160} onChange={(event) => onEditName(event.target.value)} /></label>
+        <label>Description (optional)<Textarea variant="unstyled" aria-label="Strategy description" value={editDescription} maxLength={4000} onChange={(event) => onEditDescription(event.target.value)} /></label>
+        <div className="ps-actions">
+          <Button variant="unstyled" className="ps-primary" type="button" disabled={!editName.trim() || !!busy} onClick={onSaveEdit}><Check size={14} /> Save</Button>
+          <Button variant="unstyled" className="secondary-button" type="button" onClick={onCancelEdit}>Cancel</Button>
+        </div>
+      </div>
+    ) : null}
     {conversion.safe_error_code ? <div className="ps-message error">Safe failure: {conversion.safe_error_code.replaceAll('_', ' ')}</div> : null}
     {!conversion.safe_error_code && conversion.unsupported_features.length > 0 && ['READY_FOR_ADMIN_REVIEW', 'APPROVED_FOR_TRADINGVIEW_COMPILE'].includes(conversion.conversion_status) ? (
       <div className="ps-message warning">

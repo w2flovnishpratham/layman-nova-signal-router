@@ -11,6 +11,7 @@ from app.schemas.personal_pine import (
     CreatePineVersionPayload,
     LinkPineVersionPayload,
     ReviewNotePayload,
+    UpdateStrategyMetadataPayload,
 )
 from app.schemas.tradingview_setup import UserAcceptancePayload
 from app.services import personal_pine_service as service
@@ -70,6 +71,34 @@ def get_strategy(strategy_id: uuid.UUID, user: CurrentUser = Depends(get_current
 def delete_strategy(strategy_id: uuid.UUID, user: CurrentUser = Depends(get_current_user)):
     try:
         return {"ok": True, **service.delete_strategy(user.id, strategy_id)}
+    except Exception as exc:
+        return _error(exc)
+
+
+@router.patch("/{strategy_id}")
+def update_strategy_metadata(
+    strategy_id: uuid.UUID,
+    payload: UpdateStrategyMetadataPayload,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return {"ok": True, **service.update_strategy_metadata(
+            user.id, strategy_id, is_admin=False,
+            display_name=payload.display_name, description=payload.description,
+        )}
+    except Exception as exc:
+        return _error(exc)
+
+
+@router.post("/{strategy_id}/force-delete")
+def force_delete_strategy(strategy_id: uuid.UUID, user: CurrentUser = Depends(get_current_user)):
+    """Permanently delete an owned strategy regardless of approval or
+    instance-linked state -- unlike delete_strategy above, which refuses
+    once anything has ever been approved/linked/submitted. No undo.
+    Blocked only while an instance is actively running.
+    """
+    try:
+        return {"ok": True, **service.force_delete_strategy(user.id, strategy_id, is_admin=False)}
     except Exception as exc:
         return _error(exc)
 

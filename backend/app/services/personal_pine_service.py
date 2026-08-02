@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select, update
 
 from app.config import settings
 from app.db import crud, models
@@ -518,6 +518,274 @@ def delete_strategy(user_id: uuid.UUID, strategy_id):
         _audit(db, user_id, "PERSONAL_PINE_STRATEGY_DELETED", strategy_id=str(strategy.id))
         db.delete(strategy)
         return {"deleted": True, "strategy_id": str(strategy.id)}
+
+
+def force_delete_strategy(
+    actor_id: uuid.UUID,
+    strategy_id: uuid.UUID | str,
+    *,
+    is_admin: bool,
+) -> dict[str, Any]:
+    """Permanently delete a strategy and everything under it -- approved
+    versions, publish/review history, conversion requests, compile
+    evidence, instances, positions, signals -- regardless of state. No
+    undo, unlike unpublish_shared(). An admin may force-delete any
+    strategy (personal or nova_shared); a non-admin may only force-delete
+    their own personal strategy.
+
+    The one guardrail this keeps: a strategy with a currently RUNNING
+    engine instance cannot be force-deleted out from under it (would risk
+    an orphaned broker position with no NOVA record left to reconcile it)
+    -- stop the engine first, then delete.
+    """
+    with session_scope() as db:
+        query = select(models.StrategyCatalog).where(
+            models.StrategyCatalog.id == uuid.UUID(str(strategy_id))
+        )
+        if not is_admin:
+            query = query.where(
+                models.StrategyCatalog.owner_user_id == actor_id,
+                models.StrategyCatalog.owner_type == "personal",
+                models.StrategyCatalog.visibility == "private",
+            )
+        strategy = db.scalar(query.with_for_update())
+        if strategy is None:
+            raise PineWorkflowError("Strategy not found.", 404, "NOT_FOUND")
+
+        instances = list(db.scalars(
+            select(models.StrategyInstance).where(models.StrategyInstance.strategy_id == strategy.id)
+        ))
+        if any(instance.status == "active" for instance in instances):
+            raise PineWorkflowError(
+                "This strategy has a running engine instance. Stop it before deleting.",
+                409,
+                "INSTANCE_RUNNING",
+            )
+        instance_ids = [instance.id for instance in instances]
+
+        version_ids = list(db.scalars(
+            select(models.StrategyVersion.id).where(models.StrategyVersion.strategy_id == strategy.id)
+        ))
+        conversion_request_ids = list(db.scalars(
+            select(models.PineConversionRequest.id).where(models.PineConversionRequest.strategy_id == strategy.id)
+        ))
+        code = strategy.code
+        counts = {
+            "instances": len(instance_ids),
+            "versions": len(version_ids),
+            "conversion_requests": len(conversion_request_ids),
+        }
+
+        # Deepest-first, entirely explicit -- SQLite (used in tests) doesn't
+        # enforce FK actions unless PRAGMA foreign_keys=ON is set per
+        # connection, which this codebase doesn't do, so relying on ON
+        # DELETE CASCADE/SET NULL here would be untested and silently wrong
+        # the moment it actually mattered. Every table is deleted explicitly
+        # instead, verified against Postgres's real constraint graph.
+        if instance_ids:
+            position_ids = list(db.scalars(
+                select(models.StrategyInstancePosition.id).where(
+                    models.StrategyInstancePosition.strategy_instance_id.in_(instance_ids)
+                )
+            ))
+            decision_ids = list(db.scalars(
+                select(models.CanonicalSignalDecision.id).where(
+                    models.CanonicalSignalDecision.strategy_instance_id.in_(instance_ids)
+                )
+            ))
+            revision_ids = list(db.scalars(
+                select(models.StrategyConfigurationRevision.id).where(
+                    models.StrategyConfigurationRevision.strategy_instance_id.in_(instance_ids)
+                )
+            ))
+            if revision_ids:
+                # Durable history rows that outlive a single run/trade/job --
+                # never deleted, just detached from the revision being removed.
+                db.execute(update(models.UserRun).where(
+                    models.UserRun.configuration_revision_id.in_(revision_ids)
+                ).values(configuration_revision_id=None, configuration_revision=None))
+                db.execute(update(models.StrategyExecutionJob).where(
+                    models.StrategyExecutionJob.configuration_revision_id.in_(revision_ids)
+                ).values(configuration_revision_id=None, configuration_revision=None))
+                db.execute(update(models.PortfolioTrade).where(
+                    models.PortfolioTrade.configuration_revision_id.in_(revision_ids)
+                ).values(configuration_revision_id=None))
+                db.execute(update(models.StrategyConfigurationRevision).where(
+                    models.StrategyConfigurationRevision.supersedes_revision_id.in_(revision_ids)
+                ).values(supersedes_revision_id=None))
+            if position_ids:
+                db.execute(delete(models.PositionEvent).where(
+                    models.PositionEvent.position_id.in_(position_ids)
+                ))
+            if decision_ids:
+                db.execute(delete(models.CanonicalSignalOutcome).where(
+                    models.CanonicalSignalOutcome.canonical_decision_id.in_(decision_ids)
+                ))
+            db.execute(update(models.UserEngineConfig).where(
+                models.UserEngineConfig.selected_strategy_instance_id.in_(instance_ids)
+            ).values(selected_strategy_instance_id=None, selected_configuration_revision_id=None))
+            db.execute(delete(models.EngineStartOperation).where(
+                models.EngineStartOperation.strategy_instance_id.in_(instance_ids)
+            ))
+            db.execute(delete(models.StrategyInstancePosition).where(
+                models.StrategyInstancePosition.strategy_instance_id.in_(instance_ids)
+            ))
+            db.execute(delete(models.CanonicalSignalDecision).where(
+                models.CanonicalSignalDecision.strategy_instance_id.in_(instance_ids)
+            ))
+            db.execute(delete(models.StrategySignalRejection).where(
+                models.StrategySignalRejection.strategy_instance_id.in_(instance_ids)
+            ))
+            db.execute(delete(models.StrategyInstanceWebhookCredential).where(
+                models.StrategyInstanceWebhookCredential.strategy_instance_id.in_(instance_ids)
+            ))
+            db.execute(delete(models.StrategyConfigurationRevision).where(
+                models.StrategyConfigurationRevision.strategy_instance_id.in_(instance_ids)
+            ))
+            db.execute(delete(models.TradingViewSetup).where(
+                models.TradingViewSetup.strategy_instance_id.in_(instance_ids)
+            ))
+            db.execute(delete(models.StrategyInstance).where(
+                models.StrategyInstance.id.in_(instance_ids)
+            ))
+        if version_ids:
+            db.execute(update(models.UserRun).where(
+                models.UserRun.strategy_version_id.in_(version_ids)
+            ).values(strategy_version_id=None))
+            db.execute(delete(models.EngineStartOperation).where(
+                models.EngineStartOperation.strategy_version_id.in_(version_ids)
+            ))
+            db.execute(delete(models.TradingViewCompileEvidence).where(
+                or_(
+                    models.TradingViewCompileEvidence.pine_conversion_request_id.in_(conversion_request_ids),
+                    models.TradingViewCompileEvidence.candidate_version_id.in_(version_ids),
+                )
+            ))
+            db.execute(delete(models.PineUserAcceptance).where(
+                or_(
+                    models.PineUserAcceptance.original_version_id.in_(version_ids),
+                    models.PineUserAcceptance.candidate_version_id.in_(version_ids),
+                )
+            ))
+            db.execute(delete(models.PinePromptQualificationTrial).where(
+                or_(
+                    models.PinePromptQualificationTrial.original_version_id.in_(version_ids),
+                    models.PinePromptQualificationTrial.candidate_version_id.in_(version_ids),
+                )
+            ))
+            artifact_ids = list(db.scalars(
+                select(models.StrategySourceArtifact.id).where(
+                    models.StrategySourceArtifact.strategy_version_id.in_(version_ids)
+                )
+            ))
+            if artifact_ids:
+                db.execute(delete(models.PineSemanticAnalysis).where(
+                    models.PineSemanticAnalysis.source_artifact_id.in_(artifact_ids)
+                ))
+            db.execute(delete(models.StrategySourceArtifact).where(
+                models.StrategySourceArtifact.strategy_version_id.in_(version_ids)
+            ))
+            db.execute(delete(models.StrategyValidationReport).where(
+                models.StrategyValidationReport.strategy_version_id.in_(version_ids)
+            ))
+            db.execute(delete(models.StrategyAdminReview).where(
+                models.StrategyAdminReview.strategy_version_id.in_(version_ids)
+            ))
+        if conversion_request_ids:
+            db.execute(delete(models.PineConversionRequest).where(
+                models.PineConversionRequest.id.in_(conversion_request_ids)
+            ))
+        if version_ids:
+            db.execute(delete(models.StrategyVersion).where(models.StrategyVersion.id.in_(version_ids)))
+
+        subscriber_count = 0
+        if code:
+            subscriber_count = db.scalar(
+                select(func.count()).select_from(models.StrategySubscription).where(
+                    models.StrategySubscription.strategy_name == code
+                )
+            ) or 0
+            db.execute(delete(models.StrategySubscription).where(
+                models.StrategySubscription.strategy_name == code
+            ))
+
+        _audit(
+            db,
+            actor_id,
+            "STRATEGY_FORCE_DELETED",
+            strategy_id=str(strategy.id),
+            catalog_code=code,
+            owner_type=strategy.owner_type,
+            visibility=strategy.visibility,
+            is_admin=is_admin,
+            **counts,
+            deleted_subscriptions=subscriber_count,
+        )
+        db.delete(strategy)
+        return {"deleted": True, "strategy_id": str(strategy.id), **counts, "deleted_subscriptions": subscriber_count}
+
+
+def update_strategy_metadata(
+    actor_id: uuid.UUID,
+    strategy_id: uuid.UUID | str,
+    *,
+    is_admin: bool,
+    display_name: str | None = None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    """Rename/redescribe a strategy -- for a published nova_shared strategy
+    this is visible to every user immediately, same live-read pattern as
+    publish_as_shared(). Does not touch catalog_code: that's the live
+    webhook path (/api/webhook/strategy/{code}) for every subscriber's
+    TradingView alert, so changing it is a separate, deliberate action
+    (publish_as_shared's own conflict-checked flow), not a casual rename.
+    An admin may edit any strategy; a non-admin may only edit their own
+    personal strategy.
+    """
+    if display_name is None and description is None:
+        raise PineWorkflowError("Nothing to update.", 422, "NO_FIELDS_GIVEN")
+    if display_name is not None:
+        display_name = display_name.strip()
+        if not display_name:
+            raise PineWorkflowError("Display name cannot be empty.", 422, "DISPLAY_NAME_REQUIRED")
+        if len(display_name) > 160:
+            raise PineWorkflowError("Display name is too long.", 422, "DISPLAY_NAME_TOO_LONG")
+    if description is not None and len(description) > 4000:
+        raise PineWorkflowError("Description is too long.", 422, "DESCRIPTION_TOO_LONG")
+
+    with session_scope() as db:
+        query = select(models.StrategyCatalog).where(
+            models.StrategyCatalog.id == uuid.UUID(str(strategy_id))
+        )
+        if not is_admin:
+            query = query.where(
+                models.StrategyCatalog.owner_user_id == actor_id,
+                models.StrategyCatalog.owner_type == "personal",
+                models.StrategyCatalog.visibility == "private",
+            )
+        strategy = db.scalar(query.with_for_update())
+        if strategy is None:
+            raise PineWorkflowError("Strategy not found.", 404, "NOT_FOUND")
+
+        changes: dict[str, Any] = {}
+        if display_name is not None and display_name != strategy.display_name:
+            changes["display_name"] = {"from": strategy.display_name, "to": display_name}
+            strategy.display_name = display_name
+        if description is not None and description != (strategy.description or ""):
+            changes["description"] = True
+            strategy.description = description or None
+        if changes:
+            strategy.updated_at = _now()
+            _audit(
+                db,
+                actor_id,
+                "STRATEGY_METADATA_UPDATED",
+                strategy_id=str(strategy.id),
+                is_admin=is_admin,
+                changes=changes,
+            )
+        db.flush()
+        return _strategy_public(strategy)
 
 
 def list_reviews(*, limit: int = 50, offset: int = 0):

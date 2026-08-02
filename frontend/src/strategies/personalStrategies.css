@@ -300,6 +300,28 @@
 .c1-normalization-policy { display: grid; gap: 6px; padding: 9px; border: 1px solid var(--border); border-radius: 8px; }
 .c1-normalization-policy ul { margin: 2px 0 0; padding-left: 18px; }
 
+.c1-conversion-grid { grid-template-columns: 300px minmax(0, 1fr); }
+.ps-list { max-height: 560px; }
+.c1-list-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.c1-filter-pill { padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-3); font-size: 10.5px; font-weight: 650; cursor: pointer; transition: color var(--dur-fast) var(--ease-soft), background var(--dur-fast) var(--ease-soft), border-color var(--dur-fast) var(--ease-soft); }
+.c1-filter-pill:hover { color: var(--text-1); }
+.c1-filter-pill.active { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.ps-list-item { padding: 0; overflow: hidden; }
+.c1-list-item-main { display: flex; flex-direction: column; align-items: stretch; gap: 4px; width: 100%; padding: 11px 13px 8px; text-align: left; }
+.c1-list-item-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.c1-list-item-main span { color: var(--text-3); font-size: 10.5px; }
+.c1-row-actions { display: flex; gap: 6px; padding: 0 9px 9px; }
+.c1-row-actions button { padding: 4px 9px; font-size: 10.5px; }
+.c1-list-count { margin: 2px 2px 0; color: var(--text-3); font-size: 10.5px; text-align: right; }
+
+.c1-detail-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.c1-edit-form { display: grid; gap: 9px; margin-bottom: 15px; padding: 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); }
+.c1-edit-form label { display: grid; gap: 6px; color: var(--text-2); font-size: 11px; font-weight: 600; }
+.c1-edit-form input, .c1-edit-form textarea { padding: 8px 9px; color: var(--text-1); border: 1px solid var(--border-hi); border-radius: 8px; background: var(--bg-1); }
+.c1-edit-form textarea { min-height: 70px; resize: vertical; }
+
+.c1-detail { max-height: calc(100vh - 96px); overflow-y: auto; }
+
 @media (max-width: 900px) {
   .ps-layout { grid-template-columns: 1fr; }
   .ps-list { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: none; }

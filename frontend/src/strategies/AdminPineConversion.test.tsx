@@ -6,6 +6,7 @@ import { AdminPineConversionWorkspace } from './AdminPineConversion'
 const api = vi.hoisted(() => ({
   list: vi.fn(), get: vi.fn(), submit: vi.fn(), convert: vi.fn(), manualPackage: vi.fn(),
   manualResponse: vi.fn(), approve: vi.fn(), reject: vi.fn(), requestChanges: vi.fn(), publish: vi.fn(), unpublish: vi.fn(),
+  updateStrategy: vi.fn(), forceDelete: vi.fn(),
 }))
 const toastApi = vi.hoisted(() => ({
   add: vi.fn(),
@@ -25,6 +26,8 @@ vi.mock('../api', () => ({
   requestChangesAdminPineConversion: api.requestChanges,
   publishAdminPineConversion: api.publish,
   unpublishAdminPineConversion: api.unpublish,
+  updateAdminStrategy: api.updateStrategy,
+  forceDeleteAdminStrategy: api.forceDelete,
   getC2Config: vi.fn().mockResolvedValue({ enabled: false }),
   getAdminC2Conversion: vi.fn(),
   listAdminC2Installations: vi.fn().mockResolvedValue({ installations: [] }),
@@ -89,6 +92,8 @@ beforeEach(() => {
     webhook_path: '/api/webhook/strategy/orb', broadcast_pine: `${LAYER}\n// broadcast transport\n`,
   })
   api.unpublish.mockResolvedValue({ strategy_id: 's1', catalog_code: 'orb', deactivated_subscriptions: 2 })
+  api.updateStrategy.mockResolvedValue({ id: 's1', name: 'Renamed strategy', description: null, visibility: 'private', status: 'active' })
+  api.forceDelete.mockResolvedValue({ deleted: true, strategy_id: 's1', instances: 0, versions: 1, conversion_requests: 1, deleted_subscriptions: 0 })
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
   vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
@@ -303,5 +308,33 @@ describe('AdminPineConversionWorkspace', () => {
     expect(api.unpublish).toHaveBeenCalledWith('c1')
     expect(await screen.findByText(/Unpublished \(was "orb"\)/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^unpublish$/i })).not.toBeInTheDocument()
+  })
+
+  it('renames a strategy through the detail-header edit form', async () => {
+    const user = userEvent.setup()
+    render(<AdminPineConversionWorkspace />)
+    await screen.findAllByText('Legend MACD')
+    await user.click(screen.getAllByRole('button', { name: /^edit$/i })[0])
+    const nameInput = screen.getByLabelText('Strategy display name')
+    await user.clear(nameInput)
+    await user.type(nameInput, 'Renamed strategy')
+    api.get.mockResolvedValue({ ...ready, strategy_name: 'Renamed strategy' })
+    await user.click(screen.getByRole('button', { name: /^save$/i }))
+    await waitFor(() => expect(api.updateStrategy).toHaveBeenCalledWith('s1', { display_name: 'Renamed strategy', description: undefined }))
+    expect(screen.queryByLabelText('Strategy display name')).not.toBeInTheDocument()
+  })
+
+  it('force-deletes a strategy after confirmation and clears the selection', async () => {
+    const user = userEvent.setup()
+    render(<AdminPineConversionWorkspace />)
+    await screen.findAllByText('Legend MACD')
+    api.list.mockResolvedValue([])
+    await user.click(screen.getAllByRole('button', { name: /^delete$/i })[0])
+    expect(window.confirm).toHaveBeenCalled()
+    await waitFor(() => expect(api.forceDelete).toHaveBeenCalledWith('s1'))
+    expect(await screen.findByText('No conversion submissions')).toBeInTheDocument()
+    expect(toastApi.add).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Deleted "Legend MACD" permanently (1 version(s), 0 subscriber(s)).',
+    }))
   })
 })
