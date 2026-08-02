@@ -50,23 +50,14 @@ def test_catalog_returns_deterministic_built_ins_with_honest_availability(mu_db,
     body = response.json()
     by_key = {item["strategy_key"]: item for item in body["strategies"]}
 
-    assert list(by_key)[:5] == [
-        "nova-supertrend",
-        "nova-orb",
-        "nova-vwap",
-        "nova-rsi",
-        "nova-scalper",
-    ]
+    # ORB/VWAP/RSI/Scalper were permanent COMING_SOON placeholders with no
+    # execution adapter -- removed rather than shown as dead/disabled UI.
+    assert list(by_key)[:1] == ["nova-supertrend"]
     assert by_key["nova-supertrend"]["availability"] == "READY"
     assert by_key["nova-supertrend"]["paper_eligible"] is True
     # Supertrend is the only built-in with a real execution adapter and has
     # been deliberately qualified for live trading (owner sign-off, 2026-07-29).
     assert by_key["nova-supertrend"]["live_eligible"] is True
-    for key in ("nova-orb", "nova-vwap", "nova-rsi", "nova-scalper"):
-        assert by_key[key]["availability"] == "COMING_SOON"
-        assert by_key[key]["paper_eligible"] is False
-        assert by_key[key]["disabled_reason"] == "Missing execution adapter"
-        assert by_key[key]["live_eligible"] is False
 
 
 def test_catalog_is_owner_scoped_and_exposes_no_secret_or_source(mu_db, runtime):
@@ -121,11 +112,36 @@ def test_builtin_selection_persists_without_execution_side_effects(mu_db, runtim
         assert subscription.active is False
 
 
-def test_disabled_builtin_cannot_be_selected(mu_db, runtime):
+def test_disabled_builtin_cannot_be_selected(mu_db, runtime, monkeypatch):
+    from app.services import built_in_strategy_registry
+
+    # No real built-in is COMING_SOON anymore (ORB/VWAP/RSI/Scalper were
+    # removed as dead placeholders); inject a synthetic one so the
+    # unavailable-selection guard itself stays covered.
+    monkeypatch.setattr(
+        built_in_strategy_registry,
+        "_BUILT_INS",
+        built_in_strategy_registry._BUILT_INS
+        + (
+            {
+                "strategy_key": "nova-test-disabled",
+                "catalog_code": "test-disabled",
+                "name": "Test Disabled",
+                "version": None,
+                "description": "Synthetic disabled entry for test coverage.",
+                "availability": "COMING_SOON",
+                "disabled_reason": "Missing execution adapter",
+                "paper_eligible": False,
+                "live_eligible": False,
+                "execution_adapter": None,
+                "setup_schema": {"fields": []},
+            },
+        ),
+    )
     _seed()
     user = make_user("catalog-disabled@example.com")
     client = _client(user)
-    response = client.put("/api/strategies/catalog/selection", json={"strategy_key": "nova-orb"})
+    response = client.put("/api/strategies/catalog/selection", json={"strategy_key": "nova-test-disabled"})
     assert response.status_code == 409
     assert response.json()["reason"] == "STRATEGY_UNAVAILABLE"
     assert client.get("/api/strategies/catalog").json()["selected_strategy_key"] is None

@@ -1,9 +1,10 @@
 import { Input } from "@/components/ui/input"
 import { Button } from '@/components/ui/button'
 import { AlertTriangle, Check, ChevronDown, Loader2, Play, Settings2 } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { toast } from '@/components/ui/toast'
 import type { FormEvent } from 'react'
+import { createRazorpaySubscription, getPaymentEntitlementStatus } from '../../api'
 import type { EngineStrategy, RuntimeStatus } from '../../api'
 import { blockerText } from '../../strategies/strategyBlockers'
 
@@ -58,6 +59,62 @@ export function TradingStrategyCard({
   const [confirmStartOpen, setConfirmStartOpen] = useState(false)
   const [busy, setBusy] = useState('')
   const [actionError, setActionError] = useState('')
+  const [paperEntitled, setPaperEntitled] = useState(true)
+  const [paywallOpen, setPaywallOpen] = useState(false)
+  const [checkoutPending, setCheckoutPending] = useState(false)
+  const [checkoutError, setCheckoutError] = useState('')
+  const [checkoutStarted, setCheckoutStarted] = useState(false)
+
+  const refreshPaperEntitlement = useCallback(async () => {
+    try {
+      const status = await getPaymentEntitlementStatus()
+      // Paper is a one-time purchase read directly off the entitlement row,
+      // deliberately not gated by status.valid (unlike the monthly Premium
+      // flags) -- see backend has_paper_entitlement().
+      setPaperEntitled(Boolean(status.paper_trading_enabled))
+    } catch {
+      // Unknown status must not block a genuinely entitled user from
+      // starting; the backend is still the real gate on /runtime/start.
+      setPaperEntitled(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshPaperEntitlement()
+  }, [refreshPaperEntitlement])
+
+  useEffect(() => {
+    if (!checkoutStarted || paperEntitled) return
+    const interval = window.setInterval(() => void refreshPaperEntitlement(), 2500)
+    return () => window.clearInterval(interval)
+  }, [checkoutStarted, paperEntitled, refreshPaperEntitlement])
+
+  useEffect(() => {
+    if (!paywallOpen || !paperEntitled) return
+    // Payment confirmed while the paywall was open -- hand off straight to
+    // the normal start-confirmation dialog instead of leaving a stale modal up.
+    setPaywallOpen(false)
+    setCheckoutStarted(false)
+    setConfirmStartOpen(true)
+  }, [paywallOpen, paperEntitled])
+
+  async function startPaperCheckout() {
+    setCheckoutPending(true)
+    setCheckoutError('')
+    try {
+      const checkout = await createRazorpaySubscription('paper_premium')
+      const checkoutUrl = checkout.checkout_url || checkout.short_url
+      if (!checkoutUrl) throw new Error('Checkout link was not returned.')
+      const opened = window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
+      if (!opened) throw new Error('Allow pop-ups to open Razorpay checkout.')
+      setCheckoutStarted(true)
+    } catch (reason) {
+      setCheckoutError(reason instanceof Error ? reason.message : 'Could not start Razorpay checkout.')
+    } finally {
+      setCheckoutPending(false)
+    }
+  }
   const serverDraft = {
     instanceId: selected?.instance_id ?? '',
     lots: numberSetting(paper, 'configured_lots', selected?.lots ?? 1),
@@ -222,7 +279,7 @@ export function TradingStrategyCard({
           type="button"
           className="strategy-start"
           disabled={!canStart || busy === 'start'}
-          onClick={() => setConfirmStartOpen(true)}
+          onClick={() => (paperEntitled ? setConfirmStartOpen(true) : setPaywallOpen(true))}
         >
           {busy === 'start' ? <Loader2 className="strategy-card-spin" size={14} /> : <Play size={14} />}
           {runtime?.engine.running ? 'Paper Engine Running' : 'Start Paper Engine'}
@@ -258,6 +315,27 @@ export function TradingStrategyCard({
             </Button>
             <Button variant="unstyled" type="button" onClick={() => { setConfirmStartOpen(false); setShowConfig(true) }}>Edit Settings</Button>
             <Button variant="unstyled" type="button" onClick={() => setConfirmStartOpen(false)}>Cancel</Button>
+          </div>
+        </section>
+      ) : null}
+
+      {paywallOpen ? (
+        <section className="strategy-start-confirm" role="dialog" aria-modal="true" aria-label="Nova Paper Premium required">
+          <div>
+            <span>Paper trading requires</span>
+            <strong>Nova Paper Premium — ₹100 one-time</strong>
+            <small>Unlocks Paper mode permanently. Not a subscription; no recurring charge.</small>
+          </div>
+          {checkoutStarted ? (
+            <p className="form-hint">Complete checkout, then return here — NOVA checks payment confirmation automatically and will start the engine setup once it clears.</p>
+          ) : null}
+          {checkoutError ? <p className="subscription-error">{checkoutError}</p> : null}
+          <div className="strategy-start-confirm-actions">
+            <Button variant="unstyled" type="button" className="strategy-start" disabled={checkoutPending} onClick={() => void startPaperCheckout()}>
+              {checkoutPending ? <Loader2 className="strategy-card-spin" size={14} /> : null}
+              {checkoutStarted ? 'Reopen Razorpay Checkout' : 'Pay ₹100 & Continue'}
+            </Button>
+            <Button variant="unstyled" type="button" onClick={() => { setPaywallOpen(false); setCheckoutStarted(false); setCheckoutError('') }}>Cancel</Button>
           </div>
         </section>
       ) : null}
