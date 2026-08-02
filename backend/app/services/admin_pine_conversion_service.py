@@ -805,6 +805,8 @@ def _public(db, row: models.PineConversionRequest, *, include_source: bool) -> d
         "unsupported_features": row.unsupported_features or [],
         "action_mapping": row.action_mapping or {},
         "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        "catalog_code": strategy.code if strategy and strategy.visibility == "nova_shared" else None,
+        "webhook_path": f"/api/webhook/strategy/{strategy.code}" if strategy and strategy.visibility == "nova_shared" else None,
     }
     candidate = pine._artifact(db, row.candidate_version_id) if row.candidate_version_id else None
     layer = _layer_artifact(db, row.candidate_version_id)

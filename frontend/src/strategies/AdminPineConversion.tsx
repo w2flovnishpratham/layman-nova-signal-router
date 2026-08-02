@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { useCallback, useEffect, useState } from 'react'
 import { Check, Copy, FileCode2, Loader2, RefreshCcw, Sparkles, Upload, X } from 'lucide-react'
 import { toast } from '@/components/ui/toast'
+import { backendHttpUrl } from '../lib/backend'
 import {
   approveAdminPineConversion,
   getAdminPineConversion,
@@ -297,6 +298,15 @@ function ConversionDetail({
           </Button>
         </div>
         {catalogCode && !codeValid ? <p className="ps-note">Lowercase letters, digits, - or _, starting with a letter.</p> : null}
+      </div>
+    ) : null}
+    {conversion.webhook_path ? (
+      <div className="ps-message success">
+        <strong>Published as "{conversion.catalog_code}".</strong> Webhook URL for the admin-run TradingView alert:
+        <div className="ps-copy-row">
+          <code>{backendHttpUrl(conversion.webhook_path as `/${string}`)}</code>
+          <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(backendHttpUrl(conversion.webhook_path as `/${string}`))}><Copy size={14} /> Copy URL</Button>
+        </div>
       </div>
     ) : null}
     {broadcastPine ? (

@@ -1260,6 +1260,8 @@ export interface AdminPineConversion {
   warnings: string[]
   unsupported_features: string[]
   action_mapping: Record<string, string>
+  catalog_code: string | null
+  webhook_path: string | null
   original_source?: string
   strategy_layer?: string | null
   backtest_layer?: string | null

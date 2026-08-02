@@ -308,6 +308,13 @@ def test_approved_candidate_can_be_published_and_appears_ready_in_registry(mu_db
     assert entry["availability"] == "READY"
     assert entry["execution_adapter"] == "strategy_webhook:bollinger-squeeze"
 
+    # The webhook URL must survive a plain re-fetch, not just the one-time
+    # publish response -- an admin reopening this conversion later (or after
+    # the publish toast disappeared) still needs to find it.
+    refetched = client.get(f"/api/admin/pine-conversions/{conversion['id']}").json()["conversion"]
+    assert refetched["catalog_code"] == "bollinger-squeeze"
+    assert refetched["webhook_path"] == "/api/webhook/strategy/bollinger-squeeze"
+
     # The shared webhook validator now accepts this newly published code too.
     signal = NormalizedSignal(
         payload_format="NOVA",

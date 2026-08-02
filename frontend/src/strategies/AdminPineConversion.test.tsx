@@ -5,7 +5,7 @@ import { AdminPineConversionWorkspace } from './AdminPineConversion'
 
 const api = vi.hoisted(() => ({
   list: vi.fn(), get: vi.fn(), submit: vi.fn(), convert: vi.fn(), manualPackage: vi.fn(),
-  manualResponse: vi.fn(), approve: vi.fn(), reject: vi.fn(), requestChanges: vi.fn(),
+  manualResponse: vi.fn(), approve: vi.fn(), reject: vi.fn(), requestChanges: vi.fn(), publish: vi.fn(),
 }))
 const toastApi = vi.hoisted(() => ({
   add: vi.fn(),
@@ -23,6 +23,7 @@ vi.mock('../api', () => ({
   approveAdminPineConversion: api.approve,
   rejectAdminPineConversion: api.reject,
   requestChangesAdminPineConversion: api.requestChanges,
+  publishAdminPineConversion: api.publish,
   getC2Config: vi.fn().mockResolvedValue({ enabled: false }),
   getAdminC2Conversion: vi.fn(),
   listAdminC2Installations: vi.fn().mockResolvedValue({ installations: [] }),
@@ -68,6 +69,7 @@ const ready = {
   transport_source: TRANSPORT,
   diff: [{ kind: 'removed', text: 'indicator("NIFTY source", overlay=true)' }, { kind: 'added', text: 'indicator("NIFTY converted", overlay=true)' }],
   approval_integrity: null,
+  catalog_code: null, webhook_path: null,
 }
 
 beforeEach(() => {
@@ -81,6 +83,10 @@ beforeEach(() => {
   api.approve.mockResolvedValue({ ...ready, conversion_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE', review_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE', approval_integrity: true })
   api.reject.mockResolvedValue({ ...ready, conversion_status: 'REJECTED', review_status: 'REJECTED' })
   api.requestChanges.mockResolvedValue({ ...ready, conversion_status: 'CHANGES_REQUESTED', review_status: 'CHANGES_REQUESTED' })
+  api.publish.mockResolvedValue({
+    strategy_id: 's1', catalog_code: 'orb', display_name: 'Legend MACD', version: 'v2',
+    webhook_path: '/api/webhook/strategy/orb', broadcast_pine: `${LAYER}\n// broadcast transport\n`,
+  })
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
   vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
@@ -244,5 +250,22 @@ describe('AdminPineConversionWorkspace', () => {
     await user.type(screen.getByLabelText('Conversion review reason'), 'TradingView mismatch')
     await user.click(screen.getByRole('button', { name: /reject candidate/i }))
     await waitFor(() => expect(api.reject).toHaveBeenCalledWith('c1', 'TradingView mismatch'))
+  })
+
+  it('shows the webhook URL persistently after publishing, not just in a one-time toast', async () => {
+    const user = userEvent.setup()
+    const approved = { ...ready, conversion_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE', review_status: 'APPROVED_FOR_TRADINGVIEW_COMPILE' }
+    api.list.mockResolvedValue([approved])
+    api.get.mockResolvedValue(approved)
+    render(<AdminPineConversionWorkspace />)
+    await screen.findAllByText('Legend MACD')
+    await user.type(screen.getByLabelText('Catalog code'), 'orb')
+    // Simulates the persisted GET response after publish actually lands, not
+    // just the one-time publish() response -- the regression this guards is
+    // the URL only ever appearing in the toast, gone on the next refetch.
+    api.get.mockResolvedValue({ ...approved, catalog_code: 'orb', webhook_path: '/api/webhook/strategy/orb' })
+    await user.click(screen.getByRole('button', { name: /^publish$/i }))
+    expect(await screen.findByText(/api\/webhook\/strategy\/orb/)).toBeInTheDocument()
+    expect(screen.getByText(/Published as "orb"/)).toBeInTheDocument()
   })
 })
