@@ -1,6 +1,8 @@
 """Payment provider webhook routes."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
@@ -26,6 +28,7 @@ from app.services.user_context import CurrentUser
 
 
 router = APIRouter(prefix="/api/payments", tags=["Payments"])
+logger = logging.getLogger("app.payments.webhook_debug")
 
 
 class RazorpayCreateSubscriptionRequest(BaseModel):
@@ -87,6 +90,15 @@ async def razorpay_webhook(request: Request) -> JSONResponse:
 
     signature = request.headers.get("X-Razorpay-Signature")
     raw_body = await request.body()
+    # TEMPORARY diagnostic logging to find why real Razorpay deliveries get
+    # a 400 -- remove once resolved.
+    logger.warning(
+        "razorpay_webhook_debug headers=%r content_type=%r body_len=%d body_preview=%r",
+        dict(request.headers),
+        request.headers.get("content-type"),
+        len(raw_body),
+        raw_body[:500].decode("utf-8", errors="replace"),
+    )
     try:
         verify_razorpay_signature(
             raw_body=raw_body,
