@@ -1,8 +1,9 @@
 import { Input } from "@/components/ui/input"
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/components/ui/popover'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Check, Loader2, Pencil } from 'lucide-react'
+import { createRazorpaySubscription, getPaymentEntitlementStatus } from '../../api'
 import type { CatalogStrategy, RuntimeStatus, StrategySetupField } from '../../api'
 import type { EngineMode } from '../../types'
 import { BotBubble } from '../messages/BotBubble'
@@ -272,6 +273,11 @@ export function ConversationController({
   const [dirty, setDirty] = useState(false)
   const [liveAcknowledged, setLiveAcknowledged] = useState(false)
   const [sharedRisk, setSharedRisk] = useState<RiskConfiguration | null>(null)
+  const [paperEntitled, setPaperEntitled] = useState(true)
+  const [paywallOpen, setPaywallOpen] = useState(false)
+  const [checkoutPending, setCheckoutPending] = useState(false)
+  const [checkoutError, setCheckoutError] = useState('')
+  const [checkoutStarted, setCheckoutStarted] = useState(false)
   const restoredRevisionRef = useRef<string | null>(null)
   // Once the user has explicitly interacted this mount (picked a mode,
   // picked a strategy, clicked Start New/Resume/Review), the restore effect
@@ -319,6 +325,48 @@ export function ConversationController({
     max_daily_loss: sharedRisk.values.daily_loss_cap,
     max_trades_per_day: sharedRisk.values.max_trades_per_day,
   } : {}, [sharedRisk])
+
+  const refreshPaperEntitlement = useCallback(async () => {
+    try {
+      const status = await getPaymentEntitlementStatus()
+      // One-time purchase read directly off the entitlement row, deliberately
+      // not gated by status.valid (unlike the monthly Premium flags) -- see
+      // backend has_paper_entitlement().
+      setPaperEntitled(Boolean(status.paper_trading_enabled))
+    } catch {
+      // Unknown status must not block a genuinely entitled user from
+      // starting; /runtime/start-selected is still the real gate.
+      setPaperEntitled(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshPaperEntitlement()
+  }, [refreshPaperEntitlement])
+
+  useEffect(() => {
+    if (!checkoutStarted || paperEntitled) return
+    const interval = window.setInterval(() => void refreshPaperEntitlement(), 2500)
+    return () => window.clearInterval(interval)
+  }, [checkoutStarted, paperEntitled, refreshPaperEntitlement])
+
+  async function startPaperCheckout() {
+    setCheckoutPending(true)
+    setCheckoutError('')
+    try {
+      const checkout = await createRazorpaySubscription('paper_premium')
+      const checkoutUrl = checkout.checkout_url || checkout.short_url
+      if (!checkoutUrl) throw new Error('Checkout link was not returned.')
+      const opened = window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
+      if (!opened) throw new Error('Allow pop-ups to open Razorpay checkout.')
+      setCheckoutStarted(true)
+    } catch (reason) {
+      setCheckoutError(reason instanceof Error ? reason.message : 'Could not start Razorpay checkout.')
+    } finally {
+      setCheckoutPending(false)
+    }
+  }
 
   useEffect(() => {
     onStateChange?.({
@@ -395,6 +443,16 @@ export function ConversationController({
     conv.selectMode(m)
     onModeSelect?.(m, 1_000_000)
   }
+
+  useEffect(() => {
+    if (!paywallOpen || !paperEntitled) return
+    // Payment confirmed while the paywall was open -- retry the start the
+    // user already asked for instead of leaving a stale modal up.
+    setPaywallOpen(false)
+    setCheckoutStarted(false)
+    void startEngine()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paywallOpen, paperEntitled])
 
   // Hooks must run before any early return. The transcript is a pure projection
   // of machine state; its length is the new-content signal for the scroll hook.
@@ -486,6 +544,7 @@ export function ConversationController({
   async function startEngine() {
     if (!selectedStrategy?.strategy_instance_id || !setupSaved || inFlightRef.current) return
     if (mode === 'live' && !liveAcknowledged) return
+    if (mode === 'paper' && !paperEntitled) { setPaywallOpen(true); return }
     const gen = state.generation
     const strategyKey = state.strategyKey
     inFlightRef.current = true
@@ -682,6 +741,23 @@ export function ConversationController({
             ) : null}
             {setupSaved ? <span className="conv-saved-badge"><Check size={14} /> Setup saved</span> : null}
           </div>
+          {paywallOpen ? (
+            <div role="alertdialog" aria-label="Nova Paper Premium required">
+              <BotBubble tone="normal" showAvatar>
+                Paper trading requires Nova Paper Premium — a one-time ₹100 purchase, not a subscription. Unlocks Paper mode permanently.
+              </BotBubble>
+              {checkoutStarted ? (
+                <BotBubble tone="normal">Complete checkout, then return here — NOVA checks payment confirmation automatically and starts the engine once it clears.</BotBubble>
+              ) : null}
+              {checkoutError ? <p className="conv-error" role="alert">{checkoutError}</p> : null}
+              <div className="conv-actions">
+                <Button variant="unstyled" type="button" className="conv-pill conv-pill--primary" disabled={checkoutPending} onClick={() => void startPaperCheckout()}>
+                  {checkoutPending ? 'Creating Checkout…' : checkoutStarted ? 'Reopen Razorpay Checkout' : 'Pay ₹100 & Continue'}
+                </Button>
+                <Button variant="unstyled" type="button" className="conv-pill" onClick={() => { setPaywallOpen(false); setCheckoutStarted(false); setCheckoutError('') }}>Cancel</Button>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
