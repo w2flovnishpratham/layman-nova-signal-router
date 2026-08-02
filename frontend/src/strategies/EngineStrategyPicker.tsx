@@ -24,7 +24,7 @@ function sourceLabel(strategy: EngineStrategy): string {
  * persists the selected strategy instance (execution authority remains the
  * per-instance private credential — selection never reroutes signals), and
  * links each strategy to its existing lifecycle controls. */
-export function EngineStrategyPicker({ onManage }: { onManage?: (instanceId: string) => void }) {
+export function EngineStrategyPicker({ onManage }: { onManage: (instanceId: string) => void }) {
   const [strategies, setStrategies] = useState<EngineStrategy[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -91,7 +91,7 @@ export function EngineStrategyPicker({ onManage }: { onManage?: (instanceId: str
                 : <Badge variant="secondary">{blockerText(selected.blocking_reason)}</Badge>}
             </CardContent>
             <CardFooter>
-              {onManage ? <Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage(selected.instance_id)}><Settings2 size={14} /> Manage</Button> : null}
+              <Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage(selected.instance_id)}><Settings2 size={14} /> Manage</Button>
             </CardFooter>
           </Card>
         ) : <div className="ps-empty-small"><Lock size={22} /><strong>No strategy selected</strong><span>Select a verified strategy below to point the engine at it.</span></div>}
@@ -116,7 +116,7 @@ export function EngineStrategyPicker({ onManage }: { onManage?: (instanceId: str
                     {isSelected
                       ? <span className="ps-credential-status"><Check size={14} /> Selected</span>
                       : <Button variant="unstyled" type="button" className="ps-primary" disabled={busy === strategy.instance_id} onClick={() => void select(strategy.instance_id)}><Play size={14} /> Select strategy</Button>}
-                    {onManage ? <Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage(strategy.instance_id)}>Manage</Button> : null}
+                    <Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage(strategy.instance_id)}>Manage</Button>
                   </CardFooter>
                 </Card>
               )
@@ -139,7 +139,7 @@ export function EngineStrategyPicker({ onManage }: { onManage?: (instanceId: str
                   <Badge variant="secondary">{blockerText(strategy.blocking_reason)}</Badge>
                 </CardContent>
                 <CardFooter>
-                  {onManage ? <Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage(strategy.instance_id)}>Continue setup</Button> : null}
+                  <Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage(strategy.instance_id)}>Continue setup</Button>
                 </CardFooter>
               </Card>
             ))}
