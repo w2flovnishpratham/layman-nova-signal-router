@@ -1,4 +1,4 @@
-const defaultBackendUrl = import.meta.env.PROD ? 'https://engine.novatradesolution.com' : ''
+const defaultBackendUrl = import.meta.env.PROD ? 'https://engine-api.novatradesolution.com' : ''
 const configuredBackendUrl = import.meta.env.VITE_BACKEND_URL?.trim().replace(/[;/\s]+$/, '')
 const backendUrl = configuredBackendUrl || defaultBackendUrl
 

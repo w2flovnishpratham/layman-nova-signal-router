@@ -42,11 +42,11 @@ migration_database_url="$(grep -m1 '^DATABASE_URL=' "$env_file" | cut -d= -f2- |
 )
 
 install -m 644 deploy/layman-nova-signal-router.service /etc/systemd/system/layman-nova-signal-router.service
-install -m 644 deploy/nginx/engine.novatradesolution.com.conf /etc/nginx/sites-available/engine.novatradesolution.com
+install -m 644 deploy/nginx/engine-api.novatradesolution.com.conf /etc/nginx/sites-available/engine-api.novatradesolution.com
 install -m 755 deploy/configure_hostinger_firewall.sh /usr/local/sbin/layman-configure-hostinger-firewall
 install -m 644 deploy/layman-premarket-healthcheck.service /etc/systemd/system/layman-premarket-healthcheck.service
 install -m 644 deploy/layman-premarket-healthcheck.timer /etc/systemd/system/layman-premarket-healthcheck.timer
-ln -sfn /etc/nginx/sites-available/engine.novatradesolution.com /etc/nginx/sites-enabled/engine.novatradesolution.com
+ln -sfn /etc/nginx/sites-available/engine-api.novatradesolution.com /etc/nginx/sites-enabled/engine-api.novatradesolution.com
 
 /usr/local/sbin/layman-configure-hostinger-firewall
 systemctl daemon-reload

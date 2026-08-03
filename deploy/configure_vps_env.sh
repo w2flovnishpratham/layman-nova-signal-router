@@ -76,9 +76,9 @@ PY
 set_env APP_ENV production
 set_env BACKEND_HOST 127.0.0.1
 set_env BACKEND_PORT 8002
-set_env BACKEND_PUBLIC_BASE_URL https://engine.novatradesolution.com
-set_env FRONTEND_ORIGIN https://engine-app.novatradesolution.com
-set_env FRONTEND_URL https://engine-app.novatradesolution.com
+set_env BACKEND_PUBLIC_BASE_URL https://engine-api.novatradesolution.com
+set_env FRONTEND_ORIGIN https://engine.novatradesolution.com
+set_env FRONTEND_URL https://engine.novatradesolution.com
 set_env DHAN_MODE REAL
 set_env PAPER_MODE_ENABLED true
 set_env REQUIRE_MARKET_HOURS true
@@ -86,7 +86,7 @@ set_env DEBUG_ENABLED false
 set_env MARKET_CLOSED_DEBUG false
 set_env FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED false
 set_env AUTH_REQUIRED true
-set_env GOOGLE_REDIRECT_URI https://engine.novatradesolution.com/api/auth/google/callback
+set_env GOOGLE_REDIRECT_URI https://engine-api.novatradesolution.com/api/auth/google/callback
 set_env ADMIN_EMAILS ""
 set_env WEBHOOK_HMAC_REQUIRED true
 set_env SESSION_COOKIE_SECURE true

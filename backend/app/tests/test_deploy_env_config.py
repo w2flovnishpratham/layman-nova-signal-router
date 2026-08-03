@@ -46,7 +46,7 @@ def _deploy_script_text() -> str:
 
 
 def test_private_webhook_deploy_logging_is_disabled():
-    nginx = (REPO_ROOT / "deploy" / "nginx" / "engine.novatradesolution.com.conf").read_text(
+    nginx = (REPO_ROOT / "deploy" / "nginx" / "engine-api.novatradesolution.com.conf").read_text(
         encoding="utf-8"
     )
     exact_location = nginx.split("location = /api/webhooks/private {", 1)[1].split("}", 1)[0]
