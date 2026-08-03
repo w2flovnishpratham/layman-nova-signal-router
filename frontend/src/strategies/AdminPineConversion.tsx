@@ -439,7 +439,7 @@ function ConversionDetail({
         <pre>{broadcastPine || conversion.broadcast_pine}</pre>
       </details>
     ) : null}
-    <C2AdminPanel conversion={conversion} />
+    {!conversion.strategy_published ? <C2AdminPanel conversion={conversion} /> : null}
   </>
 }
 
