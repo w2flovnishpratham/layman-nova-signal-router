@@ -146,6 +146,17 @@ execution. Do not add alert_message, novaWebhookPayload, or any frozen
 transport token to backtest_layer -- it must never be capable of emitting a
 NOVA-recognized signal. Do not add a bare alert() or alertcondition() call.
 
+If strategy_layer gates the three booleans on barstate.isrealtime (common
+for live signal delivery, since that flag is only ever true on the single
+currently-forming bar), backtest_layer's copy of that boolean computation
+must drop the barstate.isrealtime condition -- keep barstate.isconfirmed if
+present, but never isrealtime. TradingView's Strategy Tester replays only
+historical bars, where isrealtime is always false; keeping that gate makes
+backtest_layer place zero trades no matter how correct the underlying logic
+is, silently defeating the entire purpose of this preview and misleading the
+admin into thinking the strategy itself is broken. strategy_layer's own gate
+is unaffected by this -- only backtest_layer's separate copy changes.
+
 Set backtest_layer to null whenever status is not CONVERTED, or when source
 type is STRATEGY (already backtestable without one).
 

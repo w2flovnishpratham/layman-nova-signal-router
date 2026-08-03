@@ -521,21 +521,23 @@ function AdminReview() {
 }
 
 function AdminWorkspace() {
-  return <><AdminConsole /><AdminReview /></>
+  return <AdminConsole />
 }
 
 function AdminConsole() {
-  const [tab, setTab] = useState<'queue' | 'managed' | 'all'>('queue')
+  const [tab, setTab] = useState<'queue' | 'managed' | 'personal' | 'all'>('queue')
   return (
     <div className="admin-console">
       <span className="admin-console-badge"><Shield size={12} /> ADMIN CONSOLE</span>
       <div className="admin-console-tabs">
         <button type="button" className={tab === 'queue' ? 'active' : ''} onClick={() => setTab('queue')}>Review queue</button>
         <button type="button" className={tab === 'managed' ? 'active' : ''} onClick={() => setTab('managed')}>Managed setups</button>
+        <button type="button" className={tab === 'personal' ? 'active' : ''} onClick={() => setTab('personal')}>Personal submissions</button>
         <button type="button" className={tab === 'all' ? 'active' : ''} onClick={() => setTab('all')}>All strategies</button>
       </div>
       {tab === 'queue' ? <AdminPineConversionWorkspace /> : null}
       {tab === 'managed' ? <ManagedSetupQueue /> : null}
+      {tab === 'personal' ? <AdminReview /> : null}
       {tab === 'all' ? <div className="ps-empty-small"><FileCode2 size={20} /><strong>Full strategy registry browser coming soon</strong></div> : null}
     </div>
   )

@@ -1200,6 +1200,13 @@ def _validate_backtest_layer(output: ClaudePineConversionOutput, *, source_type:
     for name in ("novaBuyCeSignal", "novaBuyPeSignal", "novaExitSignal"):
         if name not in backtest:
             errors.append("BACKTEST_LAYER_SIGNAL_MISSING")
+    if re.search(r"\bbarstate\.isrealtime\b", backtest):
+        # isrealtime is only ever true on the single currently-forming live
+        # bar -- TradingView's Strategy Tester replays historical bars only,
+        # so a signal gated on it can never fire during a backtest, silently
+        # producing a report with zero trades no matter how correct the
+        # underlying logic is.
+        errors.append("BACKTEST_LAYER_ISREALTIME_FORBIDDEN")
     if any(
         token in backtest
         for token in ("alert_message", "novaWebhookPayload", "NOVA FROZEN TRANSPORT", "novaTransportVersion", "REPLACE_WITH_PRIVATE_CREDENTIAL")
