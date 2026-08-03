@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button'
+import { Loader2 } from 'lucide-react'
 import { PageSkeleton } from './PageSkeleton'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -304,7 +305,15 @@ export function NiftyLiveChart({
   )
 
   if (!series && !loadFailed) return <section className="nifty-chart-card">{header}<PageSkeleton label={`Loading NIFTY ${timeframe} chart`} variant="cards" compact /></section>
-  if (loadFailed || !series || series.status === 'unavailable') return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">{series?.message ?? `Authoritative NIFTY ${timeframe} candles unavailable.`}</div></section>
+  if (loadFailed || !series || series.status === 'unavailable') return (
+    <section className="nifty-chart-card">
+      {header}
+      <div className="nifty-chart-empty">
+        <p>{series?.message ?? `Authoritative NIFTY ${timeframe} candles unavailable.`}</p>
+        <span className="nifty-chart-retry-hint"><Loader2 size={13} className="nifty-chart-retry-spinner" /> Retrying automatically…</span>
+      </div>
+    </section>
+  )
   if (!hasCandles) return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">No NIFTY {timeframe} candles available for this session.</div></section>
 
   return (

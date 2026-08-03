@@ -3451,11 +3451,36 @@ code {
 }
 
 .nifty-chart-empty {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 180px;
   color: var(--text-3);
   font-size: 11px;
+  text-align: center;
+}
+
+.nifty-chart-empty p {
+  margin: 0;
+}
+
+.nifty-chart-retry-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-4, var(--text-3));
+  font-size: 10px;
+}
+
+.nifty-chart-retry-spinner {
+  animation: nifty-chart-spin 1s linear infinite;
+}
+
+@keyframes nifty-chart-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .nifty-chart-canvas,
