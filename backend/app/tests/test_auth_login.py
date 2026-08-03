@@ -79,6 +79,31 @@ def test_dev_user_helper_fails_closed_in_production(monkeypatch):
     assert str(exc.value) == "Dev user fallback is disabled in production."
 
 
+def test_google_start_redirect_is_never_cached(monkeypatch):
+    """A cached 302 would replay a stale state param without ever re-setting
+    the cookie that has to match it, since no request actually reaches the
+    server on a cache hit -- browsers observed doing exactly this in
+    production. Every /start response must forbid caching."""
+    from app.config import settings
+    from app.auth.google import router
+
+    monkeypatch.setattr(settings, "GOOGLE_CLIENT_ID", "client-id", raising=False)
+    monkeypatch.setattr(settings, "GOOGLE_CLIENT_SECRET", "client-secret", raising=False)
+    monkeypatch.setattr(settings, "GOOGLE_REDIRECT_URI", "https://example.com/api/auth/google/callback", raising=False)
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://user:pass@localhost/db", raising=False)
+    monkeypatch.setattr(settings, "APP_SECRET_KEY", "y" * 48, raising=False)
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app, follow_redirects=False)
+
+    resp = client.get("/api/auth/google/start")
+
+    assert resp.status_code == 302
+    assert resp.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+    assert resp.headers["pragma"] == "no-cache"
+    assert "nova_oauth_state" in resp.cookies
+
+
 def test_me_unauthenticated_when_auth_required(monkeypatch):
     from app.config import settings
     from app.auth.google import router

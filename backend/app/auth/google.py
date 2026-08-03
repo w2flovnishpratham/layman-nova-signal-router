@@ -79,6 +79,12 @@ def google_start(request: Request) -> RedirectResponse:
         "prompt": "select_account",
     }
     response = RedirectResponse(f"{GOOGLE_AUTH_ENDPOINT}?{urlencode(params)}", status_code=302)
+    # Without this, browsers may cache and replay this 302 on a later visit
+    # without ever re-issuing the request -- the state param and Set-Cookie
+    # both go stale together, and the callback fails signature/CSRF checks
+    # for a state that was never actually re-set as a cookie this visit.
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
     # Short-lived signed state cookie ties the callback to this browser.
     response.set_cookie(
         key=_OAUTH_STATE_COOKIE,
