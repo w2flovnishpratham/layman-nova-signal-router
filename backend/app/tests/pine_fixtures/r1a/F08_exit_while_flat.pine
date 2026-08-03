@@ -1,0 +1,4 @@
+//@version=6
+strategy("F08")
+if strategy.position_size == 0
+    strategy.close_all()

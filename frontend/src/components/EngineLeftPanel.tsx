@@ -1,20 +1,25 @@
 import { ManualOrderPanel } from './ManualOrderPanel'
-import { MarketCard } from './MarketCard'
-import type { ReactNode } from 'react'
-import type { ActiveTrade, EngineMode, MarketSnapshot } from '../types'
+import type { RuntimeStatus } from '../api'
+import type { ActiveTrade, ClientCommand, EngineMode, SideFilter } from '../types'
+import { DailyDrawdownCard, EngineConfigCard, type EngineConfigValues } from '../trading/EngineConfigCard'
 
 interface Props {
-  marketSnapshot: MarketSnapshot | null
   engineMode: EngineMode | null
   activeTrade: ActiveTrade | null
-  collapseControl?: ReactNode
+  runtimePositionOpen?: boolean
+  runtime: RuntimeStatus | null
+  onStop: () => void
+  onSaveConfig: (values: EngineConfigValues) => Promise<void>
+  side: SideFilter
+  onSend: (command: ClientCommand) => void
 }
 
-export function EngineLeftPanel({ marketSnapshot, engineMode, activeTrade, collapseControl }: Props) {
+export function EngineLeftPanel({ engineMode, activeTrade, runtimePositionOpen = false, runtime, onStop, onSaveConfig, side, onSend }: Props) {
   return (
     <div className="engine-left flex flex-col gap-4" aria-label="Market and manual order">
-      <MarketCard snapshot={marketSnapshot} collapseControl={collapseControl} />
-      <ManualOrderPanel engineMode={engineMode} activeTrade={activeTrade} />
+      <EngineConfigCard runtime={runtime} onStop={onStop} onSaveConfig={onSaveConfig} side={side} onSideChange={(next) => onSend({ type: 'session.patch_risk', data: { side: next } })} />
+      <ManualOrderPanel engineMode={engineMode} activeTrade={activeTrade} runtimePositionOpen={runtimePositionOpen} />
+      <DailyDrawdownCard runtime={runtime} />
     </div>
   )
 }

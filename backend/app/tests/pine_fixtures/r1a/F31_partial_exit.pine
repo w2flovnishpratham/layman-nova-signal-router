@@ -1,0 +1,4 @@
+//@version=6
+strategy("F31")
+strategy.entry("Long", strategy.long)
+strategy.exit("Half", "Long", qty_percent=50, limit=close + 20)

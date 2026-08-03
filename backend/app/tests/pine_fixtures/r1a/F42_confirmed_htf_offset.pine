@@ -1,0 +1,4 @@
+//@version=6
+indicator("F42")
+htf = request.security(syminfo.tickerid, "60", close[1], lookahead=barmerge.lookahead_on)
+plot(htf)

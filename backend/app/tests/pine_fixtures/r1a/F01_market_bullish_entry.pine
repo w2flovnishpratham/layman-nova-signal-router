@@ -1,0 +1,4 @@
+//@version=6
+strategy("F01")
+if barstate.isconfirmed
+    strategy.entry("Long", strategy.long)

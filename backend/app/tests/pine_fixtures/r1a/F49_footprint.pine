@@ -1,0 +1,4 @@
+//@version=6
+indicator("F49")
+footprint = request.footprint(10)
+plot(close)

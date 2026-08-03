@@ -1,0 +1,3 @@
+//@version=6
+strategy("F28")
+strategy.entry("L", strategy.long, qty=2)

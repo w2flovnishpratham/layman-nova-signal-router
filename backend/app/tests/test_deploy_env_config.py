@@ -14,6 +14,7 @@ RAZORPAY_AND_AWS_SECRET_NAMES = (
     "RAZORPAY_KEY_SECRET",
     "RAZORPAY_WEBHOOK_SECRET",
     "RAZORPAY_PLAN_PREMIUM_MONTHLY",
+    "RAZORPAY_PLAN_PAPER_PREMIUM",
     "AWS_PROXY_SLOTS_ENABLED",
     "AWS_PROXY_HOST",
     "AWS_PROXY_SHARED_PASSWORD",
@@ -42,6 +43,23 @@ def _workflow_text() -> str:
 
 def _deploy_script_text() -> str:
     return (REPO_ROOT / "deploy" / "configure_vps_env.sh").read_text(encoding="utf-8")
+
+
+def test_private_webhook_deploy_logging_is_disabled():
+    nginx = (REPO_ROOT / "deploy" / "nginx" / "layman-api.manyacare.com.conf").read_text(
+        encoding="utf-8"
+    )
+    exact_location = nginx.split("location = /api/webhooks/private {", 1)[1].split("}", 1)[0]
+    assert "access_log off;" in exact_location
+    assert "proxy_pass http://127.0.0.1:8002;" in exact_location
+    assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in exact_location
+    assert "/api/webhooks/private/{" not in nginx
+    assert "credential=" not in nginx
+    assert "$request_body" not in nginx
+
+    for service_file in ("layman-nova-signal-router.service", "nova-staging.service.example"):
+        service = (REPO_ROOT / "deploy" / service_file).read_text(encoding="utf-8")
+        assert "--no-access-log" in service
 
 
 def test_workflow_declares_production_secret_passthrough_names():

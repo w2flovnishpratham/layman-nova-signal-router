@@ -1,3 +1,4 @@
+# ruff: noqa: F811
 from __future__ import annotations
 
 import asyncio
@@ -88,11 +89,11 @@ def _signal(signal_id: str = "phase1-signal"):
 def test_alembic_baseline_creates_current_schema(tmp_path, monkeypatch):
     from alembic import command
     from alembic.config import Config
+    from scripts.init_db import EXPECTED_TABLES
     from sqlalchemy import create_engine, inspect
 
     from app.config import settings
     from app.db import engine as db_engine
-    from scripts.init_db import EXPECTED_TABLES
 
     db_path = tmp_path / "alembic-baseline.db"
     monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{db_path}", raising=False)
@@ -163,21 +164,41 @@ def test_user_cannot_read_another_users_session(mu_db):
 
 
 def test_duplicate_strategy_signal_creates_one_job_and_one_execution(mu_db, monkeypatch):
-    from app.config import DEFAULT_STRATEGY_CODE, settings
+    from app.config import settings
     from app.db import models
     from app.db.engine import session_scope
     from app.routers.strategies import router
-    from app.services import strategy_fanout
+    from app.services import private_webhook_execution, strategy_fanout
     from app.workers.strategy_job_worker import process_queued_jobs_once
 
     secret = "phase1-strategy-secret-1234567890"
     monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
     user = make_user("phase1-duplicate-user@gmail.com")
     strategy_fanout.subscribe_user(user.id, "supertrend", lots=1, execution_mode="paper_live_data")
+    from app.tests.test_strategy_fanout import _bind_paper_configuration
+
+    _bind_paper_configuration(user, lots=1)
 
     calls = []
-    monkeypatch.setattr(strategy_fanout, "route_signal", lambda signal: calls.append(signal.signal_id) or {"success": True})
+    monkeypatch.setattr(
+        strategy_fanout,
+        "route_signal",
+        lambda signal, **_kwargs: calls.append(signal.signal_id)
+        or {"success": True},
+    )
     monkeypatch.setattr(strategy_fanout, "init_runtime_files", lambda: None)
+    # The broadcast signal carries no contract (see build_broadcast_signal);
+    # the worker's per-subscriber enricher resolves one before routing.
+    monkeypatch.setattr(
+        private_webhook_execution,
+        "_resolve_entry_contract",
+        lambda option_side, lots: {
+            "security_id": "TEST-SECURITY-ID",
+            "trading_symbol": "NIFTY TEST",
+            "strike": 25000.0,
+            "expiry": "2026-12-31",
+        },
+    )
 
     app = FastAPI()
     app.include_router(router)
@@ -185,12 +206,8 @@ def test_duplicate_strategy_signal_creates_one_job_and_one_execution(mu_db, monk
     body = {
         "secret": secret,
         "signal_id": "phase1-duplicate-signal",
-        "strategy_code": DEFAULT_STRATEGY_CODE,
-        "action": "ENTRY",
-        "side": "BUY",
-        "symbol": "NIFTY",
-        "order_type": "MARKET",
-        "product_type": "INTRADAY",
+        "action": "BUY_CE",
+        "signal_time": "2026-07-31T09:00:00Z",
     }
 
     assert client.post("/api/webhook/strategy/supertrend", json=body).status_code == 202
@@ -203,7 +220,13 @@ def test_duplicate_strategy_signal_creates_one_job_and_one_execution(mu_db, monk
 
 
 def test_paper_order_path_never_calls_real_dhan_order_api(tmp_path, monkeypatch):
-    from app.services import credential_vault, execution_router, paper_broker, paper_portfolio, state_store
+    from app.services import (
+        credential_vault,
+        execution_router,
+        paper_broker,
+        paper_portfolio,
+        state_store,
+    )
     from app.services.credential_vault import DhanCredentials
     from app.services.dhan_client import DhanLtpResult
     from app.services.shared_market_data import shared_market_data_status
@@ -237,7 +260,11 @@ def test_paper_order_path_never_calls_real_dhan_order_api(tmp_path, monkeypatch)
             raise AssertionError("paper mode must not call Dhan place_super_order")
 
     monkeypatch.setattr(paper_broker, "RealDhanClient", MarketDataOnlyDhanClient)
-    monkeypatch.setattr(paper_broker, "get_shared_market_credentials", lambda: shared_creds)
+    monkeypatch.setattr(
+        paper_broker,
+        "get_quote_snapshot",
+        lambda **_kwargs: {"ltp": 100.0, "source": "DHAN_WEBSOCKET", "status": "FRESH", "stale": False},
+    )
     monkeypatch.setattr("app.services.shared_market_data.get_shared_market_credentials", lambda: shared_creds)
     monkeypatch.setattr("app.services.shared_market_data.shared_market_data_configured", lambda: True)
     monkeypatch.setattr(

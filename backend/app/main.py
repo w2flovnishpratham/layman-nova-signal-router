@@ -13,15 +13,23 @@ from app.api import session as chat_session
 from app.api import ws as chat_ws
 from app.auth.dependencies import get_execution_scoped_user
 from app.config import VALID_PAYMENT_PROVIDERS, settings
-from app.routers import broker, control, dashboard, debug, engine, market, orders, payments, positions, setup, webhook
+from app.routers import broker, control, dashboard, debug, engine, market, orders, payments, positions, setup, signals, webhook
 from app.routers import admin as admin_router
 from app.routers import live as live_router
 from app.routers import user_credentials as user_credentials_router
 from app.routers import user_webhook as user_webhook_router
+from app.routers import private_webhook as private_webhook_router
+from app.routers import c2_tradingview as c2_tradingview_router
 from app.routers import strategies as strategies_router
+from app.routers import strategy_instances as strategy_instances_router
+from app.routers import personal_pine as personal_pine_router
+from app.routers import pine_conversion as pine_conversion_router
+from app.routers import tradingview_setup as tradingview_setup_router
 from app.auth import google as google_auth
 from app.db.engine import database_configured, get_engine, init_db
 from app.services.user_credential_vault import vault_ready as user_vault_ready
+from app.services.pine_conversion_provider import validate_provider_configuration
+from app.workers.pine_conversion_worker import start_pine_conversion_worker, stop_pine_conversion_worker
 from app.services.audit_logger import log_audit_event
 from app.services.chat_event_publisher import bind_chat_event_loop, clear_chat_event_loop
 from app.services.credential_vault import vault_status
@@ -171,6 +179,10 @@ def _validate_live_payment_provider_configuration() -> None:
 
 
 def validate_production_configuration() -> None:
+    if settings.ENABLE_TEST_MARKET_DATA_PROVIDER and settings.APP_ENV.strip().lower() not in {"test", "isolated_staging"}:
+        raise RuntimeError("ENABLE_TEST_MARKET_DATA_PROVIDER is allowed only in test or isolated_staging.")
+    if settings.ENABLE_TEST_MARKET_DATA_PROVIDER and (settings.ENABLE_LIVE_ORDERS or settings.DHAN_MODE.upper() != "MOCK"):
+        raise RuntimeError("ENABLE_TEST_MARKET_DATA_PROVIDER requires ENABLE_LIVE_ORDERS=false and DHAN_MODE=MOCK.")
     if not settings.is_production:
         return
 
@@ -252,6 +264,7 @@ def _api_documentation_urls() -> dict[str, str | None]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_provider_configuration()
     validate_production_configuration()
     validate_background_worker_runner_configuration()
     bind_chat_event_loop(asyncio.get_running_loop())
@@ -287,6 +300,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Singleton background workers are disabled for this process.")
     if background_workers_enabled:
         start_strategy_job_worker()
+        start_pine_conversion_worker()
     if background_workers_enabled and _multi_user_mode():
         logger.info(
             "Multi-user reconcile, position monitor, EOD, and ghost workers enabled."
@@ -328,6 +342,7 @@ async def lifespan(app: FastAPI):
     )
     yield
     stop_strategy_job_worker()
+    stop_pine_conversion_worker()
     stop_shared_token_worker()
     stop_option_position_monitor()
     stop_eod_squareoff_worker()
@@ -364,6 +379,7 @@ authenticated = [Depends(get_execution_scoped_user)]
 app.include_router(setup.router, prefix="/api", tags=["Setup"], dependencies=authenticated)
 app.include_router(engine.router, prefix="/api", tags=["Engine"], dependencies=authenticated)
 app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"], dependencies=authenticated)
+app.include_router(signals.router, prefix="/api", tags=["Signals"], dependencies=authenticated)
 app.include_router(orders.router, prefix="/api", tags=["Orders"], dependencies=authenticated)
 app.include_router(market.router, prefix="/api", tags=["Market"], dependencies=authenticated)
 app.include_router(positions.router, prefix="/api", tags=["Positions"], dependencies=authenticated)
@@ -382,6 +398,19 @@ app.include_router(user_credentials_router.router)
 app.include_router(live_router.router)
 app.include_router(user_webhook_router.router)
 app.include_router(strategies_router.router)
+app.include_router(private_webhook_router.router)
+app.include_router(c2_tradingview_router.router)
+app.include_router(c2_tradingview_router.admin_router)
+app.include_router(strategy_instances_router.router)
+app.include_router(strategy_instances_router.admin_router)
+app.include_router(strategy_instances_router.engine_router)
+app.include_router(personal_pine_router.router)
+app.include_router(personal_pine_router.link_router)
+app.include_router(personal_pine_router.admin_router)
+app.include_router(pine_conversion_router.router)
+app.include_router(pine_conversion_router.admin_router)
+app.include_router(tradingview_setup_router.router)
+app.include_router(tradingview_setup_router.admin_router)
 app.include_router(admin_router.router)
 
 
@@ -394,6 +423,8 @@ def _health() -> dict:
         "dhan_mode": settings.DHAN_MODE.upper(),
         "engine_mode": get_engine_mode(legacy_fallback=False),
         "live_orders_enabled": settings.ENABLE_LIVE_ORDERS,
+        "private_webhook_execution_enabled": settings.PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED,
+        "private_webhook_live_execution_enabled": settings.PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED,
         "market_closed_debug": settings.MARKET_CLOSED_DEBUG,
         "force_allow_order_when_market_closed": settings.FORCE_ALLOW_ORDER_WHEN_MARKET_CLOSED,
         "webhook_trading_enabled": bool(app_state.get("webhook_trading_enabled")),

@@ -1,0 +1,26 @@
+{
+  "fixture_id": "F39",
+  "source_sha256": "4de50dfa03fd18953a53ef06562b391dea97429b96bf088a8cb8384434744850",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "CONFIRMED_BAR_CLOSE_TIMING",
+    "MARKET_DIRECTIONAL_ENTRY",
+    "PROCESS_ORDERS_ON_CLOSE"
+  ],
+  "effective_capability_level": "L2_SUPPORTED_WITH_DISCLOSED_CHANGE",
+  "temporal_classes_exact": [
+    "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC",
+    "T1_REALTIME_FLUCTUATION_NORMALIZED_TO_CLOSE"
+  ],
+  "blocker_codes_exact": [],
+  "disclosure_codes_exact": [
+    "DISC_ORDER_CLOSE_TIMING"
+  ],
+  "admin_review_points_exact": [
+    "Confirm the source does not depend on TradingView emulator fill timing."
+  ],
+  "confidence": "HIGH_CONFIDENCE_MATCH"
+}

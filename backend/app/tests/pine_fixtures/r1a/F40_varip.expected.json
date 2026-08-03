@@ -1,0 +1,23 @@
+{
+  "fixture_id": "F40",
+  "source_sha256": "759e62fec00601fdd785ef2c6c19e3bdb380e5d692d2d323882c2cf4bfa71f96",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "BASIC_INDICATOR_BOOLEAN_SIGNAL",
+    "INTRABAR_VARIP_STATE"
+  ],
+  "effective_capability_level": "L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE",
+  "temporal_classes_exact": [
+    "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC",
+    "T8_INTRABAR_NONREPRODUCIBLE_STATE"
+  ],
+  "blocker_codes_exact": [
+    "BLK_NONREPRODUCIBLE"
+  ],
+  "disclosure_codes_exact": [],
+  "admin_review_points_exact": [],
+  "confidence": "HIGH_CONFIDENCE_MATCH"
+}

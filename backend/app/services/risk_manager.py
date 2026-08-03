@@ -20,7 +20,6 @@ from app.services.state_store import (
     get_wallet_snapshot,
 )
 
-
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -88,8 +87,9 @@ def _entry_limit_checks(payload: NormalizedSignal, runtime: dict) -> RiskDecisio
             f"Trade blocked: {payload.option_side} entries are disabled by the configured side filter.",
         )
 
+    daily_risk = get_daily_risk()
     max_trades = _setting_int(runtime, "max_trades_per_day", 0)
-    if max_trades > 0 and int(get_daily_risk().get("entry_count") or 0) >= max_trades:
+    if max_trades > 0 and int(daily_risk.get("entry_count") or 0) >= max_trades:
         return RiskDecision(False, "Trade blocked: maximum entries for the day reached.")
 
     try:
@@ -100,7 +100,42 @@ def _entry_limit_checks(payload: NormalizedSignal, runtime: dict) -> RiskDecisio
     if max_daily_loss > 0 and isinstance(session_pnl, (int, float)) and float(session_pnl) <= -max_daily_loss:
         return RiskDecision(False, "Trade blocked: maximum daily loss reached.")
 
+    cooldown_minutes = _setting_int(runtime, "risk_cooldown_minutes", 0)
+    last_loss_at = daily_risk.get("last_loss_exit_at")
+    if cooldown_minutes > 0 and last_loss_at:
+        try:
+            parsed = datetime.fromisoformat(str(last_loss_at).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            elapsed = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+            if elapsed.total_seconds() < cooldown_minutes * 60:
+                remaining = max(1, int((cooldown_minutes * 60 - elapsed.total_seconds() + 59) // 60))
+                return RiskDecision(False, f"Trade blocked: post-loss cooldown active for {remaining} more minute(s).")
+        except ValueError:
+            pass
+
+    cutoff = _entry_cutoff_check(runtime)
+    if cutoff:
+        return cutoff
+
     return None
+
+
+def _entry_cutoff_check(runtime: dict) -> RiskDecision | None:
+    """Block new entries after an IST wall-clock time. Never blocks exits."""
+    raw = str(runtime.get("entry_cutoff_ist") or "").strip()
+    if not raw:
+        return None
+    try:
+        hour, minute = (int(part) for part in raw.split(":", 1))
+        cutoff = time(hour=hour, minute=minute)
+    except (TypeError, ValueError):
+        # A malformed cutoff must not silently block every entry.
+        return None
+    now_ist = datetime.now(IST).time()
+    if now_ist < cutoff:
+        return None
+    return RiskDecision(False, f"Trade blocked: entries are closed after {raw} IST.")
 
 
 def evaluate_entry(payload: NormalizedSignal, runtime: dict | None = None) -> RiskDecision:
@@ -198,9 +233,8 @@ def evaluate_exit(payload: NormalizedSignal, runtime: dict | None = None) -> Ris
     if not _setting_bool(runtime, "allow_exit", True):
         return RiskDecision(False, "Exit blocked: ALLOW_EXIT=false.")
 
-    if _setting_bool(runtime, "global_kill_switch", False):
-        if GLOBAL_KILL_SWITCH_BLOCKS_EXITS:
-            return RiskDecision(False, "Exit blocked: GLOBAL_KILL_SWITCH=true and exits are blocked.")
+    if _setting_bool(runtime, "global_kill_switch", False) and GLOBAL_KILL_SWITCH_BLOCKS_EXITS:
+        return RiskDecision(False, "Exit blocked: GLOBAL_KILL_SWITCH=true and exits are blocked.")
 
     open_position = get_open_position()
     if not open_position.get("has_open_position"):

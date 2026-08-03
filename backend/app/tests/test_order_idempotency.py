@@ -1,6 +1,6 @@
+# ruff: noqa: F811
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -283,7 +283,8 @@ def test_manual_paper_route_remains_compatible_without_idempotency_key(monkeypat
     monkeypatch.setattr(
         orders_router,
         "route_signal",
-        lambda signal: routed.append(signal.signal_id) or {"success": True, "status": "PAPER_ORDER_PLACED"},
+        lambda signal, **_kwargs: routed.append(signal.signal_id)
+        or {"success": True, "status": "PAPER_ORDER_PLACED"},
     )
 
     app = FastAPI()
@@ -294,7 +295,8 @@ def test_manual_paper_route_remains_compatible_without_idempotency_key(monkeypat
     )
 
     assert response.status_code == 200
-    assert response.json()["ok"] is True
+    assert response.json()["ok"] is False
+    assert response.json()["operationState"] == "RECONCILIATION_REQUIRED"
     assert len(routed) == 1
 
 
@@ -369,12 +371,13 @@ def test_manual_live_route_requires_live_entitlement_before_routing(monkeypatch,
 
 
 def test_manual_live_route_allows_entitled_server_user_to_reach_router(mu_db, monkeypatch, tmp_path):
+    from starlette.requests import Request
+
     from app.config import settings
     from app.routers import orders as orders_router
     from app.services import state_store
     from app.services.execution_context import bind_execution_context
     from app.services.user_context import current_user_from_model
-    from starlette.requests import Request
 
     state_dir = tmp_path / "runtime_state"
     monkeypatch.setattr(state_store, "APP_STATE_FILE", state_dir / "app_state.json")
@@ -393,7 +396,8 @@ def test_manual_live_route_allows_entitled_server_user_to_reach_router(mu_db, mo
     monkeypatch.setattr(
         orders_router,
         "route_signal",
-        lambda signal: routed.append(signal.signal_id) or {"success": True, "status": "ORDER_PLACED"},
+        lambda signal, **_kwargs: routed.append(signal.signal_id)
+        or {"success": True, "status": "ORDER_PLACED"},
     )
     request = Request(
         {
@@ -413,8 +417,59 @@ def test_manual_live_route_allows_entitled_server_user_to_reach_router(mu_db, mo
     with bind_execution_context(current_user_from_model(user)):
         response = orders_router.manual_entry(request, body)
 
-    assert response["ok"] is True
+    assert response["ok"] is False
+    assert response["operationState"] == "RECONCILIATION_REQUIRED"
     assert routed
+
+
+def test_next_manual_entry_uses_latest_confirmed_revision(mu_db, monkeypatch):
+    from app.routers import orders as orders_router
+
+    owner = current_user_from_model(make_user("manual-latest-revision@example.com"))
+    monkeypatch.setattr(
+        orders_router,
+        "current_execution_user",
+        lambda: owner,
+    )
+    monkeypatch.setattr(
+        orders_router,
+        "get_engine_mode",
+        lambda **_kwargs: "paper",
+    )
+    monkeypatch.setattr(
+        orders_router,
+        "get_runtime_settings",
+        lambda: {
+            "max_trades_per_day": 6,
+            "max_daily_loss": 25_000,
+            "stop_loss_percent": 10,
+        },
+    )
+    monkeypatch.setattr(
+        orders_router.setup_configuration,
+        "selected_configuration",
+        lambda user_id, mode: {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "revision": 8,
+            "mode": mode,
+            "risk": {
+                "max_trades_per_day": 3,
+                "max_daily_loss": 10_000,
+                "entry_cutoff_ist": "14:45",
+            },
+            "configuration": {
+                "stop_loss_percent": 7,
+                "take_profit_percent": 14,
+            },
+        },
+    )
+
+    runtime = orders_router._selected_manual_entry_runtime()
+
+    assert runtime["max_trades_per_day"] == 3
+    assert runtime["max_daily_loss"] == 10_000
+    assert runtime["stop_loss_percent"] == 7
+    assert runtime["configuration_revision"] == 8
 
 
 def test_tradingview_live_order_uses_signal_identity_for_idempotency(mu_db, monkeypatch, tmp_path):

@@ -119,8 +119,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(shared_market_data, "shared_market_data_configured", lambda: True)
     monkeypatch.setattr(shared_market_data, "get_shared_market_credentials", lambda: shared_creds)
     monkeypatch.setattr(paper_broker, "shared_market_data_configured", lambda: True)
-    monkeypatch.setattr(paper_broker, "get_shared_market_credentials", lambda: shared_creds)
-    monkeypatch.setattr(paper_broker, "RealDhanClient", FakeSharedLtpClient)
+    monkeypatch.setattr(
+        paper_broker,
+        "get_quote_snapshot",
+        lambda **_kwargs: {"ltp": 100.0, "source": "DHAN_WEBSOCKET", "status": "FRESH", "stale": False},
+    )
 
     from app.main import app
 

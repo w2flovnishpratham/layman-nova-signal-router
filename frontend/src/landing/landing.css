@@ -1,0 +1,84 @@
+/*
+ * Preservation branch typography deliberately uses system-safe fallbacks.
+ * The source worktree's PP Editorial files are personal-use-only and are not
+ * included here. Production integration must use properly licensed fonts.
+ */
+
+@layer utilities {
+  .nova-landing {
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  .nova-landing .section-heading {
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 400;
+  }
+
+  .nova-landing .section-heading em {
+    font-style: italic;
+  }
+
+  .nova-landing .service-title {
+    font-family: Arial, Helvetica, sans-serif;
+    font-weight: 600;
+  }
+
+  .nova-landing .service-description,
+  .nova-landing .service-number {
+    font-family: Arial, Helvetica, sans-serif;
+    font-weight: 400;
+  }
+
+  .nova-landing .serif-italic {
+    font-family: Georgia, "Times New Roman", serif;
+    font-style: italic;
+    font-weight: 400;
+  }
+
+  .nova-landing .font-editorial {
+    font-family: Georgia, "Times New Roman", serif;
+  }
+
+  .nova-landing .font-montreal,
+  .nova-landing .font-neue-montreal {
+    font-family: Arial, Helvetica, sans-serif;
+  }
+}
+
+
+@keyframes logoMarquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes novaCoreBounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.nova-core-bounce {
+  animation: novaCoreBounce 2.4s ease-in-out infinite;
+}
+
+.nova-landing .animate-logo-marquee {
+  display: flex;
+  width: max-content;
+  animation: logoMarquee 30s linear infinite;
+}
+
+.nova-landing .animate-logo-marquee:hover {
+  animation-play-state: paused;
+}
+
+.nova-landing .marquee-mask {
+  mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
+}

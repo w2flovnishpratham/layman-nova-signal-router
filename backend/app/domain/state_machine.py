@@ -27,7 +27,7 @@ class StrategyPayload(BaseModel):
 
 class ModePayload(BaseModel):
     engineMode: Literal["paper", "live"]
-    paperStartingBalance: float = Field(default=100000.0, ge=10000.0, le=1000000.0)
+    paperStartingBalance: float = Field(default=1000000.0, ge=1000000.0, le=1000000.0)
 
 
 class BrokerCredsPayload(BaseModel):

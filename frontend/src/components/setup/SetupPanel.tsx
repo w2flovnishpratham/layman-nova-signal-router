@@ -1,19 +1,24 @@
+import { Input } from "@/components/ui/input"
+import { Slider } from "@/components/ui/slider"
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { FlaskConical, Loader2, Zap } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createRazorpaySubscription, getPaymentEntitlementStatus } from '../../api'
-import type { PaymentEntitlementStatus } from '../../api'
+import type { PaymentEntitlementStatus, RuntimeStatus } from '../../api'
 import { SetupInfoCard } from '../messages/SetupInfoCard'
 import { MotionSpinner } from '../MotionPrimitives'
 import { formatCurrency, sideLabel } from '../../lib/format'
 import { contractsForLots } from '../../lib/trading'
-import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SetupState, SideFilter } from '../../types'
+import type { ClientCommand, EngineMode, ExitRules, SetupDraft, SetupFlowStep, SideFilter } from '../../types'
+import type { SetupSnapshot } from '../../setup/SetupPage'
+import { ConversationController } from '../conversation/ConversationController'
 
 const DISABLED_STOP_LOSS_PCT = 99.9
 const DEFAULT_CUSTOM_STOP_LOSS_PCT = 10
 
 interface Props {
-  state: SetupState
   flowStep: SetupFlowStep
   draft: SetupDraft
   lastError: string
@@ -21,14 +26,26 @@ interface Props {
   commandPending: boolean
   lotSize: number
   sharedMarketData?: boolean
+  runtime: RuntimeStatus | null
+  runtimeLoading: boolean
+  runtimeError: string
+  onManageStrategy: (instanceId: string) => void
+  onConfigureStrategy: (
+    strategyKey: string,
+    values: Record<string, string | number>,
+    risk: Record<string, string | number>,
+  ) => Promise<void>
+  onSelectStrategy: (strategyKey: string) => Promise<void>
+  onStartStrategy: (instanceId: string, liveAcknowledged: boolean) => Promise<void>
+  onRetryRuntime: () => void
   onSend: (command: ClientCommand) => void
   onUserReply: (text: string) => void
   onDraft: (patch: Partial<SetupDraft>) => void
   onStep: (step: SetupFlowStep) => void
+  onSetupState?: (snapshot: SetupSnapshot) => void
 }
 
 export function SetupPanel({
-  state,
   flowStep,
   draft,
   lastError,
@@ -36,25 +53,49 @@ export function SetupPanel({
   commandPending,
   lotSize,
   sharedMarketData = false,
+  runtime,
+  runtimeLoading,
+  runtimeError,
+  onManageStrategy,
+  onConfigureStrategy,
+  onSelectStrategy,
+  onStartStrategy,
+  onRetryRuntime,
   onSend,
   onUserReply,
   onDraft,
   onStep,
+  onSetupState,
 }: Props) {
-  if (state === 'LIVE' || state === 'PAUSED' || state === 'ENDED' || flowStep === 'complete') return null
-  if (flowStep === 'mode') return <ModeStep draft={draft} onSelect={(engineMode, paperStartingBalance) => {
-    onDraft({ engineMode, paperStartingBalance })
-    onUserReply(engineMode === 'paper' ? `Paper mode with ${formatCurrency(paperStartingBalance)} virtual balance` : 'Live mode - real money routing')
-    onSend({ type: 'setup.mode', data: { engineMode, paperStartingBalance } })
-  }} />
+  if (flowStep === 'complete') return null
   if (flowStep === 'live_access') return <LiveAccessStep onContinue={() => {
     onUserReply('Nova Static IP entitlement and proxy verification confirmed')
     onStep('strategy')
   }} />
-  if (flowStep === 'strategy') return <StrategyStep onSelect={() => {
-    onUserReply('Supertrend Strategy (NSE Options)')
-    onSend({ type: 'setup.select_strategy', data: { strategy: 'supertrend' } })
-  }} />
+  // The conversation machine owns mode selection AND strategy setup — one
+  // controller across both flow steps (ModeStep retired).
+  if (flowStep === 'mode' || flowStep === 'strategy') return (
+    <ConversationController
+      runtime={runtime}
+      loading={runtimeLoading}
+      error={runtimeError}
+      onManage={onManageStrategy}
+      onSave={onConfigureStrategy}
+      onStateChange={onSetupState}
+      onSelect={onSelectStrategy}
+      onStart={onStartStrategy}
+      onUserReply={onUserReply}
+      onRetry={onRetryRuntime}
+      liveAvailable={Boolean(runtime?.safety.live_orders_enabled && runtime.safety.dhan_mode === 'REAL')}
+      paperStartingBalance={draft.paperStartingBalance}
+      onModeSelect={(engineMode, paperStartingBalance) => {
+        onDraft({ engineMode, paperStartingBalance })
+        onUserReply(engineMode === 'paper' ? `Paper mode with ${formatCurrency(paperStartingBalance)} virtual balance` : 'Live mode - real money routing')
+        onSend({ type: 'setup.mode', data: { engineMode, paperStartingBalance } })
+      }}
+      strategyPromptPresent
+    />
+  )
   if (flowStep === 'broker' && draft.engineMode === 'paper' && sharedMarketData) {
     return <SharedDataStep onContinue={() => {
       onUserReply('Use shared live market data (no Dhan account needed)')
@@ -101,71 +142,27 @@ export function SetupPanel({
       },
     })
   }} />
-  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} pending={commandPending} onDeploy={() => {
+  if (flowStep === 'confirm') return <DeploymentSummary draft={draft} lotSize={lotSize} strategyLabel={runtime?.selected_strategy?.display_name ?? null} pending={commandPending} onDeploy={() => {
     onUserReply(draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Deploy Live Strategy & Start Listening')
     onSend({ type: 'setup.confirm_live', data: {} })
   }} />
   return null
 }
 
-function ModeStep({ draft, onSelect }: { draft: SetupDraft; onSelect: (mode: EngineMode, balance: number) => void }) {
-  const [paperBalance, setPaperBalance] = useState(draft.paperStartingBalance)
-  return (
-    <article className="setup-card mode-step">
-      <div className="mode-choice-grid">
-        <section className="mode-choice paper-choice">
-          <div><FlaskConical size={18} /><strong>Paper</strong><span>Recommended</span></div>
-          <p>Real Dhan market data and simulated fills. No real orders.</p>
-          <label>
-            Virtual starting balance
-            <input
-              type="number"
-              min={10000}
-              max={1000000}
-              step={10000}
-              value={paperBalance}
-              onChange={(event) => setPaperBalance(Math.min(1000000, Math.max(10000, Number(event.target.value) || 10000)))}
-            />
-          </label>
-          <button type="button" onClick={() => onSelect('paper', paperBalance)}>Start in Paper</button>
-        </section>
-        <section className="mode-choice live-choice">
-          <div><Zap size={18} /><strong>Live</strong></div>
-          <p>Routes real orders to Dhan. Real money is at risk and static IP is required.</p>
-          <button type="button" onClick={() => onSelect('live', paperBalance)}>Configure Live</button>
-        </section>
-      </div>
-    </article>
-  )
-}
-
-function StrategyStep({ onSelect }: { onSelect: () => void }) {
-  return (
-    <article className="setup-card strategy-panel">
-      <div className="strategy-chip-row" aria-label="Strategy choices">
-        <button type="button" onClick={onSelect}>Supertrend</button>
-        <button type="button" className="disabled-option" disabled>ORB</button>
-        <button type="button" className="disabled-option" disabled>VWAP</button>
-        <button type="button" className="disabled-option" disabled>RSI</button>
-        <button type="button" className="disabled-option" disabled>Scalper</button>
-      </div>
-    </article>
-  )
-}
 
 function SharedDataStep({ onContinue }: { onContinue: () => void }) {
   return (
     <article className="setup-card broker-panel">
       <div className="shared-data-step">
-        <span className="shared-data-badge"><FlaskConical size={14} /> Paper mode</span>
+        <Badge variant="unstyled" className="shared-data-badge"><FlaskConical size={14} /> Paper mode</Badge>
         <h3>No Dhan account needed</h3>
         <p className="form-hint">
           Paper mode runs on NOVA's shared live market data feed. Your trades are simulated against
           real NIFTY option prices — no Dhan Client ID or token required, and no real money is ever at risk.
         </p>
-        <button type="button" className="primary-button" onClick={onContinue}>
+        <Button variant="unstyled" type="button" className="primary-button" onClick={onContinue}>
           Continue with shared market data
-        </button>
+        </Button>
       </div>
     </article>
   )
@@ -177,6 +174,11 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
   const [paymentPolling, setPaymentPolling] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const autoContinuedRef = useRef(false)
+
+  // Derived, not effect-set: entitlement gates readiness, so losing entitlement
+  // makes the step not-ready without a synchronous setState in an effect.
+  const staticIpEntitled = Boolean(entitlement?.valid && entitlement.static_ip_enabled)
+  const effectiveStaticIpReady = staticIpReady && staticIpEntitled
 
   const refreshEntitlement = useCallback(async (): Promise<PaymentEntitlementStatus | null> => {
     try {
@@ -193,17 +195,20 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
   }, [])
 
   useEffect(() => {
+    // fetch on mount: refreshEntitlement is async and only setState()s after its
+    // await, so no synchronous state update happens during this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refreshEntitlement()
   }, [refreshEntitlement])
 
   useEffect(() => {
-    if (!paymentPolling || staticIpReady || entitlement?.static_ip_enabled) return
+    if (!paymentPolling || effectiveStaticIpReady || entitlement?.static_ip_enabled) return
     const interval = window.setInterval(() => {
       void refreshEntitlement()
       setRefreshKey((current) => current + 1)
     }, 2500)
     return () => window.clearInterval(interval)
-  }, [entitlement?.static_ip_enabled, paymentPolling, refreshEntitlement, staticIpReady])
+  }, [entitlement?.static_ip_enabled, paymentPolling, refreshEntitlement, effectiveStaticIpReady])
 
   useEffect(() => {
     if (!paymentPolling) return
@@ -223,20 +228,13 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
     }
   }, [paymentPolling, refreshEntitlement])
 
-  const staticIpEntitled = Boolean(entitlement?.valid && entitlement.static_ip_enabled)
   useEffect(() => {
-    if (!staticIpEntitled) {
-      setStaticIpReady(false)
-    }
-  }, [staticIpEntitled])
-
-  useEffect(() => {
-    if (!staticIpReady || !staticIpEntitled || autoContinuedRef.current) return
+    if (!effectiveStaticIpReady || autoContinuedRef.current) return
     autoContinuedRef.current = true
     window.setTimeout(() => {
       onContinue()
     }, 600)
-  }, [onContinue, staticIpEntitled, staticIpReady])
+  }, [onContinue, effectiveStaticIpReady])
 
   return (
     <article className="setup-card live-access-step">
@@ -262,9 +260,9 @@ function LiveAccessStep({ onContinue }: { onContinue: () => void }) {
       )}
       {staticIpEntitled ? (
         <>
-          <button type="button" className="primary-button" disabled={!staticIpReady} onClick={onContinue}>
+          <Button variant="unstyled" type="button" className="primary-button" disabled={!staticIpReady} onClick={onContinue}>
             {staticIpReady ? 'Opening Strategy Setup...' : 'Continue to Strategy'}
-          </button>
+          </Button>
           {!staticIpReady ? <p className="form-hint">Whitelist and verify the assigned IP before strategy setup. Live and strategy access are checked again before deployment.</p> : null}
         </>
       ) : null}
@@ -301,11 +299,11 @@ function BrokerStep({
       <p className="form-hint">{mode === 'paper' ? 'Dhan credentials are used only for real market data. Paper mode never sends Dhan orders.' : 'Credentials are used for live market data and live order routing.'}</p>
       <label>
         Dhan Client ID
-        <input value={clientId} onChange={(event) => setClientId(event.target.value)} required minLength={3} autoComplete="off" disabled={pending} />
+        <Input variant="unstyled" value={clientId} onChange={(event) => setClientId(event.target.value)} required minLength={3} autoComplete="off" disabled={pending} />
       </label>
       <label>
         Access Token
-        <input
+        <Input variant="unstyled"
           value={accessToken}
           onChange={(event) => setAccessToken(event.target.value)}
           required
@@ -316,14 +314,14 @@ function BrokerStep({
         />
       </label>
       {error ? <p className="form-error">{error}</p> : null}
-      <button type="submit" disabled={pending}>
+      <Button variant="unstyled" type="submit" disabled={pending}>
         {pending ? (
           <MotionSpinner>
             <Loader2 size={14} />
           </MotionSpinner>
         ) : null}
         {pending ? 'Verifying Dhan Account' : 'Connect & Verify Dhan Account'}
-      </button>
+      </Button>
     </form>
   )
 }
@@ -333,9 +331,9 @@ function SideStep({ value, onSelect }: { value: SideFilter; onSelect: (side: Sid
     <article className="setup-card">
       <div className="choice-grid">
         {(['CE', 'PE', 'BOTH'] as SideFilter[]).map((side) => (
-          <button key={side} className={value === side ? 'selected' : ''} type="button" onClick={() => onSelect(side)}>
+          <Button variant="unstyled" key={side} className={value === side ? 'selected' : ''} type="button" onClick={() => onSelect(side)}>
             {sideLabel(side)}
-          </button>
+          </Button>
         ))}
       </div>
     </article>
@@ -347,12 +345,12 @@ function LotsStep({ value, lotSize, onSelect }: { value: number; lotSize: number
   return (
     <article className="setup-card">
       <div className="counter-row large-counter">
-        <button type="button" onClick={() => setLots((current) => Math.max(1, current - 1))}>-</button>
+        <Button variant="unstyled" type="button" onClick={() => setLots((current) => Math.max(1, current - 1))}>-</Button>
         <strong>{lots}</strong>
-        <button type="button" onClick={() => setLots((current) => current + 1)}>+</button>
+        <Button variant="unstyled" type="button" onClick={() => setLots((current) => current + 1)}>+</Button>
         <small>{contractsForLots(lots, lotSize)} contracts</small>
       </div>
-      <button type="button" onClick={() => onSelect(lots)}>Use {lots} lot</button>
+      <Button variant="unstyled" type="button" onClick={() => onSelect(lots)}>Use {lots} lot</Button>
     </article>
   )
 }
@@ -384,16 +382,16 @@ function ExitRulesStep({
   return (
     <article className="setup-card">
       <div className="choice-grid three">
-        <button className={exitMode === 'flip_only' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_only')}>Flips Only</button>
-        <button className={exitMode === 'flip_tp' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_tp')}>Target Profit</button>
-        <button className={exitMode === 'custom' ? 'selected' : ''} type="button" onClick={() => selectExitMode('custom')}>Custom SL & TP</button>
+        <Button variant="unstyled" className={exitMode === 'flip_only' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_only')}>Flips Only</Button>
+        <Button variant="unstyled" className={exitMode === 'flip_tp' ? 'selected' : ''} type="button" onClick={() => selectExitMode('flip_tp')}>Target Profit</Button>
+        <Button variant="unstyled" className={exitMode === 'custom' ? 'selected' : ''} type="button" onClick={() => selectExitMode('custom')}>Custom SL & TP</Button>
       </div>
       {exitMode !== 'flip_only' ? (
         <div className="tp-control">
           <label>
             Target profit
             <span className="percent-input">
-              <input
+              <Input variant="unstyled"
                 type="number"
                 min={1}
                 max={100}
@@ -404,7 +402,7 @@ function ExitRulesStep({
               <span>%</span>
             </span>
           </label>
-          <input type="range" min={1} max={100} value={boundedTargetPct} onChange={(event) => setTargetPct(Number(event.target.value))} />
+          <Slider aria-label="Target profit percent" min={1} max={100} value={boundedTargetPct} onValueChange={setTargetPct} />
         </div>
       ) : null}
       {exitMode === 'custom' ? (
@@ -412,7 +410,7 @@ function ExitRulesStep({
           <label>
             Stop loss
             <span className="percent-input">
-              <input
+              <Input variant="unstyled"
                 type="number"
                 min={1}
                 max={79}
@@ -423,15 +421,15 @@ function ExitRulesStep({
               <span>%</span>
             </span>
           </label>
-          <input type="range" min={1} max={79} value={boundedStopLossPct} onChange={(event) => setStopLossPct(Number(event.target.value))} />
+          <Slider aria-label="Stop loss percent" min={1} max={79} value={boundedStopLossPct} onValueChange={setStopLossPct} />
         </div>
       ) : null}
-      <button
+      <Button variant="unstyled"
         type="button"
         onClick={() => onSubmit({ exitMode, targetPct: boundedTargetPct, stopLossPct: effectiveStopLossPct })}
       >
         Confirm Exits Rules -&gt;
-      </button>
+      </Button>
     </article>
   )
 }
@@ -458,11 +456,11 @@ function DailyLimitsStep({
     <form className="setup-card form-card launch-card" onSubmit={submit}>
       <label>
         Max trades per day
-        <input type="number" min={0} max={50} value={maxTrades} disabled={pending} onChange={(event) => setMaxTrades(Number(event.target.value))} />
+        <Input variant="unstyled" type="number" min={0} max={50} value={maxTrades} disabled={pending} onChange={(event) => setMaxTrades(Number(event.target.value))} />
       </label>
       <label>
         Max daily loss in INR
-        <input type="number" min={0} step={100} value={maxLoss} disabled={pending} onChange={(event) => setMaxLoss(Number(event.target.value))} />
+        <Input variant="unstyled" type="number" min={0} step={100} value={maxLoss} disabled={pending} onChange={(event) => setMaxLoss(Number(event.target.value))} />
       </label>
       <p className="form-hint">Use 0 for no limit.</p>
       <div className="trust-grid">
@@ -470,9 +468,9 @@ function DailyLimitsStep({
         <div><span>Margin check</span><strong>{draft.engineMode === 'paper' ? 'Virtual balance before fill' : 'Dhan margin API before order'}</strong></div>
         <div><span>Charges</span><strong>{draft.engineMode === 'paper' ? 'Simulated Dhan charge formula' : 'From real Dhan fills/reporting'}</strong></div>
       </div>
-      <button className="live-confirm" type="submit" disabled={pending}>
+      <Button variant="unstyled" className="live-confirm" type="submit" disabled={pending}>
         {pending ? 'Saving Setup...' : 'Save Limits & Finish'}
-      </button>
+      </Button>
     </form>
   )
 }
@@ -498,7 +496,7 @@ function limitsReply(maxTrades: number, maxLoss: number): string {
   return `Daily limits: ${trades} / ${loss}`
 }
 
-function DeploymentSummary({ draft, lotSize, pending, onDeploy }: { draft: SetupDraft; lotSize: number; pending: boolean; onDeploy: () => void }) {
+function DeploymentSummary({ draft, lotSize, strategyLabel, pending, onDeploy }: { draft: SetupDraft; lotSize: number; strategyLabel: string | null; pending: boolean; onDeploy: () => void }) {
   return (
     <article className="setup-card deployment-summary">
       <h3>Deployment Configuration Summary</h3>
@@ -513,7 +511,7 @@ function DeploymentSummary({ draft, lotSize, pending, onDeploy }: { draft: Setup
         </div>
         <div>
           <span>Strategy Route</span>
-          <strong>Supertrend Options</strong>
+          <strong>{strategyLabel ?? 'No strategy selected'}</strong>
         </div>
         <div>
           <span>Trade Volume</span>
@@ -532,9 +530,9 @@ function DeploymentSummary({ draft, lotSize, pending, onDeploy }: { draft: Setup
           <strong>{draft.maxTrades ? `${draft.maxTrades} trades` : 'None'} | {draft.maxLoss ? formatCurrency(draft.maxLoss) : 'None'}</strong>
         </div>
       </div>
-      <button className="live-confirm" type="button" onClick={onDeploy} disabled={pending}>
+      <Button variant="unstyled" className="live-confirm" type="button" onClick={onDeploy} disabled={pending}>
         {pending ? 'Starting Engine...' : draft.engineMode === 'paper' ? 'Start Paper Simulation' : 'Trade Real Money - Confirm'}
-      </button>
+      </Button>
     </article>
   )
 }
@@ -582,14 +580,14 @@ function RazorpayTestCheckoutCard({
         </span>
       </div>
       <p>Premium includes live orders, Nova Static IP, and strategy access. Test mode only; access activates after Razorpay webhook confirms payment.</p>
-      <button className="checkout-button" type="button" disabled={pending} onClick={startCheckout}>
+      <Button variant="unstyled" className="checkout-button" type="button" disabled={pending} onClick={startCheckout}>
         {pending ? (
           <MotionSpinner>
             <Loader2 size={14} />
           </MotionSpinner>
         ) : null}
         {pending ? 'Creating Checkout' : 'Start Razorpay Test Checkout'}
-      </button>
+      </Button>
       {message ? <p className="subscription-status-row">{message}</p> : null}
       {error ? <p className="subscription-error">{error}</p> : null}
     </section>

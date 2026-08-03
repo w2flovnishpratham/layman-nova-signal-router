@@ -1,0 +1,3 @@
+//@version=6
+strategy("F38", calc_on_every_tick=true)
+strategy.entry("Long", strategy.long)

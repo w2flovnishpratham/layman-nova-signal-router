@@ -1,0 +1,43 @@
+{
+  "candidate_code": "NOVA_SUPERTREND_V2",
+  "candidate_source_sha256": "55ac262ccdeb6e9569b81d99adfe6e20b1036a327f74419ee2aedb44bba0cdfe",
+  "old_nova_source_sha256": "7595fe7e20e63f8a03eb4d95cdc7442415d34602426d4e32328dc03f4a223c7f",
+  "original_source_artifact": "docs/pine/golden-references/original_tradingview_supertrend_v4.pine",
+  "original_source_sha256": "0ea1efffd67ad43b002e2ff8be0c378623224b8752e208269c68792df97ad9ea",
+  "original_source_pine_version": 4,
+  "original_source_artifact_created_at": "2026-07-15T15:31:58.2078713+05:30",
+  "original_source_classification": "EXTERNAL_REFERENCE_SOURCE",
+  "original_source_blocker": null,
+  "master_prompt_version": "v1",
+  "master_prompt_content_sha256": "4d5d99572c1fc1ba9bf4c16ba8663f6725dc11d9c67d080214857820d91c183d",
+  "qualification_status": "QUALIFICATION",
+  "static_validation_status": "PASSED_WITH_WARNINGS",
+  "static_validation_findings": [
+    "UNDERLYING_GENERIC"
+  ],
+  "tradingview_compile_status": "BLOCKED",
+  "real_tradingview_alert_status": "BLOCKED",
+  "paper_entry_status": "BLOCKED",
+  "paper_exit_status": "BLOCKED",
+  "reversal_status": "BLOCKED",
+  "duplicate_alert_status": "BLOCKED",
+  "data_classification": "STATIC_VALIDATION_ONLY",
+  "source_lineage_history": [
+    {
+      "status": "BLOCKED",
+      "reason": "SOURCE_NOT_SUPPLIED_TO_REPOSITORY_RUN",
+      "recorded_in_commit": "c209ecfccb57eeca639831c07d858c0849a89c31"
+    },
+    {
+      "status": "REGISTERED",
+      "artifact": "docs/pine/golden-references/original_tradingview_supertrend_v4.pine",
+      "sha256": "0ea1efffd67ad43b002e2ff8be0c378623224b8752e208269c68792df97ad9ea"
+    }
+  ],
+  "notes": [
+    "Phase 4D correctly recorded SOURCE_NOT_SUPPLIED for that repository run; Phase 4E stores the externally supplied source verbatim and preserves that history above.",
+    "The corrected v2 is a behavior-preserving conversion with NOVA transport and safety changes, not a byte-level conversion.",
+    "This portable record links the candidate to the immutable Phase 4C prompt. A database qualification trial requires real original and candidate StrategyVersion UUIDs and server-observed evidence.",
+    "No TradingView compilation, alert delivery, or PaperBroker qualification has been claimed."
+  ]
+}

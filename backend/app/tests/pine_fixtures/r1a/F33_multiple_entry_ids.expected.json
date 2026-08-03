@@ -1,0 +1,24 @@
+{
+  "fixture_id": "F33",
+  "source_sha256": "21a6eb3bb747bb99485a1c45268beec6eeca70f17faeb9cfc0f43a9bd7544f38",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "MARKET_DIRECTIONAL_ENTRY",
+    "MULTIPLE_ENTRY_IDS",
+    "SAME_SIDE_STATE_NO_OP"
+  ],
+  "effective_capability_level": "L3_REQUIRES_BACKEND_CAPABILITY",
+  "temporal_classes_exact": [
+    "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC",
+    "T6_FILL_DEPENDENT_RECALCULATION"
+  ],
+  "blocker_codes_exact": [
+    "BLK_MULTI_FILL"
+  ],
+  "disclosure_codes_exact": [],
+  "admin_review_points_exact": [],
+  "confidence": "HIGH_CONFIDENCE_MATCH"
+}

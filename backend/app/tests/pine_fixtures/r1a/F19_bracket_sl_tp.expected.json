@@ -1,0 +1,27 @@
+{
+  "fixture_id": "F19",
+  "source_sha256": "694cd9491c57e3e55876039b48bac1110bdfde0b155ff3397dbfb64be6efaf26",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "BACKEND_MANAGED_BRACKET",
+    "MARKET_DIRECTIONAL_ENTRY",
+    "STRATEGY_EXIT_ORDER_SEMANTICS"
+  ],
+  "effective_capability_level": "L2_SUPPORTED_WITH_DISCLOSED_CHANGE",
+  "temporal_classes_exact": [
+    "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC"
+  ],
+  "blocker_codes_exact": [],
+  "disclosure_codes_exact": [
+    "DISC_BACKEND_EXIT_OWNERSHIP",
+    "DISC_BACKEND_RISK"
+  ],
+  "admin_review_points_exact": [
+    "Compare Pine exit levels with NOVA risk policy.",
+    "Confirm the call does not require partial or pending exit semantics."
+  ],
+  "confidence": "HIGH_CONFIDENCE_MATCH"
+}

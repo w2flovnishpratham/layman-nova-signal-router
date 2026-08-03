@@ -433,3 +433,15 @@ def test_production_live_legacy_egress_json_fallback_passes_when_aws_slots_disab
     )
 
     validate_production_configuration()
+
+
+def test_test_market_data_provider_is_environment_locked(monkeypatch):
+    monkeypatch.setattr(settings, "ENABLE_TEST_MARKET_DATA_PROVIDER", True, raising=False)
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    with pytest.raises(RuntimeError, match="allowed only"):
+        validate_production_configuration()
+
+    monkeypatch.setattr(settings, "APP_ENV", "isolated_staging", raising=False)
+    monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False, raising=False)
+    monkeypatch.setattr(settings, "DHAN_MODE", "MOCK", raising=False)
+    validate_production_configuration()

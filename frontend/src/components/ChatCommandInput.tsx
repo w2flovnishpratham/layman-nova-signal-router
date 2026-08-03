@@ -1,3 +1,5 @@
+import { Input } from "@/components/ui/input"
+import { Button } from '@/components/ui/button'
 import { Send } from 'lucide-react'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
@@ -31,14 +33,14 @@ export function ChatCommandInput({ state, onUserReply, onSend }: Props) {
 
   return (
     <form className="chat-command-input" onSubmit={submit}>
-      <input
+      <Input variant="unstyled"
         value={value}
         onChange={(event) => setValue(event.target.value)}
         placeholder={state === 'PAUSED' ? 'Type "resume entries"' : 'Type "pause" or "resume entries"'}
       />
-      <button type="submit" aria-label="Send command">
+      <Button variant="unstyled" type="submit" aria-label="Send command">
         <Send size={15} />
-      </button>
+      </Button>
     </form>
   )
 }

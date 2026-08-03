@@ -88,17 +88,8 @@ def wallet_is_stale(snapshot: dict[str, Any]) -> bool:
     return datetime.now(last_checked.tzinfo) - last_checked > timedelta(seconds=STALE_AFTER_SECONDS)
 
 
-def refresh_wallet_snapshot(*, force: bool = False, log_event: bool = False) -> dict[str, Any]:
-    if get_engine_mode(legacy_fallback=False) == "paper":
-        snapshot = paper_wallet_snapshot()
-        if log_event:
-            log_audit_event("PAPER_WALLET_UPDATED", snapshot["message"], metadata=snapshot)
-        return snapshot
-
+def _fetch_and_persist_dhan_snapshot(*, proxy_url: str | None, log_event: bool) -> dict[str, Any]:
     current = get_wallet_snapshot()
-    if not force and not wallet_is_stale(current):
-        return sanitize_wallet_snapshot(current)
-
     creds = get_dhan_credentials()
     if not creds:
         snapshot = default_wallet_snapshot()
@@ -111,7 +102,11 @@ def refresh_wallet_snapshot(*, force: bool = False, log_event: bool = False) -> 
         )
         return sanitize_wallet_snapshot(set_wallet_snapshot(snapshot))
 
-    result = RealDhanClient().get_fund_limit(
+    # Only pass proxy_url when a caller explicitly overrides it, so the default
+    # path is still a bare RealDhanClient() call (matches what test doubles
+    # for RealDhanClient across the suite expect).
+    client = RealDhanClient(proxy_url=proxy_url) if proxy_url is not None else RealDhanClient()
+    result = client.get_fund_limit(
         client_id=creds.client_id,
         access_token=creds.access_token,
     )
@@ -132,3 +127,39 @@ def refresh_wallet_snapshot(*, force: bool = False, log_event: bool = False) -> 
             },
         )
     return sanitize_wallet_snapshot(snapshot)
+
+
+def refresh_wallet_snapshot(
+    *, force: bool = False, log_event: bool = False, proxy_url: str | None = None
+) -> dict[str, Any]:
+    """`proxy_url=""` bypasses the user's assigned execution-node proxy for this
+    one call (used by the standalone credential-verify check, which is
+    read-only and must not depend on static-IP infra). Leave unset (None) for
+    every other caller — live wallet polling still correctly routes through
+    the verified proxy.
+
+    Mode-aware: this is what the dashboard's live/paper toggle uses, so it
+    correctly serves the Paper virtual wallet when engine_mode is "paper".
+    For "what does Dhan actually say right now, regardless of engine mode"
+    (e.g. the standalone credential-verify check), use
+    fetch_dhan_wallet_snapshot() instead — that one never substitutes Paper."""
+    if get_engine_mode(legacy_fallback=False) == "paper":
+        snapshot = paper_wallet_snapshot()
+        if log_event:
+            log_audit_event("PAPER_WALLET_UPDATED", snapshot["message"], metadata=snapshot)
+        return snapshot
+
+    current = get_wallet_snapshot()
+    if not force and not wallet_is_stale(current):
+        return sanitize_wallet_snapshot(current)
+
+    return _fetch_and_persist_dhan_snapshot(proxy_url=proxy_url, log_event=log_event)
+
+
+def fetch_dhan_wallet_snapshot(*, proxy_url: str | None = None, log_event: bool = False) -> dict[str, Any]:
+    """Real Dhan funds, always — never the Paper virtual wallet, regardless of
+    the account's current engine_mode. Used by the standalone Dhan
+    credential-verify check: testing "is my Client ID/Access Token correct"
+    must answer from Dhan itself even while the engine happens to be set to
+    Paper, not silently substitute the Paper balance."""
+    return _fetch_and_persist_dhan_snapshot(proxy_url=proxy_url, log_event=log_event)

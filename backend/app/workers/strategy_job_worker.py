@@ -14,8 +14,12 @@ from app.config import settings
 from app.db import models
 from app.db.engine import database_configured, get_engine, session_scope
 from app.schemas.signal import NormalizedSignal
-from app.services import strategy_fanout, webhook_replay_store
-
+from app.services import (
+    private_webhook_execution,
+    setup_configuration,
+    strategy_fanout,
+    webhook_replay_store,
+)
 
 logger = logging.getLogger("nova_signal_router.strategy_jobs")
 _STOP_EVENT = threading.Event()
@@ -40,9 +44,38 @@ def _job_snapshot(job: models.StrategyExecutionJob) -> dict[str, Any]:
         "signal_payload": job.signal_payload,
         "lots": job.lots,
         "execution_mode": job.execution_mode,
+        "configuration_revision_id": job.configuration_revision_id,
+        "configuration_revision": job.configuration_revision,
         "attempts": job.attempts,
         "max_attempts": job.max_attempts,
     }
+
+
+def _job_configuration(job: dict[str, Any]) -> dict[str, Any] | None:
+    revision_id = job.get("configuration_revision_id")
+    required_mode = setup_configuration.configuration_mode_for_execution(
+        job["execution_mode"]
+    )
+    if revision_id is None:
+        return None
+    with session_scope() as db:
+        row = db.get(models.StrategyConfigurationRevision, revision_id)
+        if (
+            row is None
+            or row.user_id != job["user_id"]
+            or row.mode != required_mode
+            or int(row.revision) != int(job.get("configuration_revision") or 0)
+        ):
+            return None
+        return {
+            "id": str(row.id),
+            "strategy_instance_id": str(row.strategy_instance_id),
+            "strategy_version_id": str(row.strategy_version_id),
+            "mode": row.mode,
+            "revision": int(row.revision),
+            "configuration": dict(row.configuration_json or {}),
+            "risk": dict(row.risk_json or {}),
+        }
 
 
 def recover_stale_jobs() -> int:
@@ -117,6 +150,22 @@ def _complete_job(
         row.last_error = error
         row.completed_at = _now()
         row.updated_at = _now()
+    if status == "completed" and private_webhook_execution.is_private_job(
+        str(job.get("strategy_name") or "")
+    ):
+        try:
+            from app.services import c2_tradingview_service
+
+            c2_tradingview_service.record_paper_execution_evidence_from_job(
+                job["id"]
+            )
+        except Exception:
+            # The order result remains authoritative and completed. C2
+            # graduation fails closed because missing evidence prevents READY.
+            logger.exception(
+                "Could not persist C2 Paper evidence for job %s",
+                job["id"],
+            )
     _refresh_signal_summary(job["strategy_signal_id"])
 
 
@@ -174,13 +223,48 @@ def _execute_job(job: dict[str, Any]) -> None:
     with user_lock:
         try:
             signal = NormalizedSignal.model_validate(job["signal_payload"])
-            result = strategy_fanout.dispatch_signal_job(
-                user_id=job["user_id"],
-                strategy_name=job["strategy_name"],
-                lots=job["lots"],
-                execution_mode=job["execution_mode"],
-                signal=signal,
-            )
+            configuration = _job_configuration(job)
+            if (
+                setup_configuration.configuration_mode_for_execution(
+                    job["execution_mode"]
+                )
+                is not None
+                and configuration is None
+            ):
+                _complete_job(
+                    job,
+                    status="failed",
+                    error="CONFIGURATION_REVISION_UNAVAILABLE",
+                )
+                return
+            if private_webhook_execution.is_private_job(job["strategy_name"]):
+                # Private instance webhook job: revalidates instance state at
+                # processing time, then routes through the same execution path.
+                result = private_webhook_execution.execute_private_job(
+                    job,
+                    signal,
+                    configuration=configuration,
+                )
+            else:
+                # Shared/NOVA_SHARED broadcast jobs (strategy_fanout.enqueue_strategy_signal)
+                # carry a placeholder signal (no security_id/strike/expiry --
+                # see build_broadcast_signal) resolved here per-subscriber,
+                # same as the private-webhook path's own enricher. A signal
+                # that already has a contract (none do today, but future
+                # sources might) is left untouched.
+                result = strategy_fanout.dispatch_signal_job(
+                    user_id=job["user_id"],
+                    strategy_name=job["strategy_name"],
+                    lots=job["lots"],
+                    execution_mode=job["execution_mode"],
+                    signal=signal,
+                    configuration=configuration,
+                    signal_enricher=(
+                        private_webhook_execution._make_enricher(job["lots"])
+                        if signal.security_id is None
+                        else None
+                    ),
+                )
         except Exception as exc:
             logger.exception("Strategy job %s failed", job["id"])
             _complete_job(job, status="failed", error=str(exc))

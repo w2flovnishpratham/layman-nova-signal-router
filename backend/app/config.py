@@ -1,8 +1,12 @@
 import os
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain.trading_constants import (
+    DEFAULT_EXCHANGE_SEGMENT,  # noqa: F401 - compatibility re-export
+)
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -12,7 +16,6 @@ SUPPORT_PINE_MULTI_LEG_PAYLOAD = True
 DEFAULT_STRATEGY_CODE = "TRADINGVIEW_NIFTY_V1"
 DEFAULT_PRODUCT_TYPE = "INTRADAY"
 DEFAULT_ORDER_TYPE = "MARKET"
-DEFAULT_EXCHANGE_SEGMENT = "NSE_FNO"
 DEFAULT_INSTRUMENT_TYPE = "OPTIDX"
 QTY_MODE = "ABSOLUTE"
 DISABLED_OPTION_SL_PERCENT = 99.9
@@ -34,9 +37,16 @@ DEFAULT_RUNTIME_SETTINGS = {
     # H8 — Optimistic-locking counter; incremented on every settings write.
     # Clients pass the version they last read; mismatched writes return 409.
     "_version": 0,
+    # Revision of the last committed strategy+risk configuration. Both halves
+    # carry the same number, so a torn save is detectable before the engine starts.
+    "configuration_revision": 0,
     "allowed_option_side": "BOTH",
+    "configured_lots": 1,
     "max_trades_per_day": 0,
     "max_daily_loss": 0.0,
+    # No new entries after this IST time ("HH:MM"). Empty disables the cutoff.
+    # It never blocks exits, so an open position can always be closed.
+    "entry_cutoff_ist": "",
     # SL disable — when True, _broker_exit_levels sets the Super Order SL
     # leg to a floor price (~Rs.0.10 or 0.1% of entry) so it effectively never
     # fires. Position is exited by opposite Supertrend reversal, TP, or EOD.
@@ -60,7 +70,7 @@ DEFAULT_RUNTIME_SETTINGS = {
     "allow_exit": True,
     "emergency_stop": False,
     "global_kill_switch": False,
-    "paper_starting_balance": 100000.0,
+    "paper_starting_balance": 1000000.0,
     "paper_slippage_percent": 0.10,
 }
 
@@ -82,9 +92,108 @@ class Settings(BaseSettings):
     SESSION_TOKEN_TTL_SECONDS: int = 60 * 60 * 12
 
     WEBHOOK_TRADING_ENABLED: bool = False
+    # Phase 2A: shadow dual-write of JSON position state into PostgreSQL.
+    # JSON remains the execution read authority while this is rolled out.
+    POSITION_DB_SHADOW_WRITE_ENABLED: bool = False
+    # Hard budget for one shadow write (statement_timeout) and its lock waits
+    # (lock_timeout) on PostgreSQL; writes exceeding the budget count as
+    # failures and feed the circuit breaker.
+    POSITION_DB_SHADOW_WRITE_TIMEOUT_MS: int = 1500
+    POSITION_DB_SHADOW_LOCK_TIMEOUT_MS: int = 500
+    # Consecutive failures that open the breaker, and how long it stays open
+    # before a half-open recovery probe.
+    # Phase 2B1: explicit typed position operations write the PG ledger from
+    # the business transition points. PRECEDENCE: when this is on, the generic
+    # diff-based shadow hook is fully inert (POSITION_DB_SHADOW_WRITE_ENABLED
+    # then only labels the legacy generic mechanism). JSON remains the
+    # execution read authority either way.
+    POSITION_DB_TYPED_WRITES_ENABLED: bool = False
+    POSITION_DB_READ_SHADOW_ENABLED: bool = False
+    POSITION_DB_READ_SHADOW_TIMEOUT_MS: int = 250
+    POSITION_DB_READ_SHADOW_LOCK_TIMEOUT_MS: int = 100
+    POSITION_DB_READ_SHADOW_FAILURE_THRESHOLD: int = 5
+    POSITION_DB_READ_SHADOW_CIRCUIT_OPEN_SECONDS: int = 30
+    POSITION_DB_READ_SHADOW_SAMPLE_RATE: float = 1.0
+    POSITION_DB_READ_SHADOW_GRACE_MS: int = 500
+    ENABLE_TEST_MARKET_DATA_PROVIDER: bool = False
+    POSITION_DB_SHADOW_FAILURE_THRESHOLD: int = 5
+    POSITION_DB_SHADOW_CIRCUIT_OPEN_SECONDS: int = 60
     WEBHOOK_HMAC_REQUIRED: bool = False
     WEBHOOK_RATE_LIMIT_PER_MINUTE: int = 120
     WEBHOOK_REPLAY_RETENTION_SECONDS: int = 60 * 60 * 24 * 3
+
+    # Phase 3A: private strategy-instance webhook execution. Master rollout
+    # gate — when false the private webhook endpoint accepts nothing and
+    # creates no signals/jobs. Live private-webhook execution stays behind its
+    # own additional flag and remains disabled for the whole phase.
+    PRIVATE_STRATEGY_WEBHOOK_EXECUTION_ENABLED: bool = False
+    PRIVATE_STRATEGY_WEBHOOK_LIVE_EXECUTION_ENABLED: bool = False
+    CANONICAL_SIGNAL_SHADOW: bool = False
+    # R1B persistence flags. Server-side only (never API/webhook/frontend
+    # controllable); missing or invalid values resolve to False via the
+    # fail-safe validator below. R1B-2B connects decision evidence only to
+    # freshly committed HOLD signals; trading actions, outcomes and rejections
+    # remain disconnected.
+    R1B_CANONICAL_DECISION_PERSISTENCE: bool = False
+    R1B_CANONICAL_OUTCOME_PERSISTENCE: bool = False
+    R1B_SIGNAL_REJECTION_PERSISTENCE: bool = False
+    R1B_PINE_ANALYSIS_PERSISTENCE: bool = False
+    PRIVATE_WEBHOOK_MAX_AGE_SECONDS: int = 300
+    PRIVATE_WEBHOOK_MAX_FUTURE_SKEW_SECONDS: int = 30
+    PRIVATE_WEBHOOK_MAX_BODY_BYTES: int = 4096
+    PRIVATE_WEBHOOK_RATE_LIMIT_PER_MINUTE: int = 60
+    PERSONAL_PINE_MAX_SOURCE_BYTES: int = 262144
+    PINE_CONVERSION_MANUAL_PACKAGE_ENABLED: bool = True
+    PINE_CONVERSION_AI_ENABLED: bool = False
+    PINE_CONVERSION_PROVIDER: str = ""
+    PINE_CONVERSION_PROVIDER_URL: str = ""
+    PINE_CONVERSION_PROVIDER_API_KEY: str = ""
+    PINE_CONVERSION_MODEL: str = ""
+    PINE_CONVERSION_TIMEOUT_SECONDS: int = 120
+    PINE_CONVERSION_MAX_RETRIES: int = 1
+    PINE_CONVERSION_MAX_DAILY_REQUESTS_PER_USER: int = 10
+    PINE_CONVERSION_MAX_CONCURRENT_PER_USER: int = 1
+    PINE_CONVERSION_GLOBAL_CONCURRENCY: int = 4
+    PINE_CONVERSION_MAX_SOURCE_BYTES: int = 262144
+    PINE_CONVERSION_PROMPT_VERSION: str = "v2"
+    PINE_CONVERSION_QUALIFICATION_PROMPT_VERSION: str = "v3.1"
+    PINE_CONVERSION_QUALIFICATION_PACKAGE_ENABLED: bool = False
+    PINE_CONVERSION_WORKER_POLL_SECONDS: float = 1.0
+    PINE_CONVERSION_STALE_SECONDS: int = 300
+    # Admin-only C1 Claude conversion. This is independent from the existing
+    # owner opt-in queue and remains disabled unless explicitly configured.
+    CLAUDE_CONVERSION_ENABLED: bool = False
+    ANTHROPIC_API_KEY: str = ""
+    CLAUDE_CONVERSION_MODEL: str = ""
+    CLAUDE_CONVERSION_TIMEOUT_SECONDS: int = 1800
+    CLAUDE_CONVERSION_MAX_REPAIRS: int = 5
+    CLAUDE_CONVERSION_MAX_INPUT_TOKENS: int = 120000
+    CLAUDE_CONVERSION_MAX_OUTPUT_TOKENS: int = 64000
+    CLAUDE_CONVERSION_DAILY_ADMIN_LIMIT: int = 10
+    CLAUDE_CONVERSION_DAILY_GLOBAL_LIMIT: int = 50
+    # C2 product installation controls. Disabled by default; read-only C1 and
+    # the pre-existing private webhook behavior remain available independently.
+    C2_TRADINGVIEW_INSTALLATION_ENABLED: bool = False
+
+    @field_validator(
+        "CANONICAL_SIGNAL_SHADOW",
+        "R1B_CANONICAL_DECISION_PERSISTENCE",
+        "R1B_CANONICAL_OUTCOME_PERSISTENCE",
+        "R1B_SIGNAL_REJECTION_PERSISTENCE",
+        "R1B_PINE_ANALYSIS_PERSISTENCE",
+        mode="before",
+    )
+    @classmethod
+    def _safe_shadow_flag(cls, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off", ""}:
+                return False
+        return False
 
     DHAN_MODE: str = "MOCK"
     DHAN_READ_ONLY_REAL_DATA: bool = True
@@ -220,6 +329,9 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_SECRET: str = ""
     RAZORPAY_WEBHOOK_SECRET: str = ""
     RAZORPAY_PLAN_PREMIUM_MONTHLY: str = ""
+    # One-time purchase gating paper-mode engine start (independent of the
+    # live/static-IP/strategy-access bundle above).
+    RAZORPAY_PLAN_PAPER_PREMIUM: str = ""
     # Deprecated split-plan IDs retained only for legacy webhook compatibility.
     # New checkout creation uses RAZORPAY_PLAN_PREMIUM_MONTHLY.
     RAZORPAY_PLAN_LIVE_MONTHLY: str = ""

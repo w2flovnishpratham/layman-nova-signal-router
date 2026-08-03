@@ -15,11 +15,15 @@ from app.services.dhan_client import (
     DhanValidationResult,
     RealDhanClient,
 )
-from app.services.paper_portfolio import apply_paper_entry, apply_paper_exit, paper_wallet_snapshot
+from app.services.paper_portfolio import (
+    apply_paper_entry,
+    apply_paper_exit,
+    paper_wallet_snapshot,
+)
+from app.services.portfolio_analytics import persist_paper_trade
+from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import (
-    get_shared_market_credentials,
-    refresh_shared_token_after_auth_failure,
     shared_market_data_configured,
 )
 from app.services.state_store import (
@@ -29,7 +33,6 @@ from app.services.state_store import (
     scoped_runtime_path,
     utc_now,
 )
-
 
 _ORDER_LOCK = threading.RLock()
 _ORDERS: list[dict[str, Any]] = []
@@ -58,35 +61,35 @@ def _shared_market_data_unavailable_result(*, exchange_segment: str, security_id
 
 
 def _shared_market_ltp(*, exchange_segment: str, security_id: str) -> DhanLtpResult:
-    creds = get_shared_market_credentials()
-    if creds is None:
-        return _shared_market_data_unavailable_result(exchange_segment=exchange_segment, security_id=security_id)
+    from app.services.shared_market_data import test_market_data_provider_enabled
 
-    # Shared paper-data reads use the VPS/global Dhan data account, not a per-user
-    # execution-node proxy. Passing an explicit empty proxy skips user-context proxy binding.
-    result = RealDhanClient(proxy_url="").get_ltp(
-        client_id=creds.client_id,
-        access_token=creds.access_token,
+    if test_market_data_provider_enabled():
+        return DhanLtpResult(
+            success=True, message="Deterministic isolated-staging quote.", ltp=100.0,
+            exchange_segment=exchange_segment, security_id=security_id,
+            raw_response={"mode": "paper", "source": "test_market_data"},
+        )
+    quote = get_quote_snapshot(
         exchange_segment=exchange_segment,
         security_id=security_id,
+        max_age_seconds=2.0,
+        allow_rest_fallback=True,
     )
-    if (
-        not result.success
-        and refresh_shared_token_after_auth_failure(
-            status_code=result.status_code,
-            message=result.message or result.error,
-            raw_response=result.raw_response,
-        )
-    ):
-        refreshed = get_shared_market_credentials()
-        if refreshed is not None:
-            result = RealDhanClient(proxy_url="").get_ltp(
-                client_id=refreshed.client_id,
-                access_token=refreshed.access_token,
-                exchange_segment=exchange_segment,
-                security_id=security_id,
-            )
-    return result
+    return DhanLtpResult(
+        success=quote.get("ltp") is not None and not bool(quote.get("stale")),
+        message=str(quote.get("message") or "Quote unavailable."),
+        ltp=quote.get("ltp"),
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        status_code=429 if quote.get("status") == "RATE_LIMITED" else None,
+        raw_response={
+            "source": quote.get("source"),
+            "status": quote.get("status"),
+            "received_at": quote.get("received_at"),
+            "age_seconds": quote.get("age_seconds"),
+        },
+        error=quote.get("error"),
+    )
 
 
 def _simulated_charges(qty: int, price: float, transaction_type: str) -> float:
@@ -112,6 +115,86 @@ def _record_order(order: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({"timestamp": utc_now(), **order}, separators=(",", ":")) + "\n")
+
+
+def confirm_position_adjustment_fill(
+    *,
+    position: dict[str, Any],
+    qty: int,
+    transaction_type: str,
+    operation_id: str,
+) -> dict[str, Any]:
+    """Confirm a market-only Paper fill without mutating the portfolio ledger.
+
+    Add/partial-exit orchestration persists the authoritative JSON position and
+    Paper ledger under its own durable operation. This function contributes
+    only a real-source quote, configured slippage, charges, and a confirmed
+    simulated fill identity.
+    """
+    transaction = str(transaction_type or "").upper()
+    if transaction not in {"BUY", "SELL"} or qty <= 0:
+        return {"success": False, "status": "REJECTED", "error": "Invalid Paper adjustment order."}
+    payload = {
+        "exchangeSegment": str(position.get("exchange_segment") or "NSE_FNO"),
+        "securityId": str(position.get("security_id") or ""),
+        "tradingSymbol": str(
+            position.get("trading_symbol")
+            or position.get("symbol")
+            or "NIFTY option"
+        ),
+    }
+    if not payload["securityId"]:
+        return {
+            "success": False,
+            "status": "REJECTED",
+            "error": "Paper adjustment requires the confirmed position security ID.",
+        }
+    quote = PaperBroker()._ltp(client_id="", access_token="", payload=payload)
+    if not quote.success or quote.ltp is None:
+        return {
+            "success": False,
+            "status": "REJECTED",
+            "error": quote.message or quote.error or "Authoritative option LTP is unavailable.",
+            "quote": quote.raw_response,
+        }
+    runtime = get_runtime_settings()
+    raw_slippage = runtime.get("paper_slippage_percent")
+    slippage_percent = 0.10 if raw_slippage in (None, "") else float(raw_slippage)
+    slippage = max(slippage_percent, 0.0) / 100
+    multiplier = 1 + slippage if transaction == "BUY" else 1 - slippage
+    fill_price = _round_tick(float(quote.ltp) * multiplier)
+    charges = _simulated_charges(qty, fill_price, transaction)
+    order_id = f"PAPER-ADJ-{operation_id[:48]}"
+    fill = {
+        "orderId": order_id,
+        "operationId": operation_id,
+        "orderStatus": "TRADED",
+        "avgPrice": fill_price,
+        "quantity": qty,
+        "filledQty": qty,
+        "remainingQuantity": 0,
+        "transactionType": transaction,
+        "tradingSymbol": payload["tradingSymbol"],
+        "securityId": payload["securityId"],
+        "exchangeSegment": payload["exchangeSegment"],
+        "paper": True,
+        "mode": "paper",
+        "simulatedCharges": charges,
+        "sourceLtp": quote.ltp,
+        "slippagePercent": slippage * 100,
+        "confirmedAdjustmentFill": True,
+    }
+    _record_order(fill)
+    log_order_event({"event": "PAPER_POSITION_ADJUSTMENT_FILLED", **fill})
+    return {
+        "success": True,
+        "status": "TRADED",
+        "order_id": order_id,
+        "fill_price": fill_price,
+        "filled_qty": qty,
+        "charges": charges,
+        "source_ltp": quote.ltp,
+    }
 
 
 class PaperBroker:
@@ -156,11 +239,20 @@ class PaperBroker:
         charges = _simulated_charges(qty, fill_price, transaction)
         symbol = str(payload.get("tradingSymbol") or payload.get("securityId") or "NIFTY option")
 
+        origin = payload.get("_nova_origin")
+        strategy_code = payload.get("_nova_strategy_code")
         try:
             if transaction == "BUY":
-                apply_paper_entry(qty=qty, price=fill_price, charges=charges, symbol=symbol, order_id=order_id)
+                apply_paper_entry(
+                    qty=qty, price=fill_price, charges=charges, symbol=symbol, order_id=order_id, origin=origin,
+                    strategy_code=strategy_code,
+                )
             else:
-                apply_paper_exit(qty=qty, exit_price=fill_price, charges=charges, symbol=symbol, order_id=order_id)
+                portfolio = apply_paper_exit(
+                    qty=qty, exit_price=fill_price, charges=charges, symbol=symbol, order_id=order_id
+                )
+                if portfolio.closed_trades:
+                    persist_paper_trade(portfolio.closed_trades[-1])
         except ValueError as exc:
             return DhanOrderResult(
                 success=False,

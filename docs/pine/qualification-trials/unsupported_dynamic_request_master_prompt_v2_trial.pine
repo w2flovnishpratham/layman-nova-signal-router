@@ -1,0 +1,2 @@
+//@version=6
+// UNSUPPORTED: arbitrary user-selected symbol and timeframe cannot be safely normalized to NIFTY-only execution.

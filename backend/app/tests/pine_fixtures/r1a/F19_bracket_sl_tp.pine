@@ -1,0 +1,4 @@
+//@version=6
+strategy("F19")
+strategy.entry("Long", strategy.long)
+strategy.exit("Bracket", "Long", stop=close - 20, limit=close + 40)

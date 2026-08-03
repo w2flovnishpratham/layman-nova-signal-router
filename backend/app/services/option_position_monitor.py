@@ -4,6 +4,8 @@ import logging
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE, DISABLED_OPTION_SL_PRICE_FRACTION
@@ -18,15 +20,22 @@ from app.services.credential_vault import get_dhan_credentials, get_webhook_secr
 from app.services.dhan_client import RealDhanClient, get_broker_client
 from app.services.dhan_marketfeed_ws import (
     clear_marketfeed_subscription,
-    ensure_marketfeed_subscription,
-    get_marketfeed_ltp,
     marketfeed_ws_status,
     stop_marketfeed_ws,
 )
-from app.services.market_snapshot import build_nifty_snapshot, get_shared_nifty_snapshot
+from app.services.market_snapshot import get_shared_nifty_snapshot
+from app.services.quote_service import get_quote_snapshot
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import market_data_credentials, shared_market_data_configured
-from app.services.state_store import get_engine_mode, get_open_position, get_runtime_settings, set_open_position, utc_now
+from app.services import position_operations
+from app.services.state_store import (
+    get_engine_mode,
+    get_open_position,
+    get_runtime_settings,
+    ensure_open_position_identity,
+    patch_open_position_cas,
+    utc_now,
+)
 from app.store.redis_session import session_store
 
 
@@ -40,6 +49,26 @@ EXIT_COOLDOWN_SECONDS = 15.0
 _LAST_REST_FALLBACK_AT: dict[tuple[str, str], float] = {}
 LTP_HISTORY_LIMIT = 24
 
+# Quote freshness/retention thresholds (seconds). LTP_STALE_AFTER_SECONDS mirrors
+# the existing display staleness boundary in runtime_reliability: once the last
+# valid quote is older than this, the retained value is shown as STALE. Beyond
+# LTP_RETENTION_SECONDS (a bounded 4x the stale boundary) we stop trusting the
+# retained value and report UNAVAILABLE rather than showing a minutes-old price.
+LTP_STALE_AFTER_SECONDS = 15.0
+LTP_RETENTION_SECONDS = 60.0
+
+
+def _seconds_since(iso_ts: Any) -> float | None:
+    if not iso_ts:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(iso_ts).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, round((datetime.now(timezone.utc) - parsed).total_seconds(), 2))
+
 
 def _as_float(value: Any, default: float | None = None) -> float | None:
     if value in (None, ""):
@@ -48,6 +77,25 @@ def _as_float(value: Any, default: float | None = None) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _authoritative_quote(*, exchange_segment: str, security_id: str, allow_rest_fallback: bool = True):
+    snapshot = get_quote_snapshot(
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        max_age_seconds=2.0,
+        allow_rest_fallback=allow_rest_fallback,
+    )
+    return SimpleNamespace(
+        success=snapshot.get("ltp") is not None and not bool(snapshot.get("stale")),
+        ltp=snapshot.get("ltp"),
+        source=snapshot.get("source"),
+        status=snapshot.get("status"),
+        message=snapshot.get("message"),
+        error=snapshot.get("error"),
+        received_at=snapshot.get("received_at"),
+        age_seconds=snapshot.get("age_seconds"),
+    )
 
 
 def _as_positive_float(value: Any, default: float) -> float:
@@ -134,6 +182,15 @@ def _active_exit_levels(position: dict[str, Any]) -> tuple[float, float] | None:
     return sl_price, tp_price
 
 
+def _cash_loss_stop(position: dict[str, Any], entry_price: float, sl_price: float) -> float:
+    rule = position.get("maximum_loss_rule")
+    amount = _as_float(rule.get("amount")) if isinstance(rule, dict) else None
+    qty = _as_int(position.get("qty"), 0)
+    if amount is None or amount <= 0 or qty <= 0:
+        return sl_price
+    return max(sl_price, entry_price - amount / qty)
+
+
 def _broker_managed_exit(position: dict[str, Any]) -> bool:
     return str(position.get("exit_management") or "").upper() == "DHAN_SUPER"
 
@@ -143,14 +200,37 @@ def _display_exit_levels(position: dict[str, Any], entry_price: float, runtime: 
     active_levels = _active_exit_levels(position)
     if active_levels is not None:
         sl_price, tp_price = active_levels
+        sl_price = _cash_loss_stop(position, entry_price, sl_price)
         sl_percent = max(round(((entry_price - sl_price) / entry_price) * 100, 2), 0.0)
         tp_percent = max(round(((tp_price - entry_price) / entry_price) * 100, 2), 0.0)
         return sl_percent, tp_percent, sl_price, tp_price
+    stop_rule = position.get("entry_stop_rule")
+    target_rule = position.get("entry_target_rule")
+    if isinstance(stop_rule, dict) and isinstance(target_rule, dict):
+        mode = str(stop_rule.get("mode") or "CUSTOM_SL_TP").upper()
+        stop_value = _as_float(stop_rule.get("value"), 0.0) or 0.0
+        target_value = _as_float(target_rule.get("value"), 0.0) or 0.0
+        sl_price = 0.1 if mode in {"FLIPS_ONLY", "TARGET_PROFIT"} else (
+            max(0.1, entry_price - stop_value)
+            if str(stop_rule.get("basis") or "").upper() == "POINTS"
+            else max(0.1, entry_price * (1 - stop_value / 100))
+        )
+        tp_price = 1_000_000.0 if mode == "FLIPS_ONLY" else (
+            entry_price + target_value
+            if str(target_rule.get("basis") or "").upper() == "POINTS"
+            else entry_price * (1 + target_value / 100)
+        )
+        sl_price = _cash_loss_stop(position, entry_price, sl_price)
+        sl_percent = max(round((entry_price - sl_price) / entry_price * 100, 2), 0.0)
+        tp_percent = max(round((tp_price - entry_price) / entry_price * 100, 2), 0.0)
+        return sl_percent, tp_percent, round(sl_price, 2), round(tp_price, 2)
     if _runtime_bool(runtime, "option_disable_sl", True):
         sl_price = max(0.10, round(entry_price * DISABLED_OPTION_SL_PRICE_FRACTION, 2))
     if _broker_managed_exit(position):
         sl_price = _as_float(position.get("broker_sl_price"), sl_price) or sl_price
         tp_price = _as_float(position.get("broker_tp_price"), tp_price) or tp_price
+    sl_price = _cash_loss_stop(position, entry_price, sl_price)
+    sl_percent = max(round(((entry_price - sl_price) / entry_price) * 100, 2), 0.0)
     return sl_percent, tp_percent, sl_price, tp_price
 
 
@@ -169,9 +249,14 @@ def _pnl_snapshot(
     qty = _as_int(position.get("qty"), 0)
     unrealized_pnl = round((ltp - entry_price) * qty, 2)
     pnl_percent = round(((ltp - entry_price) / entry_price) * 100, 2) if entry_price > 0 else None
+    checked_at = utc_now()
+    # A real quote just resolved: it is the new last-valid observation. Mark it
+    # STALE only if the quote itself is already older than the display boundary.
+    quote_status = "stale" if (quote_age_seconds is not None and quote_age_seconds > LTP_STALE_AFTER_SECONDS) else "ready"
     return {
         "source": source,
         "status": status,
+        "quote_status": quote_status,
         "exit_management": str(position.get("exit_management") or "SERVER").upper(),
         "entry_price": entry_price,
         "ltp": ltp,
@@ -183,14 +268,111 @@ def _pnl_snapshot(
         "ltp_history": _ltp_history(position, ltp),
         "exit_reason": exit_reason,
         "quote_age_seconds": quote_age_seconds,
-        "last_checked_at": utc_now(),
+        "last_checked_at": checked_at,
+        # Last-valid observation, carried forward across transient failures so a
+        # temporary feed gap never erases the truthful price/P&L (root cause #5).
+        "last_valid_ltp": ltp,
+        "last_valid_unrealized_pnl": unrealized_pnl,
+        "last_valid_pnl_percent": pnl_percent,
+        "last_valid_quote_at": checked_at,
+        "last_valid_quote_source": source,
     }
 
 
-def _with_live_pnl(position: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
-    updated = dict(position)
-    updated["live_pnl"] = snapshot
-    return set_open_position(updated)
+def _ensure_position_identity(position: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a legacy open position (no position_id/version) exactly once so
+    the monitor's compare-and-set writes have an identity to check against."""
+    if not position.get("has_open_position") or position.get("position_id"):
+        return position
+    normalized = ensure_open_position_identity()
+    if normalized.get("position_id") and normalized.get("position_id") != position.get("position_id"):
+        log_order_event(
+            {
+                "event": "LEGACY_POSITION_IDENTITY_NORMALIZED",
+                "position_id": normalized.get("position_id"),
+                "security_id": normalized.get("security_id"),
+            }
+        )
+    return normalized
+
+
+def _patch_monitor_fields(
+    position: dict[str, Any], patch: dict[str, Any]
+) -> tuple[bool, dict[str, Any]]:
+    """Compare-and-set only monitoring fields onto the position captured at read
+    time. If an exit closed or advanced the position since, the stale write is
+    rejected (and logged) instead of resurrecting a flat position (root cause #1).
+    Never writes lifecycle/identity fields from an old snapshot."""
+    position_id = position.get("position_id")
+    position_version = position.get("position_version")
+    if not position_id:
+        return False, get_open_position()
+    applied, current = patch_open_position_cas(
+        position_id=str(position_id),
+        position_version=int(position_version or 0),
+        patch=patch,
+        reject_when_exit_pending=True,
+        # Cosmetic LTP/live_pnl tick: keep the anti-resurrection CAS guard but do
+        # NOT advance the version, or every tick would break the user's pending
+        # Add Lots / Partial Exit / Edit SL-TP operation.
+        bump_version=False,
+    )
+    if not applied:
+        log_order_event(
+            {
+                "event": "STALE_MONITOR_WRITE_REJECTED",
+                "position_id": position_id,
+                "expected_version": position_version,
+                "current_has_open_position": bool(current.get("has_open_position")),
+                "current_position_id": current.get("position_id"),
+                "current_position_version": current.get("position_version"),
+            }
+        )
+    return applied, current
+
+
+def _with_live_pnl(position: dict[str, Any], snapshot: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    return _patch_monitor_fields(position, {"live_pnl": snapshot})
+
+
+def _retained_live_pnl(position: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """Overlay quote status without erasing the last confirmed price/P&L."""
+    previous = position.get("live_pnl")
+    retained = dict(previous) if isinstance(previous, dict) else {}
+    retained.update(changes)
+    return retained
+
+
+def _stale_or_unavailable_live_pnl(position: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """Quote resolution failed. Preserve the last valid LTP/P&L and mark it STALE
+    while it is still within the retention window; only report UNAVAILABLE once no
+    valid quote has ever been seen or the retained value has aged past retention.
+
+    Never claims a fresh source (e.g. DHAN_WEBSOCKET) for a retained value — it
+    keeps the source of the last valid observation (root cause #5)."""
+    previous = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
+    retained = dict(previous)
+    retained.update(changes)
+
+    last_valid_ltp = previous.get("last_valid_ltp")
+    age = _seconds_since(previous.get("last_valid_quote_at"))
+    within_retention = (
+        last_valid_ltp is not None and age is not None and age <= LTP_RETENTION_SECONDS
+    )
+    retained["quote_age_seconds"] = age
+    # Source must reflect the retained observation, not the failed fetch.
+    retained["source"] = previous.get("last_valid_quote_source") or previous.get("source")
+    if within_retention:
+        retained["quote_status"] = "stale"
+        retained["ltp"] = last_valid_ltp
+        retained["unrealized_pnl"] = previous.get("last_valid_unrealized_pnl")
+        retained["pnl_percent"] = previous.get("last_valid_pnl_percent")
+    else:
+        retained["quote_status"] = "unavailable"
+        retained["ltp"] = None
+        retained["unrealized_pnl"] = None
+        retained["pnl_percent"] = None
+    return retained
 
 
 def _client() -> Any:
@@ -259,9 +441,7 @@ def _confirm_exit_trigger(
     trigger_reason: str,
     trigger_snapshot: dict[str, Any],
 ) -> tuple[str | None, dict[str, Any] | None]:
-    quote = client.get_ltp(
-        client_id=creds.client_id,
-        access_token=creds.access_token,
+    quote = _authoritative_quote(
         exchange_segment=exchange_segment,
         security_id=security_id,
     )
@@ -418,17 +598,22 @@ def _sync_entry_fill_if_needed(position: dict[str, Any], client: Any, client_id:
             source_status = fallback_status or source_status
 
     if avg_price is None:
-        updated = dict(position)
-        updated["live_pnl"] = {
-            "source": "dhan_order_status",
-            "status": "waiting_entry_fill",
-            "message": "Waiting for Dhan to confirm entry fill price.",
-            "entry_order_id": order_id,
-            "last_checked_at": utc_now(),
-            "order_status": poll.order_status,
-            "error": poll.error,
-        }
-        return set_open_position(updated)
+        _applied, current = _patch_monitor_fields(
+            position,
+            {
+                "live_pnl": _retained_live_pnl(
+                    position,
+                    source="dhan_order_status",
+                    status="waiting_entry_fill",
+                    message="Waiting for Dhan to confirm entry fill price.",
+                    entry_order_id=order_id,
+                    last_checked_at=utc_now(),
+                    order_status=poll.order_status,
+                    error=poll.error,
+                )
+            },
+        )
+        return current
 
     updated = dict(position)
     updated["entry_price"] = avg_price
@@ -471,7 +656,20 @@ def _sync_entry_fill_if_needed(position: dict[str, Any], client: Any, client_id:
             "security_id": position.get("security_id"),
         }
     )
-    return set_open_position(updated)
+    patch = {
+        key: value
+        for key, value in updated.items()
+        if key not in {"has_open_position", "position_id", "position_version"}
+        and value != position.get(key)
+    }
+    applied, result = _patch_monitor_fields(position, patch)
+    if not applied:
+        return result
+    # Ordering: authoritative JSON write first, typed DB operation second.
+    position_operations.on_entry_fill_synced(
+        result, order_id=str(order_id), fill_price=avg_price
+    )
+    return result
 
 
 def _exit_cooldown_active(position: dict[str, Any]) -> bool:
@@ -484,21 +682,28 @@ def _exit_cooldown_active(position: dict[str, Any]) -> bool:
     return (time.time() - last_attempt_at) < EXIT_COOLDOWN_SECONDS
 
 
-def _mark_exit_attempt(position: dict[str, Any], reason: str, snapshot: dict[str, Any]) -> dict[str, Any]:
-    updated = dict(position)
-    updated["live_pnl"] = snapshot
-    updated["server_exit"] = {
-        "exit_in_progress": True,
-        "last_attempt_at": utc_now(),
-        "last_attempt_epoch": time.time(),
-        "reason": reason,
-    }
-    return set_open_position(updated)
+def _mark_exit_attempt(position: dict[str, Any], reason: str, snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    applied, updated = _patch_monitor_fields(
+        position,
+        {
+            "live_pnl": snapshot,
+            "server_exit": {
+                "exit_in_progress": True,
+                "last_attempt_at": utc_now(),
+                "last_attempt_epoch": time.time(),
+                "reason": reason,
+            },
+        },
+    )
+    return updated if applied else None
 
 
 def _unlock_exit_attempt(position: dict[str, Any], result: dict[str, Any]) -> None:
     current = get_open_position()
-    if not current.get("has_open_position"):
+    if (
+        not current.get("has_open_position")
+        or current.get("position_id") != position.get("position_id")
+    ):
         return
     server_exit = current.get("server_exit")
     if not isinstance(server_exit, dict):
@@ -515,9 +720,7 @@ def _unlock_exit_attempt(position: dict[str, Any], result: dict[str, Any]) -> No
             },
         }
     )
-    updated = dict(current)
-    updated["server_exit"] = server_exit
-    set_open_position(updated)
+    _patch_monitor_fields(current, {"server_exit": server_exit})
 
 
 def _exit_signal(position: dict[str, Any], reason: str, snapshot: dict[str, Any]) -> NormalizedSignal:
@@ -553,6 +756,8 @@ def _route_server_exit(position: dict[str, Any], reason: str, snapshot: dict[str
         return
 
     marked = _mark_exit_attempt(position, reason, snapshot)
+    if marked is None:
+        return
     log_audit_event(
         "SERVER_SIDE_OPTION_EXIT_TRIGGERED",
         f"Server-side option {reason} triggered from Dhan LTP.",
@@ -608,21 +813,24 @@ def monitor_once(*, force_rest: bool = False) -> None:
     if not _monitor_should_run(runtime):
         return
 
-    position = get_open_position()
+    position = _ensure_position_identity(get_open_position())
     if not _market_is_open():
         if not force_rest:
             clear_marketfeed_subscription()
-        current = dict(get_open_position())
-        if current.get("has_open_position"):
-            current["live_pnl"] = {
-                "source": "market_closed",
-                "status": "market_closed",
-                "message": "Market is closed; Dhan WebSocket and REST LTP fetching are disabled.",
-                "ltp": None,
-                "last_checked_at": utc_now(),
-                "ws_status": marketfeed_ws_status(),
-            }
-            set_open_position(current)
+        if position.get("has_open_position"):
+            _patch_monitor_fields(
+                position,
+                {
+                    "live_pnl": _retained_live_pnl(
+                        position,
+                        source="market_closed",
+                        status="market_closed",
+                        message="Market is closed; Dhan WebSocket and REST LTP fetching are disabled.",
+                        last_checked_at=utc_now(),
+                        ws_status=marketfeed_ws_status(),
+                    )
+                },
+            )
         return
 
     snapshot_published = _publish_market_snapshot_from_monitor()
@@ -654,47 +862,26 @@ def monitor_once(*, force_rest: bool = False) -> None:
     if entry_price_before_sync is None:
         publish_active_trade_from_sync(position, get_engine_mode())
 
-    source = "REST" if force_rest else _ltp_source(runtime)
-    quote: Any = None
-    if source in {"WEBSOCKET", "AUTO"} and _runtime_bool(runtime, "marketfeed_ws_enabled", True):
-        ensure_marketfeed_subscription(exchange_segment=exchange_segment, security_id=security_id)
-        quote = get_marketfeed_ltp(
-            exchange_segment=exchange_segment,
-            security_id=security_id,
-            max_age_seconds=_ws_stale_seconds(runtime),
-        )
-
-    if quote is None or not quote.success:
-        if _rest_fallback_allowed(runtime, exchange_segment, security_id):
-            quote = market_client.get_ltp(
-                client_id=market_creds.client_id,
-                access_token=market_creds.access_token,
-                exchange_segment=exchange_segment,
-                security_id=security_id,
-            )
-        else:
-            current = dict(get_open_position())
-            if current.get("has_open_position"):
-                current["live_pnl"] = _ltp_error_snapshot(
-                    quote=quote,
-                    status="ws_waiting" if quote is None or quote.error == "ws_tick_missing" else "ws_stale",
-                    ws_status=marketfeed_ws_status(),
-                )
-                set_open_position(current)
-            return
+    quote = _authoritative_quote(
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        allow_rest_fallback=force_rest or _rest_fallback_allowed(runtime, exchange_segment, security_id),
+    )
 
     if not quote.success or quote.ltp is None:
-        current = dict(get_open_position())
-        if current.get("has_open_position"):
-            current["live_pnl"] = {
-                "source": getattr(quote, "source", "dhan_marketfeed_ltp"),
-                "status": "ltp_error",
-                "message": quote.message,
-                "error": quote.error,
-                "last_checked_at": utc_now(),
-                "ws_status": marketfeed_ws_status(),
-            }
-            set_open_position(current)
+        _patch_monitor_fields(
+            position,
+            {
+                "live_pnl": _stale_or_unavailable_live_pnl(
+                    position,
+                    status="ltp_error",
+                    message=quote.message,
+                    error=quote.error,
+                    last_checked_at=utc_now(),
+                    ws_status=marketfeed_ws_status(),
+                )
+            },
+        )
         log_order_event(
             {
                 "event": "OPTION_LTP_FETCH_FAILED",
@@ -746,7 +933,12 @@ def monitor_once(*, force_rest: bool = False) -> None:
             snapshot = confirmed_snapshot
         exit_reason = confirmed_reason
 
-    updated = _with_live_pnl(position, snapshot)
+    applied, updated = _with_live_pnl(position, snapshot)
+    if not applied:
+        # The position we were monitoring was exited/closed (or advanced) during
+        # quote resolution. Discard this stale iteration: do not resurrect it and
+        # do not route a server exit on stale state.
+        return
     publish_tick_pnl_from_sync(
         symbol=str(position.get("trading_symbol") or position.get("symbol") or "NIFTY option"),
         security_id=security_id,

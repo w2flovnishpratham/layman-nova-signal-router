@@ -1,0 +1,79 @@
+//@version=6
+indicator("NOVA Supertrend v4 Manual Prompt Trial", overlay=true, format=format.price, precision=2)
+
+credentialPlaceholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"
+credential = input.string(credentialPlaceholder, "NOVA Strategy Credential", group="NOVA Webhook")
+enableHoldTest = input.bool(false, "Send one HOLD connectivity test", group="NOVA Webhook")
+enableEodExit = input.bool(false, "Optional EOD EXIT", group="NOVA Extensions",
+ tooltip="Duplicate safety only; backend square-off remains authoritative.")
+eodExitHour = input.int(15, "EOD hour IST", minval=0, maxval=23, group="NOVA Extensions")
+eodExitMinute = input.int(15, "EOD minute IST", minval=0, maxval=59, group="NOVA Extensions")
+
+Periods = input.int(10, "ATR Period", minval=1)
+src = input.source(hl2, "Source")
+Multiplier = input.float(3.0, "ATR Multiplier", minval=0.1, step=0.1)
+changeATR = input.bool(true, "Change ATR Calculation Method ?")
+showsignals = input.bool(true, "Show Buy/Sell Signals ?")
+highlighting = input.bool(true, "Highlighter On/Off ?")
+
+indiaTimezone = "Asia/Kolkata"
+isFiveMinuteChart = timeframe.isminutes and timeframe.multiplier == 5
+credentialReady = credential != credentialPlaceholder and str.length(credential) >= 20 and str.substring(credential, 0, 4) == "nwk_"
+
+atr2 = ta.sma(ta.tr(true), Periods)
+atrValue = changeATR ? ta.atr(Periods) : atr2
+up = src - Multiplier * atrValue
+up1 = nz(up[1], up)
+up := close[1] > up1 ? math.max(up, up1) : up
+dn = src + Multiplier * atrValue
+dn1 = nz(dn[1], dn)
+dn := close[1] < dn1 ? math.min(dn, dn1) : dn
+var int trend = 1
+trend := nz(trend[1], trend)
+trend := trend == -1 and close > dn1 ? 1 : trend == 1 and close < up1 ? -1 : trend
+
+buySignal = trend == 1 and trend[1] == -1
+sellSignal = trend == -1 and trend[1] == 1
+
+signalId(string action) =>
+    "NOVA-ST-V2-TRIAL:" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action
+
+signalTime() =>
+    str.format_time(time_close, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+
+webhookPayload(string action) =>
+    '{"credential":"' + credential + '","action":"' + action + '","signal_id":"' + signalId(action) + '","signal_time":"' + signalTime() + '"}'
+
+productionAlertReady = barstate.isrealtime and barstate.isconfirmed and isFiveMinuteChart and credentialReady
+
+var bool holdSent = false
+if not enableHoldTest
+    holdSent := false
+if productionAlertReady and enableHoldTest and not holdSent
+    alert(webhookPayload("HOLD"), alert.freq_once_per_bar_close)
+    holdSent := true
+
+if productionAlertReady and buySignal
+    alert(webhookPayload("BUY_CE"), alert.freq_once_per_bar_close)
+if productionAlertReady and sellSignal
+    alert(webhookPayload("BUY_PE"), alert.freq_once_per_bar_close)
+
+closeDateIst = str.format_time(time_close, "yyyy-MM-dd", indiaTimezone)
+eodExitEvent = enableEodExit and hour(time_close, indiaTimezone) == eodExitHour and minute(time_close, indiaTimezone) == eodExitMinute
+var string lastEodExitDate = ""
+if productionAlertReady and eodExitEvent and lastEodExitDate != closeDateIst
+    alert(webhookPayload("EXIT"), alert.freq_once_per_bar_close)
+    lastEodExitDate := closeDateIst
+
+upPlot = plot(trend == 1 ? up : na, title="Up Trend", style=plot.style_linebr, linewidth=2, color=color.green)
+plotshape(buySignal ? up : na, "UpTrend Begins", location=location.absolute, style=shape.circle, size=size.tiny, color=color.green)
+plotshape(buySignal and showsignals ? up : na, "Buy", text="Buy", location=location.absolute, style=shape.labelup, size=size.tiny, color=color.green, textcolor=color.white)
+dnPlot = plot(trend == 1 ? na : dn, title="Down Trend", style=plot.style_linebr, linewidth=2, color=color.red)
+plotshape(sellSignal ? dn : na, "DownTrend Begins", location=location.absolute, style=shape.circle, size=size.tiny, color=color.red)
+plotshape(sellSignal and showsignals ? dn : na, "Sell", text="Sell", location=location.absolute, style=shape.labeldown, size=size.tiny, color=color.red, textcolor=color.white)
+mPlot = plot(ohlc4, title="", style=plot.style_circles, linewidth=1, color=color.new(color.white, 100))
+fill(mPlot, upPlot, color=highlighting and trend == 1 ? color.new(color.green, 0) : color.white)
+fill(mPlot, dnPlot, color=highlighting and trend == -1 ? color.new(color.red, 0) : color.white)
+
+bgcolor(not isFiveMinuteChart ? color.new(color.orange, 88) : na, title="Five-minute timeframe warning")
+bgcolor(not credentialReady ? color.new(color.red, 92) : na, title="Credential placeholder warning")

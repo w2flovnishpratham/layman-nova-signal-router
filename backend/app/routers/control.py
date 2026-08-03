@@ -1,7 +1,6 @@
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException
 
-from app.config import settings
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import get_webhook_secret
 from app.services.state_store import (
@@ -13,11 +12,25 @@ from app.services.state_store import (
     get_open_position,
 )
 from app.services.execution_router import route_signal
+from app.services.execution_context import current_execution_user
+from app.services import runtime_reliability
 from app.schemas.signal import NormalizedSignal
 import time
 
 
 router = APIRouter()
+
+
+def _synchronize_owner_runtime_session() -> None:
+    user = current_execution_user()
+    if user is None:
+        return
+    from app.services.chat_event_publisher import synchronize_runtime_sessions_from_sync
+
+    synchronize_runtime_sessions_from_sync(
+        runtime_reliability.runtime_status(user),
+        user_id=user.id_str,
+    )
 
 
 class ToggleRequest(BaseModel):
@@ -87,6 +100,7 @@ def clear_seen() -> dict:
 @router.post("/pause-entries")
 def pause_entries() -> dict:
     settings_data = update_runtime_settings(allow_entry=False)
+    _synchronize_owner_runtime_session()
     log_audit_event("ALLOW_ENTRY_DISABLED", "Pause Entries enabled.")
     return {"ok": True, "settings": settings_data}
 
@@ -94,6 +108,7 @@ def pause_entries() -> dict:
 @router.post("/resume-entries")
 def resume_entries() -> dict:
     settings_data = update_runtime_settings(allow_entry=True)
+    _synchronize_owner_runtime_session()
     log_audit_event("ALLOW_ENTRY_ENABLED", "Pause Entries disabled / entries resumed.")
     return {"ok": True, "settings": settings_data}
 

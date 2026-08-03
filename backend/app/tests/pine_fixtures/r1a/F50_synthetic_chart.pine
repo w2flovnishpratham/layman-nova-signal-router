@@ -1,0 +1,4 @@
+//@version=6
+indicator("F50")
+synthetic = ticker.heikinashi(syminfo.tickerid)
+plot(request.security(synthetic, timeframe.period, close))

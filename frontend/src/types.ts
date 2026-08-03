@@ -11,7 +11,7 @@ export type SetupState =
   | 'ENDED'
 
 export type WsStatus = 'live' | 'degraded' | 'down'
-export type NovaView = 'trading' | 'dashboard'
+export type NovaView = 'trading' | 'dashboard' | 'strategies'
 export type Tone = 'up' | 'down' | 'flat'
 export type EngineMode = 'paper' | 'live'
 export type SetupFlowStep = 'mode' | 'live_access' | 'strategy' | 'broker' | 'side' | 'lots' | 'exits' | 'limits' | 'confirm' | 'complete'
@@ -139,6 +139,7 @@ export interface AtmLtpSnapshot {
   niftySpot: number | null
   niftySpotSource?: string | null
   niftySpotStatus?: string | null
+  niftySpotReceivedAt?: string | null
   atmStrike: number | null
   strikeStep: number
   lots: number
@@ -250,6 +251,8 @@ export interface ActiveExitLevels {
 }
 
 export interface ActiveTrade {
+  positionId?: string
+  positionVersion?: number
   mode?: EngineMode
   symbol: string
   strike: number
@@ -271,6 +274,13 @@ export interface ActiveTrade {
   slippagePercent?: number
   srSuggestion?: SrSuggestion
   activeExitLevels?: ActiveExitLevels | null
+  riskArmed?: boolean
+  riskSource?: string | null
+  quoteSource?: string | null
+  quoteReceivedAt?: string | null
+  quoteStale?: boolean
+  quoteStatus?: string | null
+  quoteAgeSeconds?: number | null
   correlationId: string
   status: 'OPEN' | 'CLOSED'
 }

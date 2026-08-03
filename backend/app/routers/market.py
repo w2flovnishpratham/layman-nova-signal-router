@@ -1,3 +1,4 @@
+# ruff: noqa: BLE001
 from __future__ import annotations
 
 from typing import Any
@@ -9,9 +10,12 @@ from app.services.credential_vault import dhan_metadata
 from app.services.execution_context import current_execution_user
 from app.services.market_snapshot import get_shared_nifty_snapshot
 from app.services.risk_manager import _market_is_open
-from app.services.state_store import get_app_state, get_runtime_settings, get_wallet_snapshot
+from app.services.state_store import (
+    get_app_state,
+    get_runtime_settings,
+    get_wallet_snapshot,
+)
 from app.workers.strategy_job_worker import strategy_job_worker_status
-
 
 router = APIRouter()
 
@@ -30,7 +34,9 @@ def atm_ltp(
 
 
 @router.get("/market/nifty/candles")
-def nifty_candles(interval: str = Query(default="5m", pattern="^5m$")) -> dict[str, Any]:
+def nifty_candles(
+    interval: str = Query(default="5m", pattern="^(1m|5m|15m)$"),
+) -> dict[str, Any]:
     """Global NIFTY candles from the shared Dhan market-data identity.
 
     Served from a global cache - no per-user Dhan credentials, entitlement,
@@ -42,10 +48,67 @@ def nifty_candles(interval: str = Query(default="5m", pattern="^5m$")) -> dict[s
 
 
 @router.get("/market/nifty/chart-status")
-def nifty_chart_status() -> dict[str, Any]:
+def nifty_chart_status(
+    interval: str = Query(default="5m", pattern="^(1m|5m|15m)$"),
+) -> dict[str, Any]:
     from app.services.market_chart_service import chart_status
 
-    return chart_status()
+    return chart_status(interval)
+
+
+# Cached passthrough to the NOVA intelligence buy/sell sentiment. The upstream
+# service already recomputes on its own schedule, so a background poller here
+# would be redundant — this just caches ~45s and serves last-known on failure.
+# ponytail: in-memory cache; add a DB-backed poller only if offline resilience
+# across restarts is ever needed.
+_SENTIMENT_URL = "https://intelligence.novatradesolution.com/api/v1/sentiment/buy-sell"
+_SENTIMENT_TTL_SECONDS = 45.0
+_sentiment_cache: dict[str, Any] = {"data": None, "at": 0.0}
+_SENTIMENT_UNAVAILABLE = {
+    "available": False, "bullish_percent": None, "bearish_percent": None, "updated_at": None,
+}
+
+
+def _fetch_sentiment(url: str = _SENTIMENT_URL) -> dict[str, Any]:
+    import httpx
+
+    response = httpx.get(url, timeout=6.0)
+    # Per the upstream contract, 503 means "no valid value right now" — the
+    # service is healthy but has nothing to report. It is not an error and must
+    # not be presented as a stale reading.
+    if response.status_code == 503:
+        return dict(_SENTIMENT_UNAVAILABLE)
+    response.raise_for_status()
+    raw = response.json()
+    return {
+        "available": True,
+        "bullish_percent": int(raw["bullish_percent"]),
+        "bearish_percent": int(raw["bearish_percent"]),
+        "updated_at": raw.get("updated_at"),
+    }
+
+
+@router.get("/market/sentiment")
+def market_sentiment() -> dict[str, Any]:
+    import time
+
+    now = time.monotonic()
+    cached = _sentiment_cache["data"]
+    if cached is not None and now - float(_sentiment_cache["at"]) < _SENTIMENT_TTL_SECONDS:
+        return {**cached, "cached": True}
+    try:
+        data = _fetch_sentiment()
+    except Exception:
+        # Network / unexpected upstream error (not a documented 503): serve the
+        # last good value if we have one; never 500 the Trading page.
+        if cached is not None:
+            return {**cached, "cached": True, "stale": True}
+        return dict(_SENTIMENT_UNAVAILABLE)
+    # A fresh reading (or a fresh 503-unavailable) both become the current state;
+    # caching the unavailable result avoids hammering upstream during a 503 window.
+    _sentiment_cache["data"] = data
+    _sentiment_cache["at"] = now
+    return {**data, "cached": False}
 
 
 @router.get("/market/nifty/markers")
@@ -84,7 +147,9 @@ def nifty_markers(
     legs = [
         ev
         for ev in events
-        if isinstance(ev, dict) and _is_filled(ev) and str(ev.get("mode") or "").lower() == active_mode
+        if isinstance(ev, dict)
+        and _is_filled(ev)
+        and str(ev.get("mode") or ev.get("engine_mode") or "").lower() == active_mode
     ]
     legs = _dedupe_legs_by_order_id(legs)
 
@@ -119,20 +184,32 @@ def nifty_markers(
         exit_labels = {"SL": "EXIT SL", "TARGET": "EXIT TGT", "REVERSAL": "REV EXIT", "EXIT": "EXIT"}
         markers.append(
             {
+                "id": str(ev.get("order_id") or ev.get("signal_id") or f"{epoch}-{action}"),
                 "time": epoch,
                 "side": side,
                 "option_side": option_side,
-                "exit_kind": exit_kind,
-                "label": exit_labels[exit_kind] if exit_kind else (f"BUY {option_side}" if option_side else "BUY"),
-                # Execution price is the option premium, not the index level, so
-                # the frontend snaps the marker to the nearest NIFTY candle.
-                "price": None,
-                "approximate": True,
+                "label": f"{side} {option_side}" if option_side else side,
+                "price": _marker_number(ev.get("nifty_price")),
+                "stop_price": _marker_number(ev.get("nifty_sl_level")),
+                "target_price": _marker_number(ev.get("nifty_target_level")),
+                "execution_price": _marker_number(ev.get("avg_price")),
+                "contract": ev.get("trading_symbol") or ev.get("normalized_symbol"),
+                "pnl": _marker_number(ev.get("realized_pnl") or ev.get("pnl")),
+                "exit_kind": str(ev.get("exit_kind") or "EXIT").upper(),
+                "approximate": ev.get("nifty_price") is None,
                 "mode": active_mode,
                 "source": "paper_trade" if active_mode == "paper" else "trade_execution",
             }
         )
     return {**base, "markers": markers}
+
+
+def _marker_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 @router.get("/system/health-strip")

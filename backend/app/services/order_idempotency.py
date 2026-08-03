@@ -1,4 +1,4 @@
-"""Durable idempotency helpers for live Dhan order writes."""
+"""Durable idempotency helpers for broker and paper-order writes."""
 from __future__ import annotations
 
 import hashlib
@@ -15,7 +15,7 @@ from app.db.engine import database_configured, session_scope
 
 
 class OrderIdempotencyUnavailable(RuntimeError):
-    """Raised when live order idempotency cannot use durable storage."""
+    """Raised when order idempotency cannot use durable storage."""
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,7 @@ def claim_live_order_intent(
     side: str | None = None,
     symbol: str | None = None,
     broker_correlation_id: str | None = None,
+    risk_configuration_version_id: str | uuid.UUID | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> OrderIntentClaim:
     if not database_configured():
@@ -94,6 +95,11 @@ def claim_live_order_intent(
                 side=side,
                 symbol=symbol,
                 broker_correlation_id=broker_correlation_id,
+                risk_configuration_version_id=(
+                    uuid.UUID(str(risk_configuration_version_id))
+                    if risk_configuration_version_id
+                    else None
+                ),
                 intent_metadata=metadata or {},
                 created_at=now,
                 updated_at=now,
@@ -174,6 +180,49 @@ def mark_order_intent_submitted(
         row.updated_at = models.utcnow()
 
 
+def mark_order_intent_stage(
+    *,
+    user_id: uuid.UUID | str,
+    scope: str,
+    idempotency_key: str,
+    stage: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Persist reconciliation-visible stages for a non-atomic position operation."""
+    if not database_configured():
+        raise OrderIdempotencyUnavailable("Durable order idempotency store is unavailable.")
+    user_uuid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(str(user_id))
+    with session_scope() as db:
+        row = db.scalar(
+            select(models.LiveOrderIntent)
+            .where(
+                models.LiveOrderIntent.user_id == user_uuid,
+                models.LiveOrderIntent.scope == str(scope).strip().lower(),
+                models.LiveOrderIntent.idempotency_key == _normalize_key(idempotency_key),
+            )
+            .with_for_update()
+        )
+        if row is None:
+            raise OrderIdempotencyUnavailable("Durable position operation was not found.")
+        previous = dict(row.intent_metadata or {})
+        stages = list(previous.get("stages") or [])
+        stages.append(
+            {
+                "stage": str(stage),
+                "at": models.utcnow().isoformat(),
+                **(metadata or {}),
+            }
+        )
+        row.intent_metadata = {
+            **previous,
+            "operation_stage": str(stage),
+            "stages": stages[-20:],
+        }
+        if stage in {"FILL_CONFIRMED", "POSITION_APPLIED", "LEDGER_APPLIED"}:
+            row.status = "submitted"
+        row.updated_at = models.utcnow()
+
+
 def complete_order_intent(
     intent_id: str,
     *,
@@ -182,7 +231,7 @@ def complete_order_intent(
     if not intent_id or not database_configured():
         return
     intent_uuid = uuid.UUID(str(intent_id))
-    success = bool(result_summary.get("success"))
+    success = bool(result_summary.get("success", result_summary.get("ok")))
     status = str(result_summary.get("status") or "").upper()
     if success and status not in {"ORDER_STATE_UNKNOWN"}:
         intent_status = "completed"

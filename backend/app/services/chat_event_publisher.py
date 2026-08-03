@@ -9,6 +9,7 @@ from app.services.normalized_errors import classify_failure, order_journey
 from app.services.paper_portfolio import get_paper_portfolio
 from app.store.redis_session import session_store
 from app.services.state_store import get_engine_mode, get_wallet_snapshot
+from app.domain.state_machine import SetupState
 
 
 _MAIN_LOOP: asyncio.AbstractEventLoop | None = None
@@ -78,6 +79,26 @@ def publish_tick_pnl_from_sync(
         asyncio.run_coroutine_threadsafe(coroutine, loop)
 
 
+def synchronize_runtime_sessions_from_sync(
+    runtime: dict[str, Any],
+    *,
+    user_id: str | None = None,
+) -> None:
+    """Project owner-scoped runtime lifecycle into existing browser sessions."""
+    loop = _MAIN_LOOP
+    if loop is None or loop.is_closed() or not user_id:
+        return
+    coroutine = synchronize_runtime_sessions(runtime, user_id=user_id)
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    if running_loop is loop:
+        loop.create_task(coroutine)
+    else:
+        asyncio.run_coroutine_threadsafe(coroutine, loop)
+
+
 def publish_market_snapshot_from_sync(
     *,
     snapshot: dict[str, Any] | None = None,
@@ -130,7 +151,7 @@ async def publish_market_snapshot(
     *,
     user_id: str | None = None,
 ) -> None:
-    for session_id in await session_store.active_session_ids(user_id=user_id):
+    for session_id in await _runtime_recipient_session_ids(user_id):
         await session_store.append_event(session_id, event("market.snapshot", **snapshot))
 
 
@@ -144,7 +165,7 @@ async def publish_tick_pnl(
     mode: str | None,
     user_id: str | None = None,
 ) -> None:
-    for session_id in await session_store.active_session_ids(user_id=user_id):
+    for session_id in await _runtime_recipient_session_ids(user_id):
         await session_store.append_event(
             session_id,
             event(
@@ -168,7 +189,7 @@ async def publish_active_trade(
     active_trade = active_trade_from_position(position, mode)
     if active_trade is None or active_trade["avgPrice"] <= 0:
         return
-    for session_id in await session_store.active_session_ids(user_id=user_id):
+    for session_id in await _runtime_recipient_session_ids(user_id):
         await session_store.update_active_trade(session_id, active_trade)
         await session_store.append_event(session_id, event("order.filled", **active_trade))
 
@@ -179,8 +200,35 @@ async def publish_chat_result(
     *,
     user_id: str | None = None,
 ) -> None:
-    for session_id in await session_store.active_session_ids(user_id=user_id):
+    for session_id in await _runtime_recipient_session_ids(user_id):
         await append_chat_result_to_session(session_id, payload, execution_result)
+
+
+async def _runtime_recipient_session_ids(user_id: str | None) -> list[str]:
+    if user_id:
+        return await session_store.owner_session_ids(user_id)
+    return await session_store.active_session_ids()
+
+
+async def synchronize_runtime_sessions(runtime: dict[str, Any], *, user_id: str) -> None:
+    engine = runtime.get("engine") if isinstance(runtime.get("engine"), dict) else {}
+    lifecycle = str(engine.get("state") or "STOPPED").upper()
+    accepting = bool(engine.get("accepting_signals"))
+    if lifecycle == "RUNNING":
+        state = SetupState.LIVE if accepting else SetupState.PAUSED
+    elif lifecycle == "STOPPING":
+        # PAUSED keeps exit controls/event delivery active while exposure is
+        # being reconciled; STOPPED is published only after confirmed flat.
+        state = SetupState.PAUSED
+    else:
+        state = SetupState.IDLE
+    for session_id in await session_store.owner_session_ids(user_id):
+        await session_store.synchronize_runtime_state(
+            session_id,
+            state,
+            engine_mode=engine.get("mode"),
+            runtime_state=lifecycle,
+        )
 
 
 async def append_chat_result_to_session(
@@ -313,6 +361,15 @@ def active_trade_from_position(position: dict[str, Any], mode: str | None) -> di
     live_pnl = position.get("live_pnl") if isinstance(position.get("live_pnl"), dict) else {}
     entry_price = _number(position.get("entry_price") or live_pnl.get("entry_price"))
     ltp = _number(live_pnl.get("ltp") or entry_price)
+    active_levels = position.get("active_exit_levels") if isinstance(position.get("active_exit_levels"), dict) else None
+    sl_price = live_pnl.get("sl_price") or position.get("broker_sl_price")
+    tp_price = live_pnl.get("tp_price") or position.get("broker_tp_price")
+    if active_levels is None and (sl_price is not None or tp_price is not None):
+        active_levels = {
+            "source": "server_monitor" if str(live_pnl.get("exit_management") or "SERVER").upper() == "SERVER" else "broker",
+            "stopLossPrice": sl_price,
+            "targetPrice": tp_price,
+        }
     return {
         "mode": mode,
         "symbol": position.get("trading_symbol") or position.get("symbol") or "NIFTY option",
@@ -331,7 +388,15 @@ def active_trade_from_position(position: dict[str, Any], mode: str | None) -> di
         "sourceLtp": position.get("source_ltp"),
         "simulatedCharges": position.get("simulated_charges"),
         "srSuggestion": position.get("sr_suggestion"),
-        "activeExitLevels": position.get("active_exit_levels"),
+        "activeExitLevels": active_levels,
+        "riskArmed": (
+            bool(position.get("risk_armed"))
+            if position.get("risk_armed") is not None
+            else True
+            if sl_price is not None or tp_price is not None
+            else None
+        ),
+        "riskSource": active_levels.get("source") if active_levels else None,
         "correlationId": "",
         "status": "OPEN",
     }

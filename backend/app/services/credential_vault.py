@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import secrets
 import threading
 from copy import deepcopy
 from dataclasses import dataclass
@@ -109,7 +110,7 @@ def generate_fernet_key() -> str:
 
 
 def _empty_payload() -> dict[str, Any]:
-    return {"version": 1, "dhan": None, "webhook_secret": None}
+    return {"version": 1, "dhan": None, "webhook_secret": None, "strategy_webhook_secret": None}
 
 
 def _memory_payload() -> dict[str, Any]:
@@ -428,6 +429,71 @@ def _vault_has_webhook_secret() -> bool:
     except VaultError:
         return False
     secret = payload.get("webhook_secret")
+    return isinstance(secret, str) and bool(secret.strip())
+
+
+# --- Managed strategy (broadcast catalog) webhook secret --------------------
+# A separate secret from the legacy single-user webhook_secret above -- this
+# one authenticates the single admin-run broadcast chart that fans NOVA
+# webhook signals out to every subscriber of a NOVA_SHARED catalog strategy,
+# not any one user's own credential.
+#
+# Vault-first, env-fallback (the reverse of the legacy secret above):
+# STRATEGY_WEBHOOK_SECRET is only the bootstrap value before any rotation has
+# ever happened. If the env var were authoritative the way it is for the
+# legacy secret, the admin "Rotate" action below would silently do nothing
+# useful for as long as the env var stays set, which is a real footgun for a
+# feature whose entire purpose is rotation.
+
+def generate_strategy_webhook_secret() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def get_strategy_webhook_secret() -> str | None:
+    try:
+        payload = _read_payload()
+    except VaultError:
+        payload = _empty_payload()
+    secret = payload.get("strategy_webhook_secret")
+    if isinstance(secret, str) and secret.strip():
+        return secret.strip()
+    env_secret = (settings.STRATEGY_WEBHOOK_SECRET or "").strip()
+    return env_secret or None
+
+
+def save_strategy_webhook_secret(webhook_secret: str) -> dict[str, Any]:
+    webhook_secret = webhook_secret.strip()
+    strength_error = webhook_secret_strength_error(webhook_secret)
+    if strength_error:
+        raise VaultError(strength_error)
+    payload = _read_payload()
+    payload["strategy_webhook_secret"] = webhook_secret
+    payload["strategy_webhook_secret_updated_at"] = utc_now()
+    _write_payload(payload)
+    return strategy_webhook_secret_metadata()
+
+
+def strategy_webhook_secret_metadata() -> dict[str, Any]:
+    secret = get_strategy_webhook_secret()
+    return {
+        "set": bool(secret),
+        "masked": mask_secret(secret),
+        "source": (
+            "vault"
+            if _vault_has_strategy_webhook_secret()
+            else "environment"
+            if (settings.STRATEGY_WEBHOOK_SECRET or "").strip()
+            else None
+        ),
+    }
+
+
+def _vault_has_strategy_webhook_secret() -> bool:
+    try:
+        payload = _read_payload()
+    except VaultError:
+        return False
+    secret = payload.get("strategy_webhook_secret")
     return isinstance(secret, str) and bool(secret.strip())
 
 

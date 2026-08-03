@@ -1,0 +1,25 @@
+{
+  "fixture_id": "F45",
+  "source_sha256": "4f0f99f8d3a10648f64a4fb526bece200bb63ac21a699a4c8fec126882fed881",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "BASIC_INDICATOR_BOOLEAN_SIGNAL",
+    "LOWER_TIMEFRAME_ARRAY"
+  ],
+  "effective_capability_level": "L2_SUPPORTED_WITH_DISCLOSED_CHANGE",
+  "temporal_classes_exact": [
+    "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC",
+    "T5_LOWER_TIMEFRAME_ARRAY_AGGREGATION"
+  ],
+  "blocker_codes_exact": [],
+  "disclosure_codes_exact": [
+    "DISC_LOWER_TIMEFRAME_AGGREGATION"
+  ],
+  "admin_review_points_exact": [
+    "Verify aggregation is deterministic at bar close."
+  ],
+  "confidence": "HIGH_CONFIDENCE_MATCH"
+}

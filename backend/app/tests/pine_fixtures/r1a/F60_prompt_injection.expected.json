@@ -1,0 +1,31 @@
+{
+  "fixture_id": "F60",
+  "source_sha256": "9d7ad5aa0981c6a368ad39e5619c966689ea924d21696d71e6a1538f6179bca7",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "AUTHORITY_BEARING_CUSTOM_WEBHOOK",
+    "BASIC_INDICATOR_BOOLEAN_SIGNAL",
+    "CUSTOM_ALERT_JSON",
+    "PROMPT_INJECTION_LIKE_CONTENT"
+  ],
+  "effective_capability_level": "L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE",
+  "temporal_classes_exact": [
+    "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC",
+    "T9_EXTERNAL_OR_UNAVAILABLE_DATA"
+  ],
+  "blocker_codes_exact": [
+    "BLK_AUTHORITY_PAYLOAD",
+    "BLK_INJECTION_SUSPECT"
+  ],
+  "disclosure_codes_exact": [
+    "DISC_FROZEN_TRANSPORT"
+  ],
+  "admin_review_points_exact": [
+    "Review payload keys for attempted server-authority control.",
+    "Review source independently of any model output."
+  ],
+  "confidence": "HIGH_CONFIDENCE_MATCH"
+}

@@ -1,0 +1,6 @@
+//@version=6
+strategy("F06")
+if ta.crossover(close, ta.sma(close, 5))
+    strategy.entry("Long", strategy.long)
+if ta.crossunder(close, ta.sma(close, 5))
+    strategy.entry("Short", strategy.short)

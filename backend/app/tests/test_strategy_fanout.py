@@ -1,13 +1,16 @@
+# ruff: noqa: F811
 from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+# Pytest discovers the imported fixture by name; parameters reuse it intentionally.
 from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
 
 
@@ -52,6 +55,10 @@ def _signal(secret: str, signal_id: str = "fanout-1"):
     from app.config import DEFAULT_STRATEGY_CODE
     from app.schemas.signal import NormalizedSignal
 
+    # A pre-resolved contract (security_id set) so the worker's per-subscriber
+    # ATM-resolution enricher (wired for placeholder broadcast signals -- see
+    # build_broadcast_signal) leaves this signal untouched. These tests exist
+    # to verify fan-out/queueing/qty mechanics, not contract resolution.
     payload = {
         "secret": secret,
         "signal_id": signal_id,
@@ -71,6 +78,10 @@ def _signal(secret: str, signal_id: str = "fanout-1"):
         action="ENTRY",
         side="BUY",
         symbol="NIFTY",
+        security_id="TEST-SECURITY-ID",
+        strike=25000.0,
+        expiry="2026-12-31",
+        option_side="CE",
         qty=1,
         order_type="MARKET",
         product_type="INTRADAY",
@@ -78,8 +89,87 @@ def _signal(secret: str, signal_id: str = "fanout-1"):
     )
 
 
+def _bind_paper_configuration(user, *, lots: int) -> None:
+    from sqlalchemy import select
+
+    from app.db import models
+    from app.db.engine import session_scope
+
+    with session_scope() as db:
+        subscription = db.scalar(
+            select(models.StrategySubscription)
+            .where(models.StrategySubscription.user_id == user.id)
+            .order_by(models.StrategySubscription.created_at.desc())
+        )
+        assert subscription is not None
+        instance = db.scalar(
+            select(models.StrategyInstance)
+            .where(
+                models.StrategyInstance.user_id == user.id,
+                models.StrategyInstance.legacy_subscription_id == subscription.id,
+            )
+            .order_by(models.StrategyInstance.created_at.desc())
+        )
+        if instance is None:
+            strategy = models.StrategyCatalog(
+                code=f"fanout-{user.id.hex[:10]}",
+                display_name="Fanout Test",
+                owner_type="personal",
+                owner_user_id=user.id,
+                status="active",
+            )
+            db.add(strategy)
+            db.flush()
+            version = models.StrategyVersion(
+                strategy_id=strategy.id,
+                version="1.0",
+                payload_spec_version="nova.v1",
+                source_journey="personal_tradingview",
+                status="approved",
+                execution_kind="external_webhook",
+            )
+            db.add(version)
+            db.flush()
+            instance = models.StrategyInstance(
+                user_id=user.id,
+                strategy_id=strategy.id,
+                strategy_version_id=version.id,
+                source_journey="NOVA_SHARED",
+                label="Fanout Test",
+                status="active",
+                execution_mode=subscription.execution_mode,
+                current_lots=lots,
+                legacy_subscription_id=subscription.id,
+            )
+            db.add(instance)
+            db.flush()
+        revision = models.StrategyConfigurationRevision(
+            user_id=user.id,
+            strategy_instance_id=instance.id,
+            strategy_version_id=instance.strategy_version_id,
+            mode="paper",
+            revision=1,
+            configuration_json={"lots": lots},
+            risk_json={},
+            status="active",
+        )
+        db.add(revision)
+        db.flush()
+        db.add(
+            models.UserEngineConfig(
+                user_id=user.id,
+                selected_strategy_instance_id=instance.id,
+                selected_configuration_revision_id=revision.id,
+                selected_configuration_revision=revision.revision,
+            )
+        )
+
+
 def test_context_credentials_are_isolated_per_user(mu_db):
-    from app.services.credential_vault import get_dhan_credentials, save_dhan_credentials
+    from app.services.credential_vault import (
+        get_dhan_credentials,
+        save_dhan_credentials,
+    )
     from app.services.execution_context import bind_execution_context
 
     alice = _current_user(make_user("fanout-alice@gmail.com"))
@@ -161,10 +251,12 @@ def test_one_signal_routes_to_two_subscribers_with_their_lots(mu_db, monkeypatch
         lots=2,
         execution_mode="paper_live_data",
     )
+    _bind_paper_configuration(alice, lots=1)
+    _bind_paper_configuration(bob, lots=2)
 
     calls = []
 
-    def fake_route(signal):
+    def fake_route(signal, **_kwargs):
         calls.append((current_execution_user().email, signal.qty))
         return {"success": True, "status": "TRADED"}
 
@@ -645,7 +737,7 @@ def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
     mu_db,
     monkeypatch,
 ):
-    from app.config import DEFAULT_STRATEGY_CODE, settings
+    from app.config import settings
     from app.db import models
     from app.db.engine import session_scope
     from app.routers.strategies import router
@@ -667,12 +759,8 @@ def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
     body = {
         "secret": secret,
         "signal_id": "tv-shared-1",
-        "strategy_code": DEFAULT_STRATEGY_CODE,
-        "action": "ENTRY",
-        "side": "BUY",
-        "symbol": "NIFTY",
-        "order_type": "MARKET",
-        "product_type": "INTRADAY",
+        "action": "BUY_CE",
+        "signal_time": "2026-07-31T09:00:00Z",
     }
 
     response = client.post("/api/webhook/strategy/supertrend", json=body)
@@ -693,6 +781,8 @@ def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
 
 
 def test_durable_jobs_process_two_users_independently(mu_db, monkeypatch):
+    from sqlalchemy import select
+
     from app.db import models
     from app.db.engine import session_scope
     from app.services import strategy_fanout
@@ -713,9 +803,11 @@ def test_durable_jobs_process_two_users_independently(mu_db, monkeypatch):
         lots=2,
         execution_mode="paper_live_data",
     )
+    _bind_paper_configuration(alice, lots=1)
+    _bind_paper_configuration(bob, lots=2)
     calls = []
 
-    def fake_route(signal):
+    def fake_route(signal, **_kwargs):
         calls.append((current_execution_user().email, signal.qty))
         return {"success": True, "status": "TRADED"}
 
@@ -732,6 +824,15 @@ def test_durable_jobs_process_two_users_independently(mu_db, monkeypatch):
         _signal("shared-secret", signal_id="durable-two-user-1"),
     )
     assert queued["subscriber_count"] == 2
+    with session_scope() as db:
+        jobs = db.scalars(
+            select(models.StrategyExecutionJob).where(
+                models.StrategyExecutionJob.signal_id == "durable-two-user-1"
+            )
+        ).all()
+        assert len(jobs) == 2
+        assert {job.configuration_revision for job in jobs} == {1}
+        assert all(job.configuration_revision_id is not None for job in jobs)
     assert process_queued_jobs_once(limit=2) == 2
     assert sorted(calls) == [
         ("job-alice@gmail.com", 75),
@@ -742,6 +843,58 @@ def test_durable_jobs_process_two_users_independently(mu_db, monkeypatch):
         assert {job.status for job in jobs} == {"completed"}
         signal = db.query(models.StrategySignal).one()
         assert signal.status == "completed"
+
+
+def test_queued_jobs_keep_old_and_new_immutable_automation_revisions(mu_db, monkeypatch):
+    from sqlalchemy import select
+
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import setup_configuration, strategy_fanout
+
+    user = make_user("automation-fanout@gmail.com")
+    strategy_fanout.subscribe_user(
+        user.id,
+        "supertrend",
+        lots=1,
+        execution_mode="paper_live_data",
+    )
+    _bind_paper_configuration(user, lots=1)
+    monkeypatch.setattr(strategy_fanout, "init_runtime_files", lambda: None)
+
+    strategy_fanout.enqueue_strategy_signal(
+        "supertrend",
+        _signal("shared-secret", signal_id="automation-revision-old"),
+    )
+    selected = setup_configuration.selected_configuration(user.id, "paper")
+    assert selected is not None
+    successor = setup_configuration.revise_automation_configuration(
+        user.id,
+        configuration_id=uuid.UUID(selected["id"]),
+        expected_revision=1,
+        changes={"max_daily_loss": 12_000},
+    )
+    strategy_fanout.enqueue_strategy_signal(
+        "supertrend",
+        _signal("shared-secret", signal_id="automation-revision-new"),
+    )
+
+    with session_scope() as db:
+        jobs = db.scalars(
+            select(models.StrategyExecutionJob).where(
+                models.StrategyExecutionJob.user_id == user.id,
+                models.StrategyExecutionJob.signal_id.in_(
+                    ["automation-revision-old", "automation-revision-new"]
+                ),
+            )
+        ).all()
+        by_signal = {job.signal_id: job for job in jobs}
+        assert by_signal["automation-revision-old"].configuration_revision == 1
+        assert by_signal["automation-revision-new"].configuration_revision == successor["revision"] == 2
+        assert (
+            by_signal["automation-revision-old"].configuration_revision_id
+            != by_signal["automation-revision-new"].configuration_revision_id
+        )
 
 
 def test_new_session_does_not_replay_recent_strategy_job_result_by_default(mu_db, monkeypatch, tmp_path):
@@ -854,9 +1007,8 @@ def test_new_session_does_not_replay_recent_strategy_job_result_by_default(mu_db
 
 
 def test_additive_schema_upgrades_pre_release_user_egress_table(tmp_path):
-    from sqlalchemy import create_engine, inspect, text
-
     from scripts.init_db import ensure_additive_schema
+    from sqlalchemy import create_engine, inspect, text
 
     engine = create_engine(f"sqlite:///{tmp_path / 'old-schema.db'}")
     with engine.begin() as connection:

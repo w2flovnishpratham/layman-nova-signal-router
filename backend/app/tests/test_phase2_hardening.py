@@ -1,3 +1,4 @@
+# ruff: noqa: F811
 from __future__ import annotations
 
 import asyncio
@@ -114,21 +115,20 @@ def test_chat_websocket_accepts_session_token_subprotocol_without_query_token(mo
         pass
 
 
-def test_chat_confirm_live_requires_server_side_entitlement(monkeypatch):
+def test_chat_confirm_live_cannot_synthesize_consent_or_start_over_websocket(
+    monkeypatch,
+):
     from app.api import ws as chat_ws
-    from app.services import entitlements
     from app.services.user_context import CurrentUser
 
     user = CurrentUser(id=uuid.uuid4(), email="ws-live-entitlement@example.com")
     session = SimpleNamespace(config={"strategy": "supertrend", "risk": {"lots": 1}})
     monkeypatch.setattr(chat_ws, "get_engine_mode", lambda legacy_fallback=True: "live")
-    monkeypatch.setattr(
-        chat_ws,
-        "start_engine",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("entitlement must block before live start")),
-    )
 
-    with pytest.raises(entitlements.EntitlementError, match="Live entitlement is required"):
+    with pytest.raises(
+        ValueError,
+        match="durable /api/runtime/start-selected",
+    ):
         asyncio.run(
             chat_ws._apply_production_command(
                 "setup.confirm_live",
@@ -170,17 +170,11 @@ def _shared_strategy_body(
     timestamp: int | None = None,
     nonce: str | None = "phase2-prod-nonce",
 ):
-    from app.config import DEFAULT_STRATEGY_CODE
-
     body = {
         "secret": secret,
         "signal_id": signal_id,
-        "strategy_code": DEFAULT_STRATEGY_CODE,
-        "action": "ENTRY",
-        "side": "BUY",
-        "symbol": "NIFTY",
-        "order_type": "MARKET",
-        "product_type": "INTRADAY",
+        "action": "BUY_CE",
+        "signal_time": "2026-07-31T09:00:00Z",
     }
     if timestamp is not None:
         body["timestamp"] = timestamp
@@ -215,7 +209,7 @@ def test_user_webhook_nonce_replay_is_durable_after_cache_clear(mu_db, monkeypat
 
 
 def test_strategy_webhook_event_claim_blocks_duplicate_and_body_mismatch(mu_db, monkeypatch):
-    from app.config import DEFAULT_STRATEGY_CODE, settings
+    from app.config import settings
     from app.db import models
     from app.db.engine import session_scope
     from app.routers.strategies import router
@@ -232,12 +226,8 @@ def test_strategy_webhook_event_claim_blocks_duplicate_and_body_mismatch(mu_db, 
     body = {
         "secret": secret,
         "signal_id": "phase2-shared-signal",
-        "strategy_code": DEFAULT_STRATEGY_CODE,
-        "action": "ENTRY",
-        "side": "BUY",
-        "symbol": "NIFTY",
-        "order_type": "MARKET",
-        "product_type": "INTRADAY",
+        "action": "BUY_CE",
+        "signal_time": "2026-07-31T09:00:00Z",
     }
 
     assert client.post("/api/webhook/strategy/supertrend", json=body).status_code == 202
@@ -511,7 +501,10 @@ def test_recovered_strategy_retry_does_not_double_reserve_daily_counter(mu_db, m
     from app.db import models
     from app.db.engine import session_scope
     from app.services import strategy_fanout, strategy_risk
-    from app.workers.strategy_job_worker import process_queued_jobs_once, recover_stale_jobs
+    from app.workers.strategy_job_worker import (
+        process_queued_jobs_once,
+        recover_stale_jobs,
+    )
 
     user = make_user("phase2-reservation-retry@gmail.com")
     signal = _signal("phase2-reservation-retry")
@@ -721,6 +714,9 @@ def test_broker_routes_sanitize_wallet_and_profile_payload(monkeypatch):
     from app.services.dhan_client import DhanValidationResult
 
     class FakeDhanClient:
+        def __init__(self, *, proxy_url=None, expected_egress_ip=None):
+            pass
+
         def validate_token(self, *, client_id, access_token):
             return DhanValidationResult(
                 success=True,
@@ -740,6 +736,7 @@ def test_broker_routes_sanitize_wallet_and_profile_payload(monkeypatch):
     monkeypatch.setattr(broker, "get_dhan_credentials", lambda: DhanCredentials("1000000001", "raw-token-secret"))
     monkeypatch.setattr(broker, "RealDhanClient", FakeDhanClient)
     monkeypatch.setattr(broker, "refresh_wallet_snapshot", lambda **_kwargs: raw_wallet)
+    monkeypatch.setattr(broker, "fetch_dhan_wallet_snapshot", lambda **_kwargs: raw_wallet)
 
     app = FastAPI()
     app.include_router(broker.router)
@@ -770,13 +767,13 @@ def test_dashboard_sanitizes_wallet_state_and_log_surfaces(monkeypatch):
     }
     monkeypatch.setattr(dashboard, "get_reconciled_open_position", lambda reason: None)
     monkeypatch.setattr(dashboard, "get_app_state", lambda: {"wallet": raw_wallet, "nested": raw_log})
-    monkeypatch.setattr(dashboard, "get_runtime_settings", lambda: {})
+    monkeypatch.setattr(dashboard, "get_runtime_settings", dict)
     monkeypatch.setattr(dashboard, "tradingview_webhook_url", lambda: "https://example.test/webhook")
     monkeypatch.setattr(dashboard, "get_dhan_credentials", lambda: None)
     monkeypatch.setattr(dashboard, "dhan_metadata", lambda: {"connected": True, "client_id_masked": "******0001"})
     monkeypatch.setattr(dashboard, "webhook_secret_metadata", lambda: {"set": True})
-    monkeypatch.setattr(dashboard, "get_external_positions", lambda: [])
-    monkeypatch.setattr(dashboard, "shared_market_data_status", lambda: {})
+    monkeypatch.setattr(dashboard, "get_external_positions", list)
+    monkeypatch.setattr(dashboard, "shared_market_data_status", dict)
     monkeypatch.setattr(dashboard, "read_jsonl", lambda _name, limit=1: [raw_log])
 
     summary = dashboard.dashboard_summary()

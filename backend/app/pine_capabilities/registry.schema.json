@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nova.local/schemas/pine-capability-registry-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["registry_id", "registry_version", "effective_date", "capabilities"],
+  "properties": {
+    "registry_id": {"const": "nova.pine-capabilities"},
+    "registry_version": {"pattern": "^v[0-9]+$"},
+    "effective_date": {"type": "string", "format": "date"},
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/capability"}
+    }
+  },
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability_id", "family", "pine_patterns", "pine_apis",
+        "minimum_pine_version", "maximum_tested_pine_version",
+        "capability_level", "temporal_class",
+        "required_nova_backend_capability", "conversion_policy",
+        "allowed_normalization", "mandatory_disclosure", "blocker_code",
+        "admin_review_points", "user_facing_message", "fixtures",
+        "effective_version", "deprecated_version", "priority"
+      ],
+      "properties": {
+        "capability_id": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]+$"},
+        "family": {"type": "string", "minLength": 1},
+        "pine_patterns": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "pine_apis": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "minimum_pine_version": {"type": "integer", "minimum": 1, "maximum": 6},
+        "maximum_tested_pine_version": {"type": "integer", "minimum": 1, "maximum": 6},
+        "capability_level": {
+          "enum": [
+            "L0_DIRECTLY_SUPPORTED",
+            "L1_NORMALIZED_WITHOUT_MATERIAL_CHANGE",
+            "L2_SUPPORTED_WITH_DISCLOSED_CHANGE",
+            "L3_REQUIRES_BACKEND_CAPABILITY",
+            "L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE"
+          ]
+        },
+        "temporal_class": {
+          "enum": [
+            "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC",
+            "T1_REALTIME_FLUCTUATION_NORMALIZED_TO_CLOSE",
+            "T2_HTF_DEVELOPING_SERIES",
+            "T3_HTF_CONFIRMED_OFFSET_SERIES",
+            "T4_FUTURE_LEAKAGE_LOOKAHEAD",
+            "T5_LOWER_TIMEFRAME_ARRAY_AGGREGATION",
+            "T6_FILL_DEPENDENT_RECALCULATION",
+            "T7_SYNTHETIC_CHART_PRICE_BASIS",
+            "T8_INTRABAR_NONREPRODUCIBLE_STATE",
+            "T9_EXTERNAL_OR_UNAVAILABLE_DATA"
+          ]
+        },
+        "required_nova_backend_capability": {"type": "string", "minLength": 1},
+        "conversion_policy": {
+          "enum": [
+            "DIRECT",
+            "NORMALIZE_TARGET_STATE",
+            "DISCLOSE_BACKEND_OWNERSHIP",
+            "BLOCK_REQUIRES_BACKEND",
+            "BLOCK_UNSAFE",
+            "ADVISORY_ONLY"
+          ]
+        },
+        "allowed_normalization": {"type": "string"},
+        "mandatory_disclosure": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "blocker_code": {"type": ["string", "null"]},
+        "admin_review_points": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "user_facing_message": {"type": "string", "minLength": 1},
+        "fixtures": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^F(?:0[1-9]|[1-5][0-9]|6[0-7])$"},
+          "uniqueItems": true
+        },
+        "effective_version": {"type": "string", "pattern": "^v[0-9]+$"},
+        "deprecated_version": {"type": ["string", "null"]},
+        "priority": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

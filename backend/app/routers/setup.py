@@ -1,27 +1,33 @@
+# ruff: noqa: BLE001, DTZ007, DTZ011
 from __future__ import annotations
 
-from collections import Counter
-from copy import deepcopy
 import csv
-from datetime import date, datetime
 import ipaddress
 import json
-from pathlib import Path
 import threading
 import time
-from typing import Any
-from urllib.parse import urlparse
 import uuid
+from collections import Counter
+from copy import deepcopy
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Literal
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import Literal
 
-from app.config import BACKEND_DIR, DEFAULT_NIFTY_LOT_SIZE, DISABLED_OPTION_SL_PERCENT, RUNTIME_STATE_DIR, settings
+from app.config import (
+    BACKEND_DIR,
+    DEFAULT_NIFTY_LOT_SIZE,
+    DISABLED_OPTION_SL_PERCENT,
+    RUNTIME_STATE_DIR,
+    settings,
+)
 from app.services.audit_logger import log_audit_event
 from app.services.credential_vault import (
-    VaultError,
     WEBHOOK_SECRET_MIN_LENGTH,
+    VaultError,
     clear_dhan_credentials,
     dhan_credentials_snapshot,
     dhan_metadata,
@@ -33,14 +39,17 @@ from app.services.credential_vault import (
     save_dhan_credentials,
     save_webhook_secret,
     vault_status,
-    webhook_secret_strength_error,
     webhook_secret_metadata,
+    webhook_secret_strength_error,
 )
 from app.services.dhan_client import DhanFundsResult, RealDhanClient
-from app.services.dhan_response_safety import sanitize_dhan_response_surface, sanitize_wallet_snapshot
-from app.services.paper_portfolio import paper_wallet_snapshot, reset_paper_portfolio
 from app.services.dhan_debugger import get_outgoing_ip
 from app.services.dhan_error_interpreter import interpret_dhan_error
+from app.services.dhan_response_safety import (
+    sanitize_dhan_response_surface,
+    sanitize_wallet_snapshot,
+)
+from app.services.paper_portfolio import paper_wallet_snapshot, reset_paper_portfolio
 from app.services.setup_error_messages import safe_dhan_failure_detail
 from app.services.state_store import (
     SettingsVersionMismatch,
@@ -50,14 +59,13 @@ from app.services.state_store import (
     get_engine_mode,
     get_runtime_settings,
     get_wallet_snapshot,
-    set_wallet_snapshot,
     set_engine_mode,
+    set_wallet_snapshot,
     update_app_state,
     update_runtime_settings,
     update_runtime_settings_if_version,
     utc_now,
 )
-
 
 router = APIRouter()
 
@@ -87,6 +95,21 @@ def _validate_tp_percent(value: float | None) -> float | None:
     if not 0 < float(value) < RISK_OPTION_TP_MAX_PERCENT:
         raise ValueError(f"Option TP percent must be greater than 0 and less than {RISK_OPTION_TP_MAX_PERCENT:g}.")
     return value
+
+
+def _validate_entry_cutoff(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        hour, minute = (int(part) for part in text.split(":", 1))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Entry cutoff must be an IST time as HH:MM.") from exc
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("Entry cutoff must be an IST time as HH:MM.")
+    return f"{hour:02d}:{minute:02d}"
 
 
 def _scrip_master_candidates() -> list[Path]:
@@ -162,13 +185,14 @@ class WebhookSecretRequest(BaseModel):
 
 class EngineModeRequest(BaseModel):
     engine_mode: Literal["paper", "live"]
-    paper_starting_balance: float = Field(default=100000.0, ge=10000.0, le=1000000.0)
+    paper_starting_balance: float = Field(default=1000000.0, ge=1000000.0, le=1000000.0)
 
 
 class RiskSetupRequest(BaseModel):
     allowed_option_side: str = "BOTH"
     max_trades_per_day: int = Field(default=0, ge=0)
     max_daily_loss: float = Field(default=0.0, ge=0)
+    entry_cutoff_ist: str = Field(default="", max_length=5)
     option_disable_sl: bool = True
     server_side_exit_enabled: bool = True
     marketfeed_ws_enabled: bool = True
@@ -192,9 +216,10 @@ class RiskSetupRequest(BaseModel):
 
     _sl_business_rule = field_validator("option_sl_percent")(_validate_sl_percent)
     _tp_business_rule = field_validator("option_tp_percent")(_validate_tp_percent)
+    _entry_cutoff_rule = field_validator("entry_cutoff_ist")(_validate_entry_cutoff)
 
     @model_validator(mode="after")
-    def regular_sl_must_stay_under_business_cap(self) -> "RiskSetupRequest":
+    def regular_sl_must_stay_under_business_cap(self) -> RiskSetupRequest:
         if not self.option_disable_sl and self.option_sl_percent >= RISK_OPTION_SL_MAX_PERCENT:
             raise ValueError(f"Option SL percent must be less than {RISK_OPTION_SL_MAX_PERCENT:g}.")
         return self
@@ -204,6 +229,7 @@ class RiskSettingsPatchRequest(BaseModel):
     allowed_option_side: str | None = None
     max_trades_per_day: int | None = Field(default=None, ge=0)
     max_daily_loss: float | None = Field(default=None, ge=0)
+    entry_cutoff_ist: str | None = Field(default=None, max_length=5)
     option_disable_sl: bool | None = None
     server_side_exit_enabled: bool | None = None
     marketfeed_ws_enabled: bool | None = None
@@ -224,9 +250,10 @@ class RiskSettingsPatchRequest(BaseModel):
 
     _sl_business_rule = field_validator("option_sl_percent")(_validate_sl_percent)
     _tp_business_rule = field_validator("option_tp_percent")(_validate_tp_percent)
+    _entry_cutoff_rule = field_validator("entry_cutoff_ist")(_validate_entry_cutoff)
 
     @model_validator(mode="after")
-    def regular_sl_patch_must_stay_under_business_cap(self) -> "RiskSettingsPatchRequest":
+    def regular_sl_patch_must_stay_under_business_cap(self) -> RiskSettingsPatchRequest:
         if self.option_sl_percent is None:
             return self
         if self.option_disable_sl is not True and self.option_sl_percent >= RISK_OPTION_SL_MAX_PERCENT:
@@ -328,6 +355,18 @@ def _model_dump(model: BaseModel, **kwargs: Any) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump(**kwargs)
     return model.dict(**kwargs)
+
+
+def normalize_risk_values(values: dict[str, Any]) -> dict[str, Any]:
+    """Validate risk values with exactly the rules the settings API enforces.
+
+    Raises pydantic ValidationError on an out-of-bounds value, so a combined
+    configuration save fails validation before anything is written.
+    """
+    model = RiskSettingsPatchRequest(**values)
+    changes = _model_dump(model, exclude_unset=True, exclude_none=True)
+    changes.pop("expected_version", None)
+    return _normalize_risk_changes(changes)
 
 
 def _normalize_risk_changes(changes: dict[str, Any]) -> dict[str, Any]:
@@ -464,21 +503,20 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
     warnings: list[str] = []
     engine_mode = get_engine_mode(legacy_fallback=False)
 
-    from app.services.shared_market_data import shared_market_data_configured
-
-    # Paper mode can run on the shared market-data account, so it does not
-    # require the user to connect their own Dhan credentials.
-    paper_uses_shared_data = engine_mode == "paper" and shared_market_data_configured()
-
     if engine_mode is None:
         issues.append("Engine mode is not selected.")
     elif engine_mode == "paper" and not settings.PAPER_MODE_ENABLED:
         issues.append("Paper mode is disabled on this server.")
-    if not creds and not paper_uses_shared_data:
+    # Paper execution never routes orders through the user's Dhan account and
+    # the unified setup has no personal broker or legacy webhook-secret step.
+    # Market-data availability is reported by its own authoritative feed state;
+    # it must not turn personal credentials into a hidden Paper prerequisite.
+    requires_live_credentials = engine_mode == "live"
+    if requires_live_credentials and not creds:
         issues.append("Dhan credentials are not connected.")
-    if not webhook_secret:
+    if requires_live_credentials and not webhook_secret:
         issues.append("Webhook secret is not set.")
-    else:
+    elif requires_live_credentials:
         secret_strength_error = webhook_secret_strength_error(webhook_secret)
         if secret_strength_error:
             issues.append(secret_strength_error)
@@ -492,7 +530,7 @@ def setup_readiness(*, check_dhan_ping: bool = False) -> dict[str, Any]:
     issues.extend(risk_issues)
 
     dhan_ping: dict[str, Any] | None = None
-    if check_dhan_ping and creds and not paper_uses_shared_data:
+    if check_dhan_ping and requires_live_credentials and creds:
         ok, message, _funds, details = validate_dhan_credentials(creds.client_id, creds.access_token)
         dhan_ping = {"ok": ok, "message": message, **details}
         if not ok:
@@ -555,6 +593,7 @@ def setup_status_payload(*, include_outgoing_ip: bool = True) -> dict[str, Any]:
             "allowed_option_side": runtime.get("allowed_option_side"),
             "max_trades_per_day": runtime.get("max_trades_per_day"),
             "max_daily_loss": runtime.get("max_daily_loss"),
+            "entry_cutoff_ist": runtime.get("entry_cutoff_ist"),
             "option_disable_sl": runtime.get("option_disable_sl"),
             "server_side_exit_enabled": runtime.get("server_side_exit_enabled"),
             "marketfeed_ws_enabled": runtime.get("marketfeed_ws_enabled"),
@@ -794,9 +833,12 @@ def _scrip_master_job_snapshot() -> dict[str, Any]:
 
 
 def _download_scrip_master_sync() -> dict[str, Any]:
-    import httpx as _httpx
-    from app.config import settings as _s, BACKEND_DIR, RUNTIME_STATE_DIR
     from pathlib import Path
+
+    import httpx as _httpx
+
+    from app.config import BACKEND_DIR, RUNTIME_STATE_DIR
+    from app.config import settings as _s
 
     configured = Path(_s.DHAN_SCRIP_MASTER_PATH)
     target = configured if configured.is_absolute() else BACKEND_DIR / configured
@@ -950,8 +992,10 @@ def refresh_scrip_master() -> dict[str, Any]:
 @router.get("/setup/scrip-master/status")
 def scrip_master_status() -> dict[str, Any]:
     """Return scrip master file status and last download info."""
-    from app.config import settings as _s, BACKEND_DIR, RUNTIME_STATE_DIR
     from pathlib import Path
+
+    from app.config import BACKEND_DIR, RUNTIME_STATE_DIR
+    from app.config import settings as _s
 
     configured = Path(_s.DHAN_SCRIP_MASTER_PATH)
     target = configured if configured.is_absolute() else BACKEND_DIR / configured

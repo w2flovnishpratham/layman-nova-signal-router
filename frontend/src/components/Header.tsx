@@ -1,46 +1,60 @@
-import { BarChart3, Check, Copy, FlaskConical, LineChart, LogOut, MoreVertical, RotateCcw, ShieldAlert, Wifi, X, Zap } from 'lucide-react'
+import { Input } from "@/components/ui/input"
+import { Button } from '@/components/ui/button'
+import { Check, Copy, LogOut, ShieldAlert, Wifi, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
-import type { AuthUser } from '../api'
+import type { AuthUser, LogoutEngineAction, RuntimeStatus } from '../api'
 import { getEgressStatus } from '../api'
+import type { AppRoute } from '../appRoutes'
 import { modeBadgeText } from '../lib/mode'
 import { MotionPing, MotionProgressFill, softEase, useAppReducedMotion } from './MotionPrimitives'
-import type { EngineMode, NovaView, SetupState, SystemHealth, WsStatus } from '../types'
+import type { EngineMode, MarketSnapshot, SetupState, WsStatus } from '../types'
 
 interface Props {
+  route: AppRoute
   status: WsStatus
   clientId?: string
+  runtime: RuntimeStatus | null
   engineLive: boolean
   engineMode: EngineMode | null
   setupState: SetupState
-  health: SystemHealth | null
   user: AuthUser
-  view: NovaView
-  onNavigate: (view: NovaView) => void
+  market: MarketSnapshot | null
+  onNavigate: (route: AppRoute) => void
   onKill: () => void
-  onReconfigure: () => void
-  onLogout: () => void
+  onLogout: (action: LogoutEngineAction) => void
+  onMode: (mode: 'paper' | 'live') => void
+  onSaveConfig: (mode: 'paper' | 'live', lots: number, sl: number, tp: number) => void
+  onPaperReset: () => void
 }
 
 export function Header({
+  route,
   status,
   clientId,
+  runtime,
   engineLive,
   engineMode,
   setupState,
-  health,
   user,
-  view,
+  market,
   onNavigate,
   onKill,
-  onReconfigure,
   onLogout,
+  onMode,
+  onSaveConfig,
+  onPaperReset,
 }: Props) {
   const [killDialogOpen, setKillDialogOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [holdingKill, setHoldingKill] = useState(false)
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false)
+  const [lots, setLots] = useState<number | null>(null)
+  const [slPercent, setSlPercent] = useState<number | null>(null)
+  const [tpPercent, setTpPercent] = useState<number | null>(null)
   const [staticIp, setStaticIp] = useState<string | null>(null)
   const [ipCopied, setIpCopied] = useState(false)
+  const [clock, setClock] = useState(() => new Date())
   const holdTimer = useRef<number | null>(null)
 
   // Fetch the assigned Nova Static IP whenever the account menu opens, so a
@@ -54,6 +68,23 @@ export function Header({
       .catch(() => { if (active) setStaticIp(null) })
     return () => { active = false }
   }, [menuOpen])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(new Date()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const activeConfig = runtime?.config.active
+  const displayedLots = lots ?? Number(activeConfig?.configured_lots ?? 1)
+  const displayedSlPercent = slPercent ?? Number(activeConfig?.option_sl_percent ?? 10)
+  const displayedTpPercent = tpPercent ?? Number(activeConfig?.option_tp_percent ?? 20)
+
+  function chooseMode(mode: 'paper' | 'live') {
+    setLots(null)
+    setSlPercent(null)
+    setTpPercent(null)
+    onMode(mode)
+  }
 
   function copyStaticIp() {
     if (!staticIp) return
@@ -92,46 +123,57 @@ export function Header({
     <>
       <header className="app-header">
         <div className="brand-lockup">
-          <span className="nova-mark" />
-          <strong>NOVA SIGNAL ROUTER</strong>
-          <nav className="nv-nav-tabs hidden lg:flex" aria-label="Primary">
-            <button
-              type="button"
-              className={`nv-nav-tab${view === 'trading' ? ' active' : ''}`}
-              aria-current={view === 'trading'}
-              onClick={() => onNavigate('trading')}
-            >
-              <LineChart size={13} />
-              Trading
-            </button>
-            <button
-              type="button"
-              className={`nv-nav-tab${view === 'dashboard' ? ' active' : ''}`}
-              aria-current={view === 'dashboard'}
-              onClick={() => onNavigate('dashboard')}
-            >
-              <BarChart3 size={13} />
-              Dashboard
-            </button>
-          </nav>
+          <span className="brand-copy"><strong>NOVA</strong><span>Signal Router</span></span>
         </div>
 
-        <div className="header-actions relative flex items-center gap-3">
-          <div className={`mode-badge mode-badge-${engineMode ?? 'unset'}`}>
-            {engineMode === 'paper' ? <FlaskConical size={13} /> : engineMode === 'live' ? <Zap size={13} /> : null}
-            <MotionPing className={status === 'live' ? 'mode-status-ok' : 'mode-status-warn'} />
-            {modeBadgeText(engineMode)}{engineLive ? ` - ${statusLabel(status, setupState)}` : ''}
+        <nav className="top-navigation" aria-label="Primary navigation">
+          {TOP_NAVIGATION.map((item) => (
+            <Button variant="unstyled"
+              type="button"
+              key={item.label}
+              className={route === item.route ? 'is-active' : ''}
+              aria-current={route === item.route ? 'page' : undefined}
+              onClick={() => onNavigate(item.route)}
+            >
+              {item.label}
+            </Button>
+          ))}
+        </nav>
+
+        <div className="header-runtime">
+          <div className={`header-market-status is-${market?.marketStatus ?? 'closed'}`}>
+            <span>{market?.marketStatus === 'open' ? 'Market Open' : 'Market Closed'}</span>
+            <time>{clock.toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' })} IST</time>
+          </div>
+          <div className="header-nifty">
+            <span>NIFTY 50</span>
+            <strong>{market?.niftySpot == null ? '—' : market.niftySpot.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong>
+            <em className={(market?.dayChangePct ?? 0) >= 0 ? 'positive' : 'negative'}>
+              {market?.dayChangePct == null ? '—' : `${market.dayChangePct >= 0 ? '+' : ''}${market.dayChangePct.toFixed(2)}%`}
+            </em>
+          </div>
+        </div>
+
+        <div className="header-actions relative flex items-center gap-2">
+          <div className={`mode-badge mode-badge-${engineMode ?? 'unset'}${engineLive ? '' : ' mode-badge-stopped'}`}>
+            <MotionPing className={status === 'live' && engineLive ? 'mode-status-ok' : 'mode-status-warn'} />
+            {modeBadgeText(engineMode)} - {engineLive ? statusLabel(status, setupState) : 'Stopped'}
           </div>
 
-          <button
-            className="icon-button p-1.5 rounded-lg border border-white/10 hover:bg-white/5 transition-colors"
+          <Button variant="unstyled"
             type="button"
-            aria-label="More actions"
-            title="More actions"
+            className="header-user"
             onClick={() => setMenuOpen(!menuOpen)}
+            aria-label="Open account menu"
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
           >
-            <MoreVertical size={18} />
-          </button>
+            {user.picture_url ? <img src={user.picture_url} alt="" referrerPolicy="no-referrer" /> : <span>{initials(user.name || user.email)}</span>}
+            <span className="header-user-copy">
+              <strong>{user.name || user.email}</strong>
+              <small>{formatMoney(runtime?.pnl.available_balance)}</small>
+            </span>
+          </Button>
 
           <AnimatePresence initial={false}>
             {menuOpen ? (
@@ -163,19 +205,51 @@ export function Header({
                   </div>
                 </div>
 
-                {clientId && (
+                {(runtime?.account.dhan_client_id_masked || clientId) && (
                   <div className="text-xs text-white/70 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/5 flex justify-between items-center">
                     <span className="opacity-70">Client ID:</span>
-                    <strong className="font-mono">{maskClientId(clientId)}</strong>
+                    <strong className="font-mono">{runtime?.account.dhan_client_id_masked || maskClientId(clientId || '')}</strong>
                   </div>
                 )}
+
+                {runtime ? (
+                  <div className="text-xs bg-white/5 px-2.5 py-2 rounded-lg border border-white/5 flex flex-col gap-1">
+                    <strong className={runtime.engine.running ? 'text-emerald-300' : 'text-amber-300'}>
+                      {runtime.engine.display}
+                    </strong>
+                    <span className="text-white/55">
+                      {runtime.engine.mode?.toUpperCase() || 'NO MODE'} · P&amp;L {runtime.pnl.session ?? '—'}
+                    </span>
+                    {runtime.position.has_open_position ? (
+                      <span className="text-amber-200">
+                        {runtime.position.trading_symbol || runtime.position.option_side || 'Position'} · Qty {runtime.position.qty}
+                      </span>
+                    ) : <span className="text-emerald-200">Flat — no active option position</span>}
+                    {runtime.position.has_open_position ? (
+                      <>
+                        <span className={runtime.position.ltp.stale || runtime.position.ltp.value == null ? 'text-amber-300' : 'text-white/45'}>
+                          {runtime.position.ltp.value == null
+                            ? 'Live option quote unavailable'
+                            : `LTP ${runtime.position.ltp.value} · ${runtime.position.ltp.status}`}
+                        </span>
+                        {(runtime.position.ltp.stale || runtime.position.ltp.value == null) ? (
+                          <span className="text-white/40">
+                            {runtime.position.ltp.source || 'source unknown'}
+                            {runtime.position.ltp.received_at ? ` · ${new Date(runtime.position.ltp.received_at).toLocaleTimeString()}` : ''}
+                            {runtime.position.ltp.age_seconds != null ? ` · ${Math.round(runtime.position.ltp.age_seconds)}s old` : ''}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : <span className="text-white/45">No active LTP</span>}
+                  </div>
+                ) : null}
 
                 {staticIp && (
                   <div className="text-xs text-white/70 bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/5 flex justify-between items-center gap-2">
                     <span className="opacity-70 flex items-center gap-1.5"><Wifi size={12} /> Nova Static IP:</span>
                     <span className="flex items-center gap-2 min-w-0">
                       <strong className="font-mono truncate">{staticIp}</strong>
-                      <button
+                      <Button variant="unstyled"
                         type="button"
                         onClick={copyStaticIp}
                         aria-label="Copy static IP"
@@ -183,22 +257,60 @@ export function Header({
                         className="p-1 rounded-md border border-white/10 hover:bg-white/10 transition-colors text-white/70 hover:text-white"
                       >
                         {ipCopied ? <Check size={12} /> : <Copy size={12} />}
-                      </button>
+                      </Button>
                     </span>
                   </div>
                 )}
 
-                {engineLive && (
-                  <div className="flex flex-col gap-2 py-1">
-                    <span className="text-[10px] uppercase font-bold tracking-wider text-white/40">System Health</span>
-                    <HealthStrip setupState={setupState} health={health} />
-                  </div>
-                )}
-
                 <div className="flex flex-col gap-2 pt-2 border-t border-white/5">
+                  {runtime && runtime.engine.state === 'STOPPED' ? (
+                    <div className="flex flex-col gap-2 pb-2 border-b border-white/5">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-white/40">Stopped configuration</span>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(['paper', 'live'] as const).map((mode) => (
+                          <Button variant="unstyled"
+                            key={mode}
+                            type="button"
+                            disabled={runtime.position.has_open_position}
+                            onClick={() => chooseMode(mode)}
+                            className={`py-1.5 rounded-lg border text-xs font-semibold ${
+                              runtime.engine.mode === mode
+                                ? 'border-[#2F6BED]/60 bg-[#2F6BED]/20 text-white'
+                                : 'border-white/10 bg-white/5 text-white/60'
+                            } disabled:opacity-40`}
+                          >
+                            {mode === 'paper' ? 'Paper' : 'Live'}
+                          </Button>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <label className="text-[10px] text-white/50">Lots
+                          <Input variant="unstyled" aria-label="Runtime lots" type="number" min={1} max={20} value={displayedLots} onChange={(event) => setLots(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
+                        </label>
+                        <label className="text-[10px] text-white/50">SL %
+                          <Input variant="unstyled" aria-label="Runtime stop loss percent" type="number" min={0} max={100} value={displayedSlPercent} onChange={(event) => setSlPercent(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
+                        </label>
+                        <label className="text-[10px] text-white/50">TP %
+                          <Input variant="unstyled" aria-label="Runtime target profit percent" type="number" min={0} max={1000} value={displayedTpPercent} onChange={(event) => setTpPercent(Number(event.target.value))} className="w-full mt-1 bg-black/20 border border-white/10 rounded px-1 py-1 text-white" />
+                        </label>
+                      </div>
+                      <Button variant="unstyled"
+                        type="button"
+                        disabled={!runtime.engine.mode || runtime.position.has_open_position}
+                        onClick={() => runtime.engine.mode && onSaveConfig(runtime.engine.mode, displayedLots, displayedSlPercent, displayedTpPercent)}
+                        className="secondary-button py-1.5 rounded-lg text-xs disabled:opacity-40"
+                      >
+                        Save {runtime.engine.mode?.toUpperCase() || ''} settings
+                      </Button>
+                      {runtime.engine.mode === 'paper' ? (
+                        <Button variant="unstyled" type="button" disabled={runtime.position.has_open_position} onClick={onPaperReset} className="secondary-button py-1.5 rounded-lg text-xs disabled:opacity-40">
+                          Reset Paper session
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {engineLive && (
-                    <>
-                      <button
+                    <Button variant="unstyled"
                         className="kill-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-red-400 hover:text-white bg-red-950/30 hover:bg-red-900/40 border border-red-900/30 hover:border-red-500/40 transition-all font-medium text-sm"
                         type="button"
                         onClick={() => {
@@ -208,31 +320,19 @@ export function Header({
                       >
                         <ShieldAlert size={14} />
                         Stop & Square Off
-                      </button>
-                      <button
-                        className="secondary-button w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/80 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-sm font-medium"
-                        type="button"
-                        onClick={() => {
-                          setMenuOpen(false)
-                          onReconfigure()
-                        }}
-                      >
-                        <RotateCcw size={14} />
-                        Re-Configure
-                      </button>
-                    </>
+                    </Button>
                   )}
-                  <button
+                  <Button variant="unstyled"
                     className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/15 transition-all text-sm font-medium"
                     type="button"
                     onClick={() => {
                       setMenuOpen(false)
-                      onLogout()
+                      setLogoutDialogOpen(true)
                     }}
                   >
                     <LogOut size={14} />
                     Log Out
-                  </button>
+                  </Button>
                 </div>
                 </motion.div>
               </>
@@ -264,14 +364,14 @@ export function Header({
               exit={{ opacity: 0, y: 8, scale: 0.98 }}
               transition={popTransition}
             >
-            <button
+            <Button variant="unstyled"
               className="absolute right-4 top-4 text-white/40 hover:text-white hover:bg-white/5 p-1.5 rounded-lg transition-colors border-0 cursor-pointer"
               type="button"
               aria-label="Close stop and square-off confirmation"
               onClick={closeDialog}
             >
               <X size={16} />
-            </button>
+            </Button>
 
             <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 mt-2">
               <ShieldAlert size={24} />
@@ -287,7 +387,7 @@ export function Header({
             </div>
 
             <div className="w-full flex flex-col gap-2 mt-2">
-              <button
+              <Button variant="unstyled"
                 className="hold-confirm w-full py-3 px-4 rounded-xl font-semibold border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm select-none cursor-pointer relative overflow-hidden"
                 type="button"
                 onPointerDown={startHold}
@@ -303,77 +403,71 @@ export function Header({
               >
                 {holdingKill ? <MotionProgressFill durationSeconds={0.8} tone="danger" /> : null}
                 <span className="hold-button-content">Hold to Stop & Square Off</span>
-              </button>
-              <button
+              </Button>
+              <Button variant="unstyled"
                 className="w-full py-2.5 px-4 rounded-xl text-white/50 hover:text-white bg-transparent hover:bg-white/5 transition-all text-xs font-semibold cursor-pointer border-0"
                 type="button"
                 onClick={closeDialog}
               >
                 Cancel
-              </button>
+              </Button>
             </div>
             </motion.section>
           </motion.div>
         ) : null}
       </AnimatePresence>
+
+      <AnimatePresence initial={false}>
+        {logoutDialogOpen ? (
+          <motion.div className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.section className="kill-dialog w-full max-w-[420px] bg-[#12101c] border border-white/10 rounded-2xl shadow-2xl p-6 flex flex-col gap-4" role="dialog" aria-modal="true" aria-labelledby="logout-dialog-title">
+              <h2 id="logout-dialog-title" className="text-lg font-bold text-white m-0">Log out of NOVA</h2>
+              <p className="text-xs text-white/60 m-0">
+                Choose what the server should do with your engine. Closing this browser alone never stops it.
+              </p>
+              <Button variant="unstyled" type="button" className="secondary-button py-3 rounded-xl text-sm" onClick={() => { setLogoutDialogOpen(false); onLogout('keep_running') }}>
+                Keep engine running and log out
+              </Button>
+              <Button variant="unstyled" type="button" className="secondary-button py-3 rounded-xl text-sm" onClick={() => { setLogoutDialogOpen(false); onLogout('stop_engine') }}>
+                Stop engine and log out
+              </Button>
+              <Button variant="unstyled" type="button" className="py-2 text-xs text-white/50" onClick={() => setLogoutDialogOpen(false)}>
+                Cancel
+              </Button>
+            </motion.section>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
     </>
   )
 }
 
-function HealthStrip({ setupState, health }: { setupState: SetupState; health: SystemHealth | null }) {
-  const chips = [
-    {
-      key: 'dhan',
-      label: 'Dhan',
-      value: dhanLabel(health?.dhan),
-      tone: health?.dhan === 'connected' ? 'ok' : health?.dhan === 'auth_issue' ? 'bad' : 'muted',
-    },
-    {
-      key: 'market',
-      label: 'Market',
-      value: health?.market === 'open' ? 'Open' : 'Closed',
-      tone: health?.market === 'open' ? 'ok' : 'muted',
-    },
-    {
-      key: 'feed',
-      label: 'Feed',
-      value: feedLabel(health?.feed),
-      tone: feedTone(health?.feed),
-      title: health?.feedReason ?? undefined,
-    },
-    {
-      key: 'engine',
-      label: 'Engine',
-      value: setupState === 'PAUSED' ? 'Paused' : health?.engine === 'listening' ? 'Listening' : 'Idle',
-      tone: setupState === 'PAUSED' ? 'warn' : health?.engine === 'listening' ? 'ok' : 'muted',
-    },
-  ] as Array<{ key: string; label: string; value: string; tone: string; title?: string }>
+const TOP_NAVIGATION: Array<{ route: AppRoute; label: string }> = [
+  { route: 'dashboard', label: 'Dashboard' },
+  { route: 'trading', label: 'Trading' },
+  { route: 'strategies', label: 'Strategies' },
+  { route: 'signals', label: 'Signals' },
+  { route: 'automations', label: 'Automations' },
+  { route: 'webhooks', label: 'Webhooks' },
+  { route: 'credentials', label: 'Credentials' },
+  { route: 'risk', label: 'Risk' },
+  { route: 'reports', label: 'Reports' },
+  { route: 'settings', label: 'Settings' },
+]
 
-  return (
-    <div className="health-strip" aria-label="System health">
-      {chips.map((chip) => (
-        <span key={chip.key} className={`health-chip ${chip.tone}`} title={chip.title ?? `${chip.label}: ${chip.value}`}>
-          <span>{chip.label}</span>
-          <strong>{chip.value}</strong>
-        </span>
-      ))}
-    </div>
-  )
+function initials(value: string): string {
+  return value
+    .split(/\s+|@/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('')
 }
 
-function feedLabel(value: SystemHealth['feed'] | undefined): string {
-  if (value === 'live') return 'Live'
-  if (value === 'stale') return 'Stale'
-  if (value === 'down') return 'Down'
-  if (value === 'off') return 'Idle'
-  return 'Unknown'
-}
-
-function feedTone(value: SystemHealth['feed'] | undefined): string {
-  if (value === 'live') return 'ok'
-  if (value === 'stale') return 'warn'
-  if (value === 'down') return 'bad'
-  return 'muted'
+function formatMoney(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return 'Balance unavailable'
+  return `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function maskClientId(clientId: string): string {
@@ -384,10 +478,4 @@ function statusLabel(status: WsStatus, setupState: SetupState): string {
   if (status !== 'live') return 'reconnecting'
   if (setupState === 'PAUSED') return 'paused'
   return 'listening'
-}
-
-function dhanLabel(value: SystemHealth['dhan'] | undefined): string {
-  if (value === 'connected') return 'Connected'
-  if (value === 'auth_issue') return 'Auth Issue'
-  return 'Unknown'
 }

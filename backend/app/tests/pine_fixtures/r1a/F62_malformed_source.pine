@@ -1,0 +1,3 @@
+//@version=6
+strategy("F62")
+strategy.entry("Long", strategy.long

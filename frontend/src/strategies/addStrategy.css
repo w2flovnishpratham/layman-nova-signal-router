@@ -1,0 +1,23 @@
+.add-strategy-stepper { display: flex; align-items: center; list-style: none; margin: 4px 0 22px; padding: 0; }
+.as-step { display: flex; align-items: center; flex: 1 1 0; min-width: 0; }
+.as-step:last-child { flex: 0 0 auto; }
+.as-step-dot {
+  display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 24px; height: 24px; border-radius: 999px; border: 1px solid var(--border-hi);
+  color: var(--text-3); font-size: 11px; font-weight: 650;
+  transition: border-color var(--dur-base) var(--ease-soft), color var(--dur-base) var(--ease-soft), background var(--dur-base) var(--ease-soft);
+}
+.as-step-label { margin: 0 10px; color: var(--text-3); font-size: 12px; font-weight: 600; white-space: nowrap; transition: color var(--dur-base) var(--ease-soft); }
+.as-step-line { flex: 1 1 auto; height: 1px; background: var(--border-hi); margin-right: 10px; }
+
+.as-step--active .as-step-dot { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.as-step--active .as-step-label { color: var(--text-1); }
+
+.as-step--done .as-step-dot { border-color: var(--success); color: var(--success); background: var(--success-bg); }
+.as-step--done .as-step-label { color: var(--text-2); }
+.as-step--done .as-step-line { background: var(--success); opacity: .4; }
+
+@media (max-width: 640px) {
+  .as-step-label { display: none; }
+  .as-step--active .as-step-label { display: inline; }
+}

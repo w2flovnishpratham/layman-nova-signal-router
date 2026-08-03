@@ -1,0 +1,28 @@
+{
+  "prompt_version_id": "v3.1",
+  "version_label": "Layman-safe NOVA Pine conversion prompt v3.1",
+  "prompt_artifact": "backend/app/prompts/pine_conversion_v3.1.txt",
+  "prompt_sha256": "4fc31dbd5a94429806227754a32959716e87f68cbb20b952c746d8a11e8785b7",
+  "transport_version_id": "pine_transport_v2",
+  "transport_artifact": "backend/app/prompts/pine_transport_v2.txt",
+  "transport_sha256": "18a3247c93c0c17e2bb70847a635c721bacf6e231d8d14c14db7871da56ef96f",
+  "created_at": "2026-07-17T11:05:34.250Z",
+  "status": "QUALIFICATION",
+  "ai_conversion_enabled": false,
+  "supersedes_for_qualification": "v3",
+  "changes": [
+    "Manual packages verify the selected immutable source against both stored hashes.",
+    "Package headers expose only source, prompt and transport SHA-256 evidence.",
+    "Frozen Transport V2 makes HOLD mutually exclusive with execution actions."
+  ],
+  "legend_trial": {
+    "case_id": 6,
+    "source_classification": "ACTUAL_SELECTED_IMMUTABLE_VERSION_REQUIRED",
+    "output_status": "NOT_RUN",
+    "reason": "COMPLETE_SELECTED_LEGEND_SOURCE_NOT_SUPPLIED_TO_REPOSITORY",
+    "package_artifact": null,
+    "package_sha256": null,
+    "selected_source_sha256": null,
+    "external_execution": "NOT_RUN"
+  }
+}

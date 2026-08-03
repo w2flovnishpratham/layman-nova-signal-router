@@ -25,7 +25,8 @@ PREMIUM_PLAN = "plan_premium_checkout"
 LIVE_PLAN = "plan_live_checkout"
 STATIC_PLAN = "plan_static_checkout"
 STRATEGY_PLAN = "plan_strategy_checkout"
-NOW = datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+PAPER_PLAN = "plan_paper_checkout"
+NOW = datetime.now(timezone.utc)
 PERIOD_START = int((NOW - timedelta(days=1)).timestamp())
 PERIOD_END = int((NOW + timedelta(days=30)).timestamp())
 
@@ -41,6 +42,7 @@ def checkout_env(mu_db, monkeypatch):
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_LIVE_MONTHLY", LIVE_PLAN, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_STATIC_IP_MONTHLY", STATIC_PLAN, raising=False)
     monkeypatch.setattr(settings, "RAZORPAY_PLAN_STRATEGY_MONTHLY", STRATEGY_PLAN, raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_PLAN_PAPER_PREMIUM", PAPER_PLAN, raising=False)
 
 
 class FakeRazorpayClient:
@@ -193,6 +195,7 @@ def test_entitlement_status_returns_safe_server_owned_flags(checkout_env):
     assert body["entitlement"]["static_ip_enabled"] is True
     assert body["entitlement"]["live_orders_enabled"] is False
     assert body["entitlement"]["strategy_access_enabled"] is False
+    assert body["entitlement"]["paper_trading_enabled"] is False
     serialized = json.dumps(body)
     assert KEY_SECRET not in serialized
     assert WEBHOOK_SECRET not in serialized
@@ -226,6 +229,25 @@ def test_authenticated_user_can_request_configured_plan(checkout_env, monkeypatc
     assert FakeRazorpayClient.calls[0]["auth"] == (KEY_ID, KEY_SECRET)
     assert FakeRazorpayClient.calls[0]["json"]["plan_id"] == PREMIUM_PLAN
     assert FakeRazorpayClient.calls[0]["json"]["customer_notify"] is True
+
+
+def test_paper_premium_checkout_uses_its_own_plan_id_and_a_single_total_count(checkout_env, monkeypatch):
+    """paper_premium is a one-time purchase (a single charge on a long-cycle
+    Razorpay plan), unlike premium_monthly's 12-cycle recurring default."""
+    from app.services import razorpay_checkout
+
+    user = _current_user(make_user("checkout-paper@example.com"))
+    FakeRazorpayClient.calls = []
+    monkeypatch.setattr(razorpay_checkout.httpx, "Client", FakeRazorpayClient)
+    client, _ = _auth_client(user)
+
+    response = client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "paper_premium"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["plan_code"] == "paper_premium"
+    assert FakeRazorpayClient.calls[0]["json"]["plan_id"] == PAPER_PLAN
+    assert FakeRazorpayClient.calls[0]["json"]["total_count"] == 1
 
 
 def test_frontend_user_id_and_payment_fields_are_ignored(checkout_env, monkeypatch):

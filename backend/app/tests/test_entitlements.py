@@ -27,6 +27,7 @@ def _add_entitlement(
     live_orders_enabled: bool = True,
     static_ip_enabled: bool = True,
     strategy_access_enabled: bool = True,
+    paper_trading_enabled: bool = False,
     max_strategy_count: int | None = None,
 ):
     with session_scope() as db:
@@ -40,6 +41,7 @@ def _add_entitlement(
             live_orders_enabled=live_orders_enabled,
             static_ip_enabled=static_ip_enabled,
             strategy_access_enabled=strategy_access_enabled,
+            paper_trading_enabled=paper_trading_enabled,
             max_strategy_count=max_strategy_count,
             metadata_json={"grant": "unit_test"},
             created_at=NOW - timedelta(minutes=5),
@@ -138,6 +140,38 @@ def test_strategy_entitlement_is_separate_from_live_orders(mu_db):
         result = entitlements.require_strategy_entitlement(db, user.id, now=NOW)
 
     assert result.max_strategy_count == 3
+
+
+def test_no_entitlement_means_no_paper_entitlement(mu_db):
+    user = make_user("no-paper-entitlement@example.com")
+    with session_scope() as db:
+        assert entitlements.has_paper_entitlement(db, user.id) is False
+        with pytest.raises(entitlements.EntitlementError):
+            entitlements.require_paper_entitlement(db, user.id)
+
+
+def test_paper_entitlement_is_read_directly_off_the_row_not_gated_by_evaluate_entitlement(mu_db):
+    """paper_trading_enabled is a one-time, non-expiring grant, unlike the
+    monthly live/static-IP/strategy bundle -- it must stay valid even when
+    the row's shared status/expiry (driven by an unrelated subscription
+    lifecycle) would fail evaluate_entitlement()'s normal gate."""
+    user = make_user("paper-only-entitlement@example.com")
+    _add_entitlement(
+        user.id,
+        status="cancelled",
+        expires_at=NOW - timedelta(days=1),
+        live_orders_enabled=False,
+        static_ip_enabled=False,
+        strategy_access_enabled=False,
+        paper_trading_enabled=True,
+    )
+
+    with session_scope() as db:
+        assert entitlements.has_paper_entitlement(db, user.id) is True
+        entitlements.require_paper_entitlement(db, user.id)  # does not raise
+        # The shared row is genuinely expired/cancelled for the other flags.
+        result = entitlements.evaluate_entitlement(entitlements.get_user_entitlement(db, user.id), now=NOW)
+        assert result.valid is False
 
 
 def test_entitlement_lookup_is_scoped_by_user_id(mu_db):

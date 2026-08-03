@@ -1,0 +1,8 @@
+//@version=5
+indicator("Unsupported Dynamic Request Qualification Source", overlay=true, dynamic_requests=true)
+remoteSymbol = input.symbol("NASDAQ:AAPL", "Arbitrary Remote Symbol")
+remoteTimeframe = input.timeframe("60", "Arbitrary Remote Timeframe")
+remoteClose = request.security(remoteSymbol, remoteTimeframe, close)
+signal = ta.crossover(close, remoteClose)
+plot(remoteClose, "Remote Close")
+alertcondition(signal, "Cross Remote Symbol", "Local close crossed arbitrary remote symbol")

@@ -1,9 +1,15 @@
+# ruff: noqa: FLY002
+from types import SimpleNamespace
+
 from app.config import settings
 from app.schemas.signal import NormalizedSignal
+from app.services import execution_router, security_id_resolver
 from app.services.dhan_debugger import validate_dhan_payload
 from app.services.execution_router import _build_dhan_payload_and_resolution
-from app.services import security_id_resolver
-from app.services.security_id_resolver import resolve_security_id, suggest_option_contract
+from app.services.security_id_resolver import (
+    resolve_security_id,
+    suggest_option_contract,
+)
 
 
 def make_signal(security_id=None) -> NormalizedSignal:
@@ -88,6 +94,11 @@ def test_dhan_payload_validation_passes_after_security_id_resolution(monkeypatch
     monkeypatch.setattr(settings, "ALLOW_DEFAULT_SECURITY_ID", True)
     monkeypatch.setattr(settings, "DEFAULT_SECURITY_ID", "999999")
     monkeypatch.setattr(settings, "AUTO_RESOLVE_SECURITY_ID", False)
+    monkeypatch.setattr(
+        execution_router,
+        "get_dhan_credentials",
+        lambda: SimpleNamespace(client_id="test-client"),
+    )
 
     payload, resolution = _build_dhan_payload_and_resolution(make_signal(), 1, "ENTRY")
     validation = validate_dhan_payload(payload)

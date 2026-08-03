@@ -1,0 +1,4 @@
+//@version=6
+indicator("F05")
+signal = barstate.isconfirmed and ta.crossover(close, ta.sma(close, 5))
+alertcondition(signal, "signal", "BUY_CE")

@@ -9,26 +9,35 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import select
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.config import settings
-from app.db.engine import database_configured
-from app.services import entitlements, live_engine, strategy_fanout
-from app.services import webhook_replay_store
-from app.services import strategy_risk
-from app.services.signal_parser import PayloadParseError, parse_webhook_payload
+from app.db import crud, models
+from app.db.engine import database_configured, session_scope
+from app.services import credential_vault
+from app.services import (
+    entitlements,
+    live_engine,
+    runtime_reliability,
+    setup_configuration,
+    strategy_catalog_service,
+    strategy_fanout,
+    strategy_instance_service,
+    strategy_risk,
+    webhook_replay_store,
+)
+from app.services.execution_context import bind_user_execution_context
 from app.services.signal_validator import validate_signal
 from app.services.user_context import CurrentUser
 from app.workers.strategy_job_worker import wake_strategy_job_worker
 
-
 router = APIRouter(tags=["Strategies"])
 _WEBHOOK_REQUESTS: dict[str, list[float]] = {}
 _WEBHOOK_RATE_LOCK = threading.RLock()
-_FANOUT_QTY_PLACEHOLDER = 1
 _PRODUCTION_WEBHOOK_WINDOW_SECONDS = 300
 
 
@@ -48,14 +57,6 @@ def _webhook_rate_limited(client_host: str) -> bool:
         recent.append(now)
         _WEBHOOK_REQUESTS[client_host] = recent
         return False
-
-
-def _fanout_parse_body(body: dict) -> dict:
-    """Add parser-only defaults that are replaced before per-user execution."""
-    if body.get("qty") in (None, ""):
-        body = dict(body)
-        body["qty"] = _FANOUT_QTY_PLACEHOLDER
-    return body
 
 
 def _parse_webhook_timestamp(value: Any) -> float | None:
@@ -160,6 +161,394 @@ class RiskControlPatch(BaseModel):
         return data
 
 
+class CatalogSelectionPayload(BaseModel):
+    strategy_key: str = Field(min_length=1, max_length=120)
+
+
+class ConfigurationPayload(BaseModel):
+    """One save for both halves of a configuration.
+
+    Owner identity is never accepted from the browser - it comes from the auth
+    layer. ``expected_revision`` is the revision the client last read; omit it
+    only for a first save.
+    """
+
+    strategy_key: str = Field(min_length=1, max_length=120)
+    mode: str = Field(min_length=4, max_length=5)
+    setup: dict[str, Any]
+    risk: dict[str, Any]
+    expected_revision: int | None = Field(default=None, ge=0)
+
+
+class CatalogSetupPayload(BaseModel):
+    strategy_key: str = Field(min_length=1, max_length=120)
+    mode: str = Field(min_length=4, max_length=5)
+    values: dict[str, Any]
+
+
+def _catalog_error(exc: Exception) -> JSONResponse:
+    if isinstance(exc, strategy_instance_service.InstanceError):
+        content: dict[str, Any] = {"ok": False, "error": str(exc)}
+        if exc.code:
+            content["reason"] = exc.code
+        return JSONResponse(status_code=exc.status_code, content=content)
+    if isinstance(exc, ValueError):
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    raise exc
+
+
+def _owner_runtime(user: CurrentUser) -> dict[str, Any]:
+    with bind_user_execution_context(user):
+        return runtime_reliability.runtime_status(user)
+
+
+@router.get("/api/strategies/catalog")
+def unified_strategy_catalog(user: CurrentUser = Depends(get_current_user)) -> dict:
+    runtime = _owner_runtime(user)
+    return {
+        "ok": True,
+        **strategy_catalog_service.get_catalog(
+            user.id,
+            runtime_state=runtime["engine"]["state"],
+        ),
+    }
+
+
+@router.get("/api/strategies/catalog/{strategy_key}/setup-schema")
+def strategy_setup_schema(
+    strategy_key: str,
+    user: CurrentUser = Depends(get_current_user),
+):
+    catalog = strategy_catalog_service.get_catalog(user.id)
+    strategy = next(
+        (item for item in catalog["strategies"] if item["strategy_key"] == strategy_key),
+        None,
+    )
+    if strategy is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Strategy not found."})
+    return {"ok": True, "strategy_key": strategy_key, "setup_schema": strategy["setup_schema"]}
+
+
+@router.put("/api/strategies/catalog/selection")
+def select_catalog_strategy(
+    payload: CatalogSelectionPayload,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        current = strategy_catalog_service.get_catalog(user.id)
+        changing = current["selected_strategy_key"] != payload.strategy_key
+        if changing:
+            runtime = _owner_runtime(user)
+            if runtime["engine"]["state"] != "STOPPED" or runtime["position"]["has_open_position"]:
+                raise strategy_instance_service.InstanceError(
+                    "Stop the engine and confirm the tracked position is flat before changing strategy.",
+                    status_code=409,
+                    code="RECONFIGURE_REQUIRED",
+                )
+        return {
+            "ok": True,
+            **strategy_catalog_service.select_strategy(user.id, payload.strategy_key),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return _catalog_error(exc)
+
+
+@router.put("/api/strategies/catalog/setup")
+def save_catalog_setup(
+    payload: CatalogSetupPayload,
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        runtime = _owner_runtime(user)
+        if runtime["engine"]["state"] != "STOPPED":
+            raise strategy_instance_service.InstanceError(
+                "Stop the engine before changing configuration.",
+                status_code=409,
+                code="RECONFIGURE_REQUIRED",
+            )
+        if runtime["position"]["has_open_position"]:
+            raise strategy_instance_service.InstanceError(
+                "Configuration cannot change while a tracked position is open.",
+                status_code=409,
+                code="OPEN_POSITION",
+            )
+        return {
+            "ok": True,
+            **strategy_catalog_service.save_setup(
+                user.id,
+                strategy_key=payload.strategy_key,
+                mode=payload.mode,
+                values=payload.values,
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return _catalog_error(exc)
+
+
+@router.put("/api/setup/configuration")
+def save_configuration(
+    payload: ConfigurationPayload,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Commit strategy setup and risk settings as one revision."""
+    from app.routers.setup import normalize_risk_values
+
+    try:
+        runtime = _owner_runtime(user)
+        if runtime["engine"]["state"] != "STOPPED":
+            raise strategy_instance_service.InstanceError(
+                "Stop the engine before changing configuration.",
+                status_code=409,
+                code="RECONFIGURE_REQUIRED",
+            )
+        if runtime["position"]["has_open_position"]:
+            raise strategy_instance_service.InstanceError(
+                "Configuration cannot change while a tracked position is open.",
+                status_code=409,
+                code="OPEN_POSITION",
+            )
+        return setup_configuration.save_configuration(
+            user.id,
+            strategy_key=payload.strategy_key,
+            mode=payload.mode,
+            setup_values=payload.setup,
+            risk_values=payload.risk,
+            expected_revision=payload.expected_revision,
+            normalize_risk=normalize_risk_values,
+        )
+    except ValidationError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "error": "Risk settings are out of range.", "code": "INVALID_RISK",
+                     "detail": [{"field": list(e.get("loc") or ["risk"])[-1], "message": e.get("msg")} for e in exc.errors()]},
+        )
+    except setup_configuration.ConfigurationConflict as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "error": exc.message,
+                "code": exc.code,
+                "expected_revision": exc.expected,
+                "current_revision": exc.current,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _catalog_error(exc)
+
+
+@router.get("/api/setup/configuration")
+def read_configuration(
+    mode: str = "paper",
+    user: CurrentUser = Depends(get_current_user),
+):
+    """The revision a save must echo back, and whether both halves agree."""
+    return {"ok": True, **setup_configuration.current_revision(user.id, mode)}
+
+
+@router.get("/api/trading/configurations")
+def list_trading_configurations(
+    mode: str | None = Query(default=None, pattern="^(paper|live)$"),
+    strategy_instance_id: uuid.UUID | None = Query(default=None),
+    user: CurrentUser = Depends(get_current_user),
+):
+    return {
+        "ok": True,
+        "items": setup_configuration.list_configurations(
+            user.id,
+            mode=mode,
+            strategy_instance_id=strategy_instance_id,
+        ),
+        "selected": setup_configuration.selected_configuration(user.id, mode),
+    }
+
+
+@router.get("/api/trading/configurations/{configuration_id}")
+def read_trading_configuration(
+    configuration_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+):
+    configuration = setup_configuration.get_configuration(user.id, configuration_id)
+    if configuration is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Configuration not found."})
+    return {"ok": True, "configuration": configuration}
+
+
+def _manual_defaults(user_id: uuid.UUID) -> dict[str, dict[str, Any]]:
+    defaults: dict[str, dict[str, Any]] = {}
+    for mode in ("paper", "live"):
+        revision = setup_configuration.selected_configuration(user_id, mode)
+        values = dict(revision.get("configuration") or {}) if revision else {}
+        defaults[mode] = {
+            "available": revision is not None,
+            "lots": values.get("lots"),
+            "stop_loss_percent": values.get("stop_loss_percent"),
+            "take_profit_percent": values.get("take_profit_percent"),
+            "order_type": "MARKET" if revision is not None else None,
+            "configuration_revision_id": revision.get("id") if revision else None,
+            "configuration_revision": revision.get("revision") if revision else None,
+        }
+    return defaults
+
+
+@router.get("/api/trading/bootstrap")
+def trading_bootstrap(user: CurrentUser = Depends(get_current_user)):
+    """One owner-scoped read model for setup restoration and terminal startup."""
+    from app.services import automations_overview, risk_overview, user_preferences
+
+    if not database_configured():
+        raise HTTPException(status_code=503, detail="Trading database is not configured.")
+
+    runtime = _owner_runtime(user)
+    selected_configuration = setup_configuration.selected_configuration(user.id)
+    mode = (
+        selected_configuration["mode"]
+        if selected_configuration is not None
+        else None
+    )
+
+    catalog = strategy_catalog_service.get_catalog(
+        user.id,
+        runtime_state=runtime["engine"]["state"],
+    )
+    selection = strategy_instance_service.trading_selection_state(user.id)
+    current_run = None
+    pending_operation = None
+    if database_configured():
+        with session_scope() as db:
+            run = db.scalar(
+                select(models.UserRun)
+                .where(models.UserRun.user_id == user.id)
+                .order_by(models.UserRun.created_at.desc())
+            )
+            if run is not None:
+                current_run = {
+                    "id": str(run.id),
+                    "status": run.status,
+                    "mode": run.run_type,
+                    "execution_mode": run.execution_mode,
+                    "strategy_name": run.strategy_name,
+                    "strategy_version_id": (
+                        str(run.strategy_version_id)
+                        if run.strategy_version_id
+                        else None
+                    ),
+                    "configuration_revision_id": (
+                        str(run.configuration_revision_id)
+                        if run.configuration_revision_id
+                        else None
+                    ),
+                    "configuration_revision": run.configuration_revision,
+                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "stopped_at": run.stopped_at.isoformat() if run.stopped_at else None,
+                }
+            operation = db.scalar(
+                select(models.EngineStartOperation)
+                .where(
+                    models.EngineStartOperation.user_id == user.id,
+                    models.EngineStartOperation.status == "pending",
+                )
+                .order_by(models.EngineStartOperation.created_at.desc())
+            )
+            if operation is not None:
+                pending_operation = {
+                    "id": str(operation.id),
+                    "type": "engine_start",
+                    "status": operation.status,
+                    "mode": operation.mode,
+                    "configuration_revision_id": str(
+                        operation.configuration_revision_id
+                    ),
+                    "configuration_revision": operation.configuration_revision,
+                    "created_at": operation.created_at.isoformat(),
+                }
+
+    if (
+        mode is None
+        and current_run is not None
+        and current_run["status"] == "running"
+        and current_run["mode"] in {"paper", "live"}
+    ):
+        mode = current_run["mode"]
+    if (
+        mode is None
+        and (
+            runtime["engine"]["state"] != "STOPPED"
+            or runtime["position"].get("has_open_position")
+        )
+    ):
+        runtime_mode = runtime["engine"].get("mode")
+        mode = runtime_mode if runtime_mode in {"paper", "live"} else None
+
+    preferences = user_preferences.get_preferences(user.id)
+    setup_state = catalog.get("setup_progress")
+    position_version = runtime["position"].get(
+        "position_version",
+        runtime["position"].get("version"),
+    )
+    return {
+        # Every field runtime_status() produces (pnl, config, account, safety,
+        # exit, owner_user_id) belongs in this response too: RuntimeStatus is
+        # the frontend's shared contract for both /api/runtime/status and this
+        # endpoint, and every consumer (Header, EngineConfigCard, ...) trusts
+        # it's always complete.
+        **runtime,
+        # strategy_catalog/eligible_strategies/selected_strategy: the setup
+        # conversation's strategy-picker step reads these directly off the
+        # bootstrap payload; without them the strategy list silently renders
+        # empty. Mirrors _hydrated_runtime_status's already-correct pattern.
+        **selection,
+        "strategy_catalog": catalog,
+        "ok": True,
+        "mode": mode,
+        "setup": {
+            "state": setup_state,
+            "saved_complete": selected_configuration is not None,
+            "mode_selected": mode in {"paper", "live"},
+        },
+        "setup_state": setup_state,
+        "selected_strategy_key": catalog.get("selected_strategy_key"),
+        "compatible_configurations": setup_configuration.list_configurations(user.id, mode=mode),
+        "selected_configuration": selected_configuration,
+        "current_run": current_run,
+        "live_readiness": live_engine.evaluate_live_readiness(
+            user,
+            "real_orders",
+            uses_webhook=True,
+        ),
+        "pending_operation": pending_operation,
+        "engine": runtime["engine"],
+        "position": runtime["position"],
+        "risk_usage": risk_overview.build_risk_overview(user.id),
+        "manual_defaults": _manual_defaults(user.id),
+        "automation_settings": automations_overview.build_automations_overview(
+            user.id
+        ),
+        "notification_preferences": preferences.get("notification_preferences", {}),
+        "chart_preferences": {
+            "default_timeframe": preferences.get("default_chart_timeframe", "5m"),
+        },
+        "terminal_state": {
+            "engine_state": runtime["engine"]["state"],
+            "position_version": position_version,
+            "reconciliation_status": (
+                "pending" if pending_operation is not None else "resolved"
+            ),
+        },
+        "terminal_capabilities": {
+            "max_open_positions": 1,
+            "paper_add_quantity": True,
+            "live_add_quantity": False,
+            "paper_partial_exit": True,
+            "live_partial_exit": False,
+            "paper_modify_protection": True,
+            "live_modify_super_order_protection": True,
+            "manual_market_orders": True,
+            "manual_limit_orders": False,
+        },
+    }
+
+
 @router.get("/api/strategies/subscriptions")
 def my_subscriptions(user: CurrentUser = Depends(get_current_user)) -> dict:
     return {"subscriptions": strategy_fanout.list_user_subscriptions(user.id)}
@@ -248,7 +637,7 @@ async def strategy_webhook(
     strategy_name: str,
     request: Request,
 ) -> JSONResponse:
-    secret = (settings.STRATEGY_WEBHOOK_SECRET or "").strip()
+    secret = credential_vault.get_strategy_webhook_secret()
     if not secret:
         return JSONResponse(
             status_code=503,
@@ -296,22 +685,29 @@ async def strategy_webhook(
         if nonce_response is not None:
             return nonce_response
 
-    try:
-        signal = parse_webhook_payload(_fanout_parse_body(body))
-    except PayloadParseError as exc:
+    action = str(body.get("action") or "").strip().upper()
+    if action not in strategy_fanout.BROADCAST_ACTIONS:
         return JSONResponse(
             status_code=422,
-            content={"ok": False, "error": str(exc)},
+            content={"ok": False, "error": f"Unsupported action: {action or 'missing'}."},
+        )
+    signal_id = str(body.get("signal_id") or "").strip()
+    if not signal_id:
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "error": "signal_id is required."},
+        )
+    signal_time = str(body.get("signal_time") or "")
+
+    if action == "HOLD":
+        # Connectivity-only acknowledgment: proves the secret and URL are
+        # correct without touching any subscriber's account or position.
+        return JSONResponse(
+            status_code=200,
+            content={"ok": True, "signal_id": signal_id, "status": "NO_OP", "reason": "HOLD"},
         )
 
-    payload_strategy = strategy_fanout.canonical_strategy_name(
-        signal.strategy_code
-    )
-    if path_strategy != payload_strategy:
-        return JSONResponse(
-            status_code=422,
-            content={"ok": False, "error": "Strategy path does not match payload."},
-        )
+    signal = strategy_fanout.build_broadcast_signal(path_strategy, action, signal_id, signal_time)
 
     valid, error = validate_signal(signal)
     if not valid:
@@ -509,3 +905,31 @@ def verify_egress(
 ) -> dict:
     result = strategy_fanout.verify_user_egress(user_id)
     return {"ok": bool(result.get("ok")), "egress": result}
+
+
+@router.get("/api/admin/strategy-webhook-secret")
+def get_strategy_webhook_secret_metadata(admin: CurrentUser = Depends(require_admin)) -> dict:
+    return {"ok": True, "secret": credential_vault.strategy_webhook_secret_metadata()}
+
+
+@router.post("/api/admin/strategy-webhook-secret/reveal")
+def reveal_strategy_webhook_secret(admin: CurrentUser = Depends(require_admin)) -> dict:
+    secret = credential_vault.get_strategy_webhook_secret()
+    if database_configured():
+        with session_scope() as db:
+            crud.add_audit_log(db, user_id=admin.id, action="STRATEGY_WEBHOOK_SECRET_REVEALED")
+    return {"ok": True, "secret": secret, "metadata": credential_vault.strategy_webhook_secret_metadata()}
+
+
+@router.post("/api/admin/strategy-webhook-secret/rotate")
+def rotate_strategy_webhook_secret(admin: CurrentUser = Depends(require_admin)) -> dict:
+    """Every broadcast chart pasted with the previous secret stops
+    authenticating the moment this lands -- each must be updated with the new
+    value before its next signal, or that signal is rejected as unauthorized.
+    """
+    secret = credential_vault.generate_strategy_webhook_secret()
+    metadata = credential_vault.save_strategy_webhook_secret(secret)
+    if database_configured():
+        with session_scope() as db:
+            crud.add_audit_log(db, user_id=admin.id, action="STRATEGY_WEBHOOK_SECRET_ROTATED")
+    return {"ok": True, "secret": secret, "metadata": metadata}

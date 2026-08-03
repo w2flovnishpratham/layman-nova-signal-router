@@ -137,9 +137,11 @@ def save_user_credentials(
 
         if dhan_client_id is not None:
             vault.dhan_client_id_encrypted = _encrypt(dhan_client_id)
+            vault.connection_status = "NOT_CONFIGURED"
         if dhan_access_token is not None:
             vault.dhan_access_token_encrypted = _encrypt(dhan_access_token)
             vault.dhan_token_saved_at = datetime.now(timezone.utc)
+            vault.connection_status = "NOT_CONFIGURED"
         if dhan_api_secret is not None:
             vault.dhan_api_secret_encrypted = _encrypt(dhan_api_secret)
         if webhook_secret is not None:
@@ -200,26 +202,89 @@ def _status_from_vault(vault: Optional[models.UserCredentialVault]) -> dict[str,
         return {
             "broker_name": "dhan",
             "has_dhan_client_id": False,
+            # Client ID is not a secret, so the owner's own plaintext value is
+            # returned here for autofill (unlike the access token, which never is).
+            "dhan_client_id": None,
             "dhan_client_id_masked": None,
             "has_dhan_access_token": False,
             "has_dhan_api_secret": False,
             "has_webhook_secret": False,
             "mode": "paper",
             "dhan_token_saved_at": None,
+            "connection_status": "NOT_CONFIGURED",
+            "last_verified_at": None,
+            "last_verification_error": None,
+            "last_wallet_snapshot_at": None,
             "updated_at": None,
         }
     client_id_plain = _decrypt(vault.dhan_client_id_encrypted)
     return {
         "broker_name": vault.broker_name or "dhan",
         "has_dhan_client_id": bool(vault.dhan_client_id_encrypted),
+        "dhan_client_id": client_id_plain,
         "dhan_client_id_masked": mask_client_id(client_id_plain),
         "has_dhan_access_token": bool(vault.dhan_access_token_encrypted),
         "has_dhan_api_secret": bool(vault.dhan_api_secret_encrypted),
         "has_webhook_secret": bool(vault.webhook_secret_encrypted),
         "mode": vault.mode or "paper",
         "dhan_token_saved_at": vault.dhan_token_saved_at.isoformat() if vault.dhan_token_saved_at else None,
+        "connection_status": vault.connection_status or "NOT_CONFIGURED",
+        "last_verified_at": vault.last_verified_at.isoformat() if vault.last_verified_at else None,
+        "last_verification_error": vault.last_verification_error,
+        "last_wallet_snapshot_at": (
+            vault.last_wallet_snapshot_at.isoformat() if vault.last_wallet_snapshot_at else None
+        ),
         "updated_at": vault.updated_at.isoformat() if vault.updated_at else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Verification status
+# ---------------------------------------------------------------------------
+_ERROR_CATEGORY_TO_STATUS = {
+    "TOKEN_EXPIRED": "TOKEN_EXPIRED",
+    "AUTH": "INVALID_CREDENTIALS",
+    "STATIC_IP": "BROKER_UNAVAILABLE",
+    "RATE_LIMIT": "BROKER_UNAVAILABLE",
+}
+
+
+def connection_status_from_dhan_result(
+    *, success: bool, status_code: int | None, raw_response: Any, message: str = ""
+) -> tuple[str, str | None]:
+    """Map a Dhan verification outcome to a persisted connection_status + safe message."""
+    if success:
+        return "CONNECTED", None
+    if status_code is None:
+        # No HTTP response at all: network/timeout, not a credential problem.
+        return "BROKER_UNAVAILABLE", message or "Dhan did not respond."
+    from app.services.dhan_error_interpreter import interpret_dhan_error
+
+    interpreted = interpret_dhan_error(status_code, raw_response if raw_response is not None else message)
+    category = str(interpreted.get("category") or "UNKNOWN")
+    status = _ERROR_CATEGORY_TO_STATUS.get(category)
+    if status is None:
+        status = "BROKER_UNAVAILABLE" if status_code >= 500 else "ERROR"
+    return status, str(interpreted.get("message") or message or None)
+
+
+def record_verification_result(
+    user_id: uuid.UUID, *, status: str, error: str | None = None, wallet_ok: bool = False
+) -> dict[str, Any]:
+    """Persist the outcome of a Dhan credential verification. Never raises."""
+    if not database_configured():
+        return _status_from_vault(None)
+    with session_scope() as db:
+        vault = _get_vault(db, user_id)
+        if vault is None:
+            return _status_from_vault(None)
+        vault.connection_status = status
+        vault.last_verified_at = datetime.now(timezone.utc)
+        vault.last_verification_error = error
+        if wallet_ok:
+            vault.last_wallet_snapshot_at = datetime.now(timezone.utc)
+        db.flush()
+        return _status_from_vault(vault)
 
 
 def user_credential_status(user_id: uuid.UUID) -> dict[str, Any]:

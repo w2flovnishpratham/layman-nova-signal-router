@@ -1,13 +1,15 @@
+import { Button } from '@/components/ui/button'
 import { formatCurrency, exitModeLabel, sideLabel } from '../../lib/format'
 import type { ClientCommand, TradeConfig } from '../../types'
 import { contractsForLots, DEFAULT_NIFTY_LOT_SIZE } from '../../lib/trading'
 
 interface Props {
   config: TradeConfig
+  strategyLabel?: string
   onSend: (command: ClientCommand) => void
 }
 
-export function ConfirmLaunchCard({ config, onSend }: Props) {
+export function ConfirmLaunchCard({ config, strategyLabel = 'Selected owner strategy', onSend }: Props) {
   const lots = config.risk?.lots ?? 1
   const quantity = contractsForLots(lots, DEFAULT_NIFTY_LOT_SIZE)
   const sampleStrike = 'NIFTY 23500 CE / weekly 4 Jun'
@@ -19,7 +21,7 @@ export function ConfirmLaunchCard({ config, onSend }: Props) {
       <span className="eyebrow">Confirm</span>
       <h2>Review live-money launch</h2>
       <dl>
-        <div><dt>Strategy</dt><dd>Supertrend ATM Reversal</dd></div>
+        <div><dt>Strategy</dt><dd>{strategyLabel}</dd></div>
         <div><dt>Client</dt><dd>{config.broker?.clientId ?? 'pending'}</dd></div>
         <div><dt>Lots</dt><dd>{lots} lot / {quantity} qty</dd></div>
         <div><dt>Side</dt><dd>{sideLabel(config.risk?.side)}</dd></div>
@@ -30,9 +32,9 @@ export function ConfirmLaunchCard({ config, onSend }: Props) {
         <div><span>Est. margin</span><strong>{formatCurrency(estimatedMargin)}</strong></div>
         <div><span>Round-trip charges</span><strong>{formatCurrency(estimatedCharges)}</strong></div>
       </div>
-      <button className="live-confirm" type="button" onClick={() => onSend({ type: 'setup.confirm_live', data: {} })}>
+      <Button variant="unstyled" className="live-confirm" type="button" onClick={() => onSend({ type: 'setup.confirm_live', data: {} })}>
         Confirm trade real money
-      </button>
+      </Button>
     </article>
   )
 }

@@ -18,17 +18,27 @@ from datetime import date, datetime, timezone
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    event,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy import (
+    false as sa_false,
+)
+from sqlalchemy import (
+    text as sa_text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import CHAR, JSON, TypeDecorator
 
@@ -96,13 +106,13 @@ class User(Base):
     )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    sessions: Mapped[list["UserSession"]] = relationship(
+    sessions: Mapped[list[UserSession]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
-    credential_vault: Mapped["UserCredentialVault | None"] = relationship(
+    credential_vault: Mapped[UserCredentialVault | None] = relationship(
         back_populates="user", cascade="all, delete-orphan", uselist=False
     )
-    runs: Mapped[list["UserRun"]] = relationship(
+    runs: Mapped[list[UserRun]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -119,7 +129,7 @@ class UserSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     session_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
 
-    user: Mapped["User"] = relationship(back_populates="sessions")
+    user: Mapped[User] = relationship(back_populates="sessions")
 
 
 class UserCredentialVault(Base):
@@ -139,12 +149,19 @@ class UserCredentialVault(Base):
     # Stored when the token was saved so the UI can show token age without ever
     # exposing the token itself.
     dhan_token_saved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # NOT_CONFIGURED/CONNECTED/INVALID_CREDENTIALS/TOKEN_EXPIRED/BROKER_UNAVAILABLE/ERROR.
+    # Reset to NOT_CONFIGURED whenever client_id/access_token changes, so a stale
+    # CONNECTED can never survive a credential swap without re-verification.
+    connection_status: Mapped[str] = mapped_column(String(30), default="NOT_CONFIGURED", nullable=False)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_verification_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_wallet_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    user: Mapped["User"] = relationship(back_populates="credential_vault")
+    user: Mapped[User] = relationship(back_populates="credential_vault")
 
 
 class UserRun(Base):
@@ -161,6 +178,13 @@ class UserRun(Base):
     execution_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
     # signal_only/paper_live_data/real_orders
     mode_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    configuration_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"), nullable=True
+    )
+    configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    strategy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="SET NULL"), nullable=True
+    )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -169,7 +193,7 @@ class UserRun(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    user: Mapped["User"] = relationship(back_populates="runs")
+    user: Mapped[User] = relationship(back_populates="runs")
 
 
 class AuditLog(Base):
@@ -233,6 +257,51 @@ class WebhookNonce(Base):
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class UserPreference(Base):
+    """Per-user presentation settings.
+
+    Deliberately separate from the engine's runtime settings file: those are read
+    by the entry path on every decision and carry the optimistic-locking version
+    the risk API depends on. A table-density change must never touch that.
+    """
+
+    __tablename__ = "user_preferences"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_user_preferences_user"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata", nullable=False)
+    reduced_motion: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    table_density: Mapped[str] = mapped_column(String(16), default="comfortable", nullable=False)
+    default_chart_timeframe: Mapped[str] = mapped_column(String(16), default="5m", nullable=False)
+    notification_preferences: Mapped[dict] = mapped_column(JSONType, default=dict, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class TerminalAlertAcknowledgement(Base):
+    """Per-user acknowledgement state for persisted terminal alert events."""
+
+    __tablename__ = "terminal_alert_acknowledgements"
+    __table_args__ = (
+        UniqueConstraint("user_id", "event_key", name="uq_terminal_alert_ack_user_event"),
+        Index("ix_terminal_alert_ack_user_at", "user_id", "acknowledged_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class UserRiskControl(Base):
     """Per-user server-side risk gates for strategy fan-out."""
 
@@ -251,6 +320,67 @@ class UserRiskControl(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
+
+
+class UserRiskConfiguration(Base):
+    """The active owner-scoped risk version for one execution mode."""
+
+    __tablename__ = "user_risk_configurations"
+    __table_args__ = (
+        UniqueConstraint("user_id", "execution_mode", name="uq_user_risk_configuration_mode"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    execution_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    active_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("user_risk_configuration_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    based_on_preset: Mapped[str] = mapped_column(String(30), default="BALANCED", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class UserRiskConfigurationVersion(Base):
+    """Immutable audit history for one Paper or Live risk configuration."""
+
+    __tablename__ = "user_risk_configuration_versions"
+    __table_args__ = (
+        UniqueConstraint("risk_configuration_id", "version_number", name="uq_user_risk_version_number"),
+        Index("ix_user_risk_versions_configuration_created", "risk_configuration_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    risk_configuration_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("user_risk_configurations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    preset_key: Mapped[str] = mapped_column(String(30), nullable=False)
+    is_custom: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    daily_loss_cap_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    max_loss_per_trade_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    max_trades_per_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_open_positions: Mapped[int] = mapped_column(Integer, nullable=False)
+    lots_per_trade_min: Mapped[int] = mapped_column(Integer, nullable=False)
+    lots_per_trade_max: Mapped[int] = mapped_column(Integer, nullable=False)
+    cooldown_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    exit_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    stop_loss_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    take_profit_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_loss_basis: Mapped[str] = mapped_column(String(20), nullable=False)
+    take_profit_basis: Mapped[str] = mapped_column(String(20), nullable=False)
+    margin_exposure_cap_paise: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    change_source: Mapped[str] = mapped_column(String(30), nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class UserStrategyRiskControl(Base):
@@ -344,6 +474,7 @@ class UserEntitlement(Base):
     live_orders_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     static_ip_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     strategy_access_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    paper_trading_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     max_strategy_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Safe operational metadata only. Do not store raw provider payloads,
     # secrets, or full PII in this JSON field.
@@ -433,6 +564,13 @@ class StrategyExecutionJob(Base):
     signal_payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
     lots: Mapped[int] = mapped_column(Integer, nullable=False)
     execution_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    configuration_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     max_attempts: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
@@ -450,7 +588,7 @@ class StrategyExecutionJob(Base):
 
 
 class LiveOrderIntent(Base):
-    """Durable idempotency gate for live Dhan write intents."""
+    """Durable idempotency gate for broker and paper-order intents."""
 
     __tablename__ = "live_order_intents"
     __table_args__ = (
@@ -473,8 +611,62 @@ class LiveOrderIntent(Base):
     symbol: Mapped[str | None] = mapped_column(String(120), nullable=True)
     broker_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     broker_correlation_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    risk_configuration_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("user_risk_configuration_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     intent_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class EngineStartOperation(Base):
+    """Owner-scoped durable idempotency and consent record for engine starts."""
+
+    __tablename__ = "engine_start_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "idempotency_key",
+            name="uq_engine_start_operation_user_key",
+        ),
+        Index("ix_engine_start_operations_user_created", "user_id", "created_at"),
+        Index("ix_engine_start_operations_status_updated", "status", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_instances.id", ondelete="RESTRICT"), nullable=False
+    )
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    configuration_revision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("strategy_configuration_revisions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    configuration_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    live_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    started_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("user_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
@@ -539,9 +731,1197 @@ class PortfolioTrade(Base):
     entry_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     exit_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # MANUAL/BUILT_IN_STRATEGY/USER_STRATEGY/TRADINGVIEW_WEBHOOK. Null on rows
+    # closed before this column existed — never guessed during backfill.
+    origin: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # STOP_LOSS/TAKE_PROFIT/EOD_SQUAREOFF/MANUAL/etc — the reason the position
+    # closed, independent of `origin` (who opened it).
+    exit_trigger: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    configuration_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class StrategyCatalog(Base):
+    """One registered strategy (Nova-owned or personal).
+
+    Phase 0 registry foundation: nothing in the execution path reads this yet.
+    Nova-owned rows have owner_user_id NULL and a globally unique code
+    (partial unique index); personal rows are namespaced per owner.
+    """
+
+    __tablename__ = "strategy_catalog"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "code", name="uq_strategy_catalog_owner_code"),
+        Index(
+            "uq_strategy_catalog_nova_code",
+            "code",
+            unique=True,
+            postgresql_where=sa_text("owner_user_id IS NULL"),
+            sqlite_where=sa_text("owner_user_id IS NULL"),
+        ),
+        Index("ix_strategy_catalog_owner_status", "owner_user_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    owner_type: Mapped[str] = mapped_column(String(20), default="nova", nullable=False)  # nova/personal
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # private / nova_shared / marketplace (defined now, unused until a later release)
+    visibility: Mapped[str] = mapped_column(String(20), default="private", nullable=False)
+    # coming_soon / active / beta / disabled / deprecated
+    status: Mapped[str] = mapped_column(String(20), default="coming_soon", nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    versions: Mapped[list[StrategyVersion]] = relationship(
+        back_populates="strategy", cascade="all, delete-orphan"
+    )
+
+
+class StrategyVersion(Base):
+    """One immutable-once-approved version of a catalog strategy.
+
+    INVARIANT: approved StrategyVersion rows must never be modified through
+    direct ORM assignment. All updates must go through
+    app.services.strategy_registry (update_version/approve_version), which
+    rejects every change to an approved version except approved -> deprecated.
+    """
+
+    __tablename__ = "strategy_versions"
+    __table_args__ = (
+        UniqueConstraint("strategy_id", "version", name="uq_strategy_version"),
+        UniqueConstraint(
+            "strategy_id",
+            "source_sha256",
+            "pine_contract_version",
+            name="uq_strategy_version_source_contract",
+        ),
+        # Composite key target so strategy_instances can enforce
+        # "version belongs to strategy" structurally.
+        UniqueConstraint("id", "strategy_id", name="uq_strategy_versions_id_strategy"),
+        Index("ix_strategy_versions_strategy_status", "strategy_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_catalog.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Wire contract this version's alerts must use, e.g. "nova.v1".
+    payload_spec_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    # nova_shared / nova_hosted_personal / personal_tradingview
+    source_journey: Mapped[str] = mapped_column(String(30), nullable=False)
+    # draft / pending_validation / validation_failed / pending_review / approved / rejected / deprecated
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
+    # external_webhook (TradingView calls Nova) / nova_runtime (Nova evaluates internally)
+    execution_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Populated only for nova_runtime versions: the validated declarative rule
+    # document the internal runtime interprets — never raw arbitrary source.
+    runtime_definition: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pine_contract_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    strategy: Mapped[StrategyCatalog] = relationship(back_populates="versions")
+
+
+class StrategySourceArtifact(Base):
+    """Inert source evidence for one strategy version (Pine text, prompt output).
+
+    Never executed — input to validation and audit only.
+    """
+
+    __tablename__ = "strategy_source_artifacts"
+    __table_args__ = (
+        Index("ix_strategy_source_artifacts_version_type", "strategy_version_id", "artifact_type"),
+        UniqueConstraint(
+            "strategy_version_id", "artifact_type", name="uq_strategy_source_artifact_version_type"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # pine_script / master_prompt_output / ai_conversion_log / runtime_dsl
+    artifact_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    # SET NULL (not NOT NULL as drafted in the report) so audit rows survive
+    # account deletion instead of blocking it.
+    submitted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # manual_master_prompt / claude_api (future) — audit detail, never branched on
+    conversion_method: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    original_filename: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class StrategyValidationReport(Base):
+    """Durable result of one automated validation stage for one version."""
+
+    __tablename__ = "strategy_validation_reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "strategy_version_id",
+            "stage",
+            "validator_version",
+            "contract_version",
+            "source_sha256",
+            name="uq_strategy_validation_identity",
+        ),
+        Index(
+            "ix_strategy_validation_reports_version_stage",
+            "strategy_version_id",
+            "stage",
+            "executed_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # structural / security / compatibility / replay
+    stage: Mapped[str] = mapped_column(String(30), nullable=False)
+    # passed / failed / warning
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Structured findings: [{code, severity, message, location}, ...]
+    findings: Mapped[list] = mapped_column(JSONType, nullable=False)
+    validator_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    contract_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    validation_engine: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    warning_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    info_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    eligible_for_review: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class StrategyAdminReview(Base):
+    """Immutable human review decision history for one strategy version."""
+
+    __tablename__ = "strategy_admin_reviews"
+    __table_args__ = (
+        Index("ix_strategy_admin_reviews_version_reviewed", "strategy_version_id", "reviewed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # SET NULL so review history survives reviewer account deletion.
+    reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # approved / rejected / changes_requested
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validation_report_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_validation_reports.id", ondelete="SET NULL"), nullable=True
+    )
+    previous_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    new_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class PineConversionRequest(Base):
+    __tablename__ = "pine_conversion_requests"
+    __table_args__ = (
+        UniqueConstraint("identity_sha256", "attempt", name="uq_pine_conversion_identity_attempt"),
+        Index("ix_pine_conversion_status_available", "status", "available_at"),
+        Index("ix_pine_conversion_owner_created", "owner_user_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    strategy_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_catalog.id", ondelete="CASCADE"), nullable=False)
+    input_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    input_source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    options: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    options_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    identity_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    consent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
+    provider_request_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    candidate_version_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="SET NULL"), nullable=True)
+    validation_report_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("strategy_validation_reports.id", ondelete="SET NULL"), nullable=True)
+    safe_error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    usage_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    estimated_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    conversion_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assumptions: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    unsupported_features: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    warnings: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    action_mapping: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    worker_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class TradingViewCompileEvidence(Base):
+    """One terminal human-confirmed TradingView compile result for a C1 candidate.
+
+    The evidence is pinned to the complete frozen C1 hash tuple. A failed
+    compile is terminal for that conversion request; retry requires a newly
+    approved candidate/conversion.
+    """
+
+    __tablename__ = "tradingview_compile_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "pine_conversion_request_id",
+            name="uq_tv_compile_evidence_conversion",
+        ),
+        Index("ix_tv_compile_evidence_candidate", "candidate_version_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    pine_conversion_request_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("pine_conversion_requests.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    candidate_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False
+    )
+    result: Mapped[str] = mapped_column(String(20), nullable=False)  # SUCCESS / FAILURE
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    strategy_layer_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    prompt_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    transport_version: Mapped[str] = mapped_column(String(30), nullable=False)
+    transport_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    compiler_error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    setup_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admin_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    compiled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class PinePromptVersion(Base):
+    """Immutable manual conversion prompt metadata and qualification state."""
+
+    __tablename__ = "pine_prompt_versions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    version_label: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="QUALIFICATION")
+    change_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class PineUserAcceptance(Base):
+    """User acknowledgement pinned to exact source, prompt and validation evidence."""
+
+    __tablename__ = "pine_user_acceptances"
+    __table_args__ = (UniqueConstraint("candidate_version_id", name="uq_pine_acceptance_candidate"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    original_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    candidate_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    prompt_version_id: Mapped[str] = mapped_column(String(40), ForeignKey("pine_prompt_versions.id", ondelete="RESTRICT"), nullable=False)
+    setup_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    validation_report_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_validation_reports.id", ondelete="RESTRICT"), nullable=False)
+    validation_report_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    assumptions: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class TradingViewSetup(Base):
+    """Manual TradingView installation and server-observed verification state."""
+
+    __tablename__ = "tradingview_setups"
+    __table_args__ = (
+        UniqueConstraint("strategy_instance_id", name="uq_tradingview_setup_instance"),
+        UniqueConstraint(
+            "user_id",
+            "approved_version_id",
+            "pine_conversion_request_id",
+            name="uq_c2_installation_owner_candidate",
+        ),
+        Index("ix_tradingview_setups_type_status", "setup_type", "status"),
+        Index("ix_tradingview_setups_owner_updated", "user_id", "updated_at"),
+        Index("ix_tradingview_setups_conversion", "pine_conversion_request_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=False)
+    approved_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    # Non-null only for the C2 product path. Legacy manual TradingView setups
+    # retain their existing lifecycle and readiness rules.
+    pine_conversion_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("pine_conversion_requests.id", ondelete="RESTRICT"), nullable=True
+    )
+    compile_evidence_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("tradingview_compile_evidence.id", ondelete="RESTRICT"), nullable=True
+    )
+    approved_candidate_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_strategy_layer_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    setup_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="SETUP_PENDING")
+    requested_timeframe: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    user_reported_compiled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    installation_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    installation_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    installed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    current_credential_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_instance_webhook_credentials.id", ondelete="SET NULL"), nullable=True
+    )
+    hold_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hold_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hold_credential_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_instance_webhook_credentials.id", ondelete="SET NULL"), nullable=True
+    )
+    hold_webhook_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("webhook_events.id", ondelete="SET NULL"), nullable=True
+    )
+    paper_entry_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    paper_entry_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paper_exit_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    paper_exit_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reversal_signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reversal_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    blocking_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admin_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    paper_eligible_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    credential_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reset_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class PinePromptQualificationTrial(Base):
+    """Admin-owned evidence for one representative manual-prompt trial."""
+
+    __tablename__ = "pine_prompt_qualification_trials"
+    __table_args__ = (Index("ix_pine_prompt_trials_prompt_outcome", "prompt_version_id", "outcome"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    prompt_version_id: Mapped[str] = mapped_column(String(40), ForeignKey("pine_prompt_versions.id", ondelete="RESTRICT"), nullable=False)
+    original_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    candidate_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False)
+    strategy_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    test_classification: Mapped[str] = mapped_column(String(50), nullable=False)
+    evidence: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tester_user_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class StrategyInstance(Base):
+    """One user's configured copy of a strategy version — the universal
+    server-side unit all three journeys route through.
+
+    Phase 1: control-plane only. During the transition the legacy
+    strategy_subscriptions row remains EXECUTION-AUTHORITATIVE (the fan-out
+    reads it); this row is the future authority, kept transactionally
+    synchronized in both directions (lots, execution_mode, and lifecycle
+    active-eligibility) via legacy_subscription_id. Status transitions are
+    enforced solely by app.domain.strategy_instance_state_machine — never
+    assign status directly.
+    """
+
+    __tablename__ = "strategy_instances"
+    __table_args__ = (
+        UniqueConstraint("user_id", "strategy_id", "label", name="uq_strategy_instance_user_label"),
+        # Composite target so positions can structurally prove instance ownership.
+        UniqueConstraint("id", "user_id", name="uq_strategy_instances_id_user"),
+        # Structural guarantee that the chosen version belongs to the chosen
+        # strategy — not left to service-layer discipline.
+        ForeignKeyConstraint(
+            ["strategy_version_id", "strategy_id"],
+            ["strategy_versions.id", "strategy_versions.strategy_id"],
+            name="fk_strategy_instance_version_strategy",
+        ),
+        Index("ix_strategy_instances_user_status", "user_id", "status"),
+        Index("ix_strategy_instances_strategy_status", "strategy_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # No ondelete: a catalog strategy/version with live instances must not be deletable.
+    strategy_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_catalog.id"), nullable=False, index=True
+    )
+    # FK enforced via the composite fk_strategy_instance_version_strategy above.
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
+    # NOVA_SHARED / NOVA_HOSTED_PERSONAL / PERSONAL_TRADINGVIEW
+    source_journey: Mapped[str] = mapped_column(String(30), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    # See strategy_instance_state_machine.InstanceState for values/transitions.
+    status: Mapped[str] = mapped_column(String(20), default="ready", nullable=False)
+    status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # signal_only / paper_live_data / real_orders (live_engine.EXECUTION_MODES)
+    execution_mode: Mapped[str] = mapped_column(String(30), default="signal_only", nullable=False)
+    # C2 installation provenance. Nullable for every pre-C2 instance.
+    approved_candidate_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    installation_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    current_lots: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Controlled paper-only verification: when true, the private webhook path
+    # executes paper signals for this instance even though it is not ACTIVE, so
+    # a newly approved strategy can produce genuine paper entry/exit evidence
+    # without the readiness deadlock. Live orders remain impossible (enforced in
+    # the execution path). Cleared once full readiness is reached.
+    verification_mode: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false(), nullable=False)
+    verification_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Risk/config snapshot; structured but strategy-variable.
+    risk_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    # Link to the pre-instance subscription this row was backfilled from
+    # (dual-write target for lots/mode until execution is instance-aware).
+    legacy_subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("strategy_subscriptions.id", ondelete="SET NULL"),
+        unique=True,
+        nullable=True,
+    )
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    webhook_credentials: Mapped[list[StrategyInstanceWebhookCredential]] = relationship(
+        back_populates="instance", cascade="all, delete-orphan"
+    )
+
+
+class StrategyInstanceWebhookCredential(Base):
+    """One issued private-webhook token for one strategy instance.
+
+    Only the SHA-256 hash of the opaque token is stored; plaintext is returned
+    exactly once at issue/rotation time. Rotation revokes the old row and
+    inserts a new one so issue/rotate/revoke history stays immutable. At most
+    one active (revoked_at IS NULL) credential per instance (partial index).
+
+    Ownership is derived through the instance (no duplicated user_id column),
+    so a credential can never reference one user and another user's instance.
+    """
+
+    __tablename__ = "strategy_instance_webhook_credentials"
+    __table_args__ = (
+        Index(
+            "uq_instance_webhook_credential_active",
+            "strategy_instance_id",
+            unique=True,
+            postgresql_where=sa_text("revoked_at IS NULL"),
+            sqlite_where=sa_text("revoked_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # First characters of the plaintext token, for display only ("nwk_ab12…").
+    token_prefix: Mapped[str] = mapped_column(String(12), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    replaced_by_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+
+    instance: Mapped[StrategyInstance] = relationship(back_populates="webhook_credentials")
+
+
+class UserEngineConfig(Base):
+    """One row per user pointing the engine picker at the user's currently
+    selected strategy instance.
+
+    Selection is a persisted UI/engine pointer, NOT execution authority: the
+    per-instance private webhook credential remains the sole binding between an
+    inbound signal and the instance it executes as, so this pointer never
+    reroutes a signal between instances.
+    """
+
+    __tablename__ = "user_engine_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    # SET NULL: an archived/deleted instance simply clears the selection.
+    selected_strategy_instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_instances.id", ondelete="SET NULL"), nullable=True
+    )
+    selected_configuration_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"), nullable=True
+    )
+    selected_configuration_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class StrategyConfigurationRevision(Base):
+    """Canonical immutable committed setup for one strategy version and mode.
+
+    Runtime JSON may mirror the active revision for the execution path, but this
+    row owns history, selection and the exact revision an engine run used.
+    """
+
+    __tablename__ = "strategy_configuration_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "strategy_instance_id",
+            "strategy_version_id",
+            "mode",
+            "revision",
+            name="uq_strategy_configuration_revision_identity",
+        ),
+        Index(
+            "ix_strategy_configuration_user_mode_status",
+            "user_id",
+            "mode",
+            "status",
+        ),
+        Index(
+            "ix_strategy_configuration_instance_created",
+            "strategy_instance_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_versions.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    configuration_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    risk_json: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="committed", nullable=False)
+    supersedes_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_configuration_revisions.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    committed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+# Position states with an open broker exposure or an in-flight order. Shared
+# by the model constraint, position_store, and the parity tool. Closed/flat
+# rows never occupy the active-position slot.
+ACTIVE_POSITION_STATES = (
+    "entering",
+    "open",
+    "scaling_in",
+    "exiting",
+    "reversing",
+    "error_reconciling",
+)
+_ACTIVE_STATES_SQL = "position_state IN ({})".format(
+    ", ".join(f"'{state}'" for state in ACTIVE_POSITION_STATES)
+)
+
+
+class StrategyInstancePosition(Base):
+    """Durable shadow of one tracked option position (Phase 2A).
+
+    AUTHORITY: during Phase 2A the per-user JSON files (open_position.json /
+    paper_position.json) remain the EXECUTION READ AUTHORITY. Rows here are
+    shadow dual-writes for durability and parity comparison only — nothing on
+    the execution path reads this table. Do not add fallback reads.
+
+    One row represents one position lifetime for a (user, execution_mode)
+    slot; the partial unique index enforces at most one active row per slot
+    (which implies the product rule of one active live position per user).
+    Money/price columns are integer paise — never floats. raw_snapshot keeps
+    the full source JSON for lossless parity and audit.
+    """
+
+    __tablename__ = "strategy_instance_positions"
+    __table_args__ = (
+        # A position can never reference User A and an instance owned by
+        # User B — enforced structurally, not by service discipline. NULL
+        # strategy_instance_id (legacy/migration rows) passes (MATCH SIMPLE).
+        ForeignKeyConstraint(
+            ["strategy_instance_id", "user_id"],
+            ["strategy_instances.id", "strategy_instances.user_id"],
+            name="fk_position_instance_owner",
+        ),
+        # Composite target so position_events structurally prove tenant match.
+        UniqueConstraint("id", "user_id", name="uq_positions_id_user"),
+        Index(
+            "uq_active_position_per_user_mode",
+            "user_id",
+            "execution_mode",
+            unique=True,
+            postgresql_where=sa_text(_ACTIVE_STATES_SQL),
+            sqlite_where=sa_text(_ACTIVE_STATES_SQL),
+        ),
+        Index("ix_positions_user_state", "user_id", "position_state"),
+        Index("ix_positions_instance", "strategy_instance_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Nullable during migration: legacy JSON positions have no instance yet.
+    strategy_instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_instances.id", ondelete="SET NULL"), nullable=True
+    )
+    execution_mode: Mapped[str] = mapped_column(String(20), nullable=False)  # paper/live
+    # flat/entering/open/scaling_in/exiting/reversing/error_reconciling/closed
+    position_state: Mapped[str] = mapped_column(String(30), nullable=False)
+    position_side: Mapped[str] = mapped_column(String(10), default="LONG", nullable=False)
+    strategy_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    security_id: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    trading_symbol: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    underlying: Mapped[str] = mapped_column(String(20), default="NIFTY", nullable=False)
+    option_side: Mapped[str | None] = mapped_column(String(8), nullable=True)  # CE/PE
+    strike: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    expiry: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    product_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Quantities (contracts).
+    entry_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    filled_entry_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    open_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    filled_exit_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_lots: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Money in integer paise (project convention; never float).
+    avg_entry_price_paise: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    realized_pnl_paise: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Broker lifecycle.
+    entry_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    exit_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    broker_correlation_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    pending_order_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    reversal_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    super_order_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    risk_configuration_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("user_risk_configuration_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    entry_stop_rule: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    entry_target_rule: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    position_sizing_rule: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    maximum_loss_rule: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    reconciliation_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_broker_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Shadow bookkeeping.
+    raw_snapshot: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    snapshot_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    parity_status: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    last_parity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    imported_from_json: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Audit/concurrency.
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class PositionEvent(Base):
+    """Append-only history of position transitions (Phase 2A shadow).
+
+    Rows are never updated or deleted. idempotency_key dedupes retried
+    writes of the same logical event.
+    """
+
+    __tablename__ = "position_events"
+    __table_args__ = (
+        # An event can never claim a different tenant than its position.
+        # (strategy_instance ownership derives through the position row —
+        # events deliberately carry no instance column of their own.)
+        ForeignKeyConstraint(
+            ["position_id", "user_id"],
+            ["strategy_instance_positions.id", "strategy_instance_positions.user_id"],
+            name="fk_event_position_owner",
+        ),
+        Index("ix_position_events_position_at", "position_id", "event_at"),
+        Index("ix_position_events_user_at", "user_id", "event_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    position_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_instance_positions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # entry_requested/entry_submitted/entry_partial_fill/entry_filled/
+    # exit_requested/exit_submitted/exit_partial_fill/exit_filled/
+    # reversal_requested/reconciliation_adjustment/eod_exit/manual_exit/
+    # shadow_write_failure/imported_from_json/... (open string set)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    # Operation family that produced the write: entry/exit/partial_fill/
+    # reversal/reconciliation/update/import
+    source: Mapped[str] = mapped_column(String(30), nullable=False)
+    signal_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    execution_job_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    order_intent_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    broker_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    price_paise: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    previous_state: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    new_state: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    event_metadata: Mapped[dict | None] = mapped_column("metadata", JSONType, nullable=True)
+    event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# R1B additive canonical evidence tables.
+#
+# EVIDENCE ONLY — NOT EXECUTION AUTHORITY. Nothing in the webhook path,
+# execution router, risk manager, broker adapters or position store reads
+# these tables, and no failure involving them may alter webhook responses,
+# replay results, job creation, broker routing or position mutation.
+# Rows are immutable: the ORM guard below rejects every UPDATE flush.
+# ---------------------------------------------------------------------------
+
+
+def _hash64_check(column: str, *, nullable: bool) -> str:
+    """Portable length-64 lowercase hash CHECK (PostgreSQL + SQLite).
+
+    ponytail: hex charset is not enforceable portably without dialect-specific
+    SQL; the writers only ever store hexdigest output, and length+lowercase is
+    enforced here on both dialects.
+    """
+    check = f"(length({column}) = 64 AND {column} = lower({column}))"
+    if nullable:
+        return f"({column} IS NULL OR {check})"
+    return check
+
+
+class CanonicalSignalDecision(Base):
+    """At most one immutable canonical interpretation per accepted StrategySignal.
+
+    EVIDENCE ONLY — NOT EXECUTION AUTHORITY. No writer exists in R1B-1; the
+    table stays empty until a separate R1B-2 review authorizes the decision
+    writer. Never store credentials, raw signal IDs, comments, request bodies,
+    broker tokens, sizing/risk fields or Pine source here.
+    """
+
+    __tablename__ = "canonical_signal_decisions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["strategy_instance_id", "user_id"],
+            ["strategy_instances.id", "strategy_instances.user_id"],
+            name="fk_canonical_decision_instance_owner",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("strategy_signal_id", name="uq_canonical_decision_signal"),
+        CheckConstraint(
+            "wire_action IN ('BUY_CE', 'BUY_PE', 'EXIT', 'HOLD')",
+            name="ck_canonical_decision_wire_action",
+        ),
+        CheckConstraint(
+            "event_type IN ('STRATEGY_SIGNAL', 'CONNECTIVITY_TEST')",
+            name="ck_canonical_decision_event_type",
+        ),
+        CheckConstraint(
+            "desired_state IN ('BULLISH', 'BEARISH', 'FLAT', 'NONE')",
+            name="ck_canonical_decision_desired_state",
+        ),
+        CheckConstraint(
+            "intent_reason IN ('DIRECTIONAL_SIGNAL', 'EXPLICIT_EXIT', 'CONNECTIVITY_TEST')",
+            name="ck_canonical_decision_intent_reason",
+        ),
+        CheckConstraint(
+            "compatibility_action IS NULL OR compatibility_action IN ('ENTRY', 'EXIT')",
+            name="ck_canonical_decision_compat_action",
+        ),
+        CheckConstraint(
+            "compatibility_side IS NULL OR compatibility_side IN ('BUY', 'SELL')",
+            name="ck_canonical_decision_compat_side",
+        ),
+        CheckConstraint(
+            "compatibility_option_side IS NULL OR compatibility_option_side IN ('CE', 'PE')",
+            name="ck_canonical_decision_compat_option_side",
+        ),
+        CheckConstraint(
+            "provenance_kind IN ('LIVE', 'BACKFILL')",
+            name="ck_canonical_decision_provenance_kind",
+        ),
+        CheckConstraint(
+            _hash64_check("payload_fingerprint", nullable=False),
+            name="ck_canonical_decision_payload_fp_hash",
+        ),
+        CheckConstraint(
+            "wire_action != 'HOLD' OR ("
+            "event_type = 'CONNECTIVITY_TEST'"
+            " AND desired_state = 'NONE'"
+            " AND intent_reason = 'CONNECTIVITY_TEST'"
+            " AND compatibility_action IS NULL"
+            " AND compatibility_side IS NULL"
+            " AND compatibility_option_side IS NULL)",
+            name="ck_canonical_decision_hold_consistency",
+        ),
+        CheckConstraint(
+            "wire_action != 'BUY_CE' OR ("
+            "event_type = 'STRATEGY_SIGNAL'"
+            " AND desired_state = 'BULLISH'"
+            " AND compatibility_action = 'ENTRY'"
+            " AND compatibility_side = 'BUY'"
+            " AND compatibility_option_side = 'CE')",
+            name="ck_canonical_decision_buy_ce_consistency",
+        ),
+        CheckConstraint(
+            "wire_action != 'BUY_PE' OR ("
+            "event_type = 'STRATEGY_SIGNAL'"
+            " AND desired_state = 'BEARISH'"
+            " AND compatibility_action = 'ENTRY'"
+            " AND compatibility_side = 'BUY'"
+            " AND compatibility_option_side = 'PE')",
+            name="ck_canonical_decision_buy_pe_consistency",
+        ),
+        CheckConstraint(
+            "wire_action != 'EXIT' OR ("
+            "event_type = 'STRATEGY_SIGNAL'"
+            " AND desired_state = 'FLAT'"
+            " AND compatibility_action = 'EXIT'"
+            " AND compatibility_side = 'SELL'"
+            " AND compatibility_option_side IS NULL)",
+            name="ck_canonical_decision_exit_consistency",
+        ),
+        Index("ix_canonical_decisions_user_received", "user_id", "received_at"),
+        Index("ix_canonical_decisions_instance_received", "strategy_instance_id", "received_at"),
+        Index("ix_canonical_decisions_webhook_event", "webhook_event_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    strategy_signal_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_signals.id", ondelete="CASCADE"), nullable=False
+    )
+    webhook_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("webhook_events.id", ondelete="SET NULL"), nullable=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    contract_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    adapter_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    wire_action: Mapped[str] = mapped_column(String(20), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    desired_state: Mapped[str] = mapped_column(String(20), nullable=False)
+    intent_reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    signal_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    compatibility_action: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    compatibility_side: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    compatibility_option_side: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    safe_metadata: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    payload_fingerprint: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    provenance_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    backfill_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    outcomes: Mapped[list[CanonicalSignalOutcome]] = relationship(
+        back_populates="decision", lazy="select", passive_deletes=True
+    )
+
+
+class CanonicalSignalOutcome(Base):
+    """Append-only routing/state observation linked to a canonical decision.
+
+    EVIDENCE ONLY — NOT EXECUTION AUTHORITY. No writer exists in R1B-1.
+    """
+
+    __tablename__ = "canonical_signal_outcomes"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_canonical_outcome_idempotency"),
+        CheckConstraint(
+            "phase IN ('STATE_EVALUATED', 'ROUTING_COMPLETED', 'ROUTING_FAILED')",
+            name="ck_canonical_outcome_phase",
+        ),
+        CheckConstraint(
+            "current_state IS NULL OR current_state IN ('UNKNOWN', 'FLAT', 'BULLISH', 'BEARISH')",
+            name="ck_canonical_outcome_current_state",
+        ),
+        CheckConstraint(
+            "routing_result IN ("
+            "'NOT_EVALUATED', 'CONNECTIVITY_NO_JOB', 'STATE_NO_OP', 'ENTRY_ROUTED',"
+            " 'EXIT_ROUTED', 'REVERSAL_ROUTED', 'BLOCKED', 'FAILED', 'PENDING', 'PARTIAL')",
+            name="ck_canonical_outcome_routing_result",
+        ),
+        CheckConstraint(
+            "no_op_reason IS NULL OR no_op_reason IN ("
+            "'CONNECTIVITY_TEST', 'ALREADY_FLAT', 'ALREADY_BULLISH',"
+            " 'ALREADY_BEARISH', 'INSTANCE_PAUSED')",
+            name="ck_canonical_outcome_no_op_reason",
+        ),
+        CheckConstraint(
+            "exit_reason IS NULL OR exit_reason IN ("
+            "'EXPLICIT_EXIT', 'REVERSAL_EXIT', 'STOP_LOSS', 'TAKE_PROFIT',"
+            " 'TRAILING_STOP', 'SESSION_EXIT', 'MANUAL_EXIT', 'RISK_EXIT')",
+            name="ck_canonical_outcome_exit_reason",
+        ),
+        CheckConstraint("attempt IS NULL OR attempt > 0", name="ck_canonical_outcome_attempt_positive"),
+        CheckConstraint(
+            _hash64_check("result_sha256", nullable=True),
+            name="ck_canonical_outcome_result_hash",
+        ),
+        CheckConstraint(
+            _hash64_check("idempotency_key", nullable=False),
+            name="ck_canonical_outcome_idempotency_hash",
+        ),
+        Index("ix_canonical_outcomes_decision_created", "canonical_decision_id", "created_at"),
+        Index("ix_canonical_outcomes_execution_job", "execution_job_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    canonical_decision_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("canonical_signal_decisions.id", ondelete="CASCADE"), nullable=False
+    )
+    execution_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("strategy_execution_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    phase: Mapped[str] = mapped_column(String(30), nullable=False)
+    current_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    routing_result: Mapped[str] = mapped_column(String(30), nullable=False)
+    no_op_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    exit_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    safe_detail_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    result_sha256: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    decision: Mapped[CanonicalSignalDecision] = relationship(
+        back_populates="outcomes", lazy="select"
+    )
+
+
+class StrategySignalRejection(Base):
+    """Future safe, post-authentication ingress rejection evidence.
+
+    EVIDENCE ONLY — NOT EXECUTION AUTHORITY. No writer exists in R1B-1.
+    Never store credentials, full payloads, raw exceptions, Pine source,
+    emails or hostile metadata here.
+    """
+
+    __tablename__ = "strategy_signal_rejections"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["strategy_instance_id", "user_id"],
+            ["strategy_instances.id", "strategy_instances.user_id"],
+            name="fk_signal_rejection_instance_owner",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("dedupe_key", name="uq_signal_rejection_dedupe"),
+        CheckConstraint(
+            "stage IN ('LIFECYCLE', 'SIGNAL_TIME', 'REPLAY_CONFLICT',"
+            " 'CANONICAL_NORMALIZATION', 'SEMANTIC_POLICY', 'JOB_CREATION')",
+            name="ck_signal_rejection_stage",
+        ),
+        CheckConstraint(
+            "rejection_code IN ("
+            "'INVALID_ACTION', 'MISSING_TIMEZONE', 'STALE_SIGNAL', 'INACTIVE_INSTANCE',"
+            " 'LIVE_EXECUTION_SAFETY_BLOCK', 'CONFLICTING_DUPLICATE', 'STORE_UNAVAILABLE',"
+            " 'JOB_PERSISTENCE_FAILED')",
+            name="ck_signal_rejection_code",
+        ),
+        CheckConstraint(
+            _hash64_check("signal_id_sha256", nullable=True),
+            name="ck_signal_rejection_signal_id_hash",
+        ),
+        CheckConstraint(
+            _hash64_check("payload_fingerprint", nullable=True),
+            name="ck_signal_rejection_payload_fp_hash",
+        ),
+        CheckConstraint(
+            _hash64_check("dedupe_key", nullable=False),
+            name="ck_signal_rejection_dedupe_hash",
+        ),
+        Index("ix_signal_rejections_instance_received", "strategy_instance_id", "received_at"),
+        Index("ix_signal_rejections_user_received", "user_id", "received_at"),
+        Index("ix_signal_rejections_stage_code_received", "stage", "rejection_code", "received_at"),
+        Index("ix_signal_rejections_webhook_event", "webhook_event_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    strategy_instance_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    webhook_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("webhook_events.id", ondelete="SET NULL"), nullable=True
+    )
+    signal_id_safe: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    signal_id_sha256: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    payload_fingerprint: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
+    stage: Mapped[str] = mapped_column(String(40), nullable=False)
+    rejection_code: Mapped[str] = mapped_column(String(60), nullable=False)
+    safe_detail: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    adapter_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    contract_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    dedupe_key: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class PineSemanticAnalysis(Base):
+    """Immutable Pine semantic-analysis provenance for one source artifact.
+
+    EVIDENCE ONLY — NOT EXECUTION AUTHORITY. The only R1B-1 table with a
+    writer (app.services.pine_semantic_analysis_persistence), gated behind
+    R1B_PINE_ANALYSIS_PERSISTENCE (default false). Rows bind the exact source
+    hash, analyzer version, registry identity/hash and canonical payload hash
+    so a qualification decision can be independently reproduced. Reanalysis
+    inserts a new row (optionally pointing supersedes_analysis_id at the old
+    one) and never mutates history. Never store Pine source, feature vectors,
+    raw lexer tokens, credentials, user comments, raw exceptions or
+    external-model output here.
+    """
+
+    __tablename__ = "pine_semantic_analyses"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_artifact_id",
+            "source_sha256",
+            "analyzer_version",
+            "registry_id",
+            "registry_version",
+            "registry_sha256",
+            "analysis_schema_version",
+            name="uq_pine_analysis_provenance",
+        ),
+        CheckConstraint(
+            _hash64_check("source_sha256", nullable=False),
+            name="ck_pine_analysis_source_hash",
+        ),
+        CheckConstraint(
+            _hash64_check("registry_sha256", nullable=False),
+            name="ck_pine_analysis_registry_hash",
+        ),
+        CheckConstraint(
+            _hash64_check("analysis_payload_sha256", nullable=False),
+            name="ck_pine_analysis_payload_hash",
+        ),
+        CheckConstraint(
+            "confidence IN ('HIGH_CONFIDENCE_MATCH', 'PARTIAL_MATCH', 'ANALYSIS_INDETERMINATE')",
+            name="ck_pine_analysis_confidence",
+        ),
+        CheckConstraint(
+            "effective_capability_level IN ("
+            "'L0_DIRECTLY_SUPPORTED', 'L1_NORMALIZED_WITHOUT_MATERIAL_CHANGE',"
+            " 'L2_SUPPORTED_WITH_DISCLOSED_CHANGE', 'L3_REQUIRES_BACKEND_CAPABILITY',"
+            " 'L4_BLOCKED_UNSAFE_OR_UNREPRESENTABLE')",
+            name="ck_pine_analysis_level",
+        ),
+        Index("ix_pine_analyses_artifact_created", "source_artifact_id", "created_at"),
+        Index("ix_pine_analyses_level", "effective_capability_level"),
+        Index("ix_pine_analyses_supersedes", "supersedes_analysis_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    source_artifact_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("strategy_source_artifacts.id", ondelete="CASCADE"), nullable=False
+    )
+    source_sha256: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    analyzer_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    registry_id: Mapped[str] = mapped_column(String(60), nullable=False)
+    registry_version: Mapped[str] = mapped_column(String(30), nullable=False)
+    registry_sha256: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    # VARCHAR(50): the closed schema version string is 42 characters.
+    analysis_schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    effective_capability_level: Mapped[str] = mapped_column(String(60), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(40), nullable=False)
+    analysis_payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    analysis_payload_sha256: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    supersedes_analysis_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("pine_semantic_analyses.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+R1B_EVIDENCE_MODELS = (
+    CanonicalSignalDecision,
+    CanonicalSignalOutcome,
+    StrategySignalRejection,
+    PineSemanticAnalysis,
+)
+
+
+def _reject_evidence_update(mapper, connection, target) -> None:
+    raise ValueError(
+        f"{type(target).__name__} rows are immutable R1B evidence; insert a new row instead."
+    )
+
+
+for _evidence_model in R1B_EVIDENCE_MODELS:
+    event.listens_for(_evidence_model, "before_update")(_reject_evidence_update)
 
 
 class PortfolioSnapshot(Base):
@@ -564,4 +1944,8 @@ class PortfolioSnapshot(Base):
     equity: Mapped[float | None] = mapped_column(Float, nullable=True)
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     trade_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # ok/error — whether this reading came from a live broker fetch that
+    # succeeded. Lets a "last known balance" query filter out failed attempts.
+    fetch_status: Mapped[str] = mapped_column(String(20), default="ok", nullable=False)
+    safe_error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

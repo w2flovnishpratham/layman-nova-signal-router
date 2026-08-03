@@ -1,82 +1,42 @@
+import { Button } from '@/components/ui/button'
+import { PageSkeleton } from './PageSkeleton'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity } from 'lucide-react'
 import {
   CandlestickSeries,
   CrosshairMode,
   createChart,
   createSeriesMarkers,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
+  LineStyle,
   type SeriesMarker,
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
-import { getNiftyCandles, getNiftyMarkers, type NiftyCandle, type NiftyCandleSeries, type NiftyTradeMarker } from '../api'
-import { useSessionStore } from '../state/sessionStore'
+import {
+  getNiftyCandles,
+  getNiftyMarkers,
+  type ChartTimeframe,
+  type NiftyCandle,
+  type NiftyCandleSeries,
+  type NiftyTradeMarker,
+} from '../api'
 import type { EngineMode } from '../types'
+import {
+  markerCandleIndex,
+  markerStyle,
+  sameCandles,
+  sessionOnly,
+} from './NiftyLiveChart.helpers'
 
 const CANDLE_POLL_MS = 20_000
 const MARKER_POLL_MS = 12_000
-const CANDLE_SECONDS = 5 * 60
+const CHART_TIMEFRAMES: ChartTimeframe[] = ['1m', '5m', '15m']
 
-/** Keep only candles inside the response's own session window (defense in
- * depth; the backend already filters to today's IST session). */
-export function sessionOnly(series: NiftyCandleSeries): NiftyCandle[] {
-  const start = series.session_start ? Math.floor(new Date(series.session_start).getTime() / 1000) : null
-  const end = series.session_end ? Math.floor(new Date(series.session_end).getTime() / 1000) : null
-  const seen = new Set<number>()
-  return (series.candles ?? [])
-    .filter((c) => {
-      if (start !== null && c.time < start) return false
-      if (end !== null && c.time > end) return false
-      if (seen.has(c.time)) return false
-      seen.add(c.time)
-      return true
-    })
-    .sort((a, b) => a.time - b.time)
-}
-
-/** Snap a marker to the nearest candle by time; null when out of range. */
-export function nearestCandleIndex(candles: NiftyCandle[], time: number): number | null {
-  if (candles.length === 0) return null
-  let best = 0
-  let bestDelta = Math.abs(candles[0].time - time)
-  for (let i = 1; i < candles.length; i += 1) {
-    const delta = Math.abs(candles[i].time - time)
-    if (delta < bestDelta) {
-      best = i
-      bestDelta = delta
-    }
-  }
-  // Ignore markers further than 30 minutes from any visible candle.
-  return bestDelta <= 30 * 60 ? best : null
-}
-
-interface MarkerStyle {
-  position: 'aboveBar' | 'belowBar'
-  shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'
-  color: string
-  text: string
-}
-
-/** Visual identity for each confirmed execution marker kind. */
-export function markerStyle(marker: NiftyTradeMarker): MarkerStyle {
-  if (marker.side === 'BUY') {
-    return marker.option_side === 'PE'
-      ? { position: 'aboveBar', shape: 'arrowDown', color: '#fb7185', text: 'BUY PE' }
-      : { position: 'belowBar', shape: 'arrowUp', color: '#34d399', text: marker.option_side ? 'BUY CE' : 'BUY' }
-  }
-  switch (marker.exit_kind) {
-    case 'SL':
-      return { position: 'aboveBar', shape: 'square', color: '#ef4444', text: 'EXIT SL' }
-    case 'TARGET':
-      return { position: 'aboveBar', shape: 'square', color: '#22c55e', text: 'EXIT TGT' }
-    case 'REVERSAL':
-      return { position: 'aboveBar', shape: 'circle', color: '#a78bfa', text: 'REV EXIT' }
-    default:
-      return { position: 'aboveBar', shape: 'circle', color: '#94a3b8', text: marker.label || 'EXIT' }
-  }
+function supportedTimeframe(value: string | null | undefined): ChartTimeframe {
+  return value === '1m' || value === '15m' ? value : '5m'
 }
 
 function istTime(epoch: number): string {
@@ -97,56 +57,65 @@ function toBar(candle: NiftyCandle) {
   }
 }
 
-export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }) {
+export function NiftyLiveChart({
+  engineMode,
+  defaultTimeframe,
+}: {
+  engineMode: EngineMode | null
+  defaultTimeframe?: string | null
+}) {
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>(() => supportedTimeframe(defaultTimeframe))
   const [series, setSeries] = useState<NiftyCandleSeries | null>(null)
   const [markers, setMarkers] = useState<NiftyTradeMarker[]>([])
   const [loadFailed, setLoadFailed] = useState(false)
   const tradingDateRef = useRef<string | null>(null)
 
-  const snapshot = useSessionStore((state) => state.marketSnapshot)
-  const wsStatus = useSessionStore((state) => state.wsStatus)
-
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
-  // Runtime candle list = last server poll + live ticks applied on top.
+  const tradePriceLinesRef = useRef<IPriceLine[]>([])
   const candlesRef = useRef<NiftyCandle[]>([])
+  const [containerReady, setContainerReady] = useState(false)
 
   useEffect(() => {
     let cancelled = false
+    let candleRequest: AbortController | null = null
+    let markerRequest: AbortController | null = null
 
     async function loadCandles() {
-      if (document.hidden) return
+      if (document.hidden || candleRequest) return
+      candleRequest = new AbortController()
       try {
-        const next = await getNiftyCandles()
+        const next = await getNiftyCandles(timeframe, candleRequest.signal)
         if (cancelled) return
-        // New trading date -> REPLACE everything; never merge across days.
-        if (next.trading_date && tradingDateRef.current && next.trading_date !== tradingDateRef.current) {
-          setMarkers([])
-        }
+        if (next.trading_date && tradingDateRef.current && next.trading_date !== tradingDateRef.current) setMarkers([])
         tradingDateRef.current = next.trading_date ?? tradingDateRef.current
         setSeries(next)
         setLoadFailed(false)
-      } catch {
-        if (!cancelled) setLoadFailed(true)
+      } catch (error) {
+        if (!cancelled && !(error instanceof DOMException && error.name === 'AbortError')) setLoadFailed(true)
+      } finally {
+        candleRequest = null
       }
     }
 
     async function loadMarkers() {
-      if (document.hidden) return
+      if (document.hidden || markerRequest) return
       if (engineMode !== 'paper' && engineMode !== 'live') return
+      markerRequest = new AbortController()
       try {
-        const next = await getNiftyMarkers(engineMode)
+        const next = await getNiftyMarkers(engineMode, markerRequest.signal)
         if (cancelled) return
-        // Drop markers that belong to another trading date entirely.
         if (tradingDateRef.current && next.trading_date && next.trading_date !== tradingDateRef.current) {
           setMarkers([])
           return
         }
         setMarkers(next.markers ?? [])
       } catch {
-        // Markers are additive; keep the last known set on poll failure.
+        // Keep confirmed markers while a poll recovers.
+      } finally {
+        markerRequest = null
       }
     }
 
@@ -156,29 +125,45 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
     const markerTimer = window.setInterval(() => void loadMarkers(), MARKER_POLL_MS)
     return () => {
       cancelled = true
+      candleRequest?.abort()
+      markerRequest?.abort()
       window.clearInterval(candleTimer)
       window.clearInterval(markerTimer)
     }
-  }, [engineMode])
+  }, [engineMode, timeframe])
 
   const candles = useMemo(() => (series ? sessionOnly(series) : []), [series])
   const hasCandles = candles.length > 0
 
-  // Chart lifecycle: create once when data first arrives, destroy on unmount.
   useEffect(() => {
     const container = containerRef.current
-    if (!container || !hasCandles || chartRef.current) return
+    if (!container || !hasCandles) {
+      setContainerReady(false)
+      return
+    }
+    const observeSize = () => {
+      const rect = container.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0) setContainerReady(true)
+      if (chartRef.current && rect.width > 0 && rect.height > 0) {
+        chartRef.current.resize(Math.floor(rect.width), Math.floor(rect.height))
+      }
+    }
+    observeSize()
+    const observer = new ResizeObserver(observeSize)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [hasCandles])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !hasCandles || !containerReady || chartRef.current) return
+    const bounds = container.getBoundingClientRect()
+    if (bounds.width <= 0 || bounds.height <= 0) return
     const chart = createChart(container, {
-      autoSize: true,
-      layout: {
-        background: { color: 'transparent' },
-        textColor: 'rgba(148, 155, 175, 0.9)',
-        fontSize: 10,
-      },
-      grid: {
-        vertLines: { visible: false },
-        horzLines: { color: 'rgba(255, 255, 255, 0.06)' },
-      },
+      width: Math.floor(bounds.width),
+      height: Math.floor(bounds.height),
+      layout: { background: { color: 'transparent' }, textColor: 'rgba(148, 155, 175, 0.9)', fontSize: 10 },
+      grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(255, 255, 255, 0.06)' } },
       rightPriceScale: { borderVisible: false },
       timeScale: {
         borderVisible: false,
@@ -187,7 +172,6 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
         tickMarkFormatter: (time: UTCTimestamp) => istTime(time),
       },
       localization: { timeFormatter: (time: UTCTimestamp) => istTime(time) },
-      // Read-only: no zoom, scroll, pan, or crosshair.
       crosshair: { mode: CrosshairMode.Hidden },
       handleScroll: false,
       handleScale: false,
@@ -199,145 +183,135 @@ export function NiftyLiveChart({ engineMode }: { engineMode: EngineMode | null }
       wickUpColor: '#34d399',
       wickDownColor: '#fb7185',
       borderVisible: false,
-      // Built-in last-value line doubles as the current market-price line.
       priceLineVisible: true,
       lastValueVisible: true,
     })
     chartRef.current = chart
     seriesRef.current = candleSeries
     markersPluginRef.current = createSeriesMarkers(candleSeries, [])
+    let resizeFrame: number | null = null
+    const resizeObserver = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      const width = Math.floor(entry.contentRect.width)
+      const height = Math.floor(entry.contentRect.height)
+      if (width <= 0 || height <= 0) return
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null
+        chart.resize(width, height)
+      })
+    })
+    resizeObserver.observe(container)
     return () => {
+      resizeObserver.disconnect()
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
       markersPluginRef.current = null
+      tradePriceLinesRef.current = []
       seriesRef.current = null
       chartRef.current = null
       candlesRef.current = []
       chart.remove()
     }
-  }, [hasCandles])
+  }, [containerReady, hasCandles])
 
-  // Server candles: source of truth, but keep a locally formed newer candle
-  // so a slightly stale poll never rolls the chart backwards.
   useEffect(() => {
     const candleSeries = seriesRef.current
     if (!candleSeries || candles.length === 0) return
-    let merged = candles
-    const forming = candlesRef.current[candlesRef.current.length - 1]
-    const lastServer = candles[candles.length - 1]
-    if (forming && forming.time > lastServer.time && forming.time - lastServer.time <= 2 * CANDLE_SECONDS) {
-      merged = [...candles, forming]
-    }
-    candlesRef.current = [...merged]
-    candleSeries.setData(merged.map(toBar))
-    chartRef.current?.timeScale().fitContent()
-  }, [candles, hasCandles])
+    const previous = candlesRef.current
+    if (sameCandles(previous, candles)) return
+    candlesRef.current = [...candles]
+    candleSeries.setData(candles.map(toBar))
+    if (previous.length === 0) chartRef.current?.timeScale().fitContent()
+    else if (candles[candles.length - 1].time > previous[previous.length - 1].time) chartRef.current?.timeScale().scrollToRealTime()
+  }, [candles, containerReady, hasCandles])
 
-  // Live tick from the session websocket: update the forming candle in place,
-  // or open the next 5m candle when the bucket rolls over.
-  useEffect(() => {
-    const candleSeries = seriesRef.current
-    const spot = snapshot?.niftySpot
-    if (!candleSeries || spot == null || snapshot?.marketStatus !== 'open') return
-    const last = candlesRef.current[candlesRef.current.length - 1]
-    if (!last) return
-    const parsed = Date.parse(snapshot.lastUpdatedAt ?? '')
-    const epoch = Number.isFinite(parsed) ? Math.floor(parsed / 1000) : Math.floor(Date.now() / 1000)
-    const bucket = Math.floor(epoch / CANDLE_SECONDS) * CANDLE_SECONDS
-    if (bucket < last.time) return
-    if (bucket === last.time) {
-      const next = { ...last, high: Math.max(last.high, spot), low: Math.min(last.low, spot), close: spot }
-      candlesRef.current[candlesRef.current.length - 1] = next
-      candleSeries.update(toBar(next))
-    } else {
-      const next = { time: bucket, open: spot, high: spot, low: spot, close: spot, volume: 0 }
-      candlesRef.current = [...candlesRef.current, next]
-      candleSeries.update(toBar(next))
-      chartRef.current?.timeScale().fitContent()
-    }
-  }, [snapshot])
-
-  // Confirmed execution markers, snapped to the nearest visible candle.
   useEffect(() => {
     const plugin = markersPluginRef.current
     if (!plugin) return
+    const visibleCandles = candlesRef.current
     const placed = markers
       .map((marker): SeriesMarker<Time> | null => {
-        const index = nearestCandleIndex(candles, marker.time)
+        const index = markerCandleIndex(
+          visibleCandles,
+          marker.time,
+          supportedTimeframe(series?.interval),
+        )
         if (index === null) return null
         const style = markerStyle(marker)
+        const indexLevel = marker.price != null
+          ? marker.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : null
+        const fill = [marker.contract, marker.execution_price != null ? `₹${marker.execution_price.toFixed(2)}` : null].filter(Boolean).join(' @ ')
+        const details = [fill, marker.pnl != null ? `P&L ${marker.pnl >= 0 ? '+' : '-'}₹${Math.abs(marker.pnl).toLocaleString('en-IN')}` : null].filter(Boolean).join('\n')
         return {
           ...style,
-          time: candles[index].time as UTCTimestamp,
-          text: `${style.text}${marker.mode === 'paper' ? ' (P)' : ''}`,
+          time: visibleCandles[index].time as UTCTimestamp,
+          text: `${style.text}${indexLevel ? `  ${indexLevel}` : ''}${marker.mode === 'paper' ? ' (P)' : ''}${details ? `\n${details}` : ''}`,
         }
       })
-      .filter((m): m is SeriesMarker<Time> => m !== null)
-      .sort((a, b) => (a.time as number) - (b.time as number))
+      .filter((marker): marker is SeriesMarker<Time> => marker !== null)
+      .sort((left, right) => (left.time as number) - (right.time as number))
     plugin.setMarkers(placed)
-  }, [markers, candles, hasCandles])
+  }, [markers, candles, containerReady, hasCandles, series?.interval])
 
-  const lastLocal = candlesRef.current[candlesRef.current.length - 1]
-  const lastPrice = snapshot?.niftySpot ?? lastLocal?.close ?? (hasCandles ? candles[candles.length - 1].close : null)
-  const lastStampIso = snapshot?.lastUpdatedAt ?? series?.updated_at ?? null
+  useEffect(() => {
+    const candleSeries = seriesRef.current
+    if (!candleSeries) return
+    tradePriceLinesRef.current.forEach((line) => candleSeries.removePriceLine(line))
+    tradePriceLinesRef.current = []
+    const latest = [...markers].sort((left, right) => left.time - right.time).at(-1)
+    if (!latest || latest.side !== 'BUY') return
+    const entryColor = latest.option_side === 'PE' ? '#fb7185' : '#34d399'
+    const levels = [
+      { price: latest.price, color: entryColor, title: `BUY ${latest.option_side ?? ''}`.trim() },
+      { price: latest.stop_price, color: '#ef4444', title: 'SL' },
+      { price: latest.target_price, color: '#22c55e', title: 'TP' },
+    ]
+    tradePriceLinesRef.current = levels.flatMap((level) => (
+      level.price != null && Number.isFinite(level.price) && level.price > 0
+        ? [candleSeries.createPriceLine({
+            price: level.price,
+            color: level.color,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            lineVisible: true,
+            axisLabelVisible: true,
+            title: level.title,
+          })]
+        : []
+    ))
+  }, [markers, containerReady, hasCandles])
 
   const header = (
     <div className="nifty-chart-header">
-      <span className="nifty-chart-title">
-        <Activity size={14} />
-        NIFTY - 5m
-      </span>
-      <span className="nifty-chart-meta">
-        {lastPrice != null ? (
-          <strong>{lastPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-        ) : null}
-        {lastStampIso ? ` - ${shortTime(lastStampIso)} IST` : ''}
-        {' - '}
-        <span className={`nifty-conn ${wsStatus}`}>
-          {wsStatus === 'live' ? 'Live' : wsStatus === 'degraded' ? 'Reconnecting' : 'Offline'}
-        </span>
-      </span>
+      <span className="nifty-chart-title">NIFTY 50 · {series?.interval ?? timeframe}</span>
+      <div className="nifty-chart-timeframes" role="group" aria-label="Chart timeframe">
+        {CHART_TIMEFRAMES.map((value) => (
+          <Button variant="unstyled"
+            key={value}
+            type="button"
+            className={timeframe === value ? 'is-active' : ''}
+            aria-pressed={timeframe === value}
+            onClick={() => setTimeframe(value)}
+          >
+            {value}
+          </Button>
+        ))}
+        <Button variant="unstyled" type="button" disabled title="Hourly candles are not available yet">1H</Button>
+        <Button variant="unstyled" type="button" disabled title="Daily candles are not available yet">D</Button>
+      </div>
     </div>
   )
 
-  if (!series && !loadFailed) {
-    return (
-      <section className="nifty-chart-card">
-        {header}
-        <div className="nifty-chart-empty">Loading NIFTY 5m chart...</div>
-      </section>
-    )
-  }
-
-  if (loadFailed || !series || series.status === 'unavailable') {
-    return (
-      <section className="nifty-chart-card">
-        {header}
-        <div className="nifty-chart-empty">NIFTY chart temporarily unavailable. Market data reconnecting.</div>
-      </section>
-    )
-  }
-
-  if (!hasCandles) {
-    return (
-      <section className="nifty-chart-card">
-        {header}
-        <div className="nifty-chart-empty">No NIFTY 5m candles available for today yet.</div>
-      </section>
-    )
-  }
+  if (!series && !loadFailed) return <section className="nifty-chart-card">{header}<PageSkeleton label={`Loading NIFTY ${timeframe} chart`} variant="cards" compact /></section>
+  if (loadFailed || !series || series.status === 'unavailable') return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">{series?.message ?? `Authoritative NIFTY ${timeframe} candles unavailable.`}</div></section>
+  if (!hasCandles) return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">No NIFTY {timeframe} candles available for this session.</div></section>
 
   return (
     <section className="nifty-chart-card">
       {header}
-      {series.market_state === 'closed' ? (
-        <p className="nifty-chart-note">Market closed - showing today's latest candles.</p>
-      ) : null}
-      <div ref={containerRef} className="nifty-chart-canvas" role="img" aria-label="NIFTY 5 minute candlestick chart" />
+      {series.market_state === 'closed' ? <p className="nifty-chart-note">Market closed - showing today's latest candles.</p> : null}
+      <div ref={containerRef} className="nifty-chart-canvas nova-live-chart" role="img" aria-label={`NIFTY ${series.interval} candlestick chart`} />
     </section>
   )
-}
-
-function shortTime(value: string): string {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })
 }

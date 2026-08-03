@@ -1,28 +1,49 @@
+# ruff: noqa: B008, BLE001
 from __future__ import annotations
 
 import asyncio
 from typing import Any, Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 
 from app.auth.dependencies import get_current_websocket_user
 from app.config import DISABLED_OPTION_SL_PERCENT, settings
 from app.domain.events import event
-from app.domain.state_machine import SetupState, StateTransitionError, validate_command
+from app.domain.state_machine import StateTransitionError, validate_command
 from app.routers.control import panic_exit
-from app.routers.engine import StartEngineRequest, start_engine, stop_engine
-from app.routers.setup import EngineModeRequest, configure_engine_mode, validate_dhan_credentials
-from app.services.credential_vault import save_dhan_credentials
-from app.services.chat_event_publisher import active_trade_from_position
-from app.services.execution_context import bind_user_execution_context
-from app.services.state_store import get_engine_mode, get_open_position, get_wallet_snapshot, set_open_position, update_runtime_settings, utc_now
+from app.routers.engine import stop_engine
+from app.routers.setup import (
+    EngineModeRequest,
+    configure_engine_mode,
+    validate_dhan_credentials,
+)
 from app.services import entitlements, strategy_fanout
-from app.services.setup_error_messages import dhan_connection_failure_message, safe_client_error_message
+from app.services.chat_event_publisher import active_trade_from_position
+from app.services.credential_vault import save_dhan_credentials
+from app.services.execution_context import bind_user_execution_context
+from app.services.setup_error_messages import (
+    dhan_connection_failure_message,
+    safe_client_error_message,
+)
+from app.services.state_store import (
+    get_engine_mode,
+    get_open_position,
+    get_wallet_snapshot,
+    set_open_position,
+    update_runtime_settings,
+    utc_now,
+)
+from app.services.user_context import CurrentUser, dev_user
 from app.services.wallet_service import refresh_wallet_snapshot
 from app.store.redis_session import session_store
 from app.store.session_token import SessionTokenError, verify_session_token
-from app.services.user_context import CurrentUser, dev_user
-
 
 router = APIRouter(tags=["websocket"])
 SESSION_WEBSOCKET_SUBPROTOCOL = "nova-session"
@@ -213,7 +234,7 @@ async def _apply_production_command(
             configure_engine_mode,
             EngineModeRequest(
                 engine_mode=cast(Literal["paper", "live"], raw_mode),
-                paper_starting_balance=float(data.get("paperStartingBalance") or 100000),
+                paper_starting_balance=float(data.get("paperStartingBalance") or 1000000),
             ),
         )
         return
@@ -237,6 +258,18 @@ async def _apply_production_command(
             raise ValueError(dhan_connection_failure_message(message, details))
         await asyncio.to_thread(save_dhan_credentials, client_id, access_token)
         await asyncio.to_thread(refresh_wallet_snapshot, force=True, log_event=True)
+        if not user.is_dev:
+            # Record AFTER save_dhan_credentials: saving resets connection_status
+            # to NOT_CONFIGURED, so recording first would be immediately overwritten.
+            from app.services.user_credential_vault import (
+                connection_status_from_dhan_result,
+                record_verification_result,
+            )
+
+            status, error = connection_status_from_dhan_result(
+                success=ok, status_code=details.get("status_code"), raw_response=None, message=message
+            )
+            await asyncio.to_thread(record_verification_result, user.id, status=status, error=error, wallet_ok=ok)
         return
 
     if command_type == "setup.use_shared_data":
@@ -275,67 +308,10 @@ async def _apply_production_command(
         return
 
     if command_type == "setup.confirm_live":
-        mode = get_engine_mode(legacy_fallback=False)
-        if mode not in {"paper", "live"}:
-            raise ValueError("Engine mode is not configured.")
-        engine_mode = cast(Literal["paper", "live"], mode)
-        if engine_mode == "live" and not user.is_dev:
-            await asyncio.to_thread(entitlements.require_live_entitlement_for_user, user.id)
-            await asyncio.to_thread(entitlements.require_strategy_entitlement_for_user, user.id)
-            if (
-                settings.DHAN_MODE.upper() != "REAL"
-                or not settings.ENABLE_LIVE_ORDERS
-                or settings.DHAN_READ_ONLY_REAL_DATA
-            ):
-                raise ValueError(
-                    "Live Dhan orders are not armed by the server safety gates."
-                )
-            if not settings.EXECUTION_NODE_ROUTING_ENABLED:
-                raise ValueError(
-                    "Live routing is not armed on the server yet."
-                )
-            egress = await asyncio.to_thread(
-                strategy_fanout.get_user_egress,
-                user.id,
-            )
-            if egress is None or not egress.get("proxy_url"):
-                raise ValueError(
-                    "No verified Dhan static-IP execution node is assigned to this account."
-                )
-            if not egress.get("verified"):
-                verification = await asyncio.to_thread(
-                    strategy_fanout.verify_user_egress,
-                    user.id,
-                )
-                if not verification.get("ok"):
-                    detail = verification.get("error") or "verification failed"
-                    raise ValueError(
-                        "The assigned Dhan execution node has not passed its IP verification "
-                        f"in the last 24 hours: {detail}"
-                    )
-        session_runtime_settings = _runtime_settings_from_session_config(session_config)
-        if session_runtime_settings:
-            await asyncio.to_thread(update_runtime_settings, **session_runtime_settings)
-        await asyncio.to_thread(
-            start_engine,
-            StartEngineRequest(
-                engine_mode=engine_mode,
-                confirm_live_orders=engine_mode == "live",
-            ),
+        raise ValueError(
+            "Engine start requires the durable /api/runtime/start-selected "
+            "operation and an explicit per-attempt Live acknowledgement."
         )
-        risk_data = session_config.get("risk")
-        risk: dict[str, Any] = risk_data if isinstance(risk_data, dict) else {}
-        strategy = str(session_config.get("strategy") or "supertrend")
-        execution_mode = "real_orders" if engine_mode == "live" else "paper_live_data"
-        if not user.is_dev:
-            await asyncio.to_thread(
-                strategy_fanout.subscribe_user,
-                user.id,
-                strategy,
-                lots=max(int(risk.get("lots") or 1), 1),
-                execution_mode=execution_mode,
-            )
-        return
 
     if command_type == "session.pause":
         await asyncio.to_thread(update_runtime_settings, allow_entry=False)

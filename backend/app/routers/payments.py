@@ -43,13 +43,18 @@ def payment_entitlement_status(
             evaluation = entitlements.evaluate_entitlement(
                 entitlements.get_user_entitlement(db, user.id)
             )
+            paper_trading_enabled = entitlements.has_paper_entitlement(db, user.id)
     else:
         evaluation = entitlements.evaluate_entitlement(None)
+        paper_trading_enabled = False
     return JSONResponse(
         status_code=200,
         content={
             "ok": True,
-            "entitlement": evaluation.as_safe_dict(),
+            "entitlement": {
+                **evaluation.as_safe_dict(),
+                "paper_trading_enabled": paper_trading_enabled,
+            },
         },
     )
 

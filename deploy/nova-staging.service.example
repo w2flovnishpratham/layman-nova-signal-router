@@ -1,0 +1,20 @@
+[Unit]
+Description=NOVA isolated staging backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nova-staging
+Group=nova-staging
+WorkingDirectory=/opt/nova-staging/current/backend
+EnvironmentFile=/etc/nova-staging/nova-staging.env
+Environment="PATH=/opt/nova-staging/current/backend/.venv/bin"
+Environment="PYTHONUNBUFFERED=1"
+ExecStartPre=/opt/nova-staging/bin/deploy_staging.sh --preflight /etc/nova-staging/nova-staging.env
+ExecStart=/opt/nova-staging/current/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8012 --no-access-log
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

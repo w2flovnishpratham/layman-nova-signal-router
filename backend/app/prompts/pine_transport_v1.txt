@@ -1,0 +1,38 @@
+// === NOVA FROZEN TRANSPORT BEGIN: pine_transport_v1 ===
+// Replace only the strategy-code and strategy-version constant values below.
+const string novaTransportVersion = "pine_transport_v1"
+const string novaStrategyCode = "{{STRATEGY_CODE}}"
+const string novaStrategyVersion = "{{STRATEGY_VERSION}}"
+const string novaCredentialPlaceholder = "REPLACE_WITH_PRIVATE_CREDENTIAL"
+
+novaCredential = input.string(novaCredentialPlaceholder, "NOVA private credential", group="NOVA Webhook")
+novaSendHoldTest = input.bool(false, "Send one HOLD connectivity test", group="NOVA Webhook",
+ tooltip="Connectivity only. Disable after one confirmed HOLD alert.")
+
+bool novaCredentialReady = novaCredential != novaCredentialPlaceholder and str.length(novaCredential) >= 20 and str.substring(novaCredential, 0, 4) == "nwk_"
+
+novaSignalId(string action) =>
+    novaStrategyCode + ":" + syminfo.ticker + ":" + str.tostring(time_close) + ":" + action
+
+novaSignalTime() =>
+    str.format_time(time_close, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+
+novaWebhookPayload(string action) =>
+    '{"credential":"' + novaCredential + '","action":"' + action + '","signal_id":"' + novaSignalId(action) + '","signal_time":"' + novaSignalTime() + '","strategy_version":"' + novaStrategyVersion + '","timeframe":"' + timeframe.period + '"}'
+
+bool novaAlertReady = barstate.isrealtime and barstate.isconfirmed and novaCredentialReady
+
+var bool novaHoldSent = false
+if not novaSendHoldTest
+    novaHoldSent := false
+if novaAlertReady and novaSendHoldTest and not novaHoldSent
+    alert(novaWebhookPayload("HOLD"), alert.freq_once_per_bar_close)
+    novaHoldSent := true
+
+if novaAlertReady and novaExitSignal
+    alert(novaWebhookPayload("EXIT"), alert.freq_once_per_bar_close)
+else if novaAlertReady and novaBuyCeSignal
+    alert(novaWebhookPayload("BUY_CE"), alert.freq_once_per_bar_close)
+else if novaAlertReady and novaBuyPeSignal
+    alert(novaWebhookPayload("BUY_PE"), alert.freq_once_per_bar_close)
+// === NOVA FROZEN TRANSPORT END: pine_transport_v1 ===

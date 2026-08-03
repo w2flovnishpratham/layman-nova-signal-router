@@ -15,6 +15,8 @@ import type {
   TradeConfig,
   WsStatus,
 } from '../types'
+import type { ManualOrderResponse } from '../api'
+import type { RuntimeStatus } from '../api'
 
 interface SessionStore {
   session: SessionBootstrap | null
@@ -26,6 +28,9 @@ interface SessionStore {
   messages: RenderableMessage[]
   activeTrade: ActiveTrade | null
   marketSnapshot: MarketSnapshot | null
+  marketSnapshotSource: 'push' | 'rest' | null
+  lastTradePushAt: number
+  lastMarketPushAt: number
   wallet: number | null
   paperBalance: number | null
   marginUtilized: number | null
@@ -82,6 +87,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   messages: [],
   activeTrade: null,
   marketSnapshot: null,
+  marketSnapshotSource: null,
+  lastTradePushAt: 0,
+  lastMarketPushAt: 0,
   wallet: null,
   paperBalance: null,
   marginUtilized: null,
@@ -120,6 +128,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       messages: [],
       activeTrade: null,
       marketSnapshot: null,
+      marketSnapshotSource: null,
+      lastTradePushAt: 0,
+      lastMarketPushAt: 0,
       wallet: null,
       paperBalance: null,
       marginUtilized: null,
@@ -178,6 +189,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     seenEvents.add(event.id)
     const patch = reduceSessionEvent(current, event)
     set({ ...patch, seenEvents })
+    if (typeof window !== 'undefined' && (
+      event.type === 'order.filled'
+      || event.type === 'trade.exit'
+      || event.type === 'position.update'
+      || event.type === 'session.eod'
+      || event.type === 'session.error'
+      || event.type === 'order.rejected'
+      || event.type === 'system.event'
+      || event.type === 'bot.message'
+    )) {
+      window.dispatchEvent(new CustomEvent('nova:terminal-delta', { detail: event }))
+    }
   },
 
 }))
@@ -185,6 +208,121 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 export function initializePreferences(): void {
   document.documentElement.dataset.theme = initialTheme
   document.documentElement.dataset.motion = initialMotion
+}
+
+/** Apply the same authoritative manual-order response to every trading panel. */
+export function applyManualOrderHydration(response: ManualOrderResponse): void {
+  const position = response.position
+  if (response.operationState === 'POSITION_CLOSED') {
+    useSessionStore.setState({
+      activeTrade: null,
+      wallet: optionalNumber(response.portfolio?.available_balance, useSessionStore.getState().wallet),
+      paperBalance: optionalNumber(response.portfolio?.available_balance, useSessionStore.getState().paperBalance),
+      marginUtilized: optionalNumber(response.portfolio?.utilized_amount, 0),
+      sessionPnl: optionalNumber(response.portfolio?.session_pnl, useSessionStore.getState().sessionPnl) ?? 0,
+    })
+    return
+  }
+  if (response.operationState !== 'POSITION_OPEN' || !position?.has_open_position) return
+  const current = useSessionStore.getState()
+  const entryPrice = Number(position.entry_price ?? 0)
+  const qty = Number(position.qty ?? 0)
+  const symbol = position.trading_symbol || position.security_id || 'NIFTY option'
+  useSessionStore.setState({
+    activeTrade: normalizeTrade({
+      positionId: position.position_id ?? undefined,
+      positionVersion: position.position_version,
+      symbol,
+      strike: Number(position.strike ?? 0),
+      optType: position.option_side === 'PE' ? 'PE' : 'CE',
+      qty,
+      avgPrice: entryPrice,
+      ltp: entryPrice,
+      pnl: 0,
+      securityId: position.security_id ?? undefined,
+      orderId: position.entry_order_id ?? undefined,
+      expiry: position.expiry ?? undefined,
+      status: 'OPEN',
+    }, current.config, current.session?.lotSize),
+    wallet: optionalNumber(response.portfolio?.available_balance, current.wallet),
+    paperBalance: optionalNumber(response.portfolio?.available_balance, current.paperBalance),
+    marginUtilized: optionalNumber(response.portfolio?.utilized_amount, current.marginUtilized),
+    sessionPnl: optionalNumber(response.portfolio?.session_pnl, current.sessionPnl) ?? current.sessionPnl,
+  })
+}
+
+/** Merge the owner-scoped runtime poll without overwriting a newer push. */
+export function applyRuntimeHydration(status: RuntimeStatus, requestStartedAt = Date.now()): void {
+  // Defense in depth: the API layer already rejects an incomplete snapshot
+  // before it reaches any caller, but never trust an external object's shape
+  // twice removed from its own type declaration.
+  if (!status?.engine || !status.pnl || !status.config || !status.position) return
+  const current = useSessionStore.getState()
+  const engineMode = status.engine.mode
+  const setupState: SetupState = status.engine.state === 'RUNNING'
+    ? (status.engine.accepting_signals ? 'LIVE' : 'PAUSED')
+    : status.engine.state === 'STOPPING'
+      ? 'PAUSED'
+      : 'IDLE'
+  const base = {
+    setupState,
+    engineMode,
+    wallet: optionalNumber(status.pnl.available_balance, current.wallet),
+    paperBalance: engineMode === 'paper'
+      ? optionalNumber(status.pnl.available_balance, current.paperBalance)
+      : current.paperBalance,
+    marginUtilized: optionalNumber(status.pnl.utilized_amount, current.marginUtilized),
+    sessionPnl: optionalNumber(status.pnl.session, current.sessionPnl) ?? current.sessionPnl,
+    realizedPnl: optionalNumber(status.pnl.realized, current.realizedPnl) ?? current.realizedPnl,
+    unrealizedPnl: optionalNumber(status.pnl.unrealized, 0) ?? 0,
+  }
+  if (requestStartedAt < current.lastTradePushAt) {
+    useSessionStore.setState(base)
+    return
+  }
+  const position = status.position
+  const risk = position.risk
+  const activeTrade = position.has_open_position
+    ? normalizeTrade({
+      positionId: position.position_id ?? undefined,
+      positionVersion: position.position_version,
+      mode: engineMode ?? undefined,
+      symbol: position.trading_symbol || 'NIFTY option',
+      strike: Number(position.strike ?? 0),
+      optType: position.option_side === 'PE' ? 'PE' : 'CE',
+      qty: Number(position.qty ?? 0),
+      avgPrice: Number(position.entry_price ?? 0),
+      ltp: Number(position.ltp.value ?? position.entry_price ?? 0),
+      pnl: Number(position.unrealized_pnl ?? 0),
+      expiry: position.expiry ?? undefined,
+      securityId: position.security_id ?? undefined,
+      orderId: position.entry_order_id ?? 'paper-position',
+      activeExitLevels: risk && (risk.stop_price != null || risk.target_price != null)
+        ? {
+          source: risk.source ?? (risk.server_managed ? 'server_monitor' : undefined),
+          stopLossPrice: risk.stop_price ?? undefined,
+          targetPrice: risk.target_price ?? undefined,
+        }
+        : null,
+      riskArmed: risk?.armed,
+      riskSource: risk?.source,
+      quoteSource: position.ltp.source,
+      quoteReceivedAt: position.ltp.received_at,
+      quoteStale: position.ltp.stale,
+      quoteStatus: position.ltp.status,
+      quoteAgeSeconds: position.ltp.age_seconds,
+      correlationId: '',
+      status: 'OPEN',
+    }, current.config, current.session?.lotSize)
+    : null
+  useSessionStore.setState({ ...base, activeTrade })
+}
+
+/** Use the existing market poll as recovery when no newer push won the race. */
+export function applyRestMarketSnapshot(snapshot: MarketSnapshot, requestStartedAt = Date.now()): void {
+  const current = useSessionStore.getState()
+  if (requestStartedAt < current.lastMarketPushAt) return
+  useSessionStore.setState({ marketSnapshot: snapshot, marketSnapshotSource: 'rest' })
 }
 
 export function motionConfigMode(): 'always' | 'never' | 'user' {
@@ -253,18 +391,25 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       activeTrade: trade,
       tradesToday: state.tradesToday + 1,
       messages: appendMessage(state.messages, event),
+      lastTradePushAt: Date.now(),
     }
   }
 
   if (event.type === 'market.snapshot') {
     return {
       marketSnapshot: event.data as unknown as MarketSnapshot,
+      marketSnapshotSource: 'push',
+      lastMarketPushAt: Date.now(),
     }
   }
 
   if (event.type === 'tick.pnl') {
     const patch = event.data as Partial<ActiveTrade>
-    const baseTrade = state.activeTrade ?? seedTradeFromTick(patch, state.config, state.session?.lotSize)
+    // A tick is a P&L update for an EXISTING position, never a position creator.
+    // After confirmed flat (activeTrade === null) a delayed tick must not
+    // resurrect the closed trade; a genuinely new position arrives via
+    // order.filled / the position snapshot, which are the authoritative sources.
+    const baseTrade = state.activeTrade
     if (!baseTrade) return {}
     const previousLtp = baseTrade.ltp
     const nextLtp = Number(patch.ltp ?? previousLtp)
@@ -283,6 +428,7 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       activeTrade,
       sessionPnl: nextPnl,
       unrealizedPnl: nextPnl,
+      lastTradePushAt: Date.now(),
     }
   }
 
@@ -290,7 +436,6 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
     const data = event.data as {
       wallet?: number | null
       availableBalance?: number | null
-      availabelBalance?: number | null
       utilizedAmount?: number | null
       sessionPnl?: number | null
       realizedPnl?: number | null
@@ -300,9 +445,9 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       return { wallet: null, marginUtilized: null }
     }
     return {
-      wallet: optionalNumber(data.wallet ?? data.availableBalance ?? data.availabelBalance, state.wallet),
+      wallet: optionalNumber(data.wallet ?? data.availableBalance, state.wallet),
       paperBalance: state.engineMode === 'paper'
-        ? optionalNumber(data.wallet ?? data.availableBalance ?? data.availabelBalance, state.paperBalance)
+        ? optionalNumber(data.wallet ?? data.availableBalance, state.paperBalance)
         : state.paperBalance,
       marginUtilized: optionalNumber(data.utilizedAmount, state.marginUtilized),
       sessionPnl: optionalNumber(data.sessionPnl, state.sessionPnl) ?? state.sessionPnl,
@@ -325,6 +470,7 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
       activeTrade: null,
       typing: false,
       messages: appendMessage(state.messages, event),
+      lastTradePushAt: Date.now(),
     }
   }
 
@@ -348,6 +494,8 @@ function normalizeTrade(data: Partial<ActiveTrade>, config: TradeConfig, lotSize
   const pnl = Number(data.pnl ?? 0)
   const qty = Number(data.qty ?? contractsForLots(config.risk?.lots ?? 1, lotSize))
   return {
+    positionId: data.positionId,
+    positionVersion: data.positionVersion,
     symbol: data.symbol ?? 'NIFTY option',
     strike: Number(data.strike ?? 0),
     optType: data.optType ?? 'CE',
@@ -368,6 +516,13 @@ function normalizeTrade(data: Partial<ActiveTrade>, config: TradeConfig, lotSize
     slippagePercent: optionalNumber(data.slippagePercent, null) ?? undefined,
     srSuggestion: normalizeSrSuggestion(data.srSuggestion),
     activeExitLevels: normalizeActiveExitLevels(data.activeExitLevels),
+    riskArmed: data.riskArmed,
+    riskSource: data.riskSource,
+    quoteSource: data.quoteSource,
+    quoteReceivedAt: data.quoteReceivedAt,
+    quoteStale: data.quoteStale,
+    quoteStatus: data.quoteStatus,
+    quoteAgeSeconds: data.quoteAgeSeconds,
     correlationId: data.correlationId ?? '',
     status: data.status ?? 'OPEN',
   }
@@ -448,48 +603,6 @@ function normalizeActiveExitLevels(value: unknown): ActiveTrade['activeExitLevel
 function appendMessage(messages: RenderableMessage[], message: RenderableMessage): RenderableMessage[] {
   if (message.type === 'setup.info') return messages
   return [...messages, message].slice(-250)
-}
-
-function seedTradeFromTick(data: Partial<ActiveTrade>, config: TradeConfig, lotSize = DEFAULT_NIFTY_LOT_SIZE): ActiveTrade | null {
-  const ltp = optionalNumber(data.ltp, null)
-  if (ltp === null) return null
-  const symbol = typeof data.symbol === 'string' && data.symbol.trim() ? data.symbol : 'NIFTY option'
-  const qty = optionalNumber(data.qty, null) ?? contractsForLots(config.risk?.lots ?? 1, lotSize)
-  const pnl = optionalNumber(data.pnl, 0) ?? 0
-  return {
-    symbol,
-    strike: optionalNumber(data.strike, null) ?? inferStrike(symbol),
-    optType: data.optType ?? inferOptionType(symbol),
-    qty,
-    avgPrice: optionalNumber(data.avgPrice, null) ?? ltp,
-    ltp,
-    pnl,
-    pnlPct: optionalNumber(data.pnlPct, null) ?? calculatePnlPct(pnl, ltp, qty),
-    expiry: data.expiry,
-    exitOn: data.exitOn ?? exitModeLabel(config.exits?.mode),
-    securityId: data.securityId,
-    verifyUrl: data.verifyUrl ?? 'https://web.dhan.co/',
-    ltpDirection: 'flat',
-    orderId: data.orderId ?? 'pending',
-    exchOrderId: data.exchOrderId,
-    sourceLtp: optionalNumber(data.sourceLtp, null) ?? undefined,
-    simulatedCharges: optionalNumber(data.simulatedCharges, null) ?? undefined,
-    slippagePercent: optionalNumber(data.slippagePercent, null) ?? undefined,
-    srSuggestion: normalizeSrSuggestion(data.srSuggestion),
-    activeExitLevels: normalizeActiveExitLevels(data.activeExitLevels),
-    correlationId: data.correlationId ?? '',
-    status: data.status ?? 'OPEN',
-  }
-}
-
-function inferOptionType(symbol: string): ActiveTrade['optType'] {
-  const normalized = symbol.toUpperCase()
-  return normalized.includes(' PE') || normalized.includes('PUT') || normalized.endsWith('PE') ? 'PE' : 'CE'
-}
-
-function inferStrike(symbol: string): number {
-  const match = symbol.toUpperCase().match(/\b(\d{4,5})\b(?=\s*(CE|PE|CALL|PUT)\b)/)
-  return match ? Number(match[1]) : 0
 }
 
 function appendMessages(messages: RenderableMessage[], nextMessages: RenderableMessage[]): RenderableMessage[] {

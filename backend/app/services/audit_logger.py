@@ -73,7 +73,24 @@ def log_webhook_event(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def log_order_event(event: dict[str, Any]) -> dict[str, Any]:
-    return _append_jsonl(LOG_FILES["order"], event)
+    record = _append_jsonl(LOG_FILES["order"], event)
+    _maybe_persist_live_exit(record)
+    return record
+
+
+def _maybe_persist_live_exit(record: dict[str, Any]) -> None:
+    """A confirmed live EXIT fill should land its realized P&L in the durable
+    ledger immediately, not only whenever someone next opens the dashboard —
+    best-effort, never raises, no Dhan API call."""
+    try:
+        action = str(record.get("normalized_action") or record.get("action") or "").upper()
+        if action != "EXIT" or record.get("mode") != "live" or record.get("avg_price") is None:
+            return
+        from app.services.portfolio_analytics import persist_live_trades_from_log
+
+        persist_live_trades_from_log()
+    except Exception:
+        logger.debug("Live exit persistence trigger skipped", exc_info=True)
 
 
 def log_audit_event(

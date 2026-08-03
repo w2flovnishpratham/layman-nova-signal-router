@@ -170,7 +170,7 @@ def _parse_nova_payload(raw_payload: dict[str, Any]) -> NormalizedSignal:
         "qty": _as_positive_int(raw_payload.get("qty"), "qty"),
         "order_type": _normalize_order_type(raw_payload.get("order_type")),
         "product_type": _normalize_product_type(raw_payload.get("product_type")),
-        "source": raw_payload.get("source") or "tradingview",
+        "source": "tradingview",
         "raw_payload": raw_payload,
     }
     if not normalized["trading_symbol"]:
@@ -233,7 +233,7 @@ def _parse_pine_multi_leg_payload(raw_payload: dict[str, Any]) -> NormalizedSign
         "qty": _as_positive_int(leg.get("quantity"), "order_legs[0].quantity"),
         "order_type": _normalize_order_type(leg.get("orderType")),
         "product_type": _normalize_product_type(leg.get("productType")),
-        "source": raw_payload.get("source") or "tradingview",
+        "source": "tradingview",
         "raw_payload": raw_payload,
     }
     try:
@@ -255,3 +255,27 @@ def parse_webhook_payload(raw_payload: dict[str, Any]) -> NormalizedSignal:
     if raw_payload.get("alertType") == "multi_leg_order" and "order_legs" in raw_payload:
         return _parse_pine_multi_leg_payload(raw_payload)
     raise UnsupportedPayloadFormatError("Unsupported payload format.")
+
+
+# ---------------------------------------------------------------------------
+# Trade origin taxonomy
+# ---------------------------------------------------------------------------
+# Who opened the trade, derived from NormalizedSignal.source. AUTOMATED is the
+# derived category covering everything that isn't a human clicking a button.
+_ORIGIN_BY_SOURCE = {
+    "manual_panel": "MANUAL",
+    "built_in_strategy": "BUILT_IN_STRATEGY",
+    "user_strategy": "USER_STRATEGY",
+    "tradingview": "TRADINGVIEW_WEBHOOK",
+    "private_tradingview_webhook": "TRADINGVIEW_WEBHOOK",
+}
+AUTOMATED_ORIGINS = {"BUILT_IN_STRATEGY", "USER_STRATEGY", "TRADINGVIEW_WEBHOOK"}
+
+
+def origin_from_source(source: str | None) -> str | None:
+    """Map NormalizedSignal.source to the MANUAL/BUILT_IN_STRATEGY/USER_STRATEGY/
+    TRADINGVIEW_WEBHOOK taxonomy. None for anything not recognised, rather than
+    guessing."""
+    if not source:
+        return None
+    return _ORIGIN_BY_SOURCE.get(str(source))

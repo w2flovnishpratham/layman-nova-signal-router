@@ -1,0 +1,21 @@
+{
+  "fixture_id": "F12",
+  "source_sha256": "b81d98c21abe08d48e262efd159a9031176fabbbcebb0ea13c75af49c318d588",
+  "analyzer_version": "nova.pine-semantic-preanalyzer.v1",
+  "registry_id": "nova.pine-capabilities",
+  "registry_version": "v1",
+  "registry_sha256": "a237f33a6795d06e371c0e4719d7e581056893b30b1e60fd3768a511aa4b0594",
+  "matched_capabilities_exact": [
+    "PENDING_STOP_ENTRY"
+  ],
+  "effective_capability_level": "L3_REQUIRES_BACKEND_CAPABILITY",
+  "temporal_classes_exact": [
+    "T0_CONFIRMED_BAR_CLOSE_DETERMINISTIC"
+  ],
+  "blocker_codes_exact": [
+    "BLK_PENDING_ENGINE"
+  ],
+  "disclosure_codes_exact": [],
+  "admin_review_points_exact": [],
+  "confidence": "PARTIAL_MATCH"
+}

@@ -1,3 +1,5 @@
+import { Input } from "@/components/ui/input"
+import { Button } from '@/components/ui/button'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { ClientCommand, ExitRules } from '../../types'
@@ -24,20 +26,20 @@ export function ExitRulesForm({ initial, onSend }: Props) {
           ['flip_tp', 'Flip + TP'],
           ['custom', 'Custom'],
         ].map(([mode, label]) => (
-          <button
+          <Button variant="unstyled"
             key={mode}
             className={exits.mode === mode ? 'selected' : ''}
             type="button"
             onClick={() => setExits({ mode: mode as ExitRules['mode'], targetProfit: mode === 'flip_tp' ? 3000 : null })}
           >
             {label}
-          </button>
+          </Button>
         ))}
       </div>
       {exits.mode === 'flip_tp' ? (
         <label>
           Target profit
-          <input
+          <Input variant="unstyled"
             type="number"
             value={exits.targetProfit ?? 3000}
             min={100}
@@ -45,7 +47,7 @@ export function ExitRulesForm({ initial, onSend }: Props) {
           />
         </label>
       ) : null}
-      <button type="submit">Lock exits</button>
+      <Button variant="unstyled" type="submit">Lock exits</Button>
     </form>
   )
 }

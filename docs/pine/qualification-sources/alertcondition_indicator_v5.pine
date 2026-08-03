@@ -1,0 +1,12 @@
+//@version=5
+indicator("Alertcondition Qualification Source", overlay=true)
+length = input.int(20, "Channel Length", minval=2)
+middle = ta.sma(close, length)
+upper = middle + ta.stdev(close, length)
+lower = middle - ta.stdev(close, length)
+bullishAlert = ta.crossover(close, lower)
+bearishAlert = ta.crossunder(close, upper)
+plot(upper, "Upper")
+plot(lower, "Lower")
+alertcondition(bullishAlert, "Lower Band Recovery", "Price recovered above lower band")
+alertcondition(bearishAlert, "Upper Band Rejection", "Price fell below upper band")

@@ -1,0 +1,4 @@
+//@version=6
+indicator("F40")
+varip int ticks = 0
+ticks += 1

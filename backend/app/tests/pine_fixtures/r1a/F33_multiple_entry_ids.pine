@@ -1,0 +1,4 @@
+//@version=6
+strategy("F33")
+strategy.entry("LongA", strategy.long)
+strategy.entry("LongB", strategy.long)

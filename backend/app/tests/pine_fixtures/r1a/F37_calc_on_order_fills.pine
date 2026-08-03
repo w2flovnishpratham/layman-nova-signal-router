@@ -1,0 +1,3 @@
+//@version=6
+strategy("F37", calc_on_order_fills=true)
+strategy.entry("Long", strategy.long)

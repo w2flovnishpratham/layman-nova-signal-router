@@ -1,88 +1,158 @@
-import { AnimatePresence, motion } from 'framer-motion'
-import {
-  Activity,
-  ArrowDownRight,
-  ArrowUpRight,
-  Award,
-  Clock,
-  Flame,
-  Gauge,
-  Layers,
-  Loader2,
-  PieChart,
-  RefreshCw,
-  Receipt,
-  TrendingDown,
-  TrendingUp,
-  Wallet,
-} from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
-import { TickingNumber } from '../components/TickingNumber'
-import { MotionPing, MotionPulseText, MotionSpinner } from '../components/MotionPrimitives'
+import { NativeSelect } from "@/components/ui/native-select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Button } from '@/components/ui/button'
+import { motion } from 'framer-motion'
+import { Download, RefreshCw, ShieldAlert } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { RuntimeStatus } from '../api'
+import { MotionProgressFill } from '../components/MotionPrimitives'
+import { PageSkeleton } from '../components/PageSkeleton'
 import { formatCurrency } from '../lib/format'
-import { DailyPnlBars, EquityCurveChart, SideSplit, WinLossDonut } from './charts'
-import { getPortfolioAnalytics, type PortfolioAnalytics, type PortfolioTrade } from './portfolioApi'
+import { reportCsvUrl } from '../reports/reportsApi'
+import { getRiskOverview, type RiskOverview, type RiskStrategyRow } from '../risk/riskApi'
+import { getSignals, type SignalsPage } from '../signals/signalsApi'
+import type { SystemHealth } from '../types'
+import { getWebhooksOverview, type WebhooksOverview } from '../webhooks/webhooksApi'
+import { DailyPnlBars, EquityCurveChart } from './charts'
+import { getPortfolioAnalytics, type PortfolioAnalytics } from './portfolioApi'
 import './dashboard.css'
 
 const cardVariants = {
-  hidden: { opacity: 0, y: 14 },
+  hidden: { opacity: 0, y: 10 },
   show: (i: number) => ({
     opacity: 1,
     y: 0,
-    transition: { duration: 0.5, delay: i * 0.05, ease: [0.16, 1, 0.3, 1] as const },
+    transition: { duration: 0.38, delay: i * 0.035, ease: [0.16, 1, 0.3, 1] as const },
   }),
 }
 
-export function PortfolioDashboard() {
-  const [data, setData] = useState<PortfolioAnalytics | null>(null)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
+type ExportRange = 'today' | '7d' | '30d'
+type EquityRange = '1w' | '1m' | '3m' | 'all'
 
-  const load = useCallback(async (soft = false) => {
-    if (soft) setRefreshing(true)
-    try {
-      const next = await getPortfolioAnalytics()
-      setData(next)
-      setError('')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load portfolio analytics')
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
-    }
+export interface DashboardPreviewBundle {
+  data: PortfolioAnalytics
+  risk: RiskOverview
+  signals: SignalsPage
+  webhooks: WebhooksOverview
+}
+
+interface Props {
+  runtime: RuntimeStatus | null
+  health: SystemHealth | null
+  onKill: () => void
+  onManageStrategies: () => void
+  onViewHealth: () => void
+  preview?: DashboardPreviewBundle
+}
+
+interface StrategyPerformanceRow {
+  id: string
+  name: string
+  mode: string
+  selected: boolean
+  orders: number | null
+  lossPct: number | null
+  maxLots: number | null
+  pnl: number | null
+}
+
+export function PortfolioDashboard({
+  runtime,
+  health,
+  onKill,
+  onManageStrategies,
+  onViewHealth,
+  preview,
+}: Props) {
+  const [data, setData] = useState<PortfolioAnalytics | null>(preview?.data ?? null)
+  const [risk, setRisk] = useState<RiskOverview | null>(preview?.risk ?? null)
+  const [signals, setSignals] = useState<SignalsPage | null>(preview?.signals ?? null)
+  const [webhooks, setWebhooks] = useState<WebhooksOverview | null>(preview?.webhooks ?? null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(!preview)
+  const [refreshing, setRefreshing] = useState(false)
+  const [exportRange, setExportRange] = useState<ExportRange>('today')
+  const [equityRange, setEquityRange] = useState<EquityRange>('1m')
+  const [viewMode, setViewMode] = useState<'paper' | 'live'>(() => {
+    const requested = new URLSearchParams(window.location.search).get('mode')
+    return requested === 'paper' || requested === 'live' ? requested : 'live'
+  })
+  const [tradeOrigin, setTradeOrigin] = useState<'all' | 'automated' | 'manual'>(() => {
+    const requested = new URLSearchParams(window.location.search).get('tradeOrigin')
+    return requested === 'automated' || requested === 'manual' ? requested : 'all'
+  })
+
+  // Changing this only changes which book is displayed — it never arms or
+  // stops the engine, and never touches execution/runtime mode.
+  const setViewModeAndUrl = useCallback((next: 'paper' | 'live') => {
+    setViewMode(next)
+    const url = new URL(window.location.href)
+    url.searchParams.set('mode', next)
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
   }, [])
 
-  useEffect(() => {
-    let mounted = true
-    void load()
-    const timer = window.setInterval(() => {
-      if (mounted) void load(true)
-    }, 15000)
-    return () => {
-      mounted = false
-      window.clearInterval(timer)
+  // Reporting-only: never starts/stops an engine, changes execution mode, or
+  // mutates stored P&L — it only changes which trades are aggregated for display.
+  const setTradeOriginAndUrl = useCallback((next: 'all' | 'automated' | 'manual') => {
+    setTradeOrigin(next)
+    const url = new URL(window.location.href)
+    url.searchParams.set('tradeOrigin', next)
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
+  }, [])
+
+  const load = useCallback(async (soft = false, forceWalletRefresh = false) => {
+    if (preview) return
+    if (soft) setRefreshing(true)
+
+    const [portfolioResult, riskResult, signalResult, webhookResult] = await Promise.allSettled([
+      getPortfolioAnalytics(viewMode, { force: forceWalletRefresh, tradeOrigin }),
+      getRiskOverview(),
+      getSignals({ limit: 1 }),
+      getWebhooksOverview(),
+    ])
+
+    if (portfolioResult.status === 'fulfilled') {
+      setData(portfolioResult.value)
+      setError('')
+    } else {
+      setError(
+        portfolioResult.reason instanceof Error
+          ? portfolioResult.reason.message
+          : 'Could not load portfolio analytics',
+      )
     }
-  }, [load])
+    if (riskResult.status === 'fulfilled') setRisk(riskResult.value)
+    if (signalResult.status === 'fulfilled') setSignals(signalResult.value)
+    if (webhookResult.status === 'fulfilled') setWebhooks(webhookResult.value)
+
+    setLoading(false)
+    setRefreshing(false)
+  }, [preview, viewMode, tradeOrigin])
+
+  useEffect(() => {
+    if (preview) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load()
+    const timer = window.setInterval(() => void load(true), 15_000)
+    return () => window.clearInterval(timer)
+  }, [load, preview])
+
+  const filteredEquity = useMemo(
+    () => (data ? filterEquity(data, equityRange) : []),
+    [data, equityRange],
+  )
 
   if (loading && !data) {
-    return (
-      <div className="nv-dash-state flex flex-col items-center justify-center gap-4 py-20">
-        <MotionSpinner className="text-purple-400">
-          <Loader2 size={40} />
-        </MotionSpinner>
-        <MotionPulseText className="text-sm text-white/60 font-medium">Crunching your tracked trades…</MotionPulseText>
-      </div>
-    )
+    return <PageSkeleton label="Loading portfolio dashboard" variant="dashboard" />
   }
 
   if (error && !data) {
     return (
       <div className="nv-dash-state">
         <p className="nv-dash-error">{error}</p>
-        <button className="secondary-button" type="button" onClick={() => void load()}>
+        <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void load()}>
           <RefreshCw size={14} /> Retry
-        </button>
+        </Button>
       </div>
     )
   }
@@ -90,294 +160,547 @@ export function PortfolioDashboard() {
   if (!data) return null
 
   const { kpis, wallet } = data
-  const pnlUp = kpis.realized_pnl >= 0
-  const streak = kpis.current_streak
-
-  const head = (
-    <div className="nv-dash-head">
-      <div>
-        <h1>Live Portfolio</h1>
-        <p>Real-money round-trips NOVA executed on your live account · paper excluded</p>
-      </div>
-      <button
-        className="secondary-button nv-refresh"
-        type="button"
-        onClick={() => void load(true)}
-        aria-label="Refresh analytics"
-      >
-        {refreshing ? (
-          <MotionSpinner>
-            <Loader2 size={14} />
-          </MotionSpinner>
-        ) : (
-          <RefreshCw size={14} />
-        )}
-        {refreshing ? 'Refreshing' : 'Refresh'}
-      </button>
-    </div>
-  )
-
-  if (kpis.total_trades === 0 && !data.open_position) {
-    return (
-      <div className="nv-dash">
-        {head}
-        <motion.div className="nv-empty-hero" initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }}>
-          <span className="nv-empty-icon"><Wallet size={26} /></span>
-          <h2>No live trades yet</h2>
-          <p>
-            This dashboard tracks only real-money round-trips — an entry NOVA placed and the matching exit it
-            later placed on your live Dhan account. Paper trades are excluded because the paper wallet can be
-            reset at any time.
-          </p>
-
-        </motion.div>
-      </div>
-    )
-  }
+  const sessionPnl = wallet.session_pnl ?? kpis.realized_pnl
+  const balanceSource = viewMode === 'live' ? (wallet.balance_source ?? 'current') : 'current'
+  const equityValue = balanceSource === 'none' ? '—' : moneyOrUnavailable(wallet.equity)
+  const equityNote = balanceSource === 'last_known'
+    ? `Last known Dhan balance${wallet.last_known_at ? ` · ${new Date(wallet.last_known_at).toLocaleString()}` : ''}`
+    : balanceSource === 'none'
+      ? 'Connect to Dhan to view your Live balance'
+      : `${moneyOrUnavailable(wallet.available_balance)} available`
+  const signalCounts = signals?.counts ?? {}
+  const acceptedSignals = count(signalCounts, 'accepted') + count(signalCounts, 'queued')
+  const rejectedSignals = count(signalCounts, 'rejected')
+  const signalTotal = Object.values(signalCounts).reduce((sum, value) => sum + Number(value || 0), 0)
+  const openPosition = runtime?.position.has_open_position ? runtime.position : data.open_position
+  const riskLoss = getLossUtilisation(risk)
+  const daily = data.daily_pnl.slice(-14)
+  const bestDay = daily.length ? Math.max(...daily.map((point) => point.pnl)) : null
+  const worstDay = daily.length ? Math.min(...daily.map((point) => point.pnl)) : null
+  const greenDays = daily.filter((point) => point.pnl > 0).length
+  const averageDay = daily.length ? daily.reduce((sum, point) => sum + point.pnl, 0) / daily.length : null
+  const growth = filteredEquity.length > 1
+    ? filteredEquity[filteredEquity.length - 1].equity - filteredEquity[0].equity
+    : kpis.realized_pnl
+  const growthPct = wallet.starting_balance
+    ? (growth / wallet.starting_balance) * 100
+    : null
+  const exportDates = getExportDates(exportRange)
+  const mode = viewMode
+  const engineMode = runtime?.engine.mode
+  const engineState = runtime?.engine.state
+  const strategyRows = buildStrategyRows(runtime, risk)
 
   return (
     <div className="nv-dash">
-      {head}
-
-      {/* Hero band */}
-      <motion.section className="nv-hero" custom={0} variants={cardVariants} initial="hidden" animate="show">
-        <div className="nv-hero-main">
-          <span className="nv-hero-label">
-            <Wallet size={13} /> Net realized P&L
-          </span>
-          <div className={`nv-hero-value ${pnlUp ? 'pos' : 'neg'}`}>
-            <TickingNumber value={kpis.realized_pnl} kind="currency" signed />
-          </div>
-          <div className="nv-hero-sub">
-            <span className={`nv-chip ${pnlUp ? 'pos' : 'neg'}`}>
-              {pnlUp ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
-              {kpis.realized_pnl_pct >= 0 ? '+' : ''}
-              {kpis.realized_pnl_pct.toFixed(2)}%
-            </span>
-            <span className="nv-hero-muted">on {formatCurrency(wallet.starting_balance ?? 0)} capital</span>
-          </div>
+      <header className="nv-dash-head">
+        <div>
+          <h1>Portfolio Dashboard</h1>
+          <p>
+            Viewing: {titleCase(mode)} data · {formatSessionDate(data.generated_at)} ·{' '}
+            {health?.market === 'open' ? 'Market open until 15:30 IST' : 'Market closed'}
+            {engineMode && engineState ? ` · Engine: ${titleCase(engineMode)} — ${engineState}` : ''}
+          </p>
         </div>
-        <div className="nv-hero-grid">
-          <HeroStat label="Equity" value={formatCurrency(wallet.equity ?? 0)} />
-          <HeroStat label="Available" value={formatCurrency(wallet.available_balance ?? 0)} />
-          <HeroStat label="Deployed" value={formatCurrency(wallet.utilized_amount ?? 0)} />
-          <HeroStat
-            label="Current streak"
-            value={streak.count > 0 ? `${streak.count} ${streak.type}${streak.count === 1 ? '' : 's'}` : '—'}
-            tone={streak.type === 'win' ? 'pos' : streak.type === 'loss' ? 'neg' : undefined}
-            icon={<Flame size={13} />}
-          />
-        </div>
-      </motion.section>
-
-      {/* KPI grid */}
-      <div className="nv-kpi-grid">
-        <KpiCard i={1} icon={<Gauge size={15} />} label="Win rate" tone={kpis.win_rate >= 50 ? 'pos' : 'neg'}>
-          <TickingNumber value={kpis.win_rate} kind="percent" />
-          <span className="nv-kpi-foot">{kpis.wins}W · {kpis.losses}L{kpis.breakeven ? ` · ${kpis.breakeven}F` : ''}</span>
-        </KpiCard>
-        <KpiCard i={2} icon={<Activity size={15} />} label="Total trades">
-          <TickingNumber value={kpis.total_trades} kind="number" />
-          <span className="nv-kpi-foot">avg {formatCurrency(kpis.avg_trade)}/trade</span>
-        </KpiCard>
-        <KpiCard i={3} icon={<Layers size={15} />} label="Profit factor" tone={kpis.profit_factor >= 1 ? 'pos' : 'neg'}>
-          <TickingNumber value={kpis.profit_factor} kind="number" decimals={2} />
-          <span className="nv-kpi-foot">gross win ÷ gross loss</span>
-        </KpiCard>
-        <KpiCard i={4} icon={<TrendingUp size={15} />} label="Best trade" tone="pos">
-          <span className="nv-kpi-value pos">{formatCurrency(kpis.best_trade)}</span>
-          <span className="nv-kpi-foot">single round-trip</span>
-        </KpiCard>
-        <KpiCard i={5} icon={<TrendingDown size={15} />} label="Worst trade" tone="neg">
-          <span className="nv-kpi-value neg">{formatCurrency(kpis.worst_trade)}</span>
-          <span className="nv-kpi-foot">single round-trip</span>
-        </KpiCard>
-        <KpiCard i={6} icon={<Award size={15} />} label="Avg win / loss">
-          <span className="nv-kpi-value">
-            <span className="pos">{formatCurrency(kpis.avg_win)}</span>
-            <span className="nv-kpi-divider">/</span>
-            <span className="neg">{formatCurrency(kpis.avg_loss)}</span>
-          </span>
-          <span className="nv-kpi-foot">per winning · losing trade</span>
-        </KpiCard>
-        <KpiCard i={7} icon={<TrendingDown size={15} />} label="Max drawdown" tone="neg">
-          <span className="nv-kpi-value neg">{formatCurrency(kpis.max_drawdown)}</span>
-          <span className="nv-kpi-foot">{kpis.max_drawdown_pct.toFixed(2)}% peak-to-trough</span>
-        </KpiCard>
-        <KpiCard i={8} icon={<Clock size={15} />} label="Avg hold">
-          <span className="nv-kpi-value">{formatHold(kpis.avg_hold_minutes)}</span>
-          <span className="nv-kpi-foot">{formatCurrency(kpis.total_charges)} total charges</span>
-        </KpiCard>
-      </div>
-
-      {data.open_position ? (
-        <motion.div className="nv-open-banner" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-          <MotionPing className="nv-open-ping" />
-          <strong>Open position</strong>
-          <span>
-            {data.open_position.qty} × {data.open_position.symbol ?? '—'} ({data.open_position.option_side}) @{' '}
-            {formatCurrency(data.open_position.entry_price ?? 0)}
-          </span>
-        </motion.div>
-      ) : null}
-
-      {/* Equity curve */}
-      <motion.section className="nv-panel nv-panel-wide" custom={2} variants={cardVariants} initial="hidden" animate="show">
-        <div className="nv-panel-head">
-          <h2><TrendingUp size={15} /> Equity curve</h2>
-          <span className="nv-panel-note">cumulative realized P&L over closed trades</span>
-        </div>
-        <EquityCurveChart points={data.equity_curve} />
-      </motion.section>
-
-      {/* Daily + distribution */}
-      <div className="nv-two-col">
-        <motion.section className="nv-panel" custom={3} variants={cardVariants} initial="hidden" animate="show">
-          <div className="nv-panel-head">
-            <h2><Activity size={15} /> Daily P&L</h2>
-            <span className="nv-panel-note">realized by trading day (IST)</span>
-          </div>
-          <DailyPnlBars data={data.daily_pnl} />
-        </motion.section>
-
-        <motion.section className="nv-panel" custom={4} variants={cardVariants} initial="hidden" animate="show">
-          <div className="nv-panel-head">
-            <h2><PieChart size={15} /> Outcome split</h2>
-          </div>
-          <WinLossDonut wins={kpis.wins} losses={kpis.losses} breakeven={kpis.breakeven} />
-          <SideSplit ce={data.side_breakdown.CE} pe={data.side_breakdown.PE} />
-        </motion.section>
-      </div>
-
-      {/* Symbol breakdown */}
-      {data.symbol_breakdown.length ? (
-        <motion.section className="nv-panel" custom={5} variants={cardVariants} initial="hidden" animate="show">
-          <div className="nv-panel-head">
-            <h2><Layers size={15} /> By contract</h2>
-          </div>
-          <div className="nv-symbol-list">
-            {data.symbol_breakdown.map((s, i) => (
-              <motion.div
-                className="nv-symbol-row"
-                key={s.symbol}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.1 + i * 0.04 }}
+        <div className="nv-dash-actions">
+          <div className="nv-segmented" aria-label="Dashboard view mode" role="group">
+            {(['paper', 'live'] as const).map((option) => (
+              <Button variant="unstyled"
+                key={option}
+                type="button"
+                className={option === viewMode ? 'active' : ''}
+                onClick={() => setViewModeAndUrl(option)}
+                aria-pressed={option === viewMode}
               >
-                <span className="nv-symbol-name">{s.symbol}</span>
-                <span className="nv-symbol-trades">{s.trades} trade{s.trades === 1 ? '' : 's'}</span>
-                <span className={`nv-symbol-pnl ${s.pnl >= 0 ? 'pos' : 'neg'}`}>{formatCurrency(s.pnl)}</span>
-              </motion.div>
+                {titleCase(option)}
+              </Button>
             ))}
           </div>
-        </motion.section>
+          <div className="nv-segmented" aria-label="Trade origin filter" role="group">
+            {(['all', 'automated', 'manual'] as const).map((option) => (
+              <Button variant="unstyled"
+                key={option}
+                type="button"
+                className={option === tradeOrigin ? 'active' : ''}
+                onClick={() => setTradeOriginAndUrl(option)}
+                aria-pressed={option === tradeOrigin}
+              >
+                {option === 'all' ? 'All Trades' : titleCase(option)}
+              </Button>
+            ))}
+          </div>
+          <NativeSelect variant="unstyled"
+            className="nv-range-select"
+            aria-label="Export period"
+            value={exportRange}
+            onChange={(event) => setExportRange(event.target.value as ExportRange)}
+          >
+            <option value="today">Today</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+          </NativeSelect>
+          <a
+            className="nv-export-button"
+            href={reportCsvUrl(exportDates.start, exportDates.end, mode, tradeOrigin)}
+            download
+          >
+            <Download size={14} />
+            Export Report
+          </a>
+          <Button variant="unstyled"
+            className="nv-icon-refresh"
+            type="button"
+            onClick={() => void load(true, true)}
+            aria-label="Refresh dashboard"
+            title="Refresh dashboard"
+          >
+            <RefreshCw size={15} className={refreshing ? 'is-spinning' : ''} />
+          </Button>
+        </div>
+      </header>
+
+      {error ? <p className="nv-soft-error" role="status">{error} Showing the last successful snapshot.</p> : null}
+      {balanceSource === 'last_known' ? (
+        <p className="nv-soft-error" role="status">
+          Current balance could not be refreshed. Update your Dhan Access Token to refresh the account.
+        </p>
+      ) : null}
+      {balanceSource === 'none' ? (
+        <p className="nv-soft-error" role="status">Connect to Dhan to view your Live balance.</p>
       ) : null}
 
-      {/* Trades ledger */}
-      <motion.section className="nv-panel nv-panel-wide" custom={6} variants={cardVariants} initial="hidden" animate="show">
-        <div className="nv-panel-head">
-          <h2><Receipt size={15} /> Trade ledger</h2>
-          <span className="nv-panel-note">{data.trades.length} closed round-trip{data.trades.length === 1 ? '' : 's'}</span>
-        </div>
-        <TradesTable trades={data.trades} />
-      </motion.section>
+      <section className="nv-kpi-grid nv-kpi-grid-six" aria-label="Portfolio summary">
+        <MetricCard
+          i={0}
+          label="Session P&L"
+          value={signedCurrency(sessionPnl)}
+          valueTone={sessionPnl >= 0 ? 'pos' : 'neg'}
+          note={`${kpis.total_trades} trades · ${formatPercent(kpis.win_rate)} win`}
+        />
+        <MetricCard
+          i={1}
+          label={balanceSource === 'last_known' ? 'Last known Dhan balance' : 'Account equity'}
+          value={equityValue}
+          note={equityNote}
+        />
+        <MetricCard
+          i={2}
+          label="Open positions"
+          value={openPosition ? '1' : '0'}
+          note={openPositionNote(openPosition, runtime)}
+          noteTone={openPosition ? 'pos' : undefined}
+        />
+        <MetricCard
+          i={3}
+          label="Signals (24h)"
+          value={signals?.available === false ? 'Unavailable' : String(signalTotal)}
+          note={signals ? `${acceptedSignals} accepted · ${rejectedSignals} rejected` : 'Signal feed not available'}
+        />
+        <MetricCard
+          i={4}
+          label="Profit factor"
+          value={Number.isFinite(kpis.profit_factor) ? kpis.profit_factor.toFixed(2) : '—'}
+          valueTone={kpis.profit_factor >= 1 ? 'pos' : kpis.total_trades ? 'neg' : undefined}
+          note={`${formatHold(kpis.avg_hold_minutes)} avg hold`}
+        />
+        <MetricCard
+          i={5}
+          label="Daily loss used"
+          value={riskLoss.pct == null ? (riskLoss.unlimited ? 'No limit' : 'Unavailable') : `${riskLoss.pct.toFixed(1)}%`}
+          valueTone={riskLoss.pct != null && riskLoss.pct >= 70 ? 'warn' : undefined}
+          note={riskLoss.remaining == null ? 'Risk service did not return a limit' : `${formatCurrency(riskLoss.remaining)} remaining`}
+        />
+      </section>
+
+      <div className="nv-dashboard-grid nv-dashboard-grid-charts">
+        <motion.section className="nv-panel nv-equity-panel" custom={1} variants={cardVariants} initial="hidden" animate="show">
+          <div className="nv-panel-head">
+            <div className="nv-panel-title-row">
+              <h2>Equity Curve</h2>
+              <span>{titleCase(mode)} account · tracked closed trades</span>
+            </div>
+            <div className="nv-segmented" aria-label="Equity range">
+              {(['1w', '1m', '3m', 'all'] as const).map((range) => (
+                <Button variant="unstyled"
+                  key={range}
+                  type="button"
+                  className={range === equityRange ? 'active' : ''}
+                  onClick={() => setEquityRange(range)}
+                >
+                  {range === 'all' ? 'All' : range.toUpperCase()}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="nv-equity-summary">
+            <strong>{moneyOrUnavailable(wallet.equity)}</strong>
+            <span className={growth >= 0 ? 'pos' : 'neg'}>
+              {signedCurrency(growth)}
+              {growthPct == null ? '' : ` (${growthPct >= 0 ? '+' : ''}${growthPct.toFixed(1)}%)`}
+              {' '}in range
+            </span>
+          </div>
+          <EquityCurveChart points={filteredEquity} />
+        </motion.section>
+
+        <motion.section className="nv-panel nv-daily-panel" custom={2} variants={cardVariants} initial="hidden" animate="show">
+          <div className="nv-panel-head">
+            <h2>Daily P&L — last 14 sessions</h2>
+          </div>
+          <DailyPnlBars data={daily} />
+          <div className="nv-daily-stats">
+            <SmallStat label="Best day" value={bestDay == null ? '—' : signedCurrency(bestDay)} tone="pos" />
+            <SmallStat label="Worst day" value={worstDay == null ? '—' : signedCurrency(worstDay)} tone="neg" />
+            <SmallStat label="Green days" value={`${greenDays} / ${daily.length}`} />
+            <SmallStat label="Avg / day" value={averageDay == null ? '—' : signedCurrency(averageDay)} tone={averageDay != null && averageDay >= 0 ? 'pos' : 'neg'} />
+          </div>
+        </motion.section>
+      </div>
+
+      <div className="nv-dashboard-grid nv-dashboard-grid-lower">
+        <motion.section className="nv-panel nv-strategy-panel" custom={3} variants={cardVariants} initial="hidden" animate="show">
+          <div className="nv-panel-head">
+            <h2>Strategy Performance</h2>
+            <Button variant="unstyled" type="button" className="nv-panel-link" onClick={onManageStrategies}>Manage strategies →</Button>
+          </div>
+          <StrategyPerformance rows={strategyRows} mode={mode} />
+        </motion.section>
+
+        <motion.aside className="nv-panel nv-health-panel" custom={4} variants={cardVariants} initial="hidden" animate="show">
+          <div className="nv-panel-head">
+            <h2>System Health</h2>
+            <Button variant="unstyled" type="button" className="nv-panel-link" onClick={onViewHealth}>Details →</Button>
+          </div>
+          <SystemHealthList health={health} runtime={runtime} webhooks={webhooks} />
+          <KillSwitch runtime={runtime} onKill={onKill} />
+        </motion.aside>
+      </div>
     </div>
   )
 }
 
-function HeroStat({ label, value, tone, icon }: { label: string; value: string; tone?: 'pos' | 'neg'; icon?: React.ReactNode }) {
-  return (
-    <div className="nv-hero-stat">
-      <span className="nv-hero-stat-label">{icon}{label}</span>
-      <span className={`nv-hero-stat-value${tone ? ` ${tone}` : ''}`}>{value}</span>
-    </div>
-  )
-}
-
-function KpiCard({
+function MetricCard({
   i,
-  icon,
   label,
-  tone,
-  children,
+  value,
+  note,
+  valueTone,
+  noteTone,
 }: {
   i: number
-  icon: React.ReactNode
   label: string
-  tone?: 'pos' | 'neg'
-  children: React.ReactNode
+  value: string
+  note: string
+  valueTone?: 'pos' | 'neg' | 'warn'
+  noteTone?: 'pos' | 'neg'
 }) {
   return (
-    <motion.div className={`nv-kpi-card${tone ? ` accent-${tone}` : ''}`} custom={i} variants={cardVariants} initial="hidden" animate="show">
-      <span className="nv-kpi-label">{icon}{label}</span>
-      <div className="nv-kpi-body">{children}</div>
-    </motion.div>
+    <motion.article className="nv-kpi-card" custom={i} variants={cardVariants} initial="hidden" animate="show">
+      <span className="nv-kpi-label">{label}</span>
+      <strong className={`nv-kpi-value${valueTone ? ` ${valueTone}` : ''}`}>{value}</strong>
+      <span className={`nv-kpi-note${noteTone ? ` ${noteTone}` : ''}`}>{note}</span>
+    </motion.article>
   )
 }
 
-function TradesTable({ trades }: { trades: PortfolioTrade[] }) {
-  if (!trades.length) {
-    return <div className="nv-chart-empty">No closed trades yet. Once NOVA exits a position it lands here.</div>
+function SmallStat({ label, value, tone }: { label: string; value: string; tone?: 'pos' | 'neg' }) {
+  return (
+    <span className="nv-small-stat">
+      <span>{label}</span>
+      <strong className={tone}>{value}</strong>
+    </span>
+  )
+}
+
+function StrategyPerformance({ rows, mode }: { rows: StrategyPerformanceRow[]; mode: string }) {
+  if (!rows.length) {
+    return <div className="nv-table-empty">No eligible strategies or tracked strategy activity is available yet.</div>
   }
+
   return (
     <div className="nv-table-wrap">
-      <table className="nv-table">
-        <thead>
-          <tr>
-            <th>Contract</th>
-            <th>Side</th>
-            <th className="num">Qty</th>
-            <th className="num">Entry</th>
-            <th className="num">Exit</th>
-            <th className="num">P&L</th>
-            <th className="num">Return</th>
-            <th>Closed</th>
-          </tr>
-        </thead>
-        <tbody>
-          <AnimatePresence initial={false}>
-            {trades.map((t, i) => {
-              const pnl = t.realized_pnl ?? 0
-              return (
-                <motion.tr
-                  key={t.exit_order_id ?? `${t.symbol}-${t.closed_at}-${i}`}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.35, delay: Math.min(i * 0.03, 0.4) }}
-                >
-                  <td className="nv-td-symbol">{t.symbol ?? '—'}</td>
-                  <td>
-                    <span className={`nv-tag ${t.option_side === 'CE' ? 'ce' : 'pe'}`}>{t.option_side ?? '—'}</span>
-                  </td>
-                  <td className="num">{t.qty}</td>
-                  <td className="num">{t.entry_price != null ? formatCurrency(t.entry_price) : '—'}</td>
-                  <td className="num">{t.exit_price != null ? formatCurrency(t.exit_price) : '—'}</td>
-                  <td className={`num ${pnl >= 0 ? 'pos' : 'neg'}`}>{formatCurrency(pnl)}</td>
-                  <td className={`num ${pnl >= 0 ? 'pos' : 'neg'}`}>
-                    {t.pnl_pct != null ? `${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(1)}%` : '—'}
-                  </td>
-                  <td className="nv-td-time">{formatClosed(t.closed_at)}</td>
-                </motion.tr>
-              )
-            })}
-          </AnimatePresence>
-        </tbody>
-      </table>
+      <Table variant="unstyled" className="nv-performance-table">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Strategy</TableHead>
+            <TableHead>Mode</TableHead>
+            <TableHead className="num">Orders</TableHead>
+            <TableHead>Loss risk</TableHead>
+            <TableHead className="num">Max lots</TableHead>
+            <TableHead className="num">Net P&L</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={row.id}>
+              <TableCell>
+                <span className="nv-strategy-name">
+                  <span className="nv-strategy-tag">{row.selected ? 'ACTIVE' : 'NOVA'}</span>
+                  {row.name}
+                </span>
+              </TableCell>
+              <TableCell className="nv-mode-cell">{titleCase(row.mode || mode)}</TableCell>
+              <TableCell className="num">{row.orders ?? '—'}</TableCell>
+              <TableCell>
+                {row.lossPct == null ? (
+                  <span className="nv-muted">—</span>
+                ) : (
+                  <span className="nv-risk-meter">
+                    <span><i style={{ width: `${Math.min(row.lossPct, 100)}%` }} /></span>
+                    {row.lossPct.toFixed(0)}%
+                  </span>
+                )}
+              </TableCell>
+              <TableCell className="num">{row.maxLots ?? '—'}</TableCell>
+              <TableCell className={`num ${row.pnl == null ? '' : row.pnl >= 0 ? 'pos' : 'neg'}`}>
+                {row.pnl == null ? '—' : signedCurrency(row.pnl)}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </div>
   )
+}
+
+function SystemHealthList({
+  health,
+  runtime,
+  webhooks,
+}: {
+  health: SystemHealth | null
+  runtime: RuntimeStatus | null
+  webhooks: WebhooksOverview | null
+}) {
+  const rows = [
+    healthRow('Dhan Broker', dhanStatus(health), health?.dhan === 'connected' ? 'ok' : health?.dhan === 'auth_issue' ? 'bad' : 'muted'),
+    healthRow('Market Feed', feedStatus(health), health?.feed === 'live' ? 'ok' : health?.feed === 'stale' ? 'warn' : health?.feed === 'down' ? 'bad' : 'muted'),
+    healthRow('Router Engine', engineStatus(runtime, health), runtime?.engine.running ? 'info' : 'muted'),
+    healthRow(
+      'TradingView Webhook',
+      webhooks?.available === false
+        ? 'Unavailable'
+        : webhooks
+          ? `Healthy · ${webhooks.endpoints.length} endpoint${webhooks.endpoints.length === 1 ? '' : 's'}`
+          : 'Unknown',
+      webhooks?.available ? 'ok' : 'muted',
+    ),
+    healthRow('Static IP', staticIpStatus(health), health?.staticIp === 'verified' ? 'ok' : health?.staticIp === 'failed' ? 'bad' : 'muted'),
+  ]
+
+  return (
+    <div className="nv-health-list">
+      {rows.map((row) => (
+        <div className="nv-health-row" key={row.label}>
+          <span className={`nv-health-dot ${row.tone}`} />
+          <strong>{row.label}</strong>
+          <span className={row.tone}>{row.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function KillSwitch({ runtime, onKill }: { runtime: RuntimeStatus | null; onKill: () => void }) {
+  const [holding, setHolding] = useState(false)
+  const timer = useRef<number | null>(null)
+  const actionable = Boolean(runtime?.engine.running || runtime?.position.has_open_position)
+
+  function cancel() {
+    if (timer.current != null) window.clearTimeout(timer.current)
+    timer.current = null
+    setHolding(false)
+  }
+
+  function begin() {
+    if (!actionable || timer.current != null) return
+    setHolding(true)
+    timer.current = window.setTimeout(() => {
+      timer.current = null
+      setHolding(false)
+      onKill()
+    }, 800)
+  }
+
+  useEffect(() => cancel, [])
+
+  return (
+    <div className="nv-kill-switch">
+      <strong><ShieldAlert size={14} /> Kill Switch</strong>
+      <p>Stops new entries and squares off NOVA&apos;s tracked open position.</p>
+      <Button variant="unstyled"
+        type="button"
+        disabled={!actionable}
+        onPointerDown={begin}
+        onPointerUp={cancel}
+        onPointerLeave={cancel}
+        onPointerCancel={cancel}
+        onKeyDown={(event) => {
+          if ((event.key === 'Enter' || event.key === ' ') && !event.repeat) begin()
+        }}
+        onKeyUp={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') cancel()
+        }}
+      >
+        {holding ? <MotionProgressFill durationSeconds={0.8} tone="danger" /> : null}
+        <span>{actionable ? 'Hold to Stop & Square Off' : 'Engine stopped · position flat'}</span>
+      </Button>
+    </div>
+  )
+}
+
+function buildStrategyRows(runtime: RuntimeStatus | null, risk: RiskOverview | null): StrategyPerformanceRow[] {
+  const strategies = runtime?.eligible_strategies ?? []
+  const riskRows = risk?.strategies ?? []
+
+  if (strategies.length) {
+    return strategies.slice(0, 5).map((strategy) => {
+      const matched = findRiskRow(riskRows, strategy.display_name)
+      return {
+        id: strategy.instance_id,
+        name: strategy.display_name,
+        mode: strategy.mode,
+        selected: strategy.selected === true || runtime?.selected_strategy?.instance_id === strategy.instance_id,
+        orders: matched?.usage.orders_count ?? null,
+        lossPct: matched?.utilisation.loss.pct ?? null,
+        maxLots: matched?.effective.max_lots_per_order ?? strategy.lots,
+        pnl: matched ? matched.usage.realized_pnl_paise / 100 : null,
+      }
+    })
+  }
+
+  return riskRows.slice(0, 5).map((row) => ({
+    id: row.strategy_name,
+    name: row.strategy_name,
+    mode: runtime?.engine.mode ?? '—',
+    selected: false,
+    orders: row.usage.orders_count,
+    lossPct: row.utilisation.loss.pct,
+    maxLots: row.effective.max_lots_per_order,
+    pnl: row.usage.realized_pnl_paise / 100,
+  }))
+}
+
+function findRiskRow(rows: RiskStrategyRow[], name: string): RiskStrategyRow | undefined {
+  const normalized = name.trim().toLowerCase()
+  return rows.find((row) => row.strategy_name.trim().toLowerCase() === normalized)
+}
+
+function getLossUtilisation(risk: RiskOverview | null): {
+  pct: number | null
+  remaining: number | null
+  unlimited: boolean
+} {
+  if (!risk?.available) return { pct: null, remaining: null, unlimited: false }
+  const limit = risk.user.max_loss_per_day_paise
+  if (!limit) return { pct: null, remaining: null, unlimited: true }
+  const used = risk.strategies.reduce((sum, row) => sum + Math.max(0, row.usage.loss_used_paise), 0)
+  return {
+    pct: (used / limit) * 100,
+    remaining: Math.max(limit - used, 0) / 100,
+    unlimited: false,
+  }
+}
+
+function filterEquity(data: PortfolioAnalytics, range: EquityRange) {
+  if (range === 'all' || data.equity_curve.length < 2) return data.equity_curve
+  const days = range === '1w' ? 7 : range === '1m' ? 30 : 90
+  const cutoff = Date.now() - days * 86_400_000
+  const filtered = data.equity_curve.filter((point) => {
+    const timestamp = point.t ? new Date(point.t).getTime() : Number.NaN
+    return Number.isNaN(timestamp) || timestamp >= cutoff
+  })
+  return filtered.length >= 2 ? filtered : data.equity_curve
+}
+
+function getExportDates(range: ExportRange): { start: string; end: string } {
+  const end = new Date()
+  const start = new Date(end)
+  if (range === '7d') start.setDate(start.getDate() - 6)
+  if (range === '30d') start.setDate(start.getDate() - 29)
+  return {
+    start: start.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }),
+    end: end.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }),
+  }
+}
+
+function openPositionNote(
+  position: RuntimeStatus['position'] | PortfolioAnalytics['open_position'],
+  runtime: RuntimeStatus | null,
+): string {
+  if (!position) return 'Flat · no tracked position'
+  const symbol = 'trading_symbol' in position ? position.trading_symbol : position.symbol
+  const pnl = runtime?.position.unrealized_pnl
+  return `${symbol ?? position.option_side ?? 'Tracked position'}${pnl == null ? '' : ` · ${signedCurrency(pnl)}`}`
+}
+
+function healthRow(label: string, value: string, tone: string) {
+  return { label, value, tone }
+}
+
+function dhanStatus(health: SystemHealth | null): string {
+  if (health?.dhan === 'connected') return 'Connected'
+  if (health?.dhan === 'auth_issue') return 'Authentication issue'
+  return 'Unknown'
+}
+
+function feedStatus(health: SystemHealth | null): string {
+  if (health?.feed === 'live') return 'Live'
+  if (health?.feed === 'stale') return 'Stale'
+  if (health?.feed === 'down') return 'Down'
+  if (health?.feed === 'off') return 'Idle'
+  return 'Unknown'
+}
+
+function engineStatus(runtime: RuntimeStatus | null, health: SystemHealth | null): string {
+  if (runtime?.engine.running) return `${titleCase(runtime.engine.mode ?? '')} · ${runtime.engine.accepting_signals ? 'listening' : 'paused'}`
+  if (health?.engine === 'paused') return 'Paused'
+  return runtime?.engine.display || 'Idle'
+}
+
+function staticIpStatus(health: SystemHealth | null): string {
+  if (health?.staticIp === 'verified') return 'Verified'
+  if (health?.staticIp === 'failed') return 'Verification failed'
+  return 'Unknown'
+}
+
+function count(counts: Record<string, number>, key: string): number {
+  return Number(counts[key] ?? 0)
+}
+
+function signedCurrency(value: number): string {
+  return `${value >= 0 ? '+' : '-'}${formatCurrency(Math.abs(value))}`
+}
+
+function moneyOrUnavailable(value: number | null): string {
+  return value == null ? 'Unavailable' : formatCurrency(value)
+}
+
+function formatPercent(value: number): string {
+  return `${Number.isFinite(value) ? value.toFixed(1) : '0.0'}%`
 }
 
 function formatHold(minutes: number): string {
   if (!minutes || minutes <= 0) return '—'
   if (minutes < 60) return `${minutes.toFixed(minutes < 10 ? 1 : 0)}m`
-  const h = Math.floor(minutes / 60)
-  const m = Math.round(minutes % 60)
-  return `${h}h ${m}m`
+  const hours = Math.floor(minutes / 60)
+  const remainder = Math.round(minutes % 60)
+  return `${hours}h ${remainder}m`
 }
 
-function formatClosed(value: string | null): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+function formatSessionDate(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Session date unavailable'
+  return date.toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  })
+}
+
+function titleCase(value: string): string {
+  if (!value) return 'Unknown'
+  return `${value.charAt(0).toUpperCase()}${value.slice(1).toLowerCase()}`
 }
