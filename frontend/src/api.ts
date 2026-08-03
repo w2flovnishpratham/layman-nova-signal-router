@@ -544,7 +544,7 @@ export interface NiftyTradeMarker {
   time: number
   side: 'BUY' | 'SELL'
   option_side?: 'CE' | 'PE' | null
-  exit_kind?: 'SL' | 'TARGET' | 'REVERSAL' | 'EXIT' | null
+  exit_kind?: 'SL' | 'TARGET' | 'REVERSAL' | 'EOD' | 'EXIT' | null
   label: string
   price?: number | null
   approximate?: boolean
@@ -555,7 +555,6 @@ export interface NiftyTradeMarker {
   pnl?: number | null
   stop_price?: number | null
   target_price?: number | null
-  exit_kind?: 'SL' | 'TARGET' | 'REVERSAL' | 'EOD' | 'EXIT' | string | null
 }
 
 export type ChartTimeframe = '1m' | '5m' | '15m'
