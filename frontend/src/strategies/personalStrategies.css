@@ -267,10 +267,37 @@
 .c2-progress-tracker li.is-waiting { color: var(--text-3); }
 .pine-ai-panel p { width: 100%; margin: 0; color: var(--text-3); font-size: 11.5px; }
 .pine-conversion-review { margin-top: 16px; }
-.pine-diff { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.pine-diff { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin: 18px 0; padding-top: 18px; border-top: 1px solid var(--border); }
 .pine-diff > div { min-width: 0; }
-.pine-diff > div > strong { display: block; overflow-wrap: anywhere; }
-.pine-diff pre { max-height: 420px; overflow: auto; white-space: pre; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 11px; }
+.pine-diff > div > strong { display: block; margin-bottom: 8px; overflow-wrap: anywhere; }
+
+.pine-diff > div > strong,
+.c1-code-panel-head strong,
+.c1-line-diff > strong {
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.pine-diff pre,
+.c1-code-panel pre,
+.c1-line-diff pre,
+.c1-transport pre {
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-2);
+  color: var(--text-2);
+  font: 11px/1.55 "JetBrains Mono Variable", monospace;
+}
+
+.c1-code-panel { margin: 18px 0; padding-top: 18px; border-top: 1px solid var(--border); }
+.c1-code-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .pine-conversion-meta { font-size: 11.5px; }
 .c1-workspace { margin-bottom: 14px; }
 .c1-submit-grid { display: grid; grid-template-columns: minmax(240px, .7fr) minmax(0, 1.5fr); gap: 14px; margin: 16px 0 12px; }
@@ -286,14 +313,13 @@
 .ps-page { min-width: 0; }
 .c1-blocker { color: var(--danger); }
 .c1-manual { margin-top: 10px; }
-.c1-line-diff { margin-top: 12px; }
-.c1-line-diff pre, .c1-transport pre { max-height: 420px; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); font-size: 10.5px; white-space: pre; }
+.c1-line-diff { margin: 18px 0; padding-top: 18px; border-top: 1px solid var(--border); }
 .c1-line-diff span { display: block; min-height: 1.45em; }
 .c1-diff-added { color: var(--success); background: color-mix(in srgb, var(--success) 7%, transparent); }
 .c1-diff-removed { color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); }
 .c1-diff-unchanged { color: var(--text-3); }
-.c1-transport { margin-top: 12px; color: var(--text-2); font-size: 11px; }
-.c1-transport summary { cursor: pointer; font-weight: 650; }
+.c1-transport { margin: 18px 0; padding-top: 18px; border-top: 1px solid var(--border); color: var(--text-2); font-size: 11px; }
+.c1-transport summary { cursor: pointer; color: var(--text-3); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .c1-review-reason { margin: 12px 0; }
 .c1-normalization { display: grid; gap: 10px; margin: 12px 0; padding: 12px; border: 1px solid var(--border-hi); border-radius: 9px; background: var(--bg-2); color: var(--text-3); font-size: 11.5px; }
 .c1-normalization strong { color: var(--text-1); }

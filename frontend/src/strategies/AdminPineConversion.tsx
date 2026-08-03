@@ -444,9 +444,11 @@ function ConversionDetail({
 }
 
 function CodePanel({ title, value, copyable }: { title: string; value: string; copyable?: boolean }) {
-  return <div>
-    <strong>{title}</strong>
-    {copyable ? <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(value)}><Copy size={14} /> Copy</Button> : null}
+  return <div className="c1-code-panel">
+    <div className="c1-code-panel-head">
+      <strong>{title}</strong>
+      {copyable ? <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(value)}><Copy size={14} /> Copy</Button> : null}
+    </div>
     <pre>{value}</pre>
   </div>
 }
