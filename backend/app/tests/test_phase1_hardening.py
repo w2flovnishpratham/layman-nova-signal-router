@@ -163,6 +163,7 @@ def test_user_cannot_read_another_users_session(mu_db):
     asyncio.run(end_session())
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
 def test_duplicate_strategy_signal_creates_one_job_and_one_execution(mu_db, monkeypatch):
     from app.config import settings
     from app.db import models

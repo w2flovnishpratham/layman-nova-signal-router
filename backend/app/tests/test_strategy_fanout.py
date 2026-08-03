@@ -733,6 +733,7 @@ def test_real_order_fanout_dispatches_only_for_entitled_user(mu_db, monkeypatch)
     assert calls == ["fanout-entitled@gmail.com"]
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
 def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
     mu_db,
     monkeypatch,

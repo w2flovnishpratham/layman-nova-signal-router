@@ -67,3 +67,35 @@ def market_hours_open_by_default(monkeypatch):
             continue
         if hasattr(module, "_market_is_open"):
             monkeypatch.setattr(module, "_market_is_open", lambda: True, raising=False)
+
+
+@pytest.fixture
+def ready_default_strategy(monkeypatch):
+    """Make the default webhook strategy code (TRADINGVIEW_NIFTY_V1, which
+    canonicalizes to "supertrend") resolve as READY.
+
+    validate_signal() requires this via built_in_strategy_registry
+    .list_built_ins(). The static _BUILT_INS stub used to always include a
+    READY supertrend entry; it was emptied to () when the hardcoded built-in
+    was retired in favor of reading live-published catalog rows, which broke
+    every test sending a default-strategy webhook without a DB to publish
+    into. _BUILT_INS is the documented test-patching seam (see
+    built_in_strategy_registry.list_built_ins's own comment).
+    """
+    from app.services import built_in_strategy_registry as built_ins
+
+    entry = {
+        "strategy_key": "nova-supertrend",
+        "catalog_code": "supertrend",
+        "name": "Supertrend",
+        "version": "1.0.0",
+        "description": "NOVA built-in NIFTY Supertrend strategy.",
+        "availability": "READY",
+        "disabled_reason": None,
+        "paper_eligible": True,
+        "live_eligible": True,
+        "execution_adapter": "strategy_webhook:supertrend",
+        "setup_schema": built_ins._standard_setup_schema(),
+    }
+    monkeypatch.setattr(built_ins, "_BUILT_INS", (entry,))
+    return entry

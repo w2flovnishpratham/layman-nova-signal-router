@@ -172,6 +172,7 @@ def test_production_legacy_webhook_rejects_invalid_or_malformed_hmac(monkeypatch
     assert secret not in json.dumps(body)
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
 def test_production_legacy_webhook_accepts_valid_hmac(monkeypatch):
     client, secret = _legacy_production_webhook_client(monkeypatch)
     raw_body, signature = _signed_body(_production_legacy_payload(secret), secret)
@@ -208,6 +209,7 @@ def test_unsupported_payload_format_rejected(client):
     assert response.json()["status"] == "UNSUPPORTED_PAYLOAD_FORMAT"
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
 def test_backend_no_longer_caps_oversized_pine_alert(client):
     response = client.post("/webhook/tradingview", json=pine_payload("B", quantity="2"))
 
@@ -217,6 +219,7 @@ def test_backend_no_longer_caps_oversized_pine_alert(client):
     assert body["payload_format"] == "PINE_MULTI_LEG"
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
 def test_duplicate_signal_logic_works_for_nova_signal_id(client):
     payload = nova_payload("ENTRY", "BUY", "duplicate-nova-001")
 
@@ -233,6 +236,7 @@ def test_duplicate_signal_logic_works_for_nova_signal_id(client):
     assert second.json()["execution_result"]["normalizedError"]["orderSentToBroker"] is False
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
 def test_duplicate_signal_logic_works_for_generated_pine_signal_id(client):
     payload = pine_payload("B")
     payload["signal_time"] = "2026-06-17T09:15:00Z"
@@ -249,6 +253,7 @@ def test_duplicate_signal_logic_works_for_generated_pine_signal_id(client):
     assert second.json()["error"]["category"] == "DUPLICATE_SIGNAL"
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
 def test_same_strategy_signals_are_serialized(client, monkeypatch):
     from app.routers import webhook as webhook_router
 

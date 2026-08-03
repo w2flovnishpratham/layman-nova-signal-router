@@ -215,6 +215,7 @@ class TestWebhookSecretFlow:
         assert response.status_code == 403
         assert response.json()["status"] == "UNAUTHORIZED"
 
+    @pytest.mark.usefixtures("ready_default_strategy")
     def test_webhook_accepted_if_correct_secret(self, client):
         payload = nova_payload("ENTRY", "BUY", "correct-secret-test-001")
         response = client.post("/webhook/tradingview", json=payload)
@@ -407,6 +408,7 @@ class TestQuantityMode:
         payload, _ = _build_dhan_payload_and_resolution(signal, 1, "ENTRY")
         assert payload["quantity"] == 1
 
+    @pytest.mark.usefixtures("ready_default_strategy")
     def test_max_qty_no_longer_blocks_oversized_order(self, client):
         """Signal qty is absolute contracts and is not capped by backend max_qty_per_order."""
         response = client.post("/webhook/tradingview", json=pine_payload("B", quantity="2"))
@@ -420,6 +422,7 @@ class TestQuantityMode:
 # ===========================================================================
 
 class TestLiveOrderGating:
+    @pytest.mark.usefixtures("ready_default_strategy")
     def test_mock_mode_never_calls_real_dhan_client(self, monkeypatch, client):
         """DHAN_MODE=MOCK — RealDhanClient.place_order must never be invoked."""
         real_called = {"called": False}
@@ -437,6 +440,7 @@ class TestLiveOrderGating:
         assert response.status_code == 200
         assert real_called["called"] is False
 
+    @pytest.mark.usefixtures("ready_default_strategy")
     def test_real_mode_with_live_disabled_never_calls_dhan(self, monkeypatch, client):
         """REAL mode + ENABLE_LIVE_ORDERS=false must never call place_order."""
         monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
@@ -583,6 +587,7 @@ class TestLiveOrderGating:
         body = response.json()
         assert body["accepted"] is False
 
+    @pytest.mark.usefixtures("ready_default_strategy")
     def test_real_entry_blocks_when_dhan_has_open_position(self, monkeypatch, client):
         """Before live ENTRY, broker positions are checked and active exposure blocks order placement."""
         monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
@@ -973,6 +978,7 @@ class TestLiveOrderGating:
         assert calls["modified"][1]["stopLossPrice"] == 77.0
         assert state_store.get_open_position()["option_side"] == incoming_side
 
+    @pytest.mark.usefixtures("ready_default_strategy")
     def test_real_entry_blocks_when_dhan_has_pending_order(self, monkeypatch, client):
         """Before live ENTRY, broker order book is checked and pending orders block order placement."""
         monkeypatch.setattr(settings, "DHAN_MODE", "REAL")
@@ -1104,6 +1110,7 @@ class TestLiveOrderGating:
         assert calls[0]["quantity"] == 65
         assert state_store.get_open_position()["has_open_position"] is False
 
+    @pytest.mark.usefixtures("ready_default_strategy")
     def test_emergency_stop_blocks_entry(self, client):
         """EMERGENCY_STOP=true must block all entry signals."""
         client.post("/api/control/emergency-stop")
@@ -1114,6 +1121,7 @@ class TestLiveOrderGating:
         assert body["accepted"] is False
         assert "EMERGENCY_STOP" in body.get("message", "")
 
+    @pytest.mark.usefixtures("ready_default_strategy")
     def test_global_kill_switch_blocks_entry(self, client):
         """GLOBAL_KILL_SWITCH=true must block entries."""
         state_store.update_runtime_settings(global_kill_switch=True)

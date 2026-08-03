@@ -194,12 +194,29 @@ def test_live_setup_remains_blocked_and_paper_configuration_unchanged(mu_db, run
     # Supertrend is live-eligible by explicit product decision (2026-07-29).
     # Force it back to ineligible for this test only, so this exercises the
     # LIVE_UNAVAILABLE gate itself rather than depending on which built-in
-    # currently is/isn't eligible.
+    # currently is/isn't eligible. _BUILT_INS is empty since the hardcoded
+    # built-in was retired in favor of live-published catalog rows, so the
+    # override has to supply a full entry directly (mapping over the old,
+    # now-empty tuple silently produced no override at all). list_built_ins()
+    # only updates availability/disabled_reason/execution_adapter/version
+    # from a live-published row when the code is already present, so
+    # live_eligible=False here survives the merge with _seed()'s published row.
     from app.services import built_in_strategy_registry as built_ins
 
-    patched = tuple(
-        {**item, "live_eligible": False} if item["strategy_key"] == "nova-supertrend" else item
-        for item in built_ins._BUILT_INS
+    patched = (
+        {
+            "strategy_key": "nova-supertrend",
+            "catalog_code": "supertrend",
+            "name": "Supertrend",
+            "version": "1.0.0",
+            "description": "NOVA built-in NIFTY Supertrend strategy.",
+            "availability": "READY",
+            "disabled_reason": None,
+            "paper_eligible": True,
+            "live_eligible": False,
+            "execution_adapter": "strategy_webhook:supertrend",
+            "setup_schema": built_ins._standard_setup_schema(),
+        },
     )
     monkeypatch.setattr(built_ins, "_BUILT_INS", patched)
 

@@ -208,6 +208,7 @@ def test_user_webhook_nonce_replay_is_durable_after_cache_clear(mu_db, monkeypat
         assert db.query(models.WebhookEvent).count() == 1
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
 def test_strategy_webhook_event_claim_blocks_duplicate_and_body_mismatch(mu_db, monkeypatch):
     from app.config import settings
     from app.db import models
@@ -321,6 +322,7 @@ def test_production_strategy_webhook_requires_durable_replay_store(monkeypatch):
     assert secret not in str(response.json())
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
 def test_production_strategy_webhook_rejects_replayed_nonce(mu_db, monkeypatch):
     from app.config import settings
     from app.services import strategy_fanout
@@ -346,6 +348,7 @@ def test_production_strategy_webhook_rejects_replayed_nonce(mu_db, monkeypatch):
     assert secret not in str(replay.json())
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
 def test_production_strategy_webhook_rejects_duplicate_signal_identity(mu_db, monkeypatch):
     from app.config import settings
     from app.services import strategy_fanout
