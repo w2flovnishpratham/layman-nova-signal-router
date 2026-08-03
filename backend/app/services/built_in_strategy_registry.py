@@ -53,7 +53,6 @@ def _standard_setup_schema() -> dict[str, Any]:
 
 # User-visible strategies come only from admin-published NOVA_SHARED rows.
 _BUILT_INS: tuple[dict[str, Any], ...] = ()
-_RETIRED_CODES = {"supertrend"}
 
 
 def _live_nova_shared_entries() -> list[dict[str, Any]]:
@@ -89,7 +88,6 @@ def _live_nova_shared_entries() -> list[dict[str, Any]]:
                 )
                 .where(
                     models.StrategyCatalog.owner_user_id.is_(None),
-                    models.StrategyCatalog.code.not_in(_RETIRED_CODES),
                     models.StrategyCatalog.visibility == "nova_shared",
                     models.StrategyCatalog.status == "active",
                     models.StrategyVersion.status == "approved",

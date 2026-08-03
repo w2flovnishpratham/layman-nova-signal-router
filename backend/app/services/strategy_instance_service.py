@@ -1125,7 +1125,6 @@ def list_engine_strategies(user_id: uuid.UUID) -> dict[str, Any]:
             .where(
                 models.StrategyInstance.user_id == user_id,
                 models.StrategyInstance.status != InstanceState.ARCHIVED.value,
-                models.StrategyCatalog.code != "supertrend",
             )
             .order_by(models.StrategyInstance.created_at.desc())
         )
