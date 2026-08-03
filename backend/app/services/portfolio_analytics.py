@@ -502,6 +502,28 @@ def persist_live_trades_from_log() -> None:
         logger.debug("Live trade persistence trigger skipped: %s", exc)
 
 
+def _resolve_strategy_display_name(session: Any, closed_trade: dict[str, Any]) -> str | None:
+    """apply_paper_entry now tags every AUTOMATED paper trade with the
+    catalog code that triggered it (see execution_router._tag_paper_origin);
+    resolve it to the human-readable name shown elsewhere (e.g. user_runs),
+    so Reports stops falling back to "Unattributed automated" for every
+    single automated trade -- which it always did, for every strategy,
+    since apply_paper_entry never captured any strategy identity before."""
+    if closed_trade.get("origin") == "MANUAL":
+        return None
+    code = closed_trade.get("strategy_code")
+    if code:
+        from app.db import models
+
+        display_name = session.query(models.StrategyCatalog.display_name).filter(
+            models.StrategyCatalog.code == code
+        ).scalar()
+        if display_name:
+            return display_name
+        return str(code)
+    return closed_trade.get("strategy_name") or closed_trade.get("strategy")
+
+
 def persist_paper_trade(closed_trade: dict[str, Any]) -> None:
     """Best-effort durable record of one closed Paper trade, so /api/reports
     (mode=paper) reflects real history instead of always reading back empty.
@@ -545,10 +567,7 @@ def persist_paper_trade(closed_trade: dict[str, Any]) -> None:
                 PortfolioTrade(
                     user_id=user.id,
                     mode="paper",
-                    strategy_name=(
-                        None if closed_trade.get("origin") == "MANUAL"
-                        else closed_trade.get("strategy_name") or closed_trade.get("strategy")
-                    ),
+                    strategy_name=_resolve_strategy_display_name(session, closed_trade),
                     symbol=symbol,
                     option_side=option_side,
                     qty=int(closed_trade.get("qty") or 0),

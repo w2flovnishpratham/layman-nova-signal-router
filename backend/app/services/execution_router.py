@@ -1580,6 +1580,7 @@ def _place_order(
         # Never applied to a live (RealDhanClient) payload.
         if engine_mode == "paper":
             payload["_nova_origin"] = origin_from_source(signal.source)
+            payload["_nova_strategy_code"] = signal.strategy_code
         return payload
 
     if use_super_order:

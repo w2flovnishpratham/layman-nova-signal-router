@@ -123,6 +123,50 @@ def test_paper_exit_persists_a_row_reports_can_read_back(mu_db):
     assert report["trades"][0]["symbol"] == "NIFTY 25000 CE"
 
 
+def test_paper_exit_attributes_the_triggering_strategy_by_catalog_code(mu_db):
+    """apply_paper_entry never captured any strategy identity before --
+    every single AUTOMATED paper trade, for every strategy, fell back to
+    "Unattributed automated" in Reports regardless of which strategy
+    actually triggered it. Now the catalog code travels with the trade
+    (see execution_router._tag_paper_origin) and resolves to the display
+    name shown everywhere else (e.g. user_runs.strategy_name)."""
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.services import reports_service
+    from app.services.execution_context import bind_user_execution_context
+    from app.services.user_context import current_user_from_model
+
+    user = make_user("paper-attribution@example.com")
+    current = current_user_from_model(user)
+    with session_scope() as db:
+        db.add(models.StrategyCatalog(
+            code="pvtext", display_name="Pivot Extension",
+            owner_type="nova", visibility="nova_shared", status="active",
+        ))
+    closed_trade = {
+        "symbol": "NIFTY 25000 CE",
+        "qty": 75,
+        "entry_price": 100.0,
+        "exit_price": 110.0,
+        "entry_charges": 5.0,
+        "exit_charges": 5.0,
+        "realized_pnl": 740.0,
+        "entry_order_id": "PAPER-ENTRY-2",
+        "exit_order_id": "PAPER-EXIT-2",
+        "opened_at": "2026-08-03T09:20:00+00:00",
+        "closed_at": "2026-08-03T09:25:00+00:00",
+        "origin": "AUTOMATED",
+        "strategy_code": "pvtext",
+    }
+    with bind_user_execution_context(current):
+        pa.persist_paper_trade(closed_trade)
+
+    report = reports_service.build_report(
+        user.id, start=date(2026, 8, 3), end=date(2026, 8, 3), mode="paper"
+    )
+    assert report["daily_sessions"][0]["strategy_mix"] == ["Pivot Extension"]
+
+
 def test_paper_wallet_writes_owner_snapshot_and_audits_reset(
     mu_db,
     tmp_path,

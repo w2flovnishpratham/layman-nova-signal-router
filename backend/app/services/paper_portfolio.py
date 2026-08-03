@@ -140,7 +140,8 @@ def reset_paper_portfolio(starting_balance: float | None = None) -> PaperPortfol
 
 
 def apply_paper_entry(
-    *, qty: int, price: float, charges: float, symbol: str, order_id: str, origin: str | None = None
+    *, qty: int, price: float, charges: float, symbol: str, order_id: str, origin: str | None = None,
+    strategy_code: str | None = None,
 ) -> PaperPortfolio:
     # Serialize read-check-write under the shared runtime lock so two concurrent
     # mutations can't both read the same portfolio and double-book.
@@ -160,6 +161,7 @@ def apply_paper_entry(
             "entry_value": cost,
             "entry_order_id": order_id,
             "origin": origin,
+            "strategy_code": strategy_code,
             "opened_at": utc_now(),
         }
         portfolio.session_pnl = round(portfolio.available_balance + portfolio.utilized_amount - portfolio.session_start_balance, 2)

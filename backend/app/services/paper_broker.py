@@ -240,10 +240,12 @@ class PaperBroker:
         symbol = str(payload.get("tradingSymbol") or payload.get("securityId") or "NIFTY option")
 
         origin = payload.get("_nova_origin")
+        strategy_code = payload.get("_nova_strategy_code")
         try:
             if transaction == "BUY":
                 apply_paper_entry(
-                    qty=qty, price=fill_price, charges=charges, symbol=symbol, order_id=order_id, origin=origin
+                    qty=qty, price=fill_price, charges=charges, symbol=symbol, order_id=order_id, origin=origin,
+                    strategy_code=strategy_code,
                 )
             else:
                 portfolio = apply_paper_exit(
