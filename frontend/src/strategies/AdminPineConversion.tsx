@@ -2,7 +2,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from '@/components/ui/button'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Check, Copy, FileCode2, Loader2, Pencil, RefreshCcw, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { AlertTriangle, Check, Copy, FileCode2, Loader2, Pencil, RefreshCcw, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import { toast } from '@/components/ui/toast'
 import { backendHttpUrl } from '../lib/backend'
 import {
@@ -435,6 +435,12 @@ function ConversionDetail({
     {broadcastPine || conversion.broadcast_pine ? (
       <details open className="c1-transport">
         <summary>Broadcast-ready Pine (paste onto the admin-run chart)</summary>
+        <p className="ps-warning">
+          <AlertTriangle size={16} />
+          {(broadcastPine || conversion.broadcast_pine || '').includes('pine_transport_v3_fill')
+            ? <span>This is a STRATEGY-mode candidate: BUY_CE/BUY_PE/EXIT are reported by <code>alert_message=</code> on the order calls themselves, never by a bare alert() call. When creating the TradingView alert, set <strong>Condition to "Order fills only"</strong> — "Any alert() function call" will only ever catch the HOLD test and silently never fire real signals.</span>
+            : <span>This is an INDICATOR-mode candidate: the transport calls alert() directly for every signal. When creating the TradingView alert, set <strong>Condition to "Any alert() function call"</strong>.</span>}
+        </p>
         <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(broadcastPine || conversion.broadcast_pine || '')}><Copy size={14} /> Copy again</Button>
         <pre>{broadcastPine || conversion.broadcast_pine}</pre>
       </details>
