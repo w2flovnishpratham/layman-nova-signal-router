@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-domain="layman-api.manyacare.com"
+domain="engine.novatradesolution.com"
 
 resolved_ip="$(getent ahostsv4 "$domain" | awk 'NR == 1 { print $1 }')"
 if [[ "$resolved_ip" != "187.127.153.128" ]]; then
