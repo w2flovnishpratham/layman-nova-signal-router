@@ -13,6 +13,10 @@ from app.config import settings
 from app.db import crud, models
 from app.db.engine import session_scope
 from app.services import pine_semantic_analysis_persistence, pine_validation
+from app.services.strategy_instance_evidence_cascade import (
+    cascade_delete_evidence_for_strategy_instances,
+    cascade_delete_pine_semantic_analysis_for_artifacts,
+)
 
 PINE_ARTIFACT = "pine_script"
 SOURCE_JOURNEY = "nova_hosted_personal"
@@ -588,11 +592,6 @@ def force_delete_strategy(
                     models.StrategyInstancePosition.strategy_instance_id.in_(instance_ids)
                 )
             ))
-            decision_ids = list(db.scalars(
-                select(models.CanonicalSignalDecision.id).where(
-                    models.CanonicalSignalDecision.strategy_instance_id.in_(instance_ids)
-                )
-            ))
             revision_ids = list(db.scalars(
                 select(models.StrategyConfigurationRevision.id).where(
                     models.StrategyConfigurationRevision.strategy_instance_id.in_(instance_ids)
@@ -617,10 +616,10 @@ def force_delete_strategy(
                 db.execute(delete(models.PositionEvent).where(
                     models.PositionEvent.position_id.in_(position_ids)
                 ))
-            if decision_ids:
-                db.execute(delete(models.CanonicalSignalOutcome).where(
-                    models.CanonicalSignalOutcome.canonical_decision_id.in_(decision_ids)
-                ))
+            # Mirrors the schema's own cascade-delete for R1B evidence rows tied to
+            # these strategy instances -- see strategy_instance_evidence_cascade.py
+            # for why this lives in its own narrowly-scoped module.
+            cascade_delete_evidence_for_strategy_instances(db, instance_ids)
             db.execute(update(models.UserEngineConfig).where(
                 models.UserEngineConfig.selected_strategy_instance_id.in_(instance_ids)
             ).values(selected_strategy_instance_id=None, selected_configuration_revision_id=None))
@@ -629,12 +628,6 @@ def force_delete_strategy(
             ))
             db.execute(delete(models.StrategyInstancePosition).where(
                 models.StrategyInstancePosition.strategy_instance_id.in_(instance_ids)
-            ))
-            db.execute(delete(models.CanonicalSignalDecision).where(
-                models.CanonicalSignalDecision.strategy_instance_id.in_(instance_ids)
-            ))
-            db.execute(delete(models.StrategySignalRejection).where(
-                models.StrategySignalRejection.strategy_instance_id.in_(instance_ids)
             ))
             db.execute(delete(models.StrategyInstanceWebhookCredential).where(
                 models.StrategyInstanceWebhookCredential.strategy_instance_id.in_(instance_ids)
@@ -678,10 +671,9 @@ def force_delete_strategy(
                     models.StrategySourceArtifact.strategy_version_id.in_(version_ids)
                 )
             ))
-            if artifact_ids:
-                db.execute(delete(models.PineSemanticAnalysis).where(
-                    models.PineSemanticAnalysis.source_artifact_id.in_(artifact_ids)
-                ))
+            # Mirrors the schema's own cascade-delete for Pine analysis evidence
+            # tied to these source artifacts -- see strategy_instance_evidence_cascade.py.
+            cascade_delete_pine_semantic_analysis_for_artifacts(db, artifact_ids)
             db.execute(delete(models.StrategySourceArtifact).where(
                 models.StrategySourceArtifact.strategy_version_id.in_(version_ids)
             ))

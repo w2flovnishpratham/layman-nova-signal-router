@@ -103,7 +103,12 @@ def test_writers_import_no_execution_machinery():
 
 
 def test_no_execution_service_reads_evidence_tables():
-    allowed = WRITER_MODULES | DECISION_INTEGRATIONS | {"models.py"}
+    # strategy_instance_evidence_cascade.py mirrors CanonicalSignalDecision's
+    # own ondelete="CASCADE" FK -- the one sanctioned exception, kept narrow
+    # and verified by test_r1b2a_insert_only's dedicated test.
+    allowed = WRITER_MODULES | DECISION_INTEGRATIONS | {
+        "models.py", "strategy_instance_evidence_cascade.py",
+    }
     for path in _runtime_sources():
         if path.name in allowed or "alembic" in path.parts:
             continue

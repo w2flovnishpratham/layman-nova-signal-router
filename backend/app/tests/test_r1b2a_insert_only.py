@@ -35,6 +35,14 @@ def _runtime_sources() -> list[Path]:
     return [path for path in APP_ROOT.rglob("*.py") if "tests" not in path.parts]
 
 
+# CanonicalSignalDecision's FK to strategy_instances is ondelete="CASCADE" --
+# evidence does not outlive the strategy instance it evidences. This module
+# exists solely to mirror that cascade explicitly (SQLite, used in tests,
+# doesn't enforce ON DELETE CASCADE), and is the one sanctioned exception to
+# the insert-only guarantee this test otherwise enforces with zero exceptions.
+CASCADE_MIRROR_MODULE = "strategy_instance_evidence_cascade.py"
+
+
 def test_no_core_update_or_delete_targets_evidence_models():
     patterns = [
         re.compile(rf"(?:sqlalchemy\.)?update\(\s*(?:models\.)?{model}\b")
@@ -47,9 +55,33 @@ def test_no_core_update_or_delete_targets_evidence_models():
         for model in EVIDENCE_MODELS
     ]
     for path in _runtime_sources():
+        if path.name == CASCADE_MIRROR_MODULE:
+            continue
         text = path.read_text(encoding="utf-8")
         for pattern in patterns:
             assert not pattern.search(text), (path, pattern.pattern)
+
+
+def test_cascade_mirror_module_only_deletes_the_named_evidence_models():
+    """Keeps the one sanctioned exception narrow: delete() only for exactly
+    the 3 evidence models it cascades, no update() on evidence at all, and
+    it must run inside a caller-supplied session rather than opening its own
+    (so it can only ever execute as part of an existing delete transaction)."""
+    path = APP_ROOT / "services" / CASCADE_MIRROR_MODULE
+    text = path.read_text(encoding="utf-8")
+
+    for model in EVIDENCE_MODELS:
+        assert not re.search(rf"(?:sqlalchemy\.)?update\(\s*(?:models\.)?{model}\b", text)
+
+    deleted_models = set(re.findall(r"delete\(\s*models\.(\w+)\)", text))
+    assert deleted_models == {
+        "CanonicalSignalOutcome",
+        "CanonicalSignalDecision",
+        "StrategySignalRejection",
+        "PineSemanticAnalysis",
+    }, deleted_models
+
+    assert "session_scope" not in text, "must run inside the caller's transaction"
 
 
 def test_writer_modules_expose_no_update_delete_or_merge_api():
