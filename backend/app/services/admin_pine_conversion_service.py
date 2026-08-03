@@ -1152,8 +1152,17 @@ def _validate_layer(
                 errors.append("ORDER_CALLS_REDUCED")
         transport_tokens = ("NOVA FROZEN TRANSPORT", "novaTransportVersion", "REPLACE_WITH_PRIVATE_CREDENTIAL")
     else:
+        # Pine's implicit typing (novaBuyCeSignal = false) and explicit typing
+        # (bool novaBuyCeSignal = false) compile identically -- both are
+        # equally valid declarations, Pine's own compiler enforces bool-ness
+        # either way. Requiring the literal `bool` keyword added no real
+        # safety and repeatedly broke otherwise-correct manual candidates
+        # that used implicit typing, so both forms are accepted here. The
+        # negative lookahead on `=` excludes `==` (comparison) and `:=`
+        # (reassignment, which requires a prior declaration and must not
+        # itself count as one).
         for name in ("novaBuyCeSignal", "novaBuyPeSignal", "novaExitSignal"):
-            if len(re.findall(rf"\bbool\s+{name}\b", layer)) != 1:
+            if len(re.findall(rf"\bbool\s+{name}\b|(?<![.\w]){name}\s*=(?!=)", layer)) != 1:
                 errors.append("CANONICAL_SIGNAL_MISSING")
         transport_tokens = (
             "NOVA FROZEN TRANSPORT", "novaTransportVersion", "novaWebhookPayload",

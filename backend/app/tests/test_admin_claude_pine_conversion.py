@@ -952,6 +952,48 @@ def test_normal_user_cannot_generate_or_view_manual_package(mu_db, monkeypatch):
     assert normal.get(f"/api/admin/pine-conversions/{conversion['id']}").status_code == 403
 
 
+def test_canonical_signal_accepts_implicit_typing_but_still_catches_omission():
+    """Pine's implicit typing (novaBuyCeSignal = false) and explicit typing
+    (bool novaBuyCeSignal = false) compile identically -- two real manual
+    submissions were wrongly rejected over this purely cosmetic distinction
+    before the validator was relaxed to accept both."""
+    from app.schemas.pine_conversion import ClaudePineConversionOutput
+    from app.services.admin_pine_conversion_service import _validate_layer
+
+    implicit_layer = """//@version=6
+indicator("C1 NIFTY converted", overlay=true)
+fast = ta.ema(close, 5)
+slow = ta.ema(close, 13)
+novaBuyCeSignal = false
+novaBuyPeSignal = false
+novaExitSignal = false
+if ta.crossover(fast, slow)
+    novaBuyCeSignal := true
+if ta.crossunder(fast, slow)
+    novaBuyPeSignal := true
+plot(fast)
+"""
+    output = ClaudePineConversionOutput.model_validate({
+        "schema_version": "nova.claude-pine-conversion.v1",
+        "source_sha256": "a" * 64,
+        "status": "CONVERTED",
+        "strategy_layer": implicit_layer,
+        "backtest_layer": BACKTEST_LAYER,
+        "signal_mapping": {"buy_ce_source": "x", "buy_pe_source": "x", "exit_source": "x"},
+        "behavior_preservation": {"logic_changed": False, "change_summary": []},
+        "capabilities": {"handled": ["BASIC_INDICATOR_BOOLEAN_SIGNAL"], "manual_review": [], "unsupported": []},
+        "admin_review_points": [],
+        "user_summary": "test",
+    })
+    assert _validate_layer(output, source_type="INDICATOR") == []
+
+    omitted = ClaudePineConversionOutput.model_validate({
+        **output.model_dump(),
+        "strategy_layer": implicit_layer.replace("novaExitSignal = false\n", ""),
+    })
+    assert "CANONICAL_SIGNAL_MISSING" in _validate_layer(omitted, source_type="INDICATOR")
+
+
 def test_manual_package_quotes_the_canonical_prompt_contract(mu_db, monkeypatch):
     """The manual (copy-paste) package must reuse the same v4.2 prompt text
     as the automated API path -- not a hand-written paraphrase that can
