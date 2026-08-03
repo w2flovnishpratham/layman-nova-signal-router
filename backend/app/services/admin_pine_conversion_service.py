@@ -1595,6 +1595,11 @@ def manual_package(admin_id: uuid.UUID, conversion_id: uuid.UUID | str) -> dict[
             prompt, "SERVER AUTHORITY\n==================================================\n", "\nCLASSIFICATION\n"
         )
         output_contract = _prompt_section(prompt, "OUTPUT CONTRACT\n", "\nFINAL CHECK BEFORE RETURN\n")
+        display_only_multi_symbol = _prompt_section(
+            prompt,
+            "DISPLAY-ONLY MULTI-SYMBOL BLOCKS\n==================================================\n",
+            "\n==================================================\nSTRATEGY MODE (source declares strategy(...))",
+        )
         if source_type == "STRATEGY":
             layer_contract = _prompt_section(
                 prompt,
@@ -1628,6 +1633,9 @@ manual package can never silently drift out of sync with what the
 deterministic validator actually enforces.
 
 {layer_contract}
+
+DISPLAY-ONLY MULTI-SYMBOL BLOCKS
+{display_only_multi_symbol}
 
 SERVER AUTHORITY
 {server_authority}

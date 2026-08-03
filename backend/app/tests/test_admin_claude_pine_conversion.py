@@ -1011,6 +1011,8 @@ def test_manual_package_quotes_the_canonical_prompt_contract(mu_db, monkeypatch)
     assert "logic_changed=true with status=CONVERTED is invalid" in package
     assert "backtest_layer" in package
     assert "SERVER AUTHORITY" in package
+    assert "DISPLAY-ONLY MULTI-SYMBOL BLOCKS" in package
+    assert "MULTI_SYMBOL_OR_DYNAMIC_REQUEST is BLOCK_UNSAFE" in package
 
 
 def test_candidate_mutation_invalidates_approval_binding(mu_db, monkeypatch):

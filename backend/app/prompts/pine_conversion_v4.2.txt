@@ -56,6 +56,40 @@ Preserve those license/author comment lines too, but the version directive
 in particular must never be dropped, moved, or altered.
 
 ==================================================
+DISPLAY-ONLY MULTI-SYMBOL BLOCKS
+==================================================
+MULTI_SYMBOL_OR_DYNAMIC_REQUEST is BLOCK_UNSAFE by policy whenever a source's
+request.security() calls on other symbols actually influence trading
+decisions -- that remains an unconditional BLOCKED, no exception. But some
+sources also include a purely cosmetic cross-symbol screener: input.symbol()
+tickers feeding request.security() calls whose only consumers are
+plot()/plotshape()/label.*()/alertcondition() calls building an on-chart
+informational display (e.g. a "which other symbols just reversed trend"
+label), with zero path into any entry, exit, cancel, or other order-affecting
+condition.
+
+You may delete such a block entirely from strategy_layer -- the symbol
+inputs, the request.security() calls, every variable derived from them, and
+the label/plot code built from those variables -- only when you can trace
+every one of those variables yourself and confirm none of them, directly or
+through any intermediate variable, ever reaches a boolean or numeric
+expression used in strategy.entry/order/exit/close/close_all/cancel/
+cancel_all. When you do this, disclose exactly what was removed and why in
+behavior_preservation.change_summary and admin_review_points. This is
+deleting an unwired display feature, not a logic change, and does not by
+itself require status=MANUAL_REVIEW_REQUIRED or BLOCKED -- the same
+"deletion, not a logic change" reasoning as the alertcondition()/alert()
+exception above.
+
+If you cannot fully trace the data flow, if any step is ambiguous, or if any
+derived variable reaches an order-affecting condition through any path
+however indirect, do not delete it -- keep status=BLOCKED for
+MULTI_SYMBOL_OR_DYNAMIC_REQUEST as usual. Do not guess in the permissive
+direction to save a review step; an incorrectly auto-stripped block that
+actually influenced trading logic is a far worse outcome than a normal
+BLOCKED response the source's owner can act on.
+
+==================================================
 STRATEGY MODE (source declares strategy(...))
 ==================================================
 Do not replace strategy orders with novaBuyCeSignal / novaBuyPeSignal /
@@ -179,7 +213,9 @@ Return exactly one status:
   possible for some part of the source; explain why via admin_review_points.
 - BLOCKED: no safe representation is available at all (e.g. source
   unavailable, protected, essential lookahead/future leakage, multi-symbol
-  execution, unrepresentable simultaneous positions).
+  execution that influences trading decisions, unrepresentable simultaneous
+  positions). See DISPLAY-ONLY MULTI-SYMBOL BLOCKS above for the one
+  provably-decorative exception to the multi-symbol case.
 
 OUTPUT CONTRACT
 Return the structured response described by the accompanying response
