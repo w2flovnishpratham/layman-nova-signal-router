@@ -16,8 +16,9 @@ from sqlalchemy import select
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.config import settings
-from app.db import models
+from app.db import crud, models
 from app.db.engine import database_configured, session_scope
+from app.services import credential_vault
 from app.services import (
     entitlements,
     live_engine,
@@ -636,7 +637,7 @@ async def strategy_webhook(
     strategy_name: str,
     request: Request,
 ) -> JSONResponse:
-    secret = (settings.STRATEGY_WEBHOOK_SECRET or "").strip()
+    secret = credential_vault.get_strategy_webhook_secret()
     if not secret:
         return JSONResponse(
             status_code=503,
@@ -904,3 +905,31 @@ def verify_egress(
 ) -> dict:
     result = strategy_fanout.verify_user_egress(user_id)
     return {"ok": bool(result.get("ok")), "egress": result}
+
+
+@router.get("/api/admin/strategy-webhook-secret")
+def get_strategy_webhook_secret_metadata(admin: CurrentUser = Depends(require_admin)) -> dict:
+    return {"ok": True, "secret": credential_vault.strategy_webhook_secret_metadata()}
+
+
+@router.post("/api/admin/strategy-webhook-secret/reveal")
+def reveal_strategy_webhook_secret(admin: CurrentUser = Depends(require_admin)) -> dict:
+    secret = credential_vault.get_strategy_webhook_secret()
+    if database_configured():
+        with session_scope() as db:
+            crud.add_audit_log(db, user_id=admin.id, action="STRATEGY_WEBHOOK_SECRET_REVEALED")
+    return {"ok": True, "secret": secret, "metadata": credential_vault.strategy_webhook_secret_metadata()}
+
+
+@router.post("/api/admin/strategy-webhook-secret/rotate")
+def rotate_strategy_webhook_secret(admin: CurrentUser = Depends(require_admin)) -> dict:
+    """Every broadcast chart pasted with the previous secret stops
+    authenticating the moment this lands -- each must be updated with the new
+    value before its next signal, or that signal is rejected as unauthorized.
+    """
+    secret = credential_vault.generate_strategy_webhook_secret()
+    metadata = credential_vault.save_strategy_webhook_secret(secret)
+    if database_configured():
+        with session_scope() as db:
+            crud.add_audit_log(db, user_id=admin.id, action="STRATEGY_WEBHOOK_SECRET_ROTATED")
+    return {"ok": True, "secret": secret, "metadata": metadata}

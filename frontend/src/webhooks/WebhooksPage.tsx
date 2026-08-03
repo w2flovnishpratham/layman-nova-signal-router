@@ -1,9 +1,18 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from '@/components/ui/button'
-import { AlertTriangle, Check, Copy, KeyRound, Loader2 } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Eye, EyeOff, KeyRound, Loader2, Shield } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import type { AuthUser } from '../api'
 import { PageSkeleton } from '../components/PageSkeleton'
-import { getWebhooksOverview, rotateWebhookSecret, type WebhooksOverview } from './webhooksApi'
+import {
+  getManagedStrategyWebhookSecret,
+  getWebhooksOverview,
+  revealManagedStrategyWebhookSecret,
+  rotateManagedStrategyWebhookSecret,
+  rotateWebhookSecret,
+  type ManagedStrategySecretMeta,
+  type WebhooksOverview,
+} from './webhooksApi'
 
 function when(iso: string | null): string {
   if (!iso) return 'never'
@@ -19,7 +28,7 @@ function statusTone(status: string): string {
   return 'nova-sig-neutral'
 }
 
-export function WebhooksPage() {
+export function WebhooksPage({ user }: { user?: AuthUser } = {}) {
   const [data, setData] = useState<WebhooksOverview | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -144,6 +153,8 @@ export function WebhooksPage() {
             ) : null}
           </section>
 
+          {user?.is_admin ? <ManagedStrategySecretCard copied={copied} onCopy={copy} /> : null}
+
           <section aria-label="Delivery activity" className="nova-signals-counts">
             {Object.entries(data.deliveries.counts).map(([k, v]) => (
               <div key={k} className="nova-signals-count"><span>{k}</span><strong>{v}</strong></div>
@@ -193,5 +204,83 @@ export function WebhooksPage() {
         </>
       )}
     </div>
+  )
+}
+
+function ManagedStrategySecretCard({ copied, onCopy }: { copied: string | null; onCopy: (value: string) => Promise<void> }) {
+  const [meta, setMeta] = useState<ManagedStrategySecretMeta | null>(null)
+  const [revealed, setRevealed] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    try {
+      setMeta(await getManagedStrategyWebhookSecret())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load the managed secret.')
+    }
+  }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load()
+  }, [load])
+
+  async function reveal() {
+    setBusy(true)
+    setError('')
+    try {
+      setRevealed(await revealManagedStrategyWebhookSecret())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reveal the managed secret.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function rotate() {
+    if (!window.confirm(
+      'Rotate the NOVA managed secret? Every broadcast chart pasted with the current value stops authenticating the moment this lands — each must be updated with the new value before its next signal, or that signal is rejected.',
+    )) return
+    setBusy(true)
+    setError('')
+    try {
+      const secret = await rotateManagedStrategyWebhookSecret()
+      setRevealed(secret)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not rotate the managed secret.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section aria-label="NOVA managed strategy secret" className="nova-hooks-card">
+      <div className="nova-hooks-card-head"><Shield size={14} /><strong>NOVA managed secret (admin-only)</strong></div>
+      <p>
+        Shared by every admin-run broadcast chart for a NOVA_SHARED catalog strategy — paste it into the
+        indicator's "NOVA Managed Secret" setting, never into the source itself.
+      </p>
+      {error ? <p className="nova-signals-state" role="alert"><AlertTriangle size={16} /> {error}</p> : null}
+      {meta ? (
+        <div className="nova-hooks-url">
+          <code className="nova-hooks-secret">{revealed ?? meta.masked ?? 'Not configured'}</code>
+          {meta.set ? (
+            <Button variant="unstyled" type="button" className="conv-pill" disabled={busy} onClick={() => (revealed ? setRevealed(null) : void reveal())}>
+              {revealed ? <><EyeOff size={13} /> Hide</> : <><Eye size={13} /> Reveal</>}
+            </Button>
+          ) : null}
+          {revealed ? (
+            <Button variant="unstyled" type="button" className="conv-pill" onClick={() => void onCopy(revealed)}>
+              {copied === revealed ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy</>}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      <Button variant="unstyled" type="button" className="conv-pill" disabled={busy} onClick={() => void rotate()}>
+        {busy ? <><Loader2 size={13} /> Working...</> : <><KeyRound size={13} /> {meta?.set ? 'Rotate' : 'Generate'}</>}
+      </Button>
+    </section>
   )
 }

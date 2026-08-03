@@ -534,7 +534,7 @@ function App() {
       ) : route === 'signals' ? (
         <SignalsPage />
       ) : route === 'webhooks' ? (
-        <WebhooksPage />
+        <WebhooksPage user={authUser} />
       ) : route === 'risk' ? (
         <RiskPage runtime={runtimeStatus} />
       ) : route === 'credentials' ? (
