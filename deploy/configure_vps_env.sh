@@ -197,7 +197,7 @@ case "$live_trading_armed" in
       set_env WEBHOOK_TRADING_ENABLED false
       set_webhook_runtime_state false
     else
-      echo "Preserving existing live trading gate values in $env_file."
+      echo "Preserving existing live trading gate values in $env_file." >&2
     fi
     ;;
   *)
@@ -225,3 +225,9 @@ fi
 
 chmod 600 "$env_file"
 rm -f "$deploy_secrets_file"
+
+# Sole stdout line: the resolved env file path, so callers (deploy_vps.sh)
+# can point LAYMAN_ENV_FILE at the same file this script just wrote instead
+# of re-deriving the resolution logic (or silently falling back to
+# backend/.env, which is a stale unrelated local-Postgres config on this box).
+printf '%s\n' "$env_file"

@@ -26,10 +26,19 @@ fi
 git pull --ff-only origin main
 
 backend/.venv/bin/pip install -r backend/requirements.txt
-bash deploy/configure_vps_env.sh "$repo_dir"
+env_file="$(bash deploy/configure_vps_env.sh "$repo_dir" | tail -n1)"
+
+# Migrations run DDL, which Neon's pooled endpoint (the "-pooler-" host used
+# for normal app traffic) does not reliably support -- a fresh connection
+# from the pool can come back with no search_path set, so CREATE TABLE fails
+# with "no schema has been selected to create in" even though the table
+# already exists and every other query works fine. Use the direct endpoint
+# for this one step only; the running app keeps using the pooled URL.
+migration_database_url="$(grep -m1 '^DATABASE_URL=' "$env_file" | cut -d= -f2- | sed 's/-pooler//')"
 (
   cd backend
-  .venv/bin/python -m alembic upgrade head
+  LAYMAN_ENV_FILE="$env_file" DATABASE_URL="$migration_database_url" \
+    .venv/bin/python -m alembic upgrade head
 )
 
 install -m 644 deploy/layman-nova-signal-router.service /etc/systemd/system/layman-nova-signal-router.service
