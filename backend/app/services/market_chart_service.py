@@ -34,6 +34,7 @@ SESSION_OPEN_HOUR, SESSION_OPEN_MINUTE = 9, 15
 SESSION_CLOSE_HOUR, SESSION_CLOSE_MINUTE = 15, 30
 CACHE_TTL_OPEN_SECONDS = 20.0
 CACHE_TTL_CLOSED_SECONDS = 300.0
+CACHE_TTL_FAILURE_SECONDS = 20.0
 MAX_OPEN_SOURCE_AGE_SECONDS = 180
 TOKEN_EXPIRING_SOON_SECONDS = 30 * 60
 
@@ -182,14 +183,22 @@ def market_state() -> str:
     return "open" if _market_is_open() else "closed"
 
 
-def _cached(key: str, ttl: float) -> dict[str, Any] | None:
+def _cached(key: str, market_open: bool) -> dict[str, Any] | None:
+    # A failed/unavailable fetch (e.g. one transient Dhan hiccup) must not be
+    # treated as valid for the full closed-market TTL, or it locks every
+    # viewer out of the chart for up to 5 minutes before retrying.
     with _CACHE_LOCK:
         entry = _CACHE.get(key)
-        if (
-            entry is not None
-            and time.monotonic() - float(entry.get("built_monotonic") or 0) <= ttl
-        ):
-            return entry["data"]
+        if entry is None:
+            return None
+        data = entry["data"]
+        ttl = (
+            (CACHE_TTL_OPEN_SECONDS if market_open else CACHE_TTL_CLOSED_SECONDS)
+            if data.get("status") == "ready"
+            else CACHE_TTL_FAILURE_SECONDS
+        )
+        if time.monotonic() - float(entry.get("built_monotonic") or 0) <= ttl:
+            return data
     return None
 
 
@@ -206,18 +215,18 @@ def get_nifty_candles(interval: str = "5m") -> dict[str, Any]:
             interval_label=interval,
         )
     trading_date = chart_trading_date_ist()
-    ttl = CACHE_TTL_OPEN_SECONDS if _market_is_open() else CACHE_TTL_CLOSED_SECONDS
+    market_open = _market_is_open()
     key = cache_key(interval, trading_date)
-    cached = _cached(key, ttl)
+    cached = _cached(key, market_open)
     if cached is not None:
         return cached
 
     with _FETCH_LOCK:
-        cached = _cached(key, ttl)
+        cached = _cached(key, market_open)
         if cached is not None:
             return cached
         one_minute_key = cache_key("1m", trading_date)
-        one_minute = _cached(one_minute_key, ttl)
+        one_minute = _cached(one_minute_key, market_open)
         if one_minute is None:
             one_minute = _fetch_authoritative_one_minute(trading_date)
             _store_cache(one_minute_key, one_minute)

@@ -21,6 +21,39 @@ def test_chart_date_uses_previous_weekday_before_open_or_weekend():
     assert charts.chart_trading_date_ist(sunday).isoformat() == "2026-07-10"
 
 
+def test_failed_fetch_retries_sooner_than_a_successful_closed_market_cache(monkeypatch):
+    trading_date = date(2026, 7, 24)
+    calls = {"count": 0}
+    clock = {"t": 0.0}
+
+    class FakeDhanClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_intraday_candles(self, **kwargs):
+            calls["count"] += 1
+            return {"success": True, "candles": []}
+
+    monkeypatch.setattr(charts, "RealDhanClient", FakeDhanClient)
+    monkeypatch.setattr(charts, "market_data_credentials", lambda: DhanCredentials("client", "token", "shared_market_data"))
+    monkeypatch.setattr(charts, "_market_is_open", lambda: False)
+    monkeypatch.setattr(charts, "chart_trading_date_ist", lambda: trading_date)
+    monkeypatch.setattr(charts.time, "monotonic", lambda: clock["t"])
+    charts._CACHE.clear()
+
+    first = charts.get_nifty_candles(interval="5m")
+    assert first["status"] == "unavailable"
+    assert calls["count"] == 1
+
+    clock["t"] += charts.CACHE_TTL_FAILURE_SECONDS + 1
+    second = charts.get_nifty_candles(interval="5m")
+    assert second["status"] == "unavailable"
+    assert calls["count"] == 2, (
+        "a failed fetch must retry after the short failure TTL, "
+        "not sit cached for the full 5-minute closed-market TTL"
+    )
+
+
 def test_chart_auth_failure_does_not_refresh_shared_market_token(monkeypatch):
     calls = {"refresh": 0}
 
