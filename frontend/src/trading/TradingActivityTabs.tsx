@@ -12,18 +12,16 @@ import {
   getTradingActivity,
   getTradingAlerts,
   getTradingEngineLog,
-  getTradingExecutions,
   type TerminalAlerts,
   type TerminalFeed,
   type TerminalRow,
 } from './terminalApi'
 
-export type TradingTerminalTab = 'activity' | 'engine' | 'executions' | 'alerts'
+export type TradingTerminalTab = 'activity' | 'engine' | 'alerts'
 
 const TABS: Array<{ key: TradingTerminalTab; label: string }> = [
   { key: 'activity', label: 'Signal & Order Activity' },
   { key: 'engine', label: 'Engine Log' },
-  { key: 'executions', label: 'Executions' },
   { key: 'alerts', label: 'Alerts' },
 ]
 const TERMINAL_TABS = new Set(TABS.map((item) => item.key))
@@ -68,9 +66,7 @@ export function TradingActivityTabs({ mode = null, runId = null }: Props) {
       } else {
         result = active === 'activity'
           ? await getTradingActivity(options)
-          : active === 'engine'
-            ? await getTradingEngineLog(options)
-            : await getTradingExecutions(options)
+          : await getTradingEngineLog(options)
       }
       setRows((current) => (
         incremental && result.reconciliation_status === 'CURRENT'
@@ -272,9 +268,6 @@ export function TradingActivityTabs({ mode = null, runId = null }: Props) {
                         return (
                           <TableCell key={column.key} className={`terminal-cell-${column.key}`}>
                             {renderTerminalValue(column.key, value)}
-                            {tab === 'executions' && isCopyField(column.key) && value ? (
-                              <Button variant="unstyled" type="button" className="terminal-copy" aria-label={`Copy ${column.label}`} onClick={(event) => { event.stopPropagation(); void navigator.clipboard?.writeText(String(value)) }}>Copy</Button>
-                            ) : null}
                           </TableCell>
                         )
                       })}
@@ -357,17 +350,6 @@ function columnsFor(tab: TradingTerminalTab): Array<{ key: string; label: string
     { key: 'event_type', label: 'Event' },
     { key: 'message', label: 'Message' },
   ]
-  if (tab === 'executions') return [
-    { key: 'occurred_at', label: 'Time' },
-    { key: 'mode', label: 'Mode' },
-    { key: 'instrument', label: 'Instrument' },
-    { key: 'action', label: 'Action' },
-    { key: 'fill_quantity', label: 'Qty' },
-    { key: 'average_price', label: 'Avg fill' },
-    { key: 'charges', label: 'Charges' },
-    { key: 'status', label: 'Status' },
-    { key: 'order_reference', label: 'Order ID' },
-  ]
   if (tab === 'alerts') return [
     { key: 'occurred_at', label: 'Time' },
     { key: 'severity', label: 'Severity' },
@@ -379,18 +361,14 @@ function columnsFor(tab: TradingTerminalTab): Array<{ key: string; label: string
   return [
     { key: 'occurred_at', label: 'Time' },
     { key: 'strategy', label: 'Strategy' },
-    { key: 'signal', label: 'Signal' },
-    { key: 'instrument', label: 'Instrument' },
+    { key: 'action', label: 'Action' },
+    { key: 'strike', label: 'Strike' },
     { key: 'source', label: 'Source' },
-    { key: 'lots', label: 'Lots / Qty' },
-    { key: 'price', label: 'Price' },
+    { key: 'fill_quantity', label: 'Qty' },
+    { key: 'average_price', label: 'Price' },
     { key: 'status', label: 'Status' },
     { key: 'pnl', label: 'P&L' },
   ]
-}
-
-function isCopyField(key: string): boolean {
-  return key === 'order_reference'
 }
 
 function terminalColumnValue(row: TerminalRow, key: string): unknown {
@@ -399,7 +377,11 @@ function terminalColumnValue(row: TerminalRow, key: string): unknown {
     const requested = row.requested_qty ?? '—'
     return `${filled} / ${requested}`
   }
-  if (key === 'order_reference') return row.broker_order_id ?? row.order_id ?? row.operation_id
+  if (key === 'strike') {
+    if (row.strike === null || row.strike === undefined || row.strike === '') return null
+    const side = row.option_side ? String(row.option_side).toUpperCase() : ''
+    return side ? `${row.strike} ${side}` : String(row.strike)
+  }
   return row[key]
 }
 

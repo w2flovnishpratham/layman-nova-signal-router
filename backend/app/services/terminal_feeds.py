@@ -85,12 +85,17 @@ def _result_field(result: dict[str, Any], *keys: str) -> Any:
         value = result.get(key)
         if value not in (None, ""):
             return value
-    order = result.get("order")
-    if isinstance(order, dict):
-        for key in keys:
-            value = order.get(key)
-            if value not in (None, ""):
-                return value
+    # execution_result is where StrategyExecutionJob.result_summary actually
+    # carries fill data (avg_price, normalized_strike, normalized_option_side,
+    # ...) -- checking only the top level and "order" left avg_price/strike
+    # unfindable for every automated paper trade.
+    for nested_key in ("order", "execution_result"):
+        nested = result.get(nested_key)
+        if isinstance(nested, dict):
+            for key in keys:
+                value = nested.get(key)
+                if value not in (None, ""):
+                    return value
     return None
 
 
@@ -153,6 +158,8 @@ def _durable_execution_items(user_id: uuid.UUID) -> list[dict[str, Any]]:
                     "instrument": row.symbol or _result_field(
                         result, "trading_symbol", "tradingSymbol", "symbol"
                     ),
+                    "strike": _result_field(result, "normalized_strike", "strike"),
+                    "option_side": _result_field(result, "normalized_option_side", "option_side"),
                     "requested_qty": requested_qty,
                     "filled_qty": filled_qty,
                     "remaining_qty": _result_field(
@@ -216,6 +223,8 @@ def _durable_execution_items(user_id: uuid.UUID) -> list[dict[str, Any]]:
                     "side": payload.get("option_side") or payload.get("side"),
                     "action": payload.get("action"),
                     "instrument": payload.get("trading_symbol") or payload.get("symbol"),
+                    "strike": _result_field(result, "normalized_strike", "strike") or payload.get("strike"),
+                    "option_side": _result_field(result, "normalized_option_side", "option_side") or payload.get("option_side"),
                     "requested_qty": requested_qty,
                     "filled_qty": filled_qty,
                     "remaining_qty": _result_field(
@@ -256,6 +265,25 @@ def _durable_execution_items(user_id: uuid.UUID) -> list[dict[str, Any]]:
                     "durable": True,
                 }
             )
+
+        # result_summary never carries PnL (only the paper portfolio computes
+        # it, into PortfolioTrade.realized_pnl) -- backfill exit rows from there.
+        missing_pnl_order_ids = {
+            item["order_id"]
+            for item in items
+            if item.get("pnl") is None and item.get("order_id")
+        }
+        if missing_pnl_order_ids:
+            trades = db.scalars(
+                select(models.PortfolioTrade).where(
+                    models.PortfolioTrade.user_id == user_id,
+                    models.PortfolioTrade.exit_order_id.in_(missing_pnl_order_ids),
+                )
+            ).all()
+            pnl_by_order_id = {trade.exit_order_id: trade.realized_pnl for trade in trades}
+            for item in items:
+                if item.get("pnl") is None and item.get("order_id") in pnl_by_order_id:
+                    item["pnl"] = pnl_by_order_id[item["order_id"]]
     return items
 
 

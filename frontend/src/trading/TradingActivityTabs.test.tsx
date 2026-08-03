@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const api = vi.hoisted(() => ({
   activity: vi.fn(),
   engine: vi.fn(),
-  executions: vi.fn(),
   alerts: vi.fn(),
   acknowledge: vi.fn(),
   preferences: vi.fn(),
@@ -13,7 +12,6 @@ const api = vi.hoisted(() => ({
 vi.mock('./terminalApi', () => ({
   getTradingActivity: api.activity,
   getTradingEngineLog: api.engine,
-  getTradingExecutions: api.executions,
   getTradingAlerts: api.alerts,
   acknowledgeHistoricalAlerts: api.acknowledge,
 }))
@@ -37,7 +35,6 @@ beforeEach(() => {
   window.history.replaceState({}, '', '/app/trading')
   api.activity.mockResolvedValue(feed())
   api.engine.mockResolvedValue(feed())
-  api.executions.mockResolvedValue(feed())
   api.alerts.mockResolvedValue({
     ...feed(),
     active_items: [],
@@ -142,18 +139,17 @@ describe('TradingActivityTabs', () => {
     await waitFor(() => expect(api.acknowledge).toHaveBeenCalledWith(['history-1']))
   })
 
-  it('presents executions with compact signal-style badges and quantity', async () => {
-    const user = userEvent.setup()
-    api.executions.mockResolvedValue(feed([{
-      id: 'execution-1', occurred_at: '2026-07-26T09:00:00Z', mode: 'paper',
-      instrument: 'NIFTY TEST CE', action: 'ENTRY', requested_qty: 75, filled_qty: 50,
-      average_price: 101.5, charges: 7.25, status: 'TRADED', order_id: 'ORDER-1',
+  it('shows strike and fill quantity in Signal & Order Activity instead of a raw instrument column', async () => {
+    api.activity.mockResolvedValue(feed([{
+      id: 'activity-1', occurred_at: '2026-07-26T09:00:00Z', strategy: 'Supertrend',
+      action: 'ENTRY', strike: 24550, option_side: 'CE', source: 'AUTOMATED',
+      requested_qty: 75, filled_qty: 75, average_price: 101.5, status: 'TRADED', pnl: null,
     }]))
     render(<TradingActivityTabs mode="paper" />)
-    await user.click(screen.getByRole('tab', { name: 'Executions' }))
-    expect(await screen.findByText('50 / 75')).toBeInTheDocument()
-    expect(screen.getByText('PAPER')).toHaveClass('terminal-badge', 'is-paper')
+    expect(await screen.findByText('75 / 75')).toBeInTheDocument()
+    expect(screen.getByText('24550 CE')).toBeInTheDocument()
     expect(screen.getByText('ENTRY')).toHaveClass('terminal-signal-value', 'is-positive')
-    expect(screen.queryByRole('columnheader', { name: 'Slippage' })).toBeNull()
+    expect(screen.queryByRole('columnheader', { name: 'Instrument' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'Executions' })).toBeNull()
   })
 })

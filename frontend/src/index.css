@@ -5480,11 +5480,13 @@ code {
 
 .terminal-table-wrap {
   max-height: 390px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .terminal-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 11px;
 }
@@ -5494,7 +5496,8 @@ code {
   border-bottom: 1px solid rgba(255,255,255,.055);
   padding: 10px 12px;
   text-align: left;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .terminal-strategy-value {
@@ -5614,21 +5617,7 @@ code {
 }
 
 .terminal-table .terminal-cell-message {
-  min-width: 260px;
-  max-width: 440px;
-  white-space: normal;
   line-height: 1.4;
-}
-
-.terminal-table .terminal-cell-instrument {
-  min-width: 150px;
-  white-space: normal;
-}
-
-.terminal-table .terminal-cell-order_reference {
-  max-width: 210px;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .terminal-engine-chat {
