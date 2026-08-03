@@ -243,7 +243,7 @@ export function ReportsPage({ initialMode }: { initialMode?: ReportMode | null }
       </div>
 
       {loading ? (
-        <PageSkeleton label="Loading report" variant="table" />
+        <PageSkeleton label="Loading report" variant="calendar" />
       ) : error ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}

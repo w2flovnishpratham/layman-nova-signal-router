@@ -296,7 +296,7 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
   }
 
   if (loading) {
-    return <PageSkeleton label="Loading personal strategies" variant="form" />
+    return <PageSkeleton label="Loading personal strategies" variant="list-detail" />
   }
 
   return (

@@ -258,7 +258,7 @@ function OwnerWorkspace() {
     }
   }
 
-  if (loading) return <PageSkeleton label="Loading imported Pine workspace" variant="form" />
+  if (loading) return <PageSkeleton label="Loading imported Pine workspace" variant="list-detail" />
 
   if (mode === 'browse') {
     const filteredStrategies = strategies.filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))

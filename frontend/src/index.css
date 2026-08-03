@@ -5910,6 +5910,14 @@ code {
   min-height: 220px;
 }
 
+.nova-page-skeleton.is-compact .nova-skeleton-primary {
+  height: 190px;
+}
+
+.nova-page-skeleton.is-compact .nova-skeleton-rows > * {
+  height: 38px;
+}
+
 .nova-skeleton-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5978,6 +5986,143 @@ code {
   .nova-skeleton-side {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: 150px;
+  }
+}
+
+.nova-page-skeleton.is-calendar .nova-skeleton-summary {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.nova-skeleton-report-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(220px, .75fr);
+  gap: 14px;
+}
+
+.nova-skeleton-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  align-content: start;
+}
+
+.nova-skeleton-calendar-cell {
+  aspect-ratio: 1;
+  border: 1px solid var(--nova-border);
+  background: var(--nova-bg-soft);
+}
+
+.nova-skeleton-pill-row {
+  display: flex;
+  gap: 8px;
+}
+
+.nova-skeleton-pill {
+  width: 96px;
+  height: 30px;
+  border: 1px solid var(--nova-border);
+  background: var(--nova-bg-soft);
+}
+
+.nova-page-skeleton.is-split-form .nova-skeleton-body {
+  grid-template-columns: minmax(0, 1.65fr) minmax(220px, .75fr);
+}
+
+.nova-page-skeleton.is-split-form .nova-skeleton-side {
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+}
+
+.nova-skeleton-two-column {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.nova-skeleton-card-stack {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.nova-skeleton-settings-card {
+  height: 96px;
+  border: 1px solid var(--nova-border);
+  background: var(--nova-bg-soft);
+}
+
+@media (max-width: 760px) {
+  .nova-skeleton-two-column {
+    grid-template-columns: 1fr;
+  }
+}
+
+.nova-skeleton-list-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--nova-border);
+}
+
+.nova-skeleton-list-card > * {
+  height: 42px;
+  border: 1px solid var(--nova-border);
+  background: var(--nova-bg-soft);
+}
+
+.nova-skeleton-list-detail {
+  display: grid;
+  grid-template-columns: minmax(220px, .75fr) minmax(0, 1.65fr);
+  gap: 14px;
+}
+
+.nova-skeleton-list-items {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.nova-skeleton-list-item {
+  height: 68px;
+  border: 1px solid var(--nova-border);
+  background: var(--nova-bg-soft);
+}
+
+@media (max-width: 760px) {
+  .nova-skeleton-list-detail {
+    grid-template-columns: 1fr;
+  }
+}
+
+.nova-skeleton-field-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.nova-skeleton-field-group {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--nova-border);
+}
+
+.nova-skeleton-field-group > * {
+  height: 38px;
+  border: 1px solid var(--nova-border);
+  background: var(--nova-bg-soft);
+}
+
+@media (max-width: 760px) {
+  .nova-page-skeleton.is-calendar .nova-skeleton-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .nova-skeleton-report-layout,
+  .nova-page-skeleton.is-split-form .nova-skeleton-body {
+    grid-template-columns: 1fr;
+  }
+
+  .nova-skeleton-calendar-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 

@@ -130,7 +130,7 @@ export function SettingsPage({
       </header>
 
       {loading ? (
-        <PageSkeleton label="Loading settings" variant="cards" />
+        <PageSkeleton label="Loading settings" variant="two-column" />
       ) : error && !prefs ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}

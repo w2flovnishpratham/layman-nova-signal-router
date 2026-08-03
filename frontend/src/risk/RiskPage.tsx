@@ -306,7 +306,7 @@ export function RiskPage({ runtime }: { runtime: RuntimeStatus | null }) {
       </header>
 
       {loading ? (
-        <PageSkeleton label="Loading risk settings" variant="cards" />
+        <PageSkeleton label="Loading risk settings" variant="split-form" />
       ) : error && !draft ? (
         <p className="nova-signals-state" role="alert"><CircleAlert size={16} /> {error}
           <Button variant="unstyled" className="conv-pill" onClick={() => void load()}>Retry</Button>

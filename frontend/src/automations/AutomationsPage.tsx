@@ -124,7 +124,7 @@ export function AutomationsPage() {
       </header>
 
       {loading ? (
-        <PageSkeleton label="Loading automations" variant="cards" />
+        <PageSkeleton label="Loading automations" variant="list" />
       ) : error && !data ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}

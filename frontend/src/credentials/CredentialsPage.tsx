@@ -178,7 +178,7 @@ export function CredentialsPage() {
       </header>
 
       {loading ? (
-        <PageSkeleton label="Loading credentials" variant="form" />
+        <PageSkeleton label="Loading credentials" variant="split-form" />
       ) : error ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}
