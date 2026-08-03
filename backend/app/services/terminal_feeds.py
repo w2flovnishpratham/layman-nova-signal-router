@@ -8,6 +8,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
@@ -264,6 +265,30 @@ def _matches(item: dict[str, Any], *, mode: str | None, run_id: str | None) -> b
     return not (run_id and str(item.get("run_id") or "") != run_id)
 
 
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _is_today_ist(occurred_at: Any) -> bool:
+    if not occurred_at:
+        return False
+    try:
+        stamp = datetime.fromisoformat(str(occurred_at).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.astimezone(_IST).date() == datetime.now(_IST).date()
+
+
+def _is_actionable(item: dict[str, Any]) -> bool:
+    """The Signal & Order Activity tab is for what actually happened to a
+    position -- buy, sell, lot changes, partial fills -- not every received
+    signal or in-flight state. A row earns a place here once it carries real
+    trade data (a durable execution record, or a quantity/price), not while
+    it's still just "received"/"queued" with nothing to show yet."""
+    return bool(item.get("durable")) or item.get("lots") not in (None, "") or item.get("price") not in (None, "")
+
+
 def _encode_cursor(item: dict[str, Any]) -> str:
     raw = json.dumps(_sort_key(item), separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -348,48 +373,13 @@ def activity(
         )
         items.append(item)
 
-    for event in read_jsonl("order", limit=1000):
-        clean = sanitize_for_log(event)
-        signal_id = str(_field(clean, "signal_id") or "")
-        item = {
-            "id": f"order:{_event_key('order', clean)}",
-            "occurred_at": _stamp(clean.get("timestamp")),
-            "source": "MANUAL" if clean.get("manual_order") else "AUTOMATED",
-            "strategy": clean.get("strategy_code") or clean.get("strategy"),
-            "signal": clean.get("normalized_action") or clean.get("action"),
-            "signal_id": signal_id or None,
-            "correlation_id": (
-                signal_id
-                or _field(clean, "operation_id")
-                or clean.get("broker_correlation_id")
-                or clean.get("order_id")
-            ),
-            "instrument": clean.get("trading_symbol") or clean.get("symbol"),
-            "order_type": clean.get("order_type") or "MARKET",
-            "lots": clean.get("lots") or clean.get("qty"),
-            "price": clean.get("average_price") or clean.get("avg_price") or clean.get("price"),
-            "status": clean.get("order_status") or clean.get("status") or clean.get("phase"),
-            "pnl": clean.get("realized_pnl") or clean.get("pnl"),
-            "mode": str(clean.get("mode") or "").lower() or None,
-            "run_id": _field(clean, "run_id"),
-        }
-        lifecycle_key = signal_id or str(item["correlation_id"] or item["id"])
-        lifecycle_by_signal.setdefault(lifecycle_key, []).append(
-            {
-                "stage": str(
-                    clean.get("event")
-                    or clean.get("phase")
-                    or clean.get("order_status")
-                    or clean.get("status")
-                    or "ORDER_EVENT"
-                ).upper(),
-                "occurred_at": item["occurred_at"],
-                "status": item["status"],
-                "message": str(clean.get("message") or clean.get("reason") or "")[:300],
-                "order_id": clean.get("order_id") or clean.get("broker_order_id"),
-            }
-        )
-        items.append(item)
+    # The file-backed "order" JSONL log predates multi-user support and
+    # carries no user_id on any entry -- every account's Trading Activity
+    # tab was including every other account's (and the system's own
+    # internal monitoring/reconciliation) entries verbatim, unfiltered.
+    # signals_feed and _durable_execution_items below are both real
+    # user_id-scoped DB queries; the JSONL stream is intentionally not
+    # read here anymore rather than faked-scoped.
 
     durable = _durable_execution_items(user_id)
     known_correlations = {
@@ -438,6 +428,8 @@ def activity(
     filtered = [
         item for item in items
         if _matches(item, mode=requested_mode, run_id=run_id)
+        and _is_today_ist(item.get("occurred_at"))
+        and _is_actionable(item)
     ]
     for item in filtered:
         key = str(item.get("signal_id") or item.get("correlation_id") or item["id"])
@@ -482,71 +474,20 @@ def executions(
 ) -> dict[str, Any]:
     _assert_owner_context(user_id)
     requested_mode = str(mode or "").lower() or None
+    # _durable_execution_items() is a real, user_id-scoped DB query
+    # (LiveOrderIntent + StrategyExecutionJob) and already captures every
+    # real execution for this user. The file-backed "order" JSONL log used
+    # to be read here too as a supplement, but it predates multi-user
+    # support and carries no user_id -- it was leaking every account's (and
+    # the system's own internal monitoring) entries into every other
+    # account's Executions tab. Same fix as activity() above: drop it
+    # instead of pretending it's scoped.
     items = _durable_execution_items(user_id)
-    durable_identities = {
-        str(value)
-        for item in items
-        for value in (
-            item.get("order_id"),
-            item.get("operation_id"),
-            item.get("signal_id"),
-        )
-        if value not in (None, "")
-    }
-    for event in read_jsonl("order", limit=1000):
-        clean = sanitize_for_log(event)
-        requested_qty = clean.get("requested_qty") or clean.get("normalized_qty") or clean.get("qty")
-        filled_qty = clean.get("filled_qty") or clean.get("filledQty")
-        requested_qty_value = _integer(requested_qty)
-        filled_qty_value = _integer(filled_qty)
-        item = {
-            "id": _event_key("execution", clean),
-            "occurred_at": _stamp(clean.get("timestamp")),
-            "mode": str(clean.get("mode") or "").lower() or None,
-            "run_id": _field(clean, "run_id"),
-            "source": "MANUAL" if clean.get("manual_order") else "AUTOMATED",
-            "strategy": clean.get("strategy_code") or clean.get("strategy"),
-            "side": clean.get("side") or clean.get("normalized_option_side"),
-            "action": clean.get("normalized_action") or clean.get("action"),
-            "instrument": clean.get("trading_symbol") or clean.get("symbol"),
-            "requested_qty": requested_qty,
-            "filled_qty": filled_qty,
-            "remaining_qty": clean.get("remaining_qty") or clean.get("remainingQuantity"),
-            "partial_fill": (
-                filled_qty_value is not None
-                and requested_qty_value is not None
-                and filled_qty_value < requested_qty_value
-            ),
-            "average_price": (
-                clean.get("average_price")
-                or clean.get("avg_price")
-                or clean.get("fill_price")
-                or clean.get("price")
-            ),
-            "charges": clean.get("charges") or clean.get("simulatedCharges"),
-            "slippage": clean.get("slippage") or clean.get("slippagePercent"),
-            "status": clean.get("order_status") or clean.get("status"),
-            "operation_id": _field(clean, "operation_id"),
-            "order_id": clean.get("order_id"),
-            "broker_order_id": clean.get("broker_order_id"),
-            "broker_correlation_id": clean.get("broker_correlation_id"),
-            "pnl": clean.get("realized_pnl") or clean.get("pnl"),
-        }
-        identities = {
-            str(value)
-            for value in (
-                item.get("order_id"),
-                item.get("operation_id"),
-                _field(clean, "signal_id"),
-            )
-            if value not in (None, "")
-        }
-        if not identities.intersection(durable_identities):
-            items.append(item)
     filtered = [
         item
         for item in items
         if _matches(item, mode=requested_mode, run_id=run_id)
+        and _is_today_ist(item.get("occurred_at"))
     ]
     return _page(filtered, limit=limit, cursor=cursor)
 

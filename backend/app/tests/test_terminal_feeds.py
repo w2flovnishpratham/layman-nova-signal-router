@@ -1,6 +1,8 @@
 # ruff: noqa: F401, F811
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from app.db import models
@@ -16,6 +18,13 @@ from app.services.execution_context import bind_execution_context
 from app.services.user_context import current_user_from_model
 from app.tests.conftest_multiuser import make_user
 from app.tests.conftest_multiuser import mu_db as mu_db_fixture
+
+
+def _today_iso() -> str:
+    # terminal_feeds.activity() now filters to today only (IST) -- fixtures
+    # must use a live timestamp, not a fixed past date, or they're silently
+    # filtered out.
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _isolate_logs(tmp_path, monkeypatch) -> None:
@@ -57,6 +66,31 @@ def _order_event(order_id: str, *, mode: str, signal_id: str = "SIGNAL-1") -> di
     }
 
 
+def _live_order_intent(user_id, order_id: str, *, mode: str) -> models.LiveOrderIntent:
+    # executions() now reads only the durable, user_id-scoped
+    # LiveOrderIntent/StrategyExecutionJob tables -- the file-backed "order"
+    # JSONL log used as a supplement previously carried no user_id and
+    # leaked every account's entries into every other account's tab.
+    return models.LiveOrderIntent(
+        user_id=user_id,
+        scope=f"manual_{mode}_operation",
+        idempotency_key=f"idem-{order_id}",
+        payload_hash="a" * 64,
+        status="completed",
+        action="ENTRY",
+        symbol="NIFTY TEST CE",
+        broker_order_id=order_id,
+        result_summary={
+            "status": "TRADED",
+            "requested_qty": 75,
+            "filled_qty": 50,
+            "avg_price": 101.5,
+            "charges": 7.25,
+        },
+        intent_metadata={"mode": mode},
+    )
+
+
 def test_terminal_feeds_are_owner_mode_and_cursor_scoped(
     mu_db_fixture,
     tmp_path,
@@ -68,11 +102,13 @@ def test_terminal_feeds_are_owner_mode_and_cursor_scoped(
     alice = current_user_from_model(alice_model)
     bob = current_user_from_model(bob_model)
 
+    with session_scope() as db:
+        db.add(_live_order_intent(alice.id, "ALICE-1", mode="paper"))
+        db.add(_live_order_intent(bob.id, "BOB-1", mode="paper"))
+
     with bind_execution_context(alice):
-        audit_logger.log_order_event(_order_event("ALICE-1", mode="paper"))
         audit_logger.log_audit_event("ENGINE_STARTED", "Alice engine started.")
     with bind_execution_context(bob):
-        audit_logger.log_order_event(_order_event("BOB-1", mode="paper"))
         audit_logger.log_audit_event("ENGINE_STARTED", "Bob engine started.")
 
     with bind_execution_context(alice):
@@ -100,8 +136,15 @@ def test_terminal_feeds_are_owner_mode_and_cursor_scoped(
 
 
 def test_activity_projects_correlated_lifecycle(mu_db_fixture, tmp_path, monkeypatch):
+    """Lifecycle correlation across signals_feed (the received signal) and a
+    durable execution record (the resulting fill) -- both real, user_id-scoped
+    DB queries. The file-backed "order" JSONL log is deliberately no longer a
+    source here (see terminal_feeds.activity()): it predates multi-user
+    support, carries no user_id, and was leaking every account's entries into
+    every other account's Activity tab."""
     _isolate_logs(tmp_path, monkeypatch)
     owner = current_user_from_model(make_user("terminal-lifecycle@example.com"))
+    occurred_at = _today_iso()
     monkeypatch.setattr(
         signals_feed,
         "list_signals",
@@ -110,7 +153,7 @@ def test_activity_projects_correlated_lifecycle(mu_db_fixture, tmp_path, monkeyp
                 {
                     "id": "webhook-1",
                     "event_id": "SIGNAL-1",
-                    "received_at": "2026-07-26T09:00:00+00:00",
+                    "received_at": occurred_at,
                     "strategy_name": "supertrend",
                     "processed_status": "queued",
                     "error": None,
@@ -124,14 +167,36 @@ def test_activity_projects_correlated_lifecycle(mu_db_fixture, tmp_path, monkeyp
             ]
         },
     )
+    with session_scope() as db:
+        signal = models.StrategySignal(
+            strategy_name="supertrend",
+            signal_id="SIGNAL-1",
+            status="completed",
+        )
+        db.add(signal)
+        db.flush()
+        db.add(
+            models.StrategyExecutionJob(
+                strategy_signal_id=signal.id,
+                user_id=owner.id,
+                strategy_name="supertrend",
+                signal_id="SIGNAL-1",
+                signal_payload={"action": "ENTRY", "trading_symbol": "NIFTY", "qty": 75},
+                lots=1,
+                execution_mode="paper_live_data",
+                status="completed",
+                completed_at=datetime.now(timezone.utc),
+                result_summary={"status": "TRADED", "order_id": "ORDER-1", "filled_qty": 75, "avg_price": 101.5},
+            )
+        )
+
     with bind_execution_context(owner):
-        audit_logger.log_order_event(_order_event("ORDER-1", mode="paper"))
         page = terminal_feeds.activity(owner.id, mode="paper", limit=10)
 
     signal_row = next(item for item in page["items"] if item["id"] == "signal:webhook-1")
     stages = [stage["stage"] for stage in signal_row["lifecycle"]]
     assert "SIGNAL_RECEIVED" in stages
-    assert "ORDER_FILLED" in stages
+    assert "TRADED" in stages
 
 
 def test_active_alert_cannot_be_acknowledged_but_historical_can(
