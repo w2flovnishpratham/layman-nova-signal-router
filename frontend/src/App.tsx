@@ -450,15 +450,6 @@ function App() {
   const runtimeEntriesBlocked = sessionEngineLive && systemHealth?.engine === 'paused'
   const effectiveSetupState = runtimeEntriesBlocked || setupState === 'PAUSED' ? 'PAUSED' : setupState
   const engineLive = sessionEngineLive
-  // Latches true the first time the engine goes live and never resets --
-  // gates when the terminal (chart + activity) first mounts, so it doesn't
-  // fetch/render before setup is even done. Once mounted it stays mounted
-  // (see showTerminal below), so switching to another tab and back doesn't
-  // destroy and recreate the live chart.
-  const [hasGoneLive, setHasGoneLive] = useState(false)
-  useEffect(() => {
-    if (engineLive) setHasGoneLive(true)
-  }, [engineLive])
   const panelLayoutTransition = reduceMotion
     ? { duration: 0 }
     : { duration: 0.4, ease: softEase }
@@ -592,13 +583,16 @@ function App() {
       ) : !engineLive ? (
         <SetupPage conversation={setupPanel} snapshot={setupSnapshot} unavailable={Boolean(runtimeError)} />
       ) : null}
-      {/* Rendered as its own always-present sibling (not a ternary branch)
-          once the engine has ever gone live, so switching to another tab and
-          back never destroys and recreates the live chart or its fetched
-          data -- only its visibility toggles, via the style below. */}
-      {hasGoneLive ? (
+      {/* Rendered as its own always-present sibling rather than a branch of
+          the route ternary above: React unmounts a ternary branch whenever the
+          chosen branch changes, which destroyed and recreated the live chart
+          (and refetched its data) every time the user visited another tab and
+          came back. Kept mounted for as long as the engine is live, with only
+          its visibility toggling via the style below. Deliberately introduces
+          no new hook -- see the auth early return above. */}
+      {engineLive ? (
         <motion.section
-          style={{ display: showTerminal && engineLive ? undefined : 'none' }}
+          style={{ display: showTerminal ? undefined : 'none' }}
           layout
           transition={panelLayoutTransition}
           className={
