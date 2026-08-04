@@ -12,12 +12,13 @@ interface Props {
   onSaveConfig: (values: EngineConfigValues) => Promise<void>
   side: SideFilter
   onSend: (command: ClientCommand) => void
+  actionPending?: boolean
 }
 
-export function EngineLeftPanel({ engineMode, activeTrade, runtimePositionOpen = false, runtime, onStop, onSaveConfig, side, onSend }: Props) {
+export function EngineLeftPanel({ engineMode, activeTrade, runtimePositionOpen = false, runtime, onStop, onSaveConfig, side, onSend, actionPending = false }: Props) {
   return (
     <div className="engine-left flex flex-col gap-4" aria-label="Market and manual order">
-      <EngineConfigCard runtime={runtime} onStop={onStop} onSaveConfig={onSaveConfig} side={side} onSideChange={(next) => onSend({ type: 'session.patch_risk', data: { side: next } })} />
+      <EngineConfigCard runtime={runtime} onStop={onStop} onSaveConfig={onSaveConfig} side={side} onSideChange={(next) => onSend({ type: 'session.patch_risk', data: { side: next } })} actionPending={actionPending} />
       <ManualOrderPanel engineMode={engineMode} activeTrade={activeTrade} runtimePositionOpen={runtimePositionOpen} />
       <DailyDrawdownCard runtime={runtime} />
     </div>

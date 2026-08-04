@@ -82,6 +82,14 @@ function App() {
   const setView = useCallback((next: NovaView) => {
     goToRoute(next === 'dashboard' ? 'dashboard' : next === 'strategies' ? 'strategies' : 'trading')
   }, [])
+  // Whether the routed-page ternary below would fall through to the terminal
+  // (chart + activity) rather than one of the named single-purpose pages --
+  // mirrors that ternary's conditions exactly. Used to keep the terminal
+  // mounted persistently (see below) instead of destroying/recreating the
+  // live chart and its fetched data every time the user visits another tab
+  // and comes back.
+  const SECONDARY_ROUTES = new Set(['signals', 'webhooks', 'risk', 'credentials', 'reports', 'strategies/new', 'settings', 'automations'])
+  const showTerminal = isImplemented(route) && !SECONDARY_ROUTES.has(route) && view === 'trading'
   // Held here so the Trading route can project the setup rail and configuration
   // panel from the same conversation state the controller owns.
   const [setupSnapshot, setSetupSnapshot] = useState<SetupSnapshot | null>(null)
@@ -99,6 +107,7 @@ function App() {
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false)
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false)
   const [snapshotLoaded, setSnapshotLoaded] = useState(false)
+  const [runtimeActionPending, setRuntimeActionPending] = useState(false)
   const reduceMotion = useAppReducedMotion()
   const session = useSessionStore((state) => state.session)
   const setupFlowStep = useSessionStore((state) => state.setupFlowStep)
@@ -320,6 +329,11 @@ function App() {
   }
 
   async function updateRuntime(action: () => Promise<RuntimeStatus>) {
+    // Guards the repeated-click case directly: a second click while the first
+    // request is still in flight no-ops instead of firing a duplicate action,
+    // on top of the buttons showing a loading state so it's visibly pending.
+    if (runtimeActionPending) return
+    setRuntimeActionPending(true)
     setBootError('')
     try {
       await action()
@@ -329,6 +343,8 @@ function App() {
       setRuntimeError('')
     } catch (error) {
       setBootError(error instanceof Error ? error.message : 'Runtime action failed')
+    } finally {
+      setRuntimeActionPending(false)
     }
   }
 
@@ -434,6 +450,15 @@ function App() {
   const runtimeEntriesBlocked = sessionEngineLive && systemHealth?.engine === 'paused'
   const effectiveSetupState = runtimeEntriesBlocked || setupState === 'PAUSED' ? 'PAUSED' : setupState
   const engineLive = sessionEngineLive
+  // Latches true the first time the engine goes live and never resets --
+  // gates when the terminal (chart + activity) first mounts, so it doesn't
+  // fetch/render before setup is even done. Once mounted it stays mounted
+  // (see showTerminal below), so switching to another tab and back doesn't
+  // destroy and recreate the live chart.
+  const [hasGoneLive, setHasGoneLive] = useState(false)
+  useEffect(() => {
+    if (engineLive) setHasGoneLive(true)
+  }, [engineLive])
   const panelLayoutTransition = reduceMotion
     ? { duration: 0 }
     : { duration: 0.4, ease: softEase }
@@ -521,6 +546,7 @@ function App() {
         onMode={(mode) => void updateRuntime(() => switchRuntimeMode(mode))}
         onSaveConfig={(mode, lots, sl, tp) => void updateRuntime(() => saveRuntimeConfig(mode, lots, sl, tp))}
         onPaperReset={() => void updateRuntime(() => resetPaperRuntime())}
+        actionPending={runtimeActionPending}
       />
 
       {runtimeStatus?.position.has_open_position && runtimeStatus.engine.state === 'STOPPED' ? (
@@ -559,13 +585,20 @@ function App() {
           onKill={() => void updateRuntime(squareOffRuntime)}
           onManageStrategies={() => setView('strategies')}
           onViewHealth={() => goToRoute('webhooks')}
+          actionPending={runtimeActionPending}
         />
       ) : view === 'strategies' ? (
         <PersonalStrategiesPage user={authUser} focusInstanceId={managedStrategyId} />
       ) : !engineLive ? (
         <SetupPage conversation={setupPanel} snapshot={setupSnapshot} unavailable={Boolean(runtimeError)} />
-      ) : (
+      ) : null}
+      {/* Rendered as its own always-present sibling (not a ternary branch)
+          once the engine has ever gone live, so switching to another tab and
+          back never destroys and recreates the live chart or its fetched
+          data -- only its visibility toggles, via the style below. */}
+      {hasGoneLive ? (
         <motion.section
+          style={{ display: showTerminal && engineLive ? undefined : 'none' }}
           layout
           transition={panelLayoutTransition}
           className={
@@ -624,6 +657,7 @@ function App() {
                     onSaveConfig={saveTerminalConfig}
                     side={config.risk?.side ?? 'BOTH'}
                     onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
+                    actionPending={runtimeActionPending}
                   />
                 </motion.div>
                 </CollapsibleContent>
@@ -712,7 +746,7 @@ function App() {
           </Collapsible>
         ) : null}
       </motion.section>
-      )}
+      ) : null}
       </Suspense>
       </PageErrorBoundary>
       </div>
@@ -767,6 +801,7 @@ function App() {
                 onSaveConfig={saveTerminalConfig}
                 side={config.risk?.side ?? 'BOTH'}
                 onSend={(command) => sendWithUserMessage(command, commandMessage(command))}
+                actionPending={runtimeActionPending}
               />
                 </motion.div>
               </motion.div>

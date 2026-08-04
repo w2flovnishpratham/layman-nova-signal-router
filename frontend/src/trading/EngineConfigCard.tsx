@@ -14,12 +14,13 @@ export interface EngineConfigValues {
   maxTradesPerDay: number
 }
 
-export function EngineConfigCard({ runtime, onStop, onSaveConfig, side, onSideChange }: {
+export function EngineConfigCard({ runtime, onStop, onSaveConfig, side, onSideChange, actionPending = false }: {
   runtime: RuntimeStatus | null
   onStop: () => void
   onSaveConfig: (values: EngineConfigValues) => Promise<void>
   side: SideFilter
   onSideChange: (side: SideFilter) => void
+  actionPending?: boolean
 }) {
   const active = runtime?.config.active ?? {}
   const values = configValues(active)
@@ -77,7 +78,7 @@ export function EngineConfigCard({ runtime, onStop, onSaveConfig, side, onSideCh
       <Button variant="unstyled" type="button" className="terminal-save-config" disabled={saving || runtime?.engine.state !== 'STOPPED'} onClick={() => void save()}>
         {saving ? 'Saving…' : runtime?.engine.state === 'STOPPED' ? 'Save configuration' : 'Stop engine to save'}
       </Button>
-      <Button variant="unstyled" type="button" className="terminal-stop-engine" onClick={onStop}>Stop Engine</Button>
+      <Button variant="unstyled" type="button" className="terminal-stop-engine" loading={actionPending} onClick={onStop}>Stop Engine</Button>
     </section>
   )
 }

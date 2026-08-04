@@ -43,6 +43,7 @@ interface Props {
   onManageStrategies: () => void
   onViewHealth: () => void
   preview?: DashboardPreviewBundle
+  actionPending?: boolean
 }
 
 interface StrategyPerformanceRow {
@@ -63,6 +64,7 @@ export function PortfolioDashboard({
   onManageStrategies,
   onViewHealth,
   preview,
+  actionPending = false,
 }: Props) {
   const [data, setData] = useState<PortfolioAnalytics | null>(preview?.data ?? null)
   const [risk, setRisk] = useState<RiskOverview | null>(preview?.risk ?? null)
@@ -372,7 +374,7 @@ export function PortfolioDashboard({
             <Button variant="unstyled" type="button" className="nv-panel-link" onClick={onViewHealth}>Details →</Button>
           </div>
           <SystemHealthList health={health} runtime={runtime} webhooks={webhooks} />
-          <KillSwitch runtime={runtime} onKill={onKill} />
+          <KillSwitch runtime={runtime} onKill={onKill} actionPending={actionPending} />
         </motion.aside>
       </div>
     </div>
@@ -501,10 +503,10 @@ function SystemHealthList({
   )
 }
 
-function KillSwitch({ runtime, onKill }: { runtime: RuntimeStatus | null; onKill: () => void }) {
+function KillSwitch({ runtime, onKill, actionPending = false }: { runtime: RuntimeStatus | null; onKill: () => void; actionPending?: boolean }) {
   const [holding, setHolding] = useState(false)
   const timer = useRef<number | null>(null)
-  const actionable = Boolean(runtime?.engine.running || runtime?.position.has_open_position)
+  const actionable = Boolean(runtime?.engine.running || runtime?.position.has_open_position) && !actionPending
 
   function cancel() {
     if (timer.current != null) window.clearTimeout(timer.current)
@@ -531,6 +533,7 @@ function KillSwitch({ runtime, onKill }: { runtime: RuntimeStatus | null; onKill
       <Button variant="unstyled"
         type="button"
         disabled={!actionable}
+        loading={actionPending}
         onPointerDown={begin}
         onPointerUp={cancel}
         onPointerLeave={cancel}
@@ -543,7 +546,7 @@ function KillSwitch({ runtime, onKill }: { runtime: RuntimeStatus | null; onKill
         }}
       >
         {holding ? <MotionProgressFill durationSeconds={0.8} tone="danger" /> : null}
-        <span>{actionable ? 'Hold to Stop & Square Off' : 'Engine stopped · position flat'}</span>
+        <span>{actionPending ? 'Stopping…' : actionable ? 'Hold to Stop & Square Off' : 'Engine stopped · position flat'}</span>
       </Button>
     </div>
   )

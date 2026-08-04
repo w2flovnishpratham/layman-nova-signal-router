@@ -26,6 +26,7 @@ interface Props {
   onMode: (mode: 'paper' | 'live') => void
   onSaveConfig: (mode: 'paper' | 'live', lots: number, sl: number, tp: number) => void
   onPaperReset: () => void
+  actionPending?: boolean
 }
 
 export function Header({
@@ -44,6 +45,7 @@ export function Header({
   onMode,
   onSaveConfig,
   onPaperReset,
+  actionPending = false,
 }: Props) {
   const [killDialogOpen, setKillDialogOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -271,7 +273,7 @@ export function Header({
                           <Button variant="unstyled"
                             key={mode}
                             type="button"
-                            disabled={runtime.position.has_open_position}
+                            disabled={runtime.position.has_open_position || actionPending}
                             onClick={() => chooseMode(mode)}
                             className={`py-1.5 rounded-lg border text-xs font-semibold ${
                               runtime.engine.mode === mode
@@ -296,14 +298,15 @@ export function Header({
                       </div>
                       <Button variant="unstyled"
                         type="button"
-                        disabled={!runtime.engine.mode || runtime.position.has_open_position}
+                        disabled={!runtime.engine.mode || runtime.position.has_open_position || actionPending}
+                        loading={actionPending}
                         onClick={() => runtime.engine.mode && onSaveConfig(runtime.engine.mode, displayedLots, displayedSlPercent, displayedTpPercent)}
                         className="secondary-button py-1.5 rounded-lg text-xs disabled:opacity-40"
                       >
                         Save {runtime.engine.mode?.toUpperCase() || ''} settings
                       </Button>
                       {runtime.engine.mode === 'paper' ? (
-                        <Button variant="unstyled" type="button" disabled={runtime.position.has_open_position} onClick={onPaperReset} className="secondary-button py-1.5 rounded-lg text-xs disabled:opacity-40">
+                        <Button variant="unstyled" type="button" disabled={runtime.position.has_open_position || actionPending} loading={actionPending} onClick={onPaperReset} className="secondary-button py-1.5 rounded-lg text-xs disabled:opacity-40">
                           Reset Paper session
                         </Button>
                       ) : null}
@@ -388,8 +391,10 @@ export function Header({
 
             <div className="w-full flex flex-col gap-2 mt-2">
               <Button variant="unstyled"
-                className="hold-confirm w-full py-3 px-4 rounded-xl font-semibold border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm select-none cursor-pointer relative overflow-hidden"
+                className="hold-confirm w-full py-3 px-4 rounded-xl font-semibold border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-white transition-all duration-150 flex items-center justify-center gap-2 text-sm select-none cursor-pointer relative overflow-hidden disabled:opacity-60 disabled:cursor-not-allowed"
                 type="button"
+                disabled={actionPending}
+                loading={actionPending}
                 onPointerDown={startHold}
                 onPointerUp={cancelHold}
                 onPointerLeave={cancelHold}
@@ -402,7 +407,7 @@ export function Header({
                 }}
               >
                 {holdingKill ? <MotionProgressFill durationSeconds={0.8} tone="danger" /> : null}
-                <span className="hold-button-content">Hold to Stop & Square Off</span>
+                <span className="hold-button-content">{actionPending ? 'Stopping…' : 'Hold to Stop & Square Off'}</span>
               </Button>
               <Button variant="unstyled"
                 className="w-full py-2.5 px-4 rounded-xl text-white/50 hover:text-white bg-transparent hover:bg-white/5 transition-all text-xs font-semibold cursor-pointer border-0"
