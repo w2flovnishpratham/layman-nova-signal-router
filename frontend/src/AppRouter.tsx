@@ -1,8 +1,13 @@
-import { useEffect, useState } from 'react'
-import App from './App'
-import { LandingPage } from './landing/LandingPage'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { currentPath, isAppPath, navigate, replacePath } from './navigation'
 import { appPath, routeFromPath } from './appRoutes'
+
+// Landing (marketing/animation-heavy) and App (the authenticated trading
+// terminal) are mutually exclusive per visit -- splitting them keeps a first-
+// time visitor from downloading the entire trading app, and a logged-in
+// trader from downloading the landing page's animation libraries.
+const App = lazy(() => import('./App'))
+const LandingPage = lazy(() => import('./landing/LandingPage').then((m) => ({ default: m.LandingPage })))
 
 // A small URL-bound wrapper instead of a full router dependency. Nginx already
 // serves index.html for any non-asset path (SPA fallback), so a hard refresh on
@@ -33,8 +38,13 @@ export function AppRouter() {
     if (path !== canonical) replacePath(canonical)
   }, [path])
 
-  if (isAppPath(path)) {
-    return <App />
-  }
-  return <LandingPage onEnterApp={() => navigate(appPath(routeFromPath('/app')))} />
+  return (
+    <Suspense fallback={null}>
+      {isAppPath(path) ? (
+        <App />
+      ) : (
+        <LandingPage onEnterApp={() => navigate(appPath(routeFromPath('/app')))} />
+      )}
+    </Suspense>
+  )
 }

@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Loader2 } from 'lucide-react'
 import { PageSkeleton } from './PageSkeleton'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CandlestickSeries,
   CrosshairMode,
@@ -58,7 +58,7 @@ function toBar(candle: NiftyCandle) {
   }
 }
 
-export function NiftyLiveChart({
+function NiftyLiveChartInner({
   engineMode,
   defaultTimeframe,
 }: {
@@ -324,3 +324,7 @@ export function NiftyLiveChart({
     </section>
   )
 }
+
+// Parent (App) re-renders on every wallet/P&L/WS tick; memo stops those
+// unrelated updates from re-mounting this chart's render pass.
+export const NiftyLiveChart = memo(NiftyLiveChartInner)

@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { toast } from '@/components/ui/toast'
@@ -13,21 +13,25 @@ import { softEase, useAppReducedMotion } from './components/MotionPrimitives'
 import { PageSkeleton } from './components/PageSkeleton'
 import { TerminalMobileBar, type TerminalMobileSection } from './components/TerminalMobileBar'
 import { SetupPanel } from './components/setup/SetupPanel'
-import { PortfolioDashboard } from './dashboard/PortfolioDashboard'
-import { PersonalStrategiesPage } from './strategies/PersonalStrategiesPage'
 import type { NovaView } from './types'
 import { goToRoute, isImplemented, useAppRoute } from './appRoutes'
 import { PageErrorBoundary } from './components/shell/PageErrorBoundary'
 import { PlaceholderPage } from './components/shell/PlaceholderPage'
-import { SignalsPage } from './signals/SignalsPage'
-import { WebhooksPage } from './webhooks/WebhooksPage'
-import { RiskPage } from './risk/RiskPage'
-import { CredentialsPage } from './credentials/CredentialsPage'
-import { ReportsPage } from './reports/ReportsPage'
-import { AddStrategyPage } from './strategies/AddStrategyPage'
-import { SettingsPage } from './settings/SettingsPage'
-import { AutomationsPage } from './automations/AutomationsPage'
 import { TradingActivityTabs } from './trading/TradingActivityTabs'
+
+// Only the terminal (chart + activity, below) is on the critical path for a
+// logged-in trader. Every other tab is visited far less often per session,
+// so it ships as its own chunk instead of bloating the initial bundle.
+const SignalsPage = lazy(() => import('./signals/SignalsPage').then((m) => ({ default: m.SignalsPage })))
+const WebhooksPage = lazy(() => import('./webhooks/WebhooksPage').then((m) => ({ default: m.WebhooksPage })))
+const RiskPage = lazy(() => import('./risk/RiskPage').then((m) => ({ default: m.RiskPage })))
+const CredentialsPage = lazy(() => import('./credentials/CredentialsPage').then((m) => ({ default: m.CredentialsPage })))
+const ReportsPage = lazy(() => import('./reports/ReportsPage').then((m) => ({ default: m.ReportsPage })))
+const AddStrategyPage = lazy(() => import('./strategies/AddStrategyPage').then((m) => ({ default: m.AddStrategyPage })))
+const SettingsPage = lazy(() => import('./settings/SettingsPage').then((m) => ({ default: m.SettingsPage })))
+const AutomationsPage = lazy(() => import('./automations/AutomationsPage').then((m) => ({ default: m.AutomationsPage })))
+const PortfolioDashboard = lazy(() => import('./dashboard/PortfolioDashboard').then((m) => ({ default: m.PortfolioDashboard })))
+const PersonalStrategiesPage = lazy(() => import('./strategies/PersonalStrategiesPage').then((m) => ({ default: m.PersonalStrategiesPage })))
 import type { EngineConfigValues } from './trading/EngineConfigCard'
 import { SetupPage, type SetupSnapshot } from './setup/SetupPage'
 import { getConfigurationState, saveConfiguration } from './setup/configurationApi'
@@ -529,6 +533,7 @@ function App() {
           instead of blanking the header and the whole shell. */}
       <div className="nova-page">
       <PageErrorBoundary resetKey={route}>
+      <Suspense fallback={<PageSkeleton label="Loading page" />}>
       {!isImplemented(route) ? (
         <PlaceholderPage route={route} />
       ) : route === 'signals' ? (
@@ -708,6 +713,7 @@ function App() {
         ) : null}
       </motion.section>
       )}
+      </Suspense>
       </PageErrorBoundary>
       </div>
 

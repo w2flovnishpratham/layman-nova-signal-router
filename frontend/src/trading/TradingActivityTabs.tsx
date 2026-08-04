@@ -2,7 +2,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ServerEvent } from '../types'
 import { PageSkeleton } from '../components/PageSkeleton'
 import { getPreferences } from '../settings/settingsApi'
@@ -31,7 +31,7 @@ interface Props {
   runId?: string | null
 }
 
-export function TradingActivityTabs({ mode = null, runId = null }: Props) {
+function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
   const initial = initialDeepLink()
   const [tab, setTab] = useState<TradingTerminalTab>(initial.tab)
   const [focusedEventId, setFocusedEventId] = useState(initial.eventId)
@@ -299,6 +299,10 @@ export function TradingActivityTabs({ mode = null, runId = null }: Props) {
     </Tabs>
   )
 }
+
+// Parent (App) re-renders on every wallet/P&L/WS tick; memo stops those
+// unrelated updates from re-rendering this 100-row table.
+export const TradingActivityTabs = memo(TradingActivityTabsInner)
 
 function initialDeepLink(): { tab: TradingTerminalTab; eventId: string | null } {
   const params = new URLSearchParams(window.location.search)
