@@ -116,7 +116,7 @@ export function C2MyStrategies() {
               <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(detail.setup_package?.alert_message ?? '')}><Copy size={14} /> Copy alert template</Button>
             </div>
             <details><summary>Exact approved Pine</summary><pre className="pine-review-source">{detail.setup_package.approved_pine}</pre></details>
-            <details><summary>HOLD alert JSON template</summary><pre>{detail.setup_package.alert_message}</pre></details>
+            <details><summary>HOLD alert JSON template</summary><pre className="pine-review-source">{detail.setup_package.alert_message}</pre></details>
             <div className="ps-actions">
               {detail.credential_status !== 'ACTIVE' ? <Button variant="unstyled" className="ps-primary" type="button" disabled={!!busy} onClick={() => void run('Credential generation', async () => issue(false))}><KeyRound size={14} /> Generate one-time credential</Button> : <Button variant="unstyled" className="secondary-button" type="button" disabled={!!busy} onClick={() => { if (window.confirm('Rotate this credential? The old TradingView alert will stop and HOLD must be verified again.')) void run('Credential rotation', async () => issue(true)) }}><RotateCw size={14} /> Rotate credential</Button>}
               {detail.credential_status === 'ACTIVE' ? <Button variant="unstyled" className="ps-danger" type="button" disabled={!!busy} onClick={() => { if (window.confirm('Revoke this credential and remove Paper eligibility?')) void run('Credential revocation', async () => { await revokeSelfC2Credential(detail.id) }) }}><ShieldOff size={14} /> Revoke credential</Button> : null}

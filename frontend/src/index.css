@@ -122,6 +122,24 @@ html,
 body,
 #root {
   min-height: 100%;
+  /* Last-resort backstop: if some future component still manages to force
+     its content wider than the viewport, clip it here instead of letting
+     the whole page scroll sideways and push toolbars off-screen. */
+  overflow-x: clip;
+}
+
+/* Flex/grid children default to min-width/min-height: auto, refusing to
+   shrink below their own content size -- one long unbroken line (a hash,
+   URL, JSON blob) anywhere in a flex/grid tree can force every ancestor up
+   to the page root wider than the viewport. Reset the default project-wide
+   so new components don't have to remember this per-file; an explicit
+   min-w-*/min-h-* utility on a specific child still overrides this, thanks
+   to zero-specificity :where() and the base layer sitting below utilities. */
+@layer base {
+  :where(.flex, .inline-flex, .grid, .inline-grid) > * {
+    min-width: 0;
+    min-height: 0;
+  }
 }
 
 body {
@@ -199,6 +217,17 @@ code {
   font-size: 12px;
   color: var(--text-2);
   overflow-wrap: anywhere;
+}
+
+/* Default containment for any <pre> that doesn't already have a
+   purpose-built scroll class -- long lines scroll inside their own box
+   instead of widening the page. Components with their own pre rules
+   (.pine-review-source, .c1-transport pre, etc.) already set stronger
+   max-height/overflow and are unaffected by this baseline. */
+pre {
+  max-width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
 }
 
 .nova-app {
@@ -5457,7 +5486,7 @@ code {
 
 .terminal-table-wrap {
   max-height: 390px;
-  overflow-x: hidden;
+  overflow-x: auto;
   overflow-y: auto;
 }
 
