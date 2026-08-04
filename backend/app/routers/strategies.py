@@ -374,10 +374,23 @@ def read_trading_configuration(
     return {"ok": True, "configuration": configuration}
 
 
-def _manual_defaults(user_id: uuid.UUID) -> dict[str, dict[str, Any]]:
+def _manual_defaults(selected_configuration: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Per-mode manual-entry defaults, derived from the one selected revision.
+
+    A user has exactly one selected configuration at a time, and
+    selected_configuration_row's mode filter is applied in Python after
+    fetching (not in the query) -- so calling selected_configuration(user_id,
+    mode) once per mode was two identical DB round-trips for the same row.
+    The caller already has the unfiltered revision; apply the same mode
+    check here locally instead of fetching it again per mode.
+    """
     defaults: dict[str, dict[str, Any]] = {}
     for mode in ("paper", "live"):
-        revision = setup_configuration.selected_configuration(user_id, mode)
+        revision = (
+            selected_configuration
+            if selected_configuration is not None and selected_configuration.get("mode") == mode
+            else None
+        )
         values = dict(revision.get("configuration") or {}) if revision else {}
         defaults[mode] = {
             "available": revision is not None,
@@ -391,77 +404,120 @@ def _manual_defaults(user_id: uuid.UUID) -> dict[str, dict[str, Any]]:
     return defaults
 
 
+def _bootstrap_current_run_and_pending_operation(
+    user_id: uuid.UUID,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    current_run = None
+    pending_operation = None
+    with session_scope() as db:
+        run = db.scalar(
+            select(models.UserRun)
+            .where(models.UserRun.user_id == user_id)
+            .order_by(models.UserRun.created_at.desc())
+        )
+        if run is not None:
+            current_run = {
+                "id": str(run.id),
+                "status": run.status,
+                "mode": run.run_type,
+                "execution_mode": run.execution_mode,
+                "strategy_name": run.strategy_name,
+                "strategy_version_id": (
+                    str(run.strategy_version_id) if run.strategy_version_id else None
+                ),
+                "configuration_revision_id": (
+                    str(run.configuration_revision_id)
+                    if run.configuration_revision_id
+                    else None
+                ),
+                "configuration_revision": run.configuration_revision,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "stopped_at": run.stopped_at.isoformat() if run.stopped_at else None,
+            }
+        operation = db.scalar(
+            select(models.EngineStartOperation)
+            .where(
+                models.EngineStartOperation.user_id == user_id,
+                models.EngineStartOperation.status == "pending",
+            )
+            .order_by(models.EngineStartOperation.created_at.desc())
+        )
+        if operation is not None:
+            pending_operation = {
+                "id": str(operation.id),
+                "type": "engine_start",
+                "status": operation.status,
+                "mode": operation.mode,
+                "configuration_revision_id": str(operation.configuration_revision_id),
+                "configuration_revision": operation.configuration_revision,
+                "created_at": operation.created_at.isoformat(),
+            }
+    return current_run, pending_operation
+
+
 @router.get("/api/trading/bootstrap")
 def trading_bootstrap(user: CurrentUser = Depends(get_current_user)):
     """One owner-scoped read model for setup restoration and terminal startup."""
+    from concurrent.futures import ThreadPoolExecutor
+
     from app.services import automations_overview, risk_overview, user_preferences
 
     if not database_configured():
         raise HTTPException(status_code=503, detail="Trading database is not configured.")
 
-    runtime = _owner_runtime(user)
-    selected_configuration = setup_configuration.selected_configuration(user.id)
+    # Every one of these is an independent, read-only, owner-scoped lookup --
+    # none needs another's result. Sequentially they were 8+ separate Neon
+    # round-trips (~230ms each, ~2s+ of pure network latency); run them
+    # concurrently instead. Only `catalog` (needs runtime's engine state) and
+    # the final list_configurations call (needs the fully-resolved `mode`)
+    # have a real dependency, so those stay sequential after this batch.
+    with ThreadPoolExecutor(max_workers=9) as pool:
+        runtime_future = pool.submit(_owner_runtime, user)
+        selected_configuration_future = pool.submit(
+            setup_configuration.selected_configuration, user.id
+        )
+        selection_future = pool.submit(
+            strategy_instance_service.trading_selection_state, user.id
+        )
+        run_operation_future = pool.submit(
+            _bootstrap_current_run_and_pending_operation, user.id
+        )
+        preferences_future = pool.submit(user_preferences.get_preferences, user.id)
+        risk_usage_future = pool.submit(risk_overview.build_risk_overview, user.id)
+        automation_settings_future = pool.submit(
+            automations_overview.build_automations_overview, user.id
+        )
+        live_readiness_future = pool.submit(
+            live_engine.evaluate_live_readiness, user, "real_orders", uses_webhook=True
+        )
+
+        runtime = runtime_future.result()
+        # catalog needs runtime's engine state, so it can only start now -- but
+        # it still overlaps with whatever else above hasn't finished yet.
+        catalog_future = pool.submit(
+            strategy_catalog_service.get_catalog,
+            user.id,
+            runtime_state=runtime["engine"]["state"],
+        )
+
+        selected_configuration = selected_configuration_future.result()
+        selection = selection_future.result()
+        current_run, pending_operation = run_operation_future.result()
+        preferences = preferences_future.result()
+        risk_usage = risk_usage_future.result()
+        automation_settings = automation_settings_future.result()
+        live_readiness = live_readiness_future.result()
+        catalog = catalog_future.result()
+
+    # Pure in-memory derivation from the already-fetched selected_configuration
+    # -- no DB call, so it doesn't need its own thread/round-trip.
+    manual_defaults = _manual_defaults(selected_configuration)
+
     mode = (
         selected_configuration["mode"]
         if selected_configuration is not None
         else None
     )
-
-    catalog = strategy_catalog_service.get_catalog(
-        user.id,
-        runtime_state=runtime["engine"]["state"],
-    )
-    selection = strategy_instance_service.trading_selection_state(user.id)
-    current_run = None
-    pending_operation = None
-    if database_configured():
-        with session_scope() as db:
-            run = db.scalar(
-                select(models.UserRun)
-                .where(models.UserRun.user_id == user.id)
-                .order_by(models.UserRun.created_at.desc())
-            )
-            if run is not None:
-                current_run = {
-                    "id": str(run.id),
-                    "status": run.status,
-                    "mode": run.run_type,
-                    "execution_mode": run.execution_mode,
-                    "strategy_name": run.strategy_name,
-                    "strategy_version_id": (
-                        str(run.strategy_version_id)
-                        if run.strategy_version_id
-                        else None
-                    ),
-                    "configuration_revision_id": (
-                        str(run.configuration_revision_id)
-                        if run.configuration_revision_id
-                        else None
-                    ),
-                    "configuration_revision": run.configuration_revision,
-                    "started_at": run.started_at.isoformat() if run.started_at else None,
-                    "stopped_at": run.stopped_at.isoformat() if run.stopped_at else None,
-                }
-            operation = db.scalar(
-                select(models.EngineStartOperation)
-                .where(
-                    models.EngineStartOperation.user_id == user.id,
-                    models.EngineStartOperation.status == "pending",
-                )
-                .order_by(models.EngineStartOperation.created_at.desc())
-            )
-            if operation is not None:
-                pending_operation = {
-                    "id": str(operation.id),
-                    "type": "engine_start",
-                    "status": operation.status,
-                    "mode": operation.mode,
-                    "configuration_revision_id": str(
-                        operation.configuration_revision_id
-                    ),
-                    "configuration_revision": operation.configuration_revision,
-                    "created_at": operation.created_at.isoformat(),
-                }
 
     if (
         mode is None
@@ -480,7 +536,6 @@ def trading_bootstrap(user: CurrentUser = Depends(get_current_user)):
         runtime_mode = runtime["engine"].get("mode")
         mode = runtime_mode if runtime_mode in {"paper", "live"} else None
 
-    preferences = user_preferences.get_preferences(user.id)
     setup_state = catalog.get("setup_progress")
     position_version = runtime["position"].get(
         "position_version",
@@ -511,19 +566,13 @@ def trading_bootstrap(user: CurrentUser = Depends(get_current_user)):
         "compatible_configurations": setup_configuration.list_configurations(user.id, mode=mode),
         "selected_configuration": selected_configuration,
         "current_run": current_run,
-        "live_readiness": live_engine.evaluate_live_readiness(
-            user,
-            "real_orders",
-            uses_webhook=True,
-        ),
+        "live_readiness": live_readiness,
         "pending_operation": pending_operation,
         "engine": runtime["engine"],
         "position": runtime["position"],
-        "risk_usage": risk_overview.build_risk_overview(user.id),
-        "manual_defaults": _manual_defaults(user.id),
-        "automation_settings": automations_overview.build_automations_overview(
-            user.id
-        ),
+        "risk_usage": risk_usage,
+        "manual_defaults": manual_defaults,
+        "automation_settings": automation_settings,
         "notification_preferences": preferences.get("notification_preferences", {}),
         "chart_preferences": {
             "default_timeframe": preferences.get("default_chart_timeframe", "5m"),

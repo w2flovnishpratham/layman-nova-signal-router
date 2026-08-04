@@ -102,10 +102,16 @@ def get_engine() -> "Engine":
             )
         normalized = normalize_database_url(settings.DATABASE_URL)
         # pool_pre_ping avoids stale connections against Neon's serverless pooler.
+        # pool_size/max_overflow: the SQLAlchemy default (5/10, 15 total) was too
+        # small once callers started firing several independent reads concurrently
+        # (see trading_bootstrap) -- new connections queued behind the default's
+        # overflow limit, adding setup latency on top of Neon's own round-trip.
         engine = create_engine(
             normalized,
             pool_pre_ping=True,
             pool_recycle=300,
+            pool_size=15,
+            max_overflow=15,
             future=True,
         )
         _ENGINE = engine
