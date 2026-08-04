@@ -425,6 +425,11 @@ function ConversionDetail({
           <code>{backendHttpUrl(conversion.webhook_path as `/${string}`)}</code>
           <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(backendHttpUrl(conversion.webhook_path as `/${string}`))}><Copy size={14} /> Copy URL</Button>
         </div>
+        {' '}Alert Message field (paste this exactly, replacing TradingView's auto-filled default text):
+        <div className="ps-copy-row">
+          <code>{'{{strategy.order.alert_message}}'}</code>
+          <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText('{{strategy.order.alert_message}}')}><Copy size={14} /> Copy Message</Button>
+        </div>
         {conversion.strategy_published ? (
           <Button variant="unstyled" className="ps-danger" type="button" disabled={!!busy} onClick={() => void onUnpublish()}><X size={14} /> Unpublish</Button>
         ) : (
@@ -438,8 +443,12 @@ function ConversionDetail({
         <p className="ps-warning">
           <AlertTriangle size={16} />
           {(broadcastPine || conversion.broadcast_pine || '').includes('pine_transport_v3_fill')
-            ? <span>This is a STRATEGY-mode candidate: BUY_CE/BUY_PE/EXIT are reported by <code>alert_message=</code> on the order calls themselves, never by a bare alert() call. When creating the TradingView alert, set <strong>Condition to "Order fills only"</strong> — "Any alert() function call" will only ever catch the HOLD test and silently never fire real signals.</span>
+            ? <span>This is a STRATEGY-mode candidate. Market-order calls (no limit/stop price) report through both <code>alert_message=</code> on the order call AND a direct alert() call — either one reaching NOVA is enough. Any pending stop/limit order calls report through <code>alert_message=</code> only, since the signal must wait for the real fill. When creating the TradingView alert, set <strong>Condition to "Order fills and alert() function calls"</strong> so both paths are covered regardless of order type.</span>
             : <span>This is an INDICATOR-mode candidate: the transport calls alert() directly for every signal. When creating the TradingView alert, set <strong>Condition to "Any alert() function call"</strong>.</span>}
+        </p>
+        <p className="ps-warning">
+          <AlertTriangle size={16} />
+          <span><strong>Leave the alert's Message field completely empty.</strong> TradingView auto-fills it with a description of the strategy and its inputs when you first open the alert dialog — that auto-filled text is NOT the webhook JSON payload and will be sent as-is if you don't clear it. For market orders the direct alert() call bypasses this (its message is used regardless of the Message box), but any pending stop/limit order calls still depend on it, so clear it every time as a safety net. An empty Message field (or exactly <code>{'{{strategy.order.alert_message}}'}</code>) is what makes TradingView send the actual <code>novaWebhookPayload(...)</code> output instead.</span>
         </p>
         <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void navigator.clipboard.writeText(broadcastPine || conversion.broadcast_pine || '')}><Copy size={14} /> Copy again</Button>
         <pre>{broadcastPine || conversion.broadcast_pine}</pre>

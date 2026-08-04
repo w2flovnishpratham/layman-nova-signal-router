@@ -653,9 +653,22 @@ async def strategy_webhook(
         raw_body = await request.body()
         body = json.loads(raw_body.decode("utf-8", errors="replace"))
     except Exception:
+        # This endpoint only ever receives TradingView's alert Message body, so
+        # non-JSON here overwhelmingly means the admin left TradingView's
+        # auto-filled default Message text (a description of the strategy and
+        # its inputs) in place instead of clearing it -- that default text is
+        # not the novaWebhookPayload(...) JSON and TradingView sends it as-is.
         return JSONResponse(
             status_code=400,
-            content={"ok": False, "error": "Invalid JSON."},
+            content={
+                "ok": False,
+                "error": (
+                    "Invalid JSON. The alert's Message field is likely still set to "
+                    "TradingView's auto-filled default text -- clear it (or set it to "
+                    "exactly {{strategy.order.alert_message}}) so the alert sends the "
+                    "actual webhook payload instead."
+                ),
+            },
         )
     if not isinstance(body, dict):
         return JSONResponse(

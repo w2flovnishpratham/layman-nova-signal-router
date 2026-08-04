@@ -108,12 +108,34 @@ helper (appended server-side; call it, never redefine or reproduce it):
 
 Do not attach alert_message to strategy.cancel or strategy.cancel_all --
 cancellation changes pending-order state but is not a fill and must not
-generate a NOVA action. Do not add a bare alert() or alertcondition() call
-anywhere, and delete any that already exist in the source; order-fill
-reporting happens only through alert_message on the order calls themselves.
-Do not emit an alert directly from a raw entry condition when the source uses
-a pending stop or limit order -- the report must correspond to the actual
-order fill, which TradingView triggers.
+generate a NOVA action.
+
+Delete any pre-existing bare alert() or alertcondition() call in the source
+(the frozen transport owns alerting). For a market order -- strategy.entry /
+strategy.order / strategy.close / strategy.close_all with no limit= or stop=
+argument, so it fills on the same bar the call executes -- ALSO add a direct
+alert() call immediately after the order call, gated by barstate.isrealtime
+and barstate.isconfirmed, calling the exact same novaWebhookPayload(action,
+orderId) as the alert_message on that call:
+
+    if barstate.isrealtime and barstate.isconfirmed
+        alert(novaWebhookPayload("BUY_CE", "<same order id or event key>"), alert.freq_once_per_bar_close)
+
+This is required, not optional, for every market-order call in this mode.
+The reason: an admin creating the TradingView alert can then use Condition
+"Order fills and alert() function calls" without also having to clear
+TradingView's auto-filled default Message text -- the alert() call's message
+argument is used verbatim regardless of what sits in the Message box, so a
+market-order signal reaches NOVA correctly even if the admin never touches
+Message. NOVA's backend deduplicates on signal_id, so on the rare bar where
+both the order-fill alert_message and this direct alert() fire, the second
+delivery is a safe no-op, never a double-processed signal.
+
+Do NOT add this direct alert() call for a pending stop or limit order (one
+with a limit= or stop= argument) -- the report must correspond to the actual
+order fill, which may happen bars later or never, and a same-bar alert()
+would report a signal for an order that hasn't necessarily filled yet. For
+those calls, alert_message on the order call remains the only report.
 
 alert_message is required instrumentation on every order-producing call
 regardless of whether the source had any alert()/alertcondition()/webhook

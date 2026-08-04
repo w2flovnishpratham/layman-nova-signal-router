@@ -14,7 +14,8 @@ bool novaSecretReady = novaSecret != novaSecretPlaceholder and str.length(novaSe
 novaWebhookPayload(string action, string orderId) =>
     string novaSignalId = "NOVA-BROADCAST:" + syminfo.ticker + ":" + orderId + ":" + str.tostring(time) + ":" + action
     string novaSignalTime = str.format_time(time, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
-    '{"secret":"' + novaSecret + '","action":"' + action + '","signal_id":"' + novaSignalId + '","signal_time":"' + novaSignalTime + '","order_id":"' + orderId + '"}'
+    string novaTimestamp = str.tostring(int(timenow / 1000))
+    '{"secret":"' + novaSecret + '","action":"' + action + '","signal_id":"' + novaSignalId + '","signal_time":"' + novaSignalTime + '","order_id":"' + orderId + '","timestamp":"' + novaTimestamp + '","nonce":"' + novaSignalId + '"}'
 
 // Order-fill actions are reported by the alert_message= arguments NOVA
 // attached to the preserved strategy order calls above, fired by TradingView
