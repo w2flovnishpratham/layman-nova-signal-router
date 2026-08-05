@@ -1,6 +1,7 @@
 """Server-side Razorpay subscription checkout creation."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -8,6 +9,8 @@ import httpx
 
 from app.config import settings
 from app.services.user_context import CurrentUser
+
+logger = logging.getLogger("nova_signal_router.razorpay")
 
 
 RAZORPAY_SUBSCRIPTIONS_URL = "https://api.razorpay.com/v1/subscriptions"
@@ -118,16 +121,41 @@ def create_razorpay_subscription_checkout(
                 auth=(key_id, key_secret),
                 json=request_payload,
             )
+            # Razorpay explains a rejected payload in the response body (which
+            # plan/field it objected to). Log it before raise_for_status turns
+            # it into a bare status error -- without this the caller only ever
+            # sees "could not be created" and cannot tell a malformed request
+            # from a provider outage. The body describes the request, not the
+            # credentials, and the payload carries no secret.
+            if response.status_code >= 400:
+                logger.error(
+                    "Razorpay subscription create failed: HTTP %s plan_code=%s plan_id=%s total_count=%s body=%s",
+                    response.status_code,
+                    plan.plan_code,
+                    plan.plan_id,
+                    total_count,
+                    response.text[:500],
+                )
             response.raise_for_status()
             provider_response = response.json()
+    except RazorpayCheckoutError:
+        raise
     except Exception as exc:
+        logger.error(
+            "Razorpay subscription create errored: plan_code=%s %s: %s",
+            plan.plan_code,
+            type(exc).__name__,
+            exc,
+        )
         raise RazorpaySubscriptionCreateError("Payment subscription could not be created.") from exc
 
     if not isinstance(provider_response, dict):
+        logger.error("Razorpay subscription create returned a non-object response.")
         raise RazorpaySubscriptionCreateError("Payment subscription could not be created.")
 
     subscription_id = _safe_string(provider_response.get("id"))
     if not subscription_id:
+        logger.error("Razorpay subscription create response had no subscription id.")
         raise RazorpaySubscriptionCreateError("Payment subscription could not be created.")
     status = _safe_string(provider_response.get("status")) or "created"
     short_url = _safe_string(provider_response.get("short_url")) or None
