@@ -5,7 +5,7 @@ import { toast } from '@/components/ui/toast'
 import { Check, Lock, Play, Settings2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { getEngineStrategies, setEngineSelection, type EngineStrategy } from '../api'
-import { PageSkeleton } from '../components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import { blockerText } from './strategyBlockers'
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -66,7 +66,27 @@ export function EngineStrategyPicker({ onManage }: { onManage: (instanceId: stri
     }
   }
 
-  if (loading) return <PageSkeleton label="Loading engine strategies" variant="cards" />
+  // The note and the section headings are fixed; the counts and the cards
+  // themselves are what the request supplies.
+  if (loading) return (
+    <div className="ps-picker" role="status" aria-busy="true" aria-label="Loading engine strategies">
+      <p className="ps-note">Only strategies that cleared genuine HOLD and the server&apos;s Paper-readiness checks are selectable.</p>
+      {['Currently selected', 'Selectable'].map((heading) => (
+        <section className="ps-picker-section" key={heading}>
+          <h3>{heading}</h3>
+          <div className="ps-strategy-grid">
+            {Array.from({ length: heading === 'Currently selected' ? 1 : 2 }, (_, index) => (
+              <div className="ps-strategy-card" key={index}>
+                <Skeleton className="h-4 w-36" />
+                <Skeleton className="mt-2 h-3 w-24" />
+                <Skeleton className="mt-3 h-5 w-28 rounded-full" />
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  )
 
   const ready = strategies.filter((s) => s.selectable)
   const pending = strategies.filter((s) => !s.selectable)

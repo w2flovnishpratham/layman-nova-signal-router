@@ -10,7 +10,7 @@ import { NiftyLiveChart } from './components/NiftyLiveChart'
 import { EngineSidebar } from './components/EngineSidebar'
 import { Header } from './components/Header'
 import { softEase, useAppReducedMotion } from './components/MotionPrimitives'
-import { PageSkeleton } from './components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import { TerminalMobileBar, type TerminalMobileSection } from './components/TerminalMobileBar'
 import { SetupPanel } from './components/setup/SetupPanel'
 import type { NovaView } from './types'
@@ -550,7 +550,12 @@ function App() {
           instead of blanking the header and the whole shell. */}
       <div className="nova-page">
       <PageErrorBoundary resetKey={route}>
-      <Suspense fallback={<PageSkeleton label="Loading page" />}>
+      {/* Covers only the route chunk's download, after which the page renders
+          its own shape-accurate skeleton while its data loads. Deliberately a
+          thin bar rather than a page-shaped placeholder: which page is coming
+          is known, but showing a full fake layout here would mean two
+          different skeletons flashing in sequence. */}
+      <Suspense fallback={<Skeleton className="mx-auto mt-6 h-1 w-40 rounded-full" aria-label="Loading page" role="status" />}>
       {!isImplemented(route) ? (
         <PlaceholderPage route={route} />
       ) : route === 'signals' ? (
@@ -667,7 +672,18 @@ function App() {
           className={`engine-main-pane lg:h-full flex flex-col min-h-[450px] lg:min-h-0${engineLive ? ' engine-live-layout' : ''}`}
         >
           {!snapshotLoaded && !bootError ? (
-            <PageSkeleton label="Initializing trading session" variant="terminal" />
+            // Mirrors the live-engine stack below (chart above, activity
+            // below) so the terminal doesn't reflow once the snapshot lands.
+            <div className="live-engine-stack" role="status" aria-busy="true" aria-label="Initializing trading session">
+              <section className="nifty-chart-card">
+                <Skeleton className="nifty-chart-canvas" />
+              </section>
+              <div className="terminal-table-wrap">
+                {Array.from({ length: 6 }, (_, index) => (
+                  <Skeleton key={index} className="mb-2 h-9 w-full" />
+                ))}
+              </div>
+            </div>
           ) : (
             <>
               <div className="live-engine-stack">

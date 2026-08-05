@@ -16,7 +16,7 @@ import {
 import { AlertTriangle, Download } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { AppRoute } from '../appRoutes'
-import { PageSkeleton } from '../components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import type { AuthUser } from '../api'
 import {
   CHART_TIMEFRAMES,
@@ -130,7 +130,30 @@ export function SettingsPage({
       </header>
 
       {loading ? (
-        <PageSkeleton label="Loading settings" variant="two-column" />
+        <div className="nova-settings-grid" role="status" aria-busy="true" aria-label="Loading settings">
+          {/* Card titles are fixed page furniture; only the saved values
+              inside each card are being fetched. */}
+          {[
+            ['Profile & Plan', 'Google account', 'Current NOVA access', 'Trading Preferences'],
+            ['Display Preferences', 'Data & Exports', 'Connections & Security', 'Notifications'],
+          ].map((column, columnIndex) => (
+            <div className="nova-settings-column" key={columnIndex}>
+              {column.map((title) => (
+                <section className="nova-hooks-card nova-settings-card" key={title}>
+                  <div className="nova-hooks-card-head"><strong>{title}</strong></div>
+                  <div className="grid gap-2.5 pt-1">
+                    {Array.from({ length: 3 }, (_, row) => (
+                      <div className="flex items-center justify-between gap-4" key={row}>
+                        <Skeleton className="h-3 w-32" />
+                        <Skeleton className="h-3 w-16" />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          ))}
+        </div>
       ) : error && !prefs ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}

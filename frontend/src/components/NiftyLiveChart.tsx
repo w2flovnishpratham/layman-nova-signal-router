@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { Loader2 } from 'lucide-react'
-import { PageSkeleton } from './PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CandlestickSeries,
@@ -304,7 +304,20 @@ function NiftyLiveChartInner({
     </div>
   )
 
-  if (!series && !loadFailed) return <section className="nifty-chart-card">{header}<PageSkeleton label={`Loading NIFTY ${timeframe} chart`} variant="cards" compact /></section>
+  // The header (symbol, timeframe switcher) is already real above; only the
+  // plot area is pending, and it takes the canvas's own sizing class so the
+  // placeholder occupies exactly the space the chart will.
+  if (!series && !loadFailed) return (
+    <section className="nifty-chart-card">
+      {header}
+      <Skeleton
+        className="nifty-chart-canvas"
+        role="status"
+        aria-busy="true"
+        aria-label={`Loading NIFTY ${timeframe} chart`}
+      />
+    </section>
+  )
   if (loadFailed || !series || series.status === 'unavailable') return (
     <section className="nifty-chart-card">
       {header}

@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toast'
 import { AlertTriangle, Check, Loader2, Lock } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PageSkeleton } from '../components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   getAutomations,
   saveAutomations,
@@ -124,7 +124,20 @@ export function AutomationsPage() {
       </header>
 
       {loading ? (
-        <PageSkeleton label="Loading automations" variant="list" />
+        <section className="nova-hooks-card" role="status" aria-busy="true" aria-label="Loading automations">
+          {/* The card title is fixed; the rules and their saved values are
+              what the request supplies. */}
+          <div className="nova-hooks-card-head"><strong>Editable risk controls</strong></div>
+          {Array.from({ length: 5 }, (_, index) => (
+            <div className="flex items-center justify-between gap-4 py-3" key={index}>
+              <div className="grid flex-1 gap-1.5">
+                <Skeleton className="h-3.5 w-44" />
+                <Skeleton className="h-3 w-64 max-w-full" />
+              </div>
+              <Skeleton className="h-8 w-24 rounded-lg" />
+            </div>
+          ))}
+        </section>
       ) : error && !data ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}

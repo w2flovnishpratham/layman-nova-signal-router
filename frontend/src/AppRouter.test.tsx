@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { AppRouter } from './AppRouter'
 import { navigate } from './navigation'
 
@@ -18,6 +18,25 @@ function setPath(p: string) {
 
 afterEach(() => {
   cleanup()
+  setPath('/')
+})
+
+// AppRouter code-splits App and LandingPage with React.lazy, so the very first
+// render of each suspends for a tick and resolves on a later one. These tests
+// assert routing, not loading, so resolve both lazy components up front and
+// let every case render synchronously -- otherwise each one would pass or fail
+// purely on whether an earlier test happened to warm the module registry.
+beforeAll(async () => {
+  setPath('/')
+  const landing = render(<AppRouter />)
+  await screen.findByTestId('landing-view')
+  landing.unmount()
+
+  setPath('/app')
+  const app = render(<AppRouter />)
+  await screen.findByTestId('app-view')
+  app.unmount()
+
   setPath('/')
 })
 

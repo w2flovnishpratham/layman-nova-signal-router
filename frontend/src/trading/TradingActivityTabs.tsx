@@ -4,7 +4,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ServerEvent } from '../types'
-import { PageSkeleton } from '../components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import { getPreferences } from '../settings/settingsApi'
 import { notifyForServerEvent } from './browserNotifications'
 import {
@@ -206,7 +206,43 @@ function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
 
       {notificationStatus ? <p className="terminal-notification-state">{notificationStatus}</p> : null}
       {loading && rows.length === 0 ? (
-        <PageSkeleton label={`Loading ${TABS.find((item) => item.key === tab)?.label.toLowerCase()}`} variant="table" compact />
+        tab === 'engine' ? (
+          // The engine tab is a message feed, not a table -- placeholder it as
+          // avatar + timestamp + message lines so it matches what arrives.
+          <div
+            className="terminal-engine-chat terminal-table-wrap"
+            role="status"
+            aria-busy="true"
+            aria-label="Loading engine log"
+          >
+            {Array.from({ length: 5 }, (_, index) => (
+              <article key={index}>
+                <span className="terminal-engine-avatar">N</span>
+                <div className="grid w-full gap-1.5">
+                  <Skeleton className="h-2.5 w-16" />
+                  <Skeleton className="h-3" style={{ width: `${[86, 68, 78, 58, 72][index]}%` }} />
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          // columnsFor(tab) is pure, so the headings are known before any row
+          // is fetched -- render them for real and placeholder only the cells.
+          <div className="terminal-table-wrap" role="status" aria-busy="true" aria-label={`Loading ${TABS.find((item) => item.key === tab)?.label.toLowerCase()}`}>
+            <Table variant="unstyled" className="terminal-table">
+              <TableHeader><TableRow>{columns.map((column) => <TableHead key={column.key}>{column.label}</TableHead>)}</TableRow></TableHeader>
+              <TableBody>
+                {Array.from({ length: 5 }, (_, row) => (
+                  <TableRow key={row}>
+                    {columns.map((column) => (
+                      <TableCell key={column.key}><Skeleton className="h-3 w-full" /></TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )
       ) : error ? (
         <p className="terminal-feed-state is-error">{error}<Button variant="unstyled" type="button" onClick={() => void load(tab)}>Retry</Button></p>
       ) : rows.length === 0 ? (

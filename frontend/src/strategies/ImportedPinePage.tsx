@@ -49,7 +49,7 @@ import {
   type TradingViewSetupType,
 } from '../api'
 import { AdminPineConversionWorkspace } from './AdminPineConversion'
-import { PageSkeleton } from '../components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 
 const MAX_BYTES = 256 * 1024
 
@@ -258,7 +258,32 @@ function OwnerWorkspace() {
     }
   }
 
-  if (loading) return <PageSkeleton label="Loading imported Pine workspace" variant="list-detail" />
+  // Mirrors the browse layout below: a script list beside the detail panel.
+  // Each list entry is placeholdered as the lines it actually renders rather
+  // than one solid block.
+  if (loading) return (
+    <div className="pine-browse-grid" role="status" aria-busy="true" aria-label="Loading imported Pine workspace">
+      <aside className="ps-list">
+        {Array.from({ length: 5 }, (_, index) => (
+          <div className="ps-list-item" key={index}>
+            <Skeleton className="h-3.5 w-32" />
+            <Skeleton className="mt-1.5 h-3 w-24" />
+          </div>
+        ))}
+      </aside>
+      <div className="ps-card">
+        <div className="ps-card-head">
+          <div><Skeleton className="h-4 w-44" /></div>
+          <Skeleton className="h-5 w-20 rounded-full" />
+        </div>
+        <div className="grid gap-3 p-4">
+          {Array.from({ length: 6 }, (_, index) => (
+            <Skeleton key={index} className="h-3.5" style={{ width: `${[94, 72, 88, 64, 80, 58][index]}%` }} />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
 
   if (mode === 'browse') {
     const filteredStrategies = strategies.filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
