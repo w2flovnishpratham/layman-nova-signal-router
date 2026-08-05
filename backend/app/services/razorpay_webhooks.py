@@ -745,7 +745,10 @@ def _entity(payload: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def _iter_notes(payload: dict[str, Any]):
-    for entity_name in ("subscription", "payment", "invoice"):
+    # payment_link included so a one-time Paper Premium purchase resolves its
+    # owner and plan whether Razorpay copies the link's notes onto the payment
+    # entity or only sends them on the payment_link entity.
+    for entity_name in ("subscription", "payment", "invoice", "payment_link"):
         notes = _entity(payload, entity_name).get("notes")
         if isinstance(notes, dict):
             yield notes
