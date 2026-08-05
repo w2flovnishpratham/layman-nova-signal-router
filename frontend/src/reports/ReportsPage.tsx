@@ -2,9 +2,9 @@ import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { Skeleton } from '@/components/ui/skeleton'
 import { AlertTriangle, Download, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PageSkeleton } from '../components/PageSkeleton'
 import {
   getReport,
   reportExportUrl,
@@ -166,6 +166,91 @@ function Calendar({
   )
 }
 
+const REPORT_COLUMNS = ['Date', 'Strategy Mix', 'Trades', 'Win Rate', 'Max DD', 'Net P&L', 'Mode']
+
+/** Loading state for the report body, shaped like the same page once filled.
+ *
+ * Everything that is page furniture rather than fetched data — the stat
+ * captions, the panel headings, the table's column headers, the calendar's
+ * weekday row, the legend — renders for real immediately. Only the values
+ * still in flight are placeholders, so nothing shifts when the data lands
+ * and the page never misrepresents what it is about to show. */
+function ReportBodySkeleton({ month }: { month: string }) {
+  const monthShort = monthLabel(month).split(' ')[0]
+  return (
+    <div role="status" aria-busy="true" aria-label="Loading report">
+      <section className="nova-report-stats" aria-label="Monthly summary">
+        {[`Net P&L (${monthShort})`, 'Sessions', 'Win Rate', 'Profit Factor', 'Max Drawdown'].map((caption) => (
+          <div className="nova-report-stat" key={caption}>
+            <span>{caption}</span>
+            <Skeleton className="mt-1 h-5 w-24" />
+          </div>
+        ))}
+      </section>
+
+      <div className="nova-report-layout">
+        <section className="nova-report-panel nova-report-sessions">
+          <div className="nova-report-panel-head">
+            <h2>Daily Session Reports</h2>
+            <span>{monthLabel(month)}</span>
+          </div>
+          <div className="nova-report-table-wrap">
+            <Table variant="unstyled" className="nova-report-table">
+              <TableHeader>
+                <TableRow>
+                  {REPORT_COLUMNS.map((column) => <TableHead key={column}>{column}</TableHead>)}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 6 }, (_, row) => (
+                  <TableRow key={row}>
+                    {REPORT_COLUMNS.map((column) => (
+                      <TableCell key={column}>
+                        <Skeleton className="h-3.5" style={{ width: column === 'Strategy Mix' ? '9rem' : '3.5rem' }} />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+
+        <aside className="nova-report-aside">
+          <section className="nova-report-panel">
+            <div className="nova-report-panel-head"><h2>P&amp;L Calendar — {monthShort}</h2></div>
+            <div className="nova-pnl-calendar">
+              <div className="nova-pnl-weekdays">
+                {WEEKDAYS.map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}
+              </div>
+              <div className="nova-pnl-days">
+                {Array.from({ length: 35 }, (_, index) => (
+                  <Skeleton key={index} className="rounded-[7px]" style={{ aspectRatio: '1 / 1' }} />
+                ))}
+              </div>
+            </div>
+            <div className="nova-pnl-legend">
+              <span className="is-loss" /> Loss <span className="is-neutral" /> No closed trades <span className="is-profit" /> Profit
+            </div>
+          </section>
+
+          <section className="nova-report-panel">
+            <div className="nova-report-panel-head"><h2>By Strategy — {monthShort}</h2></div>
+            <div className="nova-report-strategies">
+              {Array.from({ length: 3 }, (_, index) => (
+                <div className="nova-report-strategy" key={index}>
+                  <span><Skeleton className="h-3.5 w-28" /></span>
+                  <div><i style={{ width: '0%' }} /></div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
+  )
+}
+
 export function ReportsPage({ initialMode }: { initialMode?: ReportMode | null }) {
   const search = new URLSearchParams(window.location.search)
   const [month, setMonth] = useState(search.get('month') ?? currentIstMonth())
@@ -243,7 +328,7 @@ export function ReportsPage({ initialMode }: { initialMode?: ReportMode | null }
       </div>
 
       {loading ? (
-        <PageSkeleton label="Loading report" variant="calendar" />
+        <ReportBodySkeleton month={month} />
       ) : error ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}

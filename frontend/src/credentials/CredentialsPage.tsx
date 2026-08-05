@@ -12,7 +12,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { toast } from '@/components/ui/toast'
-import { PageSkeleton } from '../components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   AlertTriangle,
   Check,
@@ -70,6 +70,63 @@ function formatDate(value: string | null): string {
 function expiryDays(value: string | null): number | null {
   if (!value) return null
   return Math.max(0, Math.ceil((new Date(value).getTime() - Date.now()) / 86_400_000))
+}
+
+/** Loading state for the credentials body, shaped like the filled page.
+ *
+ * The card chrome, the broker mark, and every fact caption are fixed — only
+ * the vault values behind them are being fetched, so only those are
+ * placeholders. */
+function CredentialsBodySkeleton() {
+  return (
+    <div className="nova-credentials-layout" role="status" aria-busy="true" aria-label="Loading credentials">
+      <div className="nova-credentials-main">
+        <section className="nova-credentials-card nova-credentials-account">
+          <div className="nova-credentials-account-head">
+            <img className="nova-credentials-broker-mark" src="/dhan.png" alt="" aria-hidden="true" />
+            <div>
+              <h2>Dhan — Primary Account</h2>
+              <Skeleton className="mt-1.5 h-3 w-40" />
+            </div>
+            <Skeleton className="h-6 w-32 rounded-full" />
+          </div>
+
+          <div className="nova-credentials-account-grid">
+            {['Client ID', 'Access Token', 'Nova Static IP', 'Last Verified'].map((caption) => (
+              <div className="nova-credentials-account-fact" key={caption}>
+                <span>{caption}</span>
+                <Skeleton className="mt-1 h-4 w-28" />
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="nova-credentials-card nova-credentials-connect">
+          <div>
+            <h2>Connect a Broker Account</h2>
+            <p>Credentials are verified against the broker before saving. Live routing stays subject to server safety checks.</p>
+          </div>
+          <div className="grid gap-3">
+            {['Client ID', 'Access Token'].map((caption) => (
+              <label className="nova-cred-field" key={caption}>
+                {caption}
+                <Skeleton className="mt-1.5 h-[42px] w-full rounded-[9px]" />
+              </label>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <aside className="nova-credentials-aside">
+        <section className="nova-credentials-card">
+          <Skeleton className="h-4 w-32" />
+          <div className="mt-3 grid gap-2.5">
+            {Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-3.5 w-full" />)}
+          </div>
+        </section>
+      </aside>
+    </div>
+  )
 }
 
 export function CredentialsPage() {
@@ -178,7 +235,7 @@ export function CredentialsPage() {
       </header>
 
       {loading ? (
-        <PageSkeleton label="Loading credentials" variant="split-form" />
+        <CredentialsBodySkeleton />
       ) : error ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}

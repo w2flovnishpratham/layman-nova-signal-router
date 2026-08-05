@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { AlertTriangle, Check, Copy, Eye, EyeOff, KeyRound, Loader2, Shield } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { AuthUser } from '../api'
-import { PageSkeleton } from '../components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   getManagedStrategyWebhookSecret,
   getWebhooksOverview,
@@ -27,6 +27,8 @@ function statusTone(status: string): string {
   if (status === 'rejected') return 'nova-sig-bad'
   return 'nova-sig-neutral'
 }
+
+const WEBHOOK_COLUMNS = ['Received', 'Event', 'Status', 'Signature']
 
 export function WebhooksPage({ user }: { user?: AuthUser } = {}) {
   const [data, setData] = useState<WebhooksOverview | null>(null)
@@ -93,7 +95,24 @@ export function WebhooksPage({ user }: { user?: AuthUser } = {}) {
       </header>
 
       {loading ? (
-        <PageSkeleton label="Loading webhooks" variant="table" />
+        <div className="nova-signals-table-wrap" role="status" aria-busy="true" aria-label="Loading webhooks">
+          <Table variant="unstyled" className="nova-signals-table">
+            <TableHeader>
+              <TableRow>
+                {WEBHOOK_COLUMNS.map((column) => <TableHead scope="col" key={column}>{column}</TableHead>)}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {Array.from({ length: 6 }, (_, row) => (
+                <TableRow key={row}>
+                  {WEBHOOK_COLUMNS.map((column) => (
+                    <TableCell key={column}><Skeleton className="h-3.5 w-full max-w-28" /></TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       ) : error ? (
         <p className="nova-signals-state" role="alert"><AlertTriangle size={16} /> {error}
           <Button variant="unstyled" type="button" className="conv-pill" onClick={() => void load()}>Retry</Button>

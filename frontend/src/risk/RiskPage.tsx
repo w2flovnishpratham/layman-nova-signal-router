@@ -7,7 +7,7 @@ import { toast } from '@/components/ui/toast'
 import { Check, CircleAlert, Loader2, ShieldX } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RuntimeStatus } from '../api'
-import { PageSkeleton } from '../components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   getRiskPageData,
   paise,
@@ -209,6 +209,73 @@ function KillSwitch({
   )
 }
 
+/** Loading state for the risk body, shaped like the filled page.
+ *
+ * Section headings and field captions are fixed; what is unknown until the
+ * fetch returns is which profile the owner selected and the saved limit
+ * values, so only those are placeholders. */
+function RiskBodySkeleton() {
+  return (
+    <div role="status" aria-busy="true" aria-label="Loading risk settings">
+      <section>
+        <div className="nova-risk-section-head">
+          <div>
+            <h2>Risk Profiles</h2>
+            <p>Fixed system templates. Selecting one loads it into the editor without saving.</p>
+          </div>
+        </div>
+        <div className="nova-risk-presets">
+          {Array.from({ length: 3 }, (_, index) => (
+            <div className="nova-risk-preset" key={index}>
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="mt-2 h-3 w-full" />
+              <Skeleton className="mt-1.5 h-3 w-4/5" />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="nova-risk-layout">
+        <div className="nova-risk-primary">
+          <section className="nova-risk-panel nova-risk-editor">
+            <div className="nova-risk-editor-head">
+              <div>
+                <h2>Active Risk Settings</h2>
+                <Skeleton className="mt-1.5 h-3 w-52" />
+              </div>
+              <Skeleton className="h-5 w-20 rounded-full" />
+            </div>
+            <fieldset>
+              <div className="nova-risk-fields">
+                {['Max lots per order', 'Max orders per day', 'Max notional per trade', 'Max loss per day'].map((caption) => (
+                  <label key={caption}>
+                    {caption}
+                    <Skeleton className="mt-1.5 h-9 w-full rounded-lg" />
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          </section>
+        </div>
+
+        <aside className="nova-risk-side">
+          <section className="nova-risk-panel">
+            <Skeleton className="h-4 w-28" />
+            <div className="mt-3 grid gap-3">
+              {Array.from({ length: 4 }, (_, index) => (
+                <div key={index}>
+                  <Skeleton className="h-3 w-32" />
+                  <Skeleton className="mt-1.5 h-2 w-full rounded-full" />
+                </div>
+              ))}
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
+  )
+}
+
 export function RiskPage({ runtime }: { runtime: RuntimeStatus | null }) {
   const search = new URLSearchParams(window.location.search)
   const [mode, setMode] = useState<RiskMode>(search.get('mode') === 'live' ? 'live' : 'paper')
@@ -306,7 +373,7 @@ export function RiskPage({ runtime }: { runtime: RuntimeStatus | null }) {
       </header>
 
       {loading ? (
-        <PageSkeleton label="Loading risk settings" variant="split-form" />
+        <RiskBodySkeleton />
       ) : error && !draft ? (
         <p className="nova-signals-state" role="alert"><CircleAlert size={16} /> {error}
           <Button variant="unstyled" className="conv-pill" onClick={() => void load()}>Retry</Button>

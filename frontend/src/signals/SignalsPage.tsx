@@ -2,10 +2,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from '@/components/ui/button'
 import { AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { PageSkeleton } from '../components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import { SIGNAL_STATUSES, getSignals, type SignalStatus, type SignalsPage as Page } from './signalsApi'
 
 const PAGE_SIZE = 10
+const SIGNAL_COLUMNS = ['Time', 'Strategy', 'Alert', 'Action', 'Instrument', 'Status', 'Signature']
 
 function statusTone(status: string): string {
   if (status === 'received') return 'nova-sig-info'
@@ -125,7 +126,24 @@ export function SignalsPage() {
       ) : null}
 
       {loading ? (
-        <PageSkeleton label="Loading signals" variant="table" />
+        <div className="nova-signals-table-scroll" role="status" aria-busy="true" aria-label="Loading signals">
+          <Table variant="unstyled" className="nova-signals-table nova-signals-rich-table">
+            <TableHeader>
+              <TableRow>
+                {SIGNAL_COLUMNS.map((column) => <TableHead scope="col" key={column}>{column}</TableHead>)}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {Array.from({ length: 8 }, (_, row) => (
+                <TableRow key={row}>
+                  {SIGNAL_COLUMNS.map((column) => (
+                    <TableCell key={column}><Skeleton className="h-3.5 w-full max-w-24" /></TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       ) : error ? (
         <p className="nova-signals-state" role="alert"><AlertTriangle size={16} /> {error}
           <Button variant="unstyled" type="button" className="conv-pill" onClick={() => void load(status, cursor)}>Retry</Button>

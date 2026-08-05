@@ -5927,6 +5927,61 @@ pre {
   color: #090a0c;
 }
 
+/* Skeleton placeholder fill.
+   Deliberately a translucent WHITE wash rather than a flat colour token: a
+   skeleton sits on the page background, inside cards, and inside nested
+   panels, and any opaque colour that reads correctly on one of those reads
+   as a hole on another. (The previous --nova-bg-soft #080A0F was darker than
+   the --bg-1 #0d0c14 cards it sat in, which is why it was invisible.)
+   The doubled class/attribute selector keeps this winning over the older
+   .nova-skeleton-* layout rules regardless of source order. */
+.nova-skeleton,
+.nova-skeleton[data-slot="skeleton"] {
+  position: relative;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.075);
+}
+
+/* Sweep, not an opacity pulse: a highlight travelling across the fill stays
+   legible at this low contrast, where fading the whole block does not. */
+.nova-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.11) 50%,
+    transparent 100%
+  );
+  animation: nova-skeleton-sweep 1.5s ease-in-out infinite;
+}
+
+@keyframes nova-skeleton-sweep {
+  100% { transform: translateX(100%); }
+}
+
+:root[data-theme="light"] .nova-skeleton,
+:root[data-theme="light"] .nova-skeleton[data-slot="skeleton"] {
+  background: rgba(0, 0, 0, 0.075);
+}
+
+:root[data-theme="light"] .nova-skeleton::after {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.06) 50%,
+    transparent 100%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nova-skeleton::after { animation: none; }
+}
+
 .nova-page-skeleton {
   display: grid;
   width: 100%;

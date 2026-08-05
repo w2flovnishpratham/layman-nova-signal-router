@@ -3,7 +3,7 @@ import { NativeSelect } from "@/components/ui/native-select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toast'
-import { PageSkeleton } from '@/components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   AlertTriangle,
   Check,
@@ -296,7 +296,57 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
   }
 
   if (loading) {
-    return <PageSkeleton label="Loading personal strategies" variant="list-detail" />
+    // Heading and actions are fixed page furniture -- only the strategy list
+    // and the selected strategy's detail are being fetched. Each list entry is
+    // skeletoned as the five separate lines it actually renders rather than one
+    // solid block, so the placeholder doesn't imply more content than arrives.
+    return (
+      <div className="ps-page">
+        <div className="ps-heading">
+          <div>
+            <span className="ps-eyebrow"><ShieldCheck size={13} /> Paper mode only</span>
+            <h1>Personal TradingView Strategies</h1>
+            <p>Create a private route, paste four alert messages, test safely, then activate.</p>
+          </div>
+          <div className="ps-heading-actions">
+            <Button variant="unstyled" type="button" className="secondary-button" disabled>
+              <RefreshCw size={14} /> Refresh
+            </Button>
+            <Button variant="unstyled" type="button" className="ps-primary" disabled>
+              <Plus size={15} /> New strategy
+            </Button>
+          </div>
+        </div>
+
+        <div className="ps-layout" role="status" aria-busy="true" aria-label="Loading personal strategies">
+          <aside className="ps-list">
+            {Array.from({ length: 4 }, (_, index) => (
+              <div className="ps-list-item" key={index}>
+                <span className="ps-list-top">
+                  <Skeleton className="h-3.5 w-32" />
+                  <Skeleton className="h-4 w-16 rounded-full" />
+                </span>
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-3 w-28" />
+                <Skeleton className="h-3 w-36" />
+              </div>
+            ))}
+          </aside>
+
+          <section className="ps-card">
+            <div className="ps-card-head">
+              <div><Skeleton className="h-4 w-40" /></div>
+              <Skeleton className="h-5 w-14 rounded-full" />
+            </div>
+            <div className="grid gap-3 p-4">
+              {Array.from({ length: 5 }, (_, index) => (
+                <Skeleton key={index} className="h-3.5" style={{ width: `${[92, 74, 84, 62, 78][index]}%` }} />
+              ))}
+            </div>
+          </section>
+        </div>
+      </div>
+    )
   }
 
   return (

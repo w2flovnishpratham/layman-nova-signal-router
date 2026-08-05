@@ -6,7 +6,7 @@ import { Download, RefreshCw, ShieldAlert } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RuntimeStatus } from '../api'
 import { MotionProgressFill } from '../components/MotionPrimitives'
-import { PageSkeleton } from '../components/PageSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import { formatCurrency } from '../lib/format'
 import { reportCsvUrl } from '../reports/reportsApi'
 import { getRiskOverview, type RiskOverview, type RiskStrategyRow } from '../risk/riskApi'
@@ -145,7 +145,88 @@ export function PortfolioDashboard({
   )
 
   if (loading && !data) {
-    return <PageSkeleton label="Loading portfolio dashboard" variant="dashboard" />
+    // The heading, the mode/origin switches and the panel titles are page
+    // furniture driven by local state, not by the fetch -- so they render for
+    // real and stay usable while the snapshot loads. Only the figures the
+    // request will supply are placeholders.
+    return (
+      <div className="nv-dash">
+        <header className="nv-dash-head">
+          <div>
+            <h1>Portfolio Dashboard</h1>
+            <p>Viewing: {titleCase(viewMode)} data</p>
+          </div>
+          <div className="nv-dash-actions">
+            <div className="nv-segmented" aria-label="Dashboard view mode" role="group">
+              {(['paper', 'live'] as const).map((option) => (
+                <Button variant="unstyled"
+                  key={option}
+                  type="button"
+                  className={option === viewMode ? 'active' : ''}
+                  onClick={() => setViewModeAndUrl(option)}
+                  aria-pressed={option === viewMode}
+                >
+                  {titleCase(option)}
+                </Button>
+              ))}
+            </div>
+            <div className="nv-segmented" aria-label="Trade origin filter" role="group">
+              {(['all', 'automated', 'manual'] as const).map((option) => (
+                <Button variant="unstyled"
+                  key={option}
+                  type="button"
+                  className={option === tradeOrigin ? 'active' : ''}
+                  onClick={() => setTradeOriginAndUrl(option)}
+                  aria-pressed={option === tradeOrigin}
+                >
+                  {option === 'all' ? 'All Trades' : titleCase(option)}
+                </Button>
+              ))}
+            </div>
+          </div>
+        </header>
+
+        <section
+          className="nv-kpi-grid nv-kpi-grid-six"
+          aria-label="Portfolio summary"
+          role="status"
+          aria-busy="true"
+        >
+          {[
+            'Session P&L',
+            'Account equity',
+            'Open positions',
+            'Signals (24h)',
+            'Profit factor',
+            'Daily loss used',
+          ].map((label) => (
+            <article className="nv-kpi-card" key={label}>
+              <span className="nv-kpi-label">{label}</span>
+              <Skeleton className="my-1.5 h-6 w-24" />
+              <Skeleton className="h-3 w-32" />
+            </article>
+          ))}
+        </section>
+
+        <div className="nv-dashboard-grid nv-dashboard-grid-charts">
+          <section className="nv-panel nv-equity-panel">
+            <div className="nv-panel-head">
+              <div className="nv-panel-title-row">
+                <h2>Equity Curve</h2>
+                <span>{titleCase(viewMode)} account · tracked closed trades</span>
+              </div>
+            </div>
+            <Skeleton className="mt-3 h-[220px] w-full" />
+          </section>
+          <section className="nv-panel">
+            <div className="nv-panel-head">
+              <div className="nv-panel-title-row"><h2>Daily P&amp;L</h2></div>
+            </div>
+            <Skeleton className="mt-3 h-[220px] w-full" />
+          </section>
+        </div>
+      </div>
+    )
   }
 
   if (error && !data) {
