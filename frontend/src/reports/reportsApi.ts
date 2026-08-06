@@ -8,6 +8,28 @@ export interface Metric {
 export type ReportMode = 'paper' | 'live'
 export type TradeOrigin = 'all' | 'automated' | 'manual'
 
+export interface TradeDetail {
+  id: string
+  opened_at: string | null
+  closed_at: string | null
+  /** Full trading symbol, e.g. "NIFTY 11 AUG 24650 CALL" -- carries strike and expiry. */
+  symbol: string | null
+  option_side: string | null
+  qty: number
+  entry_price: number | null
+  exit_price: number | null
+  charges: number | null
+  gross_pnl: number | null
+  realized_pnl: number | null
+  pnl_pct: number | null
+  strategy: string | null
+  /** MANUAL vs an automated source. */
+  origin: string | null
+  /** Why it closed: STOP_LOSS / TAKE_PROFIT / EOD_SQUAREOFF / MANUAL / ... */
+  exit_trigger: string | null
+  result: 'win' | 'loss' | 'flat'
+}
+
 export interface DailySession {
   date: string
   strategy_mix: string[]
@@ -19,6 +41,7 @@ export interface DailySession {
   net_pnl: number
   manual_orders: number
   mode: ReportMode
+  trades_detail: TradeDetail[]
 }
 
 export interface StrategyReport {

@@ -139,6 +139,46 @@ def _win_rate(wins: int, losses: int) -> dict[str, Any]:
     )
 
 
+def _trade_row(trade: models.PortfolioTrade) -> dict[str, Any]:
+    """Per-trade detail for a session's drill-down table.
+
+    symbol is the full trading symbol (e.g. "NIFTY 11 AUG 24650 CALL"), so
+    strike and expiry are carried there rather than as separate columns --
+    PortfolioTrade has never stored them individually.
+
+    Deliberately absent: the SL/TP levels that were armed on the trade. They
+    live on the runtime position, not on the durable ledger row, so they are
+    genuinely unavailable for closed trades and would have to be added as
+    columns (plus a migration) before they could be shown.
+    """
+    entry = float(trade.entry_price or 0.0)
+    exit_price = float(trade.exit_price or 0.0)
+    entry_charges = float(trade.entry_charges or 0.0)
+    exit_charges = float(trade.exit_charges or 0.0)
+    realized = float(trade.realized_pnl or 0.0)
+    invested = entry * int(trade.qty or 0)
+    return {
+        "id": str(trade.id),
+        "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
+        "closed_at": trade.closed_at.isoformat() if trade.closed_at else None,
+        "symbol": trade.symbol,
+        "option_side": trade.option_side,
+        "qty": int(trade.qty or 0),
+        "entry_price": _round(entry),
+        "exit_price": _round(exit_price),
+        "charges": _round(entry_charges + exit_charges),
+        "gross_pnl": _round(float(trade.gross_pnl or 0.0)),
+        "realized_pnl": _round(realized),
+        "pnl_pct": _round(realized / invested * 100.0) if invested else None,
+        "strategy": _strategy_label(trade),
+        # Who opened it (MANUAL vs an automated source) and why it closed
+        # (STOP_LOSS / TAKE_PROFIT / EOD_SQUAREOFF / MANUAL / ...).
+        "origin": trade.origin,
+        "exit_trigger": trade.exit_trigger,
+        "result": "win" if realized > 0 else "loss" if realized < 0 else "flat",
+    }
+
+
 def _daily_sessions(trades: list[models.PortfolioTrade], mode: str) -> list[dict[str, Any]]:
     buckets: dict[date, list[models.PortfolioTrade]] = defaultdict(list)
     for trade in trades:
@@ -160,6 +200,17 @@ def _daily_sessions(trades: list[models.PortfolioTrade], mode: str) -> list[dict
             "net_pnl": _round(sum(float(row.realized_pnl or 0.0) for row in rows)),
             "manual_orders": sum(row.origin == "MANUAL" for row in rows),
             "mode": mode,
+            # Per-trade detail for the row's drill-down, newest first. Already
+            # in memory here, so it costs no extra query -- the alternative was
+            # a second endpoint refetching the same rows per day.
+            "trades_detail": [
+                _trade_row(row)
+                for row in sorted(
+                    rows,
+                    key=lambda item: (item.closed_at is None, item.closed_at),
+                    reverse=True,
+                )
+            ],
         })
     return sessions
 

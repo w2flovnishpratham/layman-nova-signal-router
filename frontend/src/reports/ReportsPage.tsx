@@ -3,8 +3,8 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Skeleton } from '@/components/ui/skeleton'
-import { AlertTriangle, Download, TrendingDown, TrendingUp } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, ChevronRight, Download, TrendingDown, TrendingUp } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   getReport,
   reportExportUrl,
@@ -12,6 +12,7 @@ import {
   type DailySession,
   type Report,
   type ReportMode,
+  type TradeDetail,
   type TradeOrigin,
 } from './reportsApi'
 
@@ -168,6 +169,82 @@ function Calendar({
 
 const REPORT_COLUMNS = ['Date', 'Strategy Mix', 'Trades', 'Win Rate', 'Max DD', 'Net P&L', 'Mode']
 
+function istTime(value: string | null): string {
+  if (!value) return '—'
+  return new Date(value).toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Asia/Kolkata',
+  })
+}
+
+function money(value: number | null | undefined, signed = false): string {
+  if (value == null) return '—'
+  return rupees(value, signed)
+}
+
+/** STOP_LOSS -> "Stop loss", EOD_SQUAREOFF -> "Eod squareoff". */
+function humanLabel(value: string | null): string {
+  if (!value) return '—'
+  const spaced = value.replaceAll('_', ' ').toLowerCase()
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
+}
+
+function TradeDetailTable({ trades }: { trades: TradeDetail[] }) {
+  if (!trades.length) return <p className="nova-trade-detail-empty">No closed trades recorded for this session.</p>
+  return (
+    <div className="nova-trade-detail">
+      <div className="nova-trade-detail-head">
+        <h3>Trades <span>{trades.length}</span></h3>
+      </div>
+      <div className="nova-trade-detail-scroll">
+        <Table variant="unstyled" className="nova-trade-table">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Time</TableHead>
+              <TableHead>Contract</TableHead>
+              <TableHead className="num">Qty</TableHead>
+              <TableHead className="num">Buy</TableHead>
+              <TableHead className="num">Sell</TableHead>
+              <TableHead className="num">Charges</TableHead>
+              <TableHead className="num">Net P&amp;L</TableHead>
+              <TableHead className="num">%</TableHead>
+              <TableHead>Exit reason</TableHead>
+              <TableHead>Source</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {trades.map((trade) => (
+              <TableRow key={trade.id} className={`nova-trade-row is-${trade.result}`}>
+                <TableCell className="nova-trade-time">
+                  <strong>{istTime(trade.closed_at)}</strong>
+                  <small>in {istTime(trade.opened_at)}</small>
+                </TableCell>
+                <TableCell className="nova-trade-contract">
+                  <strong>{trade.symbol ?? '—'}</strong>
+                  {trade.strategy ? <small>{trade.strategy}</small> : null}
+                </TableCell>
+                <TableCell className="num">{trade.qty || '—'}</TableCell>
+                <TableCell className="num">{money(trade.entry_price)}</TableCell>
+                <TableCell className="num">{money(trade.exit_price)}</TableCell>
+                <TableCell className="num">{money(trade.charges)}</TableCell>
+                <TableCell className={`num ${(trade.realized_pnl ?? 0) >= 0 ? 'nova-sig-ok' : 'nova-sig-bad'}`}>
+                  {money(trade.realized_pnl, true)}
+                </TableCell>
+                <TableCell className={`num ${(trade.pnl_pct ?? 0) >= 0 ? 'nova-sig-ok' : 'nova-sig-bad'}`}>
+                  {trade.pnl_pct == null ? '—' : `${trade.pnl_pct > 0 ? '+' : ''}${trade.pnl_pct.toFixed(2)}%`}
+                </TableCell>
+                <TableCell><span className="nova-trade-tag">{humanLabel(trade.exit_trigger)}</span></TableCell>
+                <TableCell><span className="nova-trade-tag is-muted">{humanLabel(trade.origin)}</span></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
 /** Loading state for the report body, shaped like the same page once filled.
  *
  * Everything that is page furniture rather than fetched data — the stat
@@ -263,6 +340,9 @@ export function ReportsPage({ initialMode }: { initialMode?: ReportMode | null }
   const [data, setData] = useState<Report | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // One session expanded at a time -- the detail table is wide, and stacking
+  // several open at once buries the summary rows it hangs off.
+  const [expandedSession, setExpandedSession] = useState<string | null>(null)
   const bounds = useMemo(() => monthBounds(month), [month])
 
   const load = useCallback(async () => {
@@ -362,12 +442,23 @@ export function ReportsPage({ initialMode }: { initialMode?: ReportMode | null }
                   <Table variant="unstyled" className="nova-report-table">
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Date</TableHead><TableHead>Strategy Mix</TableHead><TableHead>Trades</TableHead><TableHead>Win Rate</TableHead><TableHead>Max DD</TableHead><TableHead>Net P&amp;L</TableHead><TableHead>Mode</TableHead>
+                        <TableHead aria-label="Expand" /><TableHead>Date</TableHead><TableHead>Strategy Mix</TableHead><TableHead>Trades</TableHead><TableHead>Win Rate</TableHead><TableHead>Max DD</TableHead><TableHead>Net P&amp;L</TableHead><TableHead>Mode</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {data.daily_sessions.map((session) => (
-                        <TableRow key={session.date}>
+                      {data.daily_sessions.map((session) => {
+                        const expanded = expandedSession === session.date
+                        const canExpand = (session.trades_detail?.length ?? 0) > 0
+                        return (
+                        <Fragment key={session.date}>
+                        <TableRow
+                          className={`nova-report-session-row${canExpand ? ' is-expandable' : ''}${expanded ? ' is-expanded' : ''}`}
+                          onClick={canExpand ? () => setExpandedSession(expanded ? null : session.date) : undefined}
+                          aria-expanded={canExpand ? expanded : undefined}
+                        >
+                          <TableCell className="nova-report-expand">
+                            {canExpand ? <ChevronRight size={13} className={expanded ? 'is-open' : ''} aria-hidden /> : null}
+                          </TableCell>
                           <TableCell>{formatSessionDate(session.date)}</TableCell>
                           <TableCell>{session.strategy_mix.join(' · ')}</TableCell>
                           <TableCell>{session.trades}</TableCell>
@@ -376,7 +467,16 @@ export function ReportsPage({ initialMode }: { initialMode?: ReportMode | null }
                           <TableCell className={session.net_pnl >= 0 ? 'nova-sig-ok' : 'nova-sig-bad'}>{rupees(session.net_pnl, true)}</TableCell>
                           <TableCell className="nova-report-mode">{session.mode}</TableCell>
                         </TableRow>
-                      ))}
+                        {expanded ? (
+                          <TableRow className="nova-report-detail-row">
+                            <TableCell colSpan={8}>
+                              <TradeDetailTable trades={session.trades_detail} />
+                            </TableCell>
+                          </TableRow>
+                        ) : null}
+                        </Fragment>
+                        )
+                      })}
                     </TableBody>
                   </Table>
                 </div>

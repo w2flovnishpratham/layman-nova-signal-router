@@ -487,7 +487,12 @@ def engine_log(
             "mode": str(clean.get("mode") or "").lower() or None,
             "run_id": _field(clean, "run_id"),
         }
-        if _matches(item, mode=requested_mode, run_id=run_id):
+        # Day-scoped like activity() and executions(): the terminal shows the
+        # current session, so every tab must clear at the next market open
+        # rather than trailing yesterday's engine events into today.
+        if _matches(item, mode=requested_mode, run_id=run_id) and _is_today_ist(
+            item.get("occurred_at")
+        ):
             items.append(item)
     return _page(items, limit=limit, cursor=cursor)
 
@@ -577,8 +582,15 @@ def alerts(
             "mode": str(clean.get("mode") or "").lower() or None,
             "run_id": _field(clean, "run_id"),
         }
-        if _matches(item, mode=requested_mode, run_id=run_id):
+        # Historical alerts are day-scoped like the other terminal tabs, so the
+        # session starts clean each market open.
+        if _matches(item, mode=requested_mode, run_id=run_id) and _is_today_ist(
+            item.get("occurred_at")
+        ):
             historical_items.append(item)
+    # Active items are deliberately NOT day-scoped: they are conditions that are
+    # true right now (e.g. a stale position quote). A live safety condition must
+    # never be hidden because it first tripped before midnight.
     active_items = [
         item for item in _active_alert_items(runtime)
         if _matches(item, mode=requested_mode, run_id=run_id)
