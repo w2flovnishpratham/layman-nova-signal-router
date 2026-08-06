@@ -68,30 +68,6 @@ class FakeRazorpayClient:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    # Paper Premium is created as a one-time Payment Link, which reads the
-    # configured plan for its price first and authenticates on the client
-    # rather than per-request.
-    plan_payload: dict = {
-        "id": "plan_paper_premium_test",
-        "item": {"amount": 10000, "currency": "INR"},
-    }
-    payment_link_payload: dict = {
-        "id": "plink_checkout_test",
-        "status": "created",
-        "short_url": "https://rzp.io/i/test-payment-link",
-        "raw_provider_field": "must-not-return",
-    }
-
-    def get(self, url, **kwargs):
-        import httpx
-
-        self.__class__.calls.append({"method": "GET", "url": url})
-        return httpx.Response(
-            200,
-            json=self.__class__.plan_payload,
-            request=httpx.Request("GET", url),
-        )
-
     def post(self, url, *, json, auth=None):
         import httpx
 
@@ -104,14 +80,9 @@ class FakeRazorpayClient:
                 "timeout": self.kwargs.get("timeout"),
             }
         )
-        payload = (
-            self.__class__.payment_link_payload
-            if "payment_links" in url
-            else self.__class__.response_payload
-        )
         return httpx.Response(
             200,
-            json=payload,
+            json=self.__class__.response_payload,
             request=httpx.Request("POST", url),
         )
 
@@ -261,14 +232,10 @@ def test_authenticated_user_can_request_configured_plan(checkout_env, monkeypatc
     assert FakeRazorpayClient.calls[0]["json"]["customer_notify"] is True
 
 
-def test_paper_premium_checkout_creates_a_one_time_payment_link(checkout_env, monkeypatch):
-    """paper_premium is a genuine one-time purchase, so it is created as a
-    Payment Link rather than a Subscription on a long-cycle plan.
-
-    The notes carry what the webhook needs to grant the entitlement: the owner
-    (nova_user_id) and a Razorpay plan id, since a payment link has no plan_id
-    of its own and _features_for_plan resolves entitlement features from one.
-    """
+def test_paper_premium_checkout_creates_a_single_charge_subscription(checkout_env, monkeypatch):
+    """paper_premium is a one-time purchase modelled as a Subscription with
+    total_count=1 on a long-cycle plan, purely to obtain a hosted checkout
+    URL -- it completes after the first charge and never renews."""
     from app.services import razorpay_checkout
 
     user = _current_user(make_user("checkout-paper@example.com"))
@@ -281,40 +248,15 @@ def test_paper_premium_checkout_creates_a_one_time_payment_link(checkout_env, mo
     assert response.status_code == 200
     body = response.json()
     assert body["plan_code"] == "paper_premium"
-    assert body["short_url"] == "https://rzp.io/i/test-payment-link"
-    assert body["checkout_url"] == "https://rzp.io/i/test-payment-link"
+    assert body["short_url"] == "https://rzp.io/i/test-checkout"
     assert "raw_provider_field" not in body
 
-    posts = [call for call in FakeRazorpayClient.calls if call.get("method") == "POST"]
-    assert len(posts) == 1
-    assert "payment_links" in posts[0]["url"]
-    assert "subscriptions" not in posts[0]["url"]
-
-    sent = posts[0]["json"]
-    # Price is taken from the configured Razorpay plan, not hardcoded here.
-    assert sent["amount"] == 10000
-    assert sent["currency"] == "INR"
-    assert sent["accept_partial"] is False
+    assert FakeRazorpayClient.calls[0]["url"] == "https://api.razorpay.com/v1/subscriptions"
+    sent = FakeRazorpayClient.calls[0]["json"]
+    assert sent["plan_id"] == PAPER_PLAN
+    assert sent["total_count"] == 1
     assert sent["notes"]["nova_user_id"] == str(user.id)
     assert sent["notes"]["nova_plan_code"] == "paper_premium"
-    assert sent["notes"]["razorpay_plan_id"] == PAPER_PLAN
-
-
-def test_paper_premium_never_creates_a_subscription(checkout_env, monkeypatch):
-    """Regression guard: the Subscriptions API must not be used for a product
-    the UI presents as a one-time purchase."""
-    from app.services import razorpay_checkout
-
-    user = _current_user(make_user("checkout-paper-no-sub@example.com"))
-    FakeRazorpayClient.calls = []
-    monkeypatch.setattr(razorpay_checkout.httpx, "Client", FakeRazorpayClient)
-    client, _ = _auth_client(user)
-
-    client.post("/api/payments/razorpay/create-subscription", json={"plan_code": "paper_premium"})
-
-    assert not any(
-        "subscriptions" in call["url"] for call in FakeRazorpayClient.calls
-    )
 
 
 def test_frontend_user_id_and_payment_fields_are_ignored(checkout_env, monkeypatch):

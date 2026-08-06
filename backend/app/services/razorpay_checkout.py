@@ -14,8 +14,6 @@ logger = logging.getLogger("nova_signal_router.razorpay")
 
 
 RAZORPAY_SUBSCRIPTIONS_URL = "https://api.razorpay.com/v1/subscriptions"
-RAZORPAY_PLANS_URL = "https://api.razorpay.com/v1/plans"
-RAZORPAY_PAYMENT_LINKS_URL = "https://api.razorpay.com/v1/payment_links"
 DEFAULT_SUBSCRIPTION_TOTAL_COUNT = 12
 # A one-time purchase modeled as a single charge on a long-cycle Razorpay
 # plan (e.g. a ~100-year billing interval) -- total_count=1 means the
@@ -95,101 +93,6 @@ def _configured_paper_premium_plan_id() -> str:
     return _safe_string(settings.RAZORPAY_PLAN_PAPER_PREMIUM)
 
 
-def _create_paper_premium_payment_link(
-    *,
-    user: CurrentUser,
-    plan: RazorpayPlan,
-    key_id: str,
-    key_secret: str,
-) -> RazorpayCheckoutResult:
-    """Create a one-time Razorpay Payment Link for Paper Premium.
-
-    Paper Premium is a single ₹100 purchase that unlocks Paper mode
-    permanently -- it is not recurring, and the UI says so. It was previously
-    modelled as a Subscription on a plan with a ~100-year billing interval and
-    total_count=1, purely to obtain a hosted checkout URL. A Payment Link is
-    the API that actually matches this product, and it returns the same
-    short_url the caller already redirects to.
-
-    The webhook side needs no change: it activates Paper Premium off
-    payment.captured / order.paid (which is all Razorpay ever emitted for this
-    flow anyway), resolves the owner from the nova_user_id note, and resolves
-    plan features from a plan id -- so razorpay_plan_id is carried in notes,
-    since a payment link has no plan_id field of its own.
-
-    Price comes from the configured Razorpay plan rather than a constant here,
-    keeping Razorpay the single source of truth for what the product costs.
-    """
-    with httpx.Client(timeout=10.0, auth=(key_id, key_secret)) as client:
-        plan_response = client.get(f"{RAZORPAY_PLANS_URL}/{plan.plan_id}")
-        if plan_response.status_code >= 400:
-            logger.error(
-                "Razorpay plan lookup failed for payment link: HTTP %s plan_id=%s body=%s",
-                plan_response.status_code,
-                plan.plan_id,
-                plan_response.text[:500],
-            )
-            raise RazorpaySubscriptionCreateError("Payment subscription could not be created.")
-        item = (plan_response.json() or {}).get("item") or {}
-        amount = item.get("amount")
-        currency = _safe_string(item.get("currency")) or "INR"
-        if not isinstance(amount, int) or amount <= 0:
-            logger.error("Razorpay plan %s has no usable amount: %r", plan.plan_id, amount)
-            raise RazorpaySubscriptionCreateError("Payment subscription could not be created.")
-
-        request_payload: dict[str, Any] = {
-            "amount": amount,
-            "currency": currency,
-            "accept_partial": False,
-            "description": "Nova Paper Premium (one-time)",
-            "reminder_enable": False,
-            # Razorpay would otherwise email/SMS the payer; the user is already
-            # being redirected straight to the link from the app.
-            "notify": {"sms": False, "email": False},
-            "notes": {
-                "nova_user_id": user.id_str,
-                "nova_plan_code": plan.plan_code,
-                # Not decorative: the webhook derives entitlement features from
-                # a Razorpay plan id, and a payment link carries none.
-                "razorpay_plan_id": plan.plan_id,
-            },
-        }
-        response = client.post(RAZORPAY_PAYMENT_LINKS_URL, json=request_payload)
-        if response.status_code >= 400:
-            logger.error(
-                "Razorpay payment link create failed: HTTP %s plan_code=%s amount=%s body=%s",
-                response.status_code,
-                plan.plan_code,
-                amount,
-                response.text[:500],
-            )
-            raise RazorpaySubscriptionCreateError("Payment subscription could not be created.")
-        provider_response = response.json()
-
-    if not isinstance(provider_response, dict):
-        logger.error("Razorpay payment link create returned a non-object response.")
-        raise RazorpaySubscriptionCreateError("Payment subscription could not be created.")
-
-    link_id = _safe_string(provider_response.get("id"))
-    short_url = _safe_string(provider_response.get("short_url")) or None
-    if not link_id or not short_url:
-        logger.error("Razorpay payment link response missing id/short_url.")
-        raise RazorpaySubscriptionCreateError("Payment subscription could not be created.")
-
-    return RazorpayCheckoutResult(
-        ok=True,
-        provider="razorpay",
-        checkout_url=short_url,
-        short_url=short_url,
-        # Same response field the caller already reads; for a one-time purchase
-        # this carries the payment link id rather than a subscription id.
-        subscription_id=link_id,
-        plan_code=plan.plan_code,
-        status=_safe_string(provider_response.get("status")) or "created",
-        message="Razorpay payment link created. Complete checkout to activate entitlement.",
-    )
-
-
 def create_razorpay_subscription_checkout(
     *,
     user: CurrentUser,
@@ -205,13 +108,6 @@ def create_razorpay_subscription_checkout(
         raise RazorpayProviderConfigError("Payment provider is not configured.")
 
     plan = resolve_razorpay_plan(plan_code)
-    if plan.plan_code == PAPER_PLAN_CODE:
-        return _create_paper_premium_payment_link(
-            user=user,
-            plan=plan,
-            key_id=key_id,
-            key_secret=key_secret,
-        )
     total_count = PAPER_PREMIUM_TOTAL_COUNT if plan.plan_code == PAPER_PLAN_CODE else DEFAULT_SUBSCRIPTION_TOTAL_COUNT
     request_payload = build_razorpay_subscription_payload(
         user=user,
