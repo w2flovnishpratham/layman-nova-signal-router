@@ -839,6 +839,7 @@ def _download_scrip_master_sync() -> dict[str, Any]:
 
     from app.config import BACKEND_DIR, RUNTIME_STATE_DIR
     from app.config import settings as _s
+    from app.services.instrument_resolver import write_scrip_master_atomically
 
     configured = Path(_s.DHAN_SCRIP_MASTER_PATH)
     target = configured if configured.is_absolute() else BACKEND_DIR / configured
@@ -852,12 +853,12 @@ def _download_scrip_master_sync() -> dict[str, Any]:
             if not content or len(content) < 100:
                 results.append({"url": url, "ok": False, "error": "Response too small; not a valid CSV."})
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content)
+            # Atomic: the engine and webhook-intake workers both read this file
+            # while resolving instruments, so a partial write is a real hazard.
+            write_scrip_master_atomically(target, content)
             fallback = RUNTIME_STATE_DIR / "api-scrip-master-detailed.csv"
             if "detailed" in url:
-                fallback.parent.mkdir(parents=True, exist_ok=True)
-                fallback.write_bytes(content)
+                write_scrip_master_atomically(fallback, content)
             downloaded_at = utc_now()
             log_audit_event("SCRIP_MASTER_REFRESHED", f"Downloaded from {url}", metadata={"path": str(target), "size_bytes": len(content)})
             results.append({"url": url, "ok": True, "size_bytes": len(content), "path": str(target)})

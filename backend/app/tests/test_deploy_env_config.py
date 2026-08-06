@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -45,21 +46,90 @@ def _deploy_script_text() -> str:
     return (REPO_ROOT / "deploy" / "configure_vps_env.sh").read_text(encoding="utf-8")
 
 
-def test_private_webhook_deploy_logging_is_disabled():
-    nginx = (REPO_ROOT / "deploy" / "nginx" / "engine-api.novatradesolution.com.conf").read_text(
+def _nginx_text() -> str:
+    return (REPO_ROOT / "deploy" / "nginx" / "engine-api.novatradesolution.com.conf").read_text(
         encoding="utf-8"
     )
+
+
+def test_private_webhook_deploy_logging_is_disabled():
+    nginx = _nginx_text()
     exact_location = nginx.split("location = /api/webhooks/private {", 1)[1].split("}", 1)[0]
     assert "access_log off;" in exact_location
-    assert "proxy_pass http://127.0.0.1:8002;" in exact_location
     assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in exact_location
     assert "/api/webhooks/private/{" not in nginx
     assert "credential=" not in nginx
     assert "$request_body" not in nginx
 
-    for service_file in ("layman-nova-signal-router.service", "nova-staging.service.example"):
+    for service_file in (
+        "layman-nova-signal-router.service",
+        "layman-nova-signal-intake.service",
+        "nova-staging.service.example",
+    ):
         service = (REPO_ROOT / "deploy" / service_file).read_text(encoding="utf-8")
         assert "--no-access-log" in service
+
+
+def test_only_enqueue_only_webhooks_route_to_the_intake_worker():
+    """The intake worker runs with BACKGROUND_WORKER_RUNNER_ENABLED=false and is
+    a second process. Only endpoints that enqueue a StrategyExecutionJob and
+    return may go there. Anything that calls route_signal() inline (manual
+    orders, /api/webhook/tradingview) relies on paper_portfolio's
+    process-local threading.Lock and must stay on the single engine worker."""
+    nginx = _nginx_text()
+
+    for intake_route in (
+        "location ^~ /api/webhook/strategy/ {",
+        "location ^~ /api/webhook/user/ {",
+        "location = /api/webhooks/private {",
+    ):
+        block = nginx.split(intake_route, 1)[1].split("}", 1)[0]
+        assert "proxy_pass http://nova_intake;" in block, intake_route
+
+    # tradingview executes inline -- it must never get its own location block
+    # and must fall through to the engine via `location /`. Checked against the
+    # actual location directives, since the comments legitimately name it.
+    location_directives = re.findall(r"^\s*location\s+(.+?)\s*\{", nginx, re.MULTILINE)
+    assert location_directives, "expected nginx location blocks"
+    assert not [route for route in location_directives if "tradingview" in route]
+
+    catch_all = nginx.rsplit("location / {", 1)[1]
+    assert "proxy_pass http://nova_engine;" in catch_all
+
+    # A dead intake worker must degrade to the engine, not drop webhooks.
+    intake_upstream = nginx.split("upstream nova_intake {", 1)[1].split("}", 1)[0]
+    assert "server 127.0.0.1:8003;" in intake_upstream
+    assert "server 127.0.0.1:8002 backup;" in intake_upstream
+
+
+def test_intake_worker_never_runs_singleton_background_workers():
+    """Dhan WS, option monitor, EOD square-off, ghost watcher and the strategy
+    job worker must run in exactly one process. A systemd Environment= entry
+    outranks the same key in LAYMAN_ENV_FILE (pydantic-settings reads env vars
+    ahead of env_file), so this holds regardless of the env file's value."""
+    intake = (REPO_ROOT / "deploy" / "layman-nova-signal-intake.service").read_text(
+        encoding="utf-8"
+    )
+    assert 'Environment="BACKGROUND_WORKER_RUNNER_ENABLED=false"' in intake
+    assert "--port 8003" in intake
+
+    engine = (REPO_ROOT / "deploy" / "layman-nova-signal-router.service").read_text(
+        encoding="utf-8"
+    )
+    assert "BACKGROUND_WORKER_RUNNER_ENABLED" not in engine  # defaults to true
+    assert "--port 8002" in engine
+
+
+def test_deploy_installs_and_health_gates_both_workers():
+    deploy_script = (REPO_ROOT / "deploy" / "deploy_vps.sh").read_text(encoding="utf-8")
+
+    assert "install -m 644 deploy/layman-nova-signal-intake.service" in deploy_script
+    assert "systemctl restart layman-nova-signal-intake.service" in deploy_script
+    # Both processes must read the same env file; the intake drop-in mirrors the
+    # engine's resolved LAYMAN_ENV_FILE rather than hardcoding a second copy.
+    assert "layman-nova-signal-intake.service.d/override.conf" in deploy_script
+    assert 'Environment="LAYMAN_ENV_FILE=%s"' in deploy_script
+    assert "http://127.0.0.1:8003/api/health" in deploy_script
 
 
 def test_workflow_declares_production_secret_passthrough_names():

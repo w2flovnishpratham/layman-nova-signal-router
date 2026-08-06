@@ -53,6 +53,39 @@ MVP storage is file-backed:
 7. Backend calls Dhan only when engine is started and live-order safety flags allow it.
 8. Dashboard shows lifecycle and sanitized logs.
 
+## Process Topology (production)
+
+Two systemd units run the **same** application, split by route in nginx.
+
+| | Engine (`layman-nova-signal-router`, :8002) | Intake (`layman-nova-signal-intake`, :8003) |
+|---|---|---|
+| `BACKGROUND_WORKER_RUNNER_ENABLED` | `true` | `false` |
+| Singleton workers (Dhan WS, option monitor, EOD square-off, ghost watcher, strategy job worker, shared-token refresh) | yes — **exactly one process may run these** | no |
+| Routes | everything else, incl. UI/API, manual orders, `/api/webhook/tradingview` | `/api/webhook/strategy/*`, `/api/webhook/user/*`, `/api/webhooks/private` |
+
+**Why:** the app runs one uvicorn worker per process with a *synchronous* DB
+layer, so every request that touches Postgres blocks that process's whole event
+loop for the round-trip. Near-simultaneous TradingView alerts queued behind each
+other until TradingView's delivery timeout fired (nginx `499`, no trace in the
+app log because the request never got to run).
+
+**What may be routed to intake:** only endpoints that enqueue a
+`StrategyExecutionJob` and return. They never call `route_signal()`, so they
+never touch `paper_portfolio`'s process-local `threading.Lock`; their duplicate
+protection is a Postgres unique constraint, which holds across processes. The
+engine's job worker polls every `STRATEGY_JOB_WORKER_POLL_SECONDS` (0.5s), so it
+picks up intake-enqueued jobs without a cross-process wake signal.
+
+**What must never be routed to intake:** anything that executes a trade inline —
+manual orders (`/api/orders/*`) and `/api/webhook/tradingview` both call
+`route_signal()` directly and depend on that process-local lock. Splitting them
+across processes would reintroduce the duplicate-execution race the lock exists
+to prevent. `test_deploy_env_config.py` asserts this routing invariant.
+
+**Degradation:** nginx lists the engine as a `backup` upstream for the intake
+routes, so a dead intake worker loses concurrency isolation but does not drop
+webhooks.
+
 ## Security Model
 
 - Dhan tokens are not stored in the browser.

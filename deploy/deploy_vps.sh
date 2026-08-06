@@ -42,21 +42,38 @@ migration_database_url="$(grep -m1 '^DATABASE_URL=' "$env_file" | cut -d= -f2- |
 )
 
 install -m 644 deploy/layman-nova-signal-router.service /etc/systemd/system/layman-nova-signal-router.service
+install -m 644 deploy/layman-nova-signal-intake.service /etc/systemd/system/layman-nova-signal-intake.service
 install -m 644 deploy/nginx/engine-api.novatradesolution.com.conf /etc/nginx/sites-available/engine-api.novatradesolution.com
 install -m 755 deploy/configure_hostinger_firewall.sh /usr/local/sbin/layman-configure-hostinger-firewall
 install -m 644 deploy/layman-premarket-healthcheck.service /etc/systemd/system/layman-premarket-healthcheck.service
 install -m 644 deploy/layman-premarket-healthcheck.timer /etc/systemd/system/layman-premarket-healthcheck.timer
 ln -sfn /etc/nginx/sites-available/engine-api.novatradesolution.com /etc/nginx/sites-enabled/engine-api.novatradesolution.com
 
+# The intake worker must read the exact same env file the engine resolved --
+# LAYMAN_ENV_FILE lives in a hand-managed drop-in on the engine unit, so mirror
+# whatever configure_vps_env.sh just resolved rather than hardcoding a second
+# copy of the path that could silently drift.
+install -d -m 755 /etc/systemd/system/layman-nova-signal-intake.service.d
+printf '[Service]\nEnvironment="LAYMAN_ENV_FILE=%s"\n' "$env_file" \
+  > /etc/systemd/system/layman-nova-signal-intake.service.d/override.conf
+chmod 644 /etc/systemd/system/layman-nova-signal-intake.service.d/override.conf
+
 /usr/local/sbin/layman-configure-hostinger-firewall
 systemctl daemon-reload
 systemctl enable --now layman-premarket-healthcheck.timer
 systemctl enable --now layman-nova-signal-router.service
 systemctl restart layman-nova-signal-router.service
+systemctl enable --now layman-nova-signal-intake.service
+systemctl restart layman-nova-signal-intake.service
 
 nginx -t
 systemctl reload nginx
 
+# Health-gate both processes. The engine is checked first and hard-fails the
+# deploy: nothing executes without it. The intake worker is checked second and
+# only warns, because nginx lists the engine as a backup upstream for the
+# intake routes -- a dead intake worker degrades concurrency, it does not drop
+# webhooks.
 healthy=false
 for _ in $(seq 1 30); do
   if curl --fail --silent http://127.0.0.1:8002/api/health >/dev/null; then
@@ -70,6 +87,22 @@ if [[ "$healthy" != "true" ]]; then
   systemctl status layman-nova-signal-router.service --no-pager -l
   journalctl -u layman-nova-signal-router.service -n 160 --no-pager -l
   exit 1
+fi
+
+intake_healthy=false
+for _ in $(seq 1 30); do
+  if curl --fail --silent http://127.0.0.1:8003/api/health >/dev/null; then
+    intake_healthy=true
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$intake_healthy" != "true" ]]; then
+  echo "WARNING: webhook intake worker (:8003) did not become healthy." >&2
+  echo "Webhook routes fall back to the engine worker via nginx; concurrency isolation is lost until this is fixed." >&2
+  systemctl status layman-nova-signal-intake.service --no-pager -l || true
+  journalctl -u layman-nova-signal-intake.service -n 80 --no-pager -l || true
 fi
 
 curl --fail --silent --show-error http://127.0.0.1:8002/api/health

@@ -1,0 +1,42 @@
+[Unit]
+# Webhook-intake worker: a second process of the SAME app, serving only the
+# stateless intake endpoints (see deploy/nginx/engine-api.novatradesolution.com.conf).
+#
+# Why this exists: the app runs one uvicorn worker with a synchronous DB layer,
+# so every request that touches Postgres blocks the whole event loop for its
+# round-trip. Near-simultaneous TradingView alerts (routinely arriving in the
+# same second) queued behind each other until TradingView's own delivery
+# timeout fired (nginx 499s, with no trace in the app log because the request
+# never got to run).
+#
+# Only endpoints that ENQUEUE work are routed here -- they insert a
+# StrategyExecutionJob row and return. They never call route_signal(), so they
+# never touch paper_portfolio's process-local threading.Lock. Duplicate
+# protection on these paths is a Postgres unique constraint, which holds across
+# processes. Actual execution stays in exactly one process: the engine unit,
+# which is the only one with BACKGROUND_WORKER_RUNNER_ENABLED=true.
+Description=Layman NOVA Signal Router - webhook intake worker (API only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/layman-nova-signal-router/backend
+Environment="PATH=/root/layman-nova-signal-router/backend/.venv/bin"
+Environment="PYTHONUNBUFFERED=1"
+# Singleton background workers (Dhan WS, option monitor, EOD square-off, ghost
+# watcher, strategy job worker, shared-token refresh) must run in exactly ONE
+# process. They stay on the engine unit; this process serves HTTP only.
+# A systemd Environment= entry outranks the same key in LAYMAN_ENV_FILE --
+# pydantic-settings reads environment variables ahead of env_file -- so this
+# holds regardless of what /etc/layman/layman.env says.
+Environment="BACKGROUND_WORKER_RUNNER_ENABLED=false"
+# LAYMAN_ENV_FILE is supplied by a drop-in that deploy_vps.sh writes, mirroring
+# whatever the engine unit resolved, so both processes always read one env file.
+ExecStart=/root/layman-nova-signal-router/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8003 --no-access-log
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

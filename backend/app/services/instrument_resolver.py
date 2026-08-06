@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -65,8 +66,33 @@ def _ensure_scrip_master(*, allow_download: bool = True) -> Path | None:
     with httpx.Client(timeout=20.0, follow_redirects=True) as client:
         response = client.get(SCRIP_MASTER_URL)
     response.raise_for_status()
-    CACHE_FILE.write_text(response.text, encoding="utf-8")
+    write_scrip_master_atomically(CACHE_FILE, response.text.encode("utf-8"))
     return CACHE_FILE
+
+
+def write_scrip_master_atomically(path: Path, content: bytes) -> None:
+    """Write the instrument master so a concurrent reader never sees a partial file.
+
+    This file maps strike/expiry to Dhan security IDs for order placement, and
+    it now has more than one writer *and* more than one reader process (the
+    engine and the webhook-intake worker both warm this cache, and an admin can
+    trigger a refresh at any time). A plain write_text() is not atomic, so a
+    reader could load a truncated CSV mid-write and fail to resolve -- or worse,
+    mis-resolve -- an instrument.
+
+    Writing to a temp file in the same directory and then os.replace()-ing it
+    is atomic on POSIX: a reader always sees either the complete old file or
+    the complete new one. Two concurrent writers just means last-one-wins
+    between two complete, valid files.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # PID-suffixed so two processes never collide on the temp file itself.
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp_path.write_bytes(content)
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _value(row: dict[str, Any], *keys: str) -> str:

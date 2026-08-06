@@ -66,3 +66,37 @@ def test_resolve_option_security_id_returns_none_without_match(tmp_path, monkeyp
     monkeypatch.setattr(instrument_resolver, "_ensure_scrip_master", lambda **_kwargs: csv_file)
 
     assert instrument_resolver.resolve_option_security_id(make_signal()) is None
+
+
+def test_scrip_master_write_is_atomic_for_concurrent_readers(tmp_path):
+    """The instrument master maps strike/expiry to Dhan security IDs and now has
+    two reader processes (engine + webhook intake). A reader must never observe
+    a half-written file, so the write goes to a temp file and is renamed into
+    place rather than truncating the live one."""
+    target = tmp_path / "nested" / "scrip.csv"
+    instrument_resolver.write_scrip_master_atomically(target, b"first,row\n")
+    assert target.read_bytes() == b"first,row\n"
+
+    # Overwriting an existing file replaces it wholesale, leaving no temp debris.
+    instrument_resolver.write_scrip_master_atomically(target, b"second,row,longer\n")
+    assert target.read_bytes() == b"second,row,longer\n"
+    assert list(target.parent.iterdir()) == [target]
+
+
+def test_scrip_master_write_leaves_previous_file_intact_on_failure(tmp_path, monkeypatch):
+    """A failed write must not destroy the instrument master that order routing
+    depends on -- the old file has to survive intact."""
+    target = tmp_path / "scrip.csv"
+    instrument_resolver.write_scrip_master_atomically(target, b"good,data\n")
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(instrument_resolver.os, "replace", _boom)
+    try:
+        instrument_resolver.write_scrip_master_atomically(target, b"partial")
+    except OSError:
+        pass
+
+    assert target.read_bytes() == b"good,data\n"
+    assert list(target.parent.iterdir()) == [target]
