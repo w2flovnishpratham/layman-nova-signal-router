@@ -1,7 +1,8 @@
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toast'
-import { Minus, Plus } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { Info, Minus, Plus } from 'lucide-react'
 import type { CSSProperties } from 'react'
 import { useEffect, useState } from 'react'
 import type { RuntimeStatus } from '../api'
@@ -33,7 +34,13 @@ export function EngineConfigCard({ runtime, onStop, onSaveConfig, side, onSideCh
     setSaving(true)
     try {
       await onSaveConfig(draft)
-      toast.add({ title: 'Engine configuration saved.', type: 'success' })
+      const positionOpen = Boolean(runtime?.position?.has_open_position)
+      toast.add({
+        title: positionOpen
+          ? 'Engine configuration saved. Your open position keeps its original stop/target -- this only applies to entries from here on.'
+          : 'Engine configuration saved.',
+        type: 'success',
+      })
     } catch (error) {
       toast.add({ title: error instanceof Error ? error.message : 'Configuration could not be saved.', type: 'error' })
     } finally {
@@ -71,7 +78,15 @@ export function EngineConfigCard({ runtime, onStop, onSaveConfig, side, onSideCh
             </Button>
           </div>
         </label>
-        <ConfigInput label="Default SL (%)" value={draft.stopLossPercent} min={0.1} max={69.9} step={0.1} onChange={(stopLossPercent) => setDraft({ ...draft, stopLossPercent })} />
+        <ConfigInput
+          label="Default SL (%)"
+          value={draft.stopLossPercent}
+          min={0.1}
+          max={69.9}
+          step={0.1}
+          onChange={(stopLossPercent) => setDraft({ ...draft, stopLossPercent })}
+          hint="The actual stop on a trade can end up tighter than this: your Risk Controls' Max Loss Per Trade cap (set separately, on the Risk page) overrides this percentage whenever it would trigger a smaller loss."
+        />
         <ConfigInput label="Default TP (%)" value={draft.takeProfitPercent} min={0.1} max={1000} step={0.1} onChange={(takeProfitPercent) => setDraft({ ...draft, takeProfitPercent })} />
         <ConfigInput label="Max trades / day" value={draft.maxTradesPerDay} min={0} max={50} onChange={(maxTradesPerDay) => setDraft({ ...draft, maxTradesPerDay })} />
       </div>
@@ -83,17 +98,28 @@ export function EngineConfigCard({ runtime, onStop, onSaveConfig, side, onSideCh
   )
 }
 
-function ConfigInput({ label, value, min, max, step = 1, onChange }: {
+function ConfigInput({ label, value, min, max, step = 1, onChange, hint }: {
   label: string
   value: number
   min: number
   max: number
   step?: number
   onChange: (value: number) => void
+  hint?: string
 }) {
   return (
     <label>
-      <span>{label}</span>
+      <span>
+        {label}
+        {hint ? (
+          <TooltipProvider delay={120}>
+            <Tooltip>
+              <TooltipTrigger render={<Info size={12} tabIndex={0} aria-label={`${label} note`} />} />
+              <TooltipContent side="top" sideOffset={8} className="max-w-64">{hint}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ) : null}
+      </span>
       <Input type="number" value={value} min={min} max={max} step={step} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   )
