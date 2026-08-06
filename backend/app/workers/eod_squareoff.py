@@ -53,12 +53,15 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger("nova_signal_router.eod_squareoff")
 
-# Window during which the EOD flatten may fire. We start at 15:15:00 IST
-# to leave ~5 minutes of buffer before Dhan's auto-square at ~15:20, and
-# stop trying after 15:25:00 IST (at which point Dhan will have done the
-# job for us anyway).
-_EOD_WINDOW_START = dtime(15, 15)
-_EOD_WINDOW_END = dtime(15, 25)
+# Window during which the EOD flatten may fire. NSE's Closing Auction Session
+# change (2026-08-03) pushed the F&O market close from 15:30 to 15:40 IST,
+# and Dhan's own derivatives RMS auto-square-off cutoff moved with it, from
+# ~15:20 to 15:25 (confirmed against Dhan's support docs). We start at
+# 15:20:00 IST to keep the original ~5 minutes of buffer before that cutoff,
+# and stop trying after 15:30:00 IST (5 minutes past it, by which point Dhan
+# will have done the job for us anyway).
+_EOD_WINDOW_START = dtime(15, 20)
+_EOD_WINDOW_END = dtime(15, 30)
 _POLL_SECONDS = 60.0
 
 _STOP_EVENT = threading.Event()

@@ -49,7 +49,10 @@ def _market_is_open() -> bool:
     now = datetime.now(market_tz)
     if now.weekday() >= 5:
         return False
-    return time(9, 15) <= now.time() <= time(15, 30)
+    # F&O close moved 15:30 -> 15:40 IST with NSE's Closing Auction Session
+    # change (2026-08-03). This gate blocked legitimate new entries in the
+    # last 10 minutes of the actual trading day until this was updated.
+    return time(9, 15) <= now.time() <= time(15, 40)
 
 
 def _common_signal_checks(payload: NormalizedSignal) -> RiskDecision | None:
