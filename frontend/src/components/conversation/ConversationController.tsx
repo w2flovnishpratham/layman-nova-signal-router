@@ -29,6 +29,8 @@ import { getRiskConfiguration, type RiskConfiguration } from '../../risk/riskApi
 import { projectTranscript } from '../../state/conversationTranscript'
 import { useConversationScroll } from '../../state/useConversationScroll'
 
+const CHECKOUT_PENDING_STORAGE_KEY = 'nova-paper-checkout-pending'
+
 interface Props {
   runtime: RuntimeStatus | null
   loading: boolean
@@ -288,7 +290,18 @@ export function ConversationController({
   const [paywallOpen, setPaywallOpen] = useState(false)
   const [checkoutPending, setCheckoutPending] = useState(false)
   const [checkoutError, setCheckoutError] = useState('')
-  const [checkoutStarted, setCheckoutStarted] = useState(false)
+  const [checkoutStarted, setCheckoutStarted] = useState(() => {
+    // Survives a hard refresh: without this, reloading mid-payment silently
+    // resets checkoutStarted to false, which turns off the polling/focus
+    // listeners below and makes the payment look "stuck" until the user
+    // manually refreshes again -- exactly backwards from what they want.
+    try {
+      return sessionStorage.getItem(CHECKOUT_PENDING_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const checkoutWindowRef = useRef<Window | null>(null)
   const restoredRevisionRef = useRef<string | null>(null)
   // Once the user has explicitly interacted this mount (picked a mode,
   // picked a strategy, clicked Start New/Resume/Review), the restore effect
@@ -377,6 +390,29 @@ export function ConversationController({
     }
   }, [checkoutStarted, paperEntitled, refreshPaperEntitlement])
 
+  useEffect(() => {
+    if (!checkoutStarted || !paperEntitled) return
+    // Payment just confirmed (via polling or the focus/visibility listener
+    // above) -- stop tracking it as pending so a later reload doesn't resume
+    // polling for a purchase that already went through, and try to close the
+    // Razorpay tab so the user lands back on NOVA without a manual switch.
+    try {
+      sessionStorage.removeItem(CHECKOUT_PENDING_STORAGE_KEY)
+    } catch {
+      // Best-effort.
+    }
+    try {
+      if (checkoutWindowRef.current && !checkoutWindowRef.current.closed) {
+        checkoutWindowRef.current.close()
+      }
+    } catch {
+      // Cross-origin window handles can refuse this in some browsers --
+      // the polling/focus refresh above already updated this tab regardless.
+    }
+    window.focus()
+    setCheckoutStarted(false)
+  }, [checkoutStarted, paperEntitled])
+
   async function startPaperCheckout() {
     setCheckoutPending(true)
     setCheckoutError('')
@@ -386,7 +422,13 @@ export function ConversationController({
       if (!checkoutUrl) throw new Error('Checkout link was not returned.')
       const opened = window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
       if (!opened) throw new Error('Allow pop-ups to open Razorpay checkout.')
+      checkoutWindowRef.current = opened
       setCheckoutStarted(true)
+      try {
+        sessionStorage.setItem(CHECKOUT_PENDING_STORAGE_KEY, '1')
+      } catch {
+        // Best-effort only -- polling still works this tab-session without it.
+      }
     } catch (reason) {
       setCheckoutError(reason instanceof Error ? reason.message : 'Could not start Razorpay checkout.')
     } finally {
