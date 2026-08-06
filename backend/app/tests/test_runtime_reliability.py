@@ -380,7 +380,9 @@ def test_unavailable_ltp_is_not_fabricated(runtime):
 def test_status_includes_realized_unrealized_and_session_pnl(runtime):
     user, _ = runtime
     portfolio = paper_portfolio.get_paper_portfolio()
-    portfolio.realized_pnl = 250
+    # session_pnl (not realized_pnl, which is lifetime-cumulative and never
+    # resets daily) is what "realized"/"session" must reflect here.
+    portfolio.session_pnl = 250
     paper_portfolio._write(portfolio)
     state_store.set_paper_position(_open_position(live_pnl={"unrealized_pnl": -50}))
     pnl = runtime_reliability.runtime_status(user)["pnl"]

@@ -189,9 +189,12 @@ def _pnl_status(mode: str | None, position: dict[str, Any]) -> dict[str, Any]:
     if mode == "paper":
         portfolio = get_paper_portfolio()
         return {
-            "realized": portfolio.realized_pnl,
+            # session_pnl resets daily at IST midnight (get_paper_portfolio());
+            # realized_pnl is lifetime-cumulative and must never be shown here,
+            # or Daily Drawdown/Session P&L never reset across trading days.
+            "realized": portfolio.session_pnl,
             "unrealized": unrealized,
-            "session": round(float(portfolio.realized_pnl) + float(unrealized or 0), 2),
+            "session": round(float(portfolio.session_pnl) + float(unrealized or 0), 2),
             "available_balance": portfolio.available_balance,
             "utilized_amount": portfolio.utilized_amount,
         }
