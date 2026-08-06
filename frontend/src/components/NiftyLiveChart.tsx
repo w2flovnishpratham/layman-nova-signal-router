@@ -35,6 +35,12 @@ import {
 
 const CANDLE_POLL_MS = 20_000
 const MARKER_POLL_MS = 12_000
+// With the market closed the candle series is finished and no new trades can
+// arrive, so polling at live cadence just burns requests all night. Still
+// polled, not stopped: the backoff has to be short enough to notice the next
+// session opening without the user reloading.
+const CLOSED_CANDLE_POLL_MS = 120_000
+const CLOSED_MARKER_POLL_MS = 120_000
 const CHART_TIMEFRAMES: ChartTimeframe[] = ['1m', '5m', '15m']
 
 function supportedTimeframe(value: string | null | undefined): ChartTimeframe {
@@ -68,6 +74,9 @@ function NiftyLiveChartInner({
 }) {
   const [timeframe, setTimeframe] = useState<ChartTimeframe>(() => supportedTimeframe(defaultTimeframe))
   const [series, setSeries] = useState<NiftyCandleSeries | null>(null)
+  // Drives the poll backoff below. Deliberately a boolean off the series rather
+  // than the series itself, so it only changes when the session flips.
+  const marketClosed = series?.market_state === 'closed'
   const [markers, setMarkers] = useState<NiftyTradeMarker[]>([])
   const [loadFailed, setLoadFailed] = useState(false)
   const tradingDateRef = useRef<string | null>(null)
@@ -123,8 +132,17 @@ function NiftyLiveChartInner({
 
     void loadCandles()
     void loadMarkers()
-    const candleTimer = window.setInterval(() => void loadCandles(), CANDLE_POLL_MS)
-    const markerTimer = window.setInterval(() => void loadMarkers(), MARKER_POLL_MS)
+    // marketClosed is a boolean derived from the series, not the series object,
+    // so this effect re-arms only when the session actually flips -- not on
+    // every poll.
+    const candleTimer = window.setInterval(
+      () => void loadCandles(),
+      marketClosed ? CLOSED_CANDLE_POLL_MS : CANDLE_POLL_MS,
+    )
+    const markerTimer = window.setInterval(
+      () => void loadMarkers(),
+      marketClosed ? CLOSED_MARKER_POLL_MS : MARKER_POLL_MS,
+    )
     return () => {
       cancelled = true
       candleRequest?.abort()
@@ -132,7 +150,7 @@ function NiftyLiveChartInner({
       window.clearInterval(candleTimer)
       window.clearInterval(markerTimer)
     }
-  }, [engineMode, timeframe])
+  }, [engineMode, timeframe, marketClosed])
 
   const candles = useMemo(() => (series ? sessionOnly(series) : []), [series])
   const hasCandles = candles.length > 0
