@@ -31,6 +31,7 @@ from app.services import (
     webhook_replay_store,
 )
 from app.services.audit_logger import log_error_event
+from app.schemas.signal import NormalizedSignal
 from app.services.execution_context import bind_user_execution_context
 from app.services.signal_validator import validate_signal
 from app.services.user_context import CurrentUser
@@ -871,6 +872,7 @@ async def strategy_webhook(
             )
         except Exception:
             pass
+        _record_signal_for_each_subscriber(path_strategy, signal, raw_body)
     return JSONResponse(
         status_code=202,
         content={
@@ -881,6 +883,46 @@ async def strategy_webhook(
             "status": "queued",
         },
     )
+
+
+def _record_signal_for_each_subscriber(
+    strategy_name: str, signal: NormalizedSignal, raw_body: bytes
+) -> None:
+    """Best-effort per-subscriber WebhookEvent rows for the Signals page.
+
+    The single claim above (provider=f"strategy:{strategy_name}", no user_id)
+    exists purely for duplicate-alert protection on this broadcast endpoint --
+    one alert fans out to many subscribers, so it can't carry a single owner,
+    and signals_feed.list_signals() filters strictly on WebhookEvent.user_id.
+    That left every broadcast-strategy signal invisible on every subscriber's
+    own Signals page, for any subscriber, with no error anywhere.
+
+    Writes one additional row per active subscriber under a per-user provider
+    string (distinct from the dedup claim above, so the same event_id doesn't
+    collide with the (provider, event_id) unique constraint). Never allowed to
+    affect the actual response -- this is visibility only, not routing.
+    """
+    try:
+        subscribers = strategy_fanout.active_subscribers(strategy_name)
+    except Exception:
+        return
+    for subscription in subscribers:
+        try:
+            webhook_replay_store.claim_webhook_event(
+                provider=f"strategy:{strategy_name}:{subscription.user_id}",
+                event_id=signal.signal_id,
+                raw_body=raw_body,
+                user_id=subscription.user_id,
+                signature_ok=True,
+                metadata={
+                    "strategy_name": strategy_name,
+                    "payload_format": signal.payload_format,
+                    "action": signal.action,
+                    "side": signal.side,
+                },
+            )
+        except Exception:
+            continue
 
 
 class EgressPayload(BaseModel):

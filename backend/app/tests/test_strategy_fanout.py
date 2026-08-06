@@ -803,6 +803,45 @@ def test_strategy_webhook_accepts_tradingview_json_and_blocks_duplicate(
     assert duplicate.status_code == 409
 
 
+@pytest.mark.usefixtures("ready_default_strategy")
+def test_strategy_webhook_signal_is_visible_on_each_subscribers_signals_page(
+    mu_db,
+    monkeypatch,
+):
+    # signals_feed.list_signals() filters strictly on WebhookEvent.user_id.
+    # The webhook's own dedup claim has no owner (one alert fans out to many
+    # subscribers), so without a per-subscriber record too, this broadcast
+    # strategy's signals were invisible on every subscriber's Signals page.
+    from app.config import settings
+    from app.routers.strategies import router
+    from app.services import signals_feed, strategy_fanout
+
+    secret = "strategy-secret-1234567890-strong"
+    monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
+    alice = make_user("signals-visible-alice@gmail.com")
+    bob = make_user("signals-visible-bob@gmail.com")
+    strategy_fanout.subscribe_user(alice.id, "supertrend", lots=1, execution_mode="signal_only")
+    strategy_fanout.subscribe_user(bob.id, "supertrend", lots=1, execution_mode="signal_only")
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    body = {
+        "secret": secret,
+        "signal_id": "tv-shared-visibility-1",
+        "action": "BUY_CE",
+        "signal_time": "2026-07-31T09:00:00Z",
+    }
+
+    response = client.post("/api/webhook/strategy/supertrend", json=body)
+    assert response.status_code == 202
+
+    for user in (alice, bob):
+        feed = signals_feed.list_signals(user.id)
+        assert feed["counts"].get("total", 0) >= 1
+        assert any(item["event_id"] == "tv-shared-visibility-1" for item in feed["items"])
+
+
 def test_durable_jobs_process_two_users_independently(mu_db, monkeypatch):
     from sqlalchemy import select
 
