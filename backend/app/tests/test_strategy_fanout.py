@@ -233,6 +233,28 @@ def test_runtime_state_is_isolated_per_user(mu_db, monkeypatch, tmp_path):
         assert state_store.get_app_state()["last_message"] == "bob-state"
 
 
+def test_active_routing_user_ids_includes_paper_users_by_default(mu_db):
+    # EOD square-off (and anything else that needs "every user with an
+    # active subscription") relies on the default including paper users --
+    # real_orders_only=True is opt-in for callers that specifically only
+    # care about live-money routing.
+    from app.services import strategy_fanout
+
+    paper_user = make_user("route-eod-paper@gmail.com")
+    real_user = make_user("route-eod-real@gmail.com")
+    _grant_entitlement(real_user, live=True, strategy=True)
+    strategy_fanout.subscribe_user(paper_user.id, "supertrend", lots=1, execution_mode="paper_live_data")
+    strategy_fanout.subscribe_user(real_user.id, "supertrend", lots=1, execution_mode="real_orders")
+
+    all_ids = set(strategy_fanout.active_routing_user_ids())
+    assert paper_user.id in all_ids
+    assert real_user.id in all_ids
+
+    real_only_ids = set(strategy_fanout.active_routing_user_ids(real_orders_only=True))
+    assert paper_user.id not in real_only_ids
+    assert real_user.id in real_only_ids
+
+
 def test_one_signal_routes_to_two_subscribers_with_their_lots(mu_db, monkeypatch):
     from app.services import strategy_fanout
     from app.services.execution_context import current_execution_user

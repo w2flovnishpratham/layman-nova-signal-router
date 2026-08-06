@@ -6,6 +6,12 @@ penalty + adverse market slippage. NOVA's risk_manager only blocks new
 *entries* outside market hours; it does NOT actively close existing
 positions. This worker closes that gap.
 
+Covers both live and paper users: a paper position has no Dhan penalty to
+avoid, but leaving it open past market close is still wrong -- paper mode
+should behave like a real trading day, and a position silently surviving
+into the next session (re-opening off a stale price) is a bug from the
+trader's perspective either way.
+
 Behavior
 --------
 * Runs as a daemon thread started from main.py's lifespan.
@@ -221,7 +227,10 @@ def _loop() -> None:
                         load_user_context,
                     )
 
-                    for user_id in active_routing_user_ids(real_orders_only=True):
+                    # No real_orders_only filter: paper-mode users must be
+                    # flattened at EOD too, not just live ones (see module
+                    # docstring).
+                    for user_id in active_routing_user_ids():
                         user = load_user_context(user_id)
                         if user is None:
                             continue
