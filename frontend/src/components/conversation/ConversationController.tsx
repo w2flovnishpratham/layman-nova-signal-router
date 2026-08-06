@@ -286,7 +286,12 @@ export function ConversationController({
   const [dirty, setDirty] = useState(false)
   const [liveAcknowledged, setLiveAcknowledged] = useState(false)
   const [sharedRisk, setSharedRisk] = useState<RiskConfiguration | null>(null)
+  // Optimistic default: an unknown entitlement must never block a paying user.
+  // But it means paperEntitled is `true` before the first real fetch resolves,
+  // so anything that reacts to "entitled" must wait on entitlementChecked --
+  // otherwise it fires on the optimistic value at mount.
   const [paperEntitled, setPaperEntitled] = useState(true)
+  const [entitlementChecked, setEntitlementChecked] = useState(false)
   const [paywallOpen, setPaywallOpen] = useState(false)
   const [checkoutPending, setCheckoutPending] = useState(false)
   const [checkoutError, setCheckoutError] = useState('')
@@ -361,6 +366,8 @@ export function ConversationController({
       // Unknown status must not block a genuinely entitled user from
       // starting; /runtime/start-selected is still the real gate.
       setPaperEntitled(true)
+    } finally {
+      setEntitlementChecked(true)
     }
   }, [])
 
@@ -391,7 +398,11 @@ export function ConversationController({
   }, [checkoutStarted, paperEntitled, refreshPaperEntitlement])
 
   useEffect(() => {
-    if (!checkoutStarted || !paperEntitled) return
+    // entitlementChecked gates this: without it, a reload mid-payment fires
+    // this immediately off the optimistic paperEntitled=true default, clearing
+    // the pending flag and stopping the polling before it ever starts -- which
+    // defeats the whole point of persisting checkoutStarted across reloads.
+    if (!checkoutStarted || !entitlementChecked || !paperEntitled) return
     // Payment just confirmed (via polling or the focus/visibility listener
     // above) -- stop tracking it as pending so a later reload doesn't resume
     // polling for a purchase that already went through, and try to close the
@@ -411,7 +422,7 @@ export function ConversationController({
     }
     window.focus()
     setCheckoutStarted(false)
-  }, [checkoutStarted, paperEntitled])
+  }, [checkoutStarted, entitlementChecked, paperEntitled])
 
   async function startPaperCheckout() {
     setCheckoutPending(true)
@@ -420,14 +431,26 @@ export function ConversationController({
       const checkout = await createRazorpaySubscription('paper_premium')
       const checkoutUrl = checkout.checkout_url || checkout.short_url
       if (!checkoutUrl) throw new Error('Checkout link was not returned.')
-      const opened = window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
-      if (!opened) throw new Error('Allow pop-ups to open Razorpay checkout.')
+      // Deliberately no 'noopener': window.open() returns null whenever
+      // noopener is passed, so its return value cannot distinguish "popup
+      // blocked" from "opened fine". The old code treated that null as a
+      // failure and threw -- which meant setCheckoutStarted(true) below never
+      // ran, so the confirmation polling was never armed and payment never
+      // reflected back into the app. We also need the real handle to close the
+      // tab once payment confirms. The target is Razorpay's checkout on a URL
+      // this app just minted server-side, so keeping an opener is acceptable.
+      const opened = window.open(checkoutUrl, '_blank')
       checkoutWindowRef.current = opened
+      // Armed before the popup-blocked check on purpose: if the user allows the
+      // popup or opens the link manually, polling must already be running.
       setCheckoutStarted(true)
       try {
         sessionStorage.setItem(CHECKOUT_PENDING_STORAGE_KEY, '1')
       } catch {
         // Best-effort only -- polling still works this tab-session without it.
+      }
+      if (!opened) {
+        setCheckoutError('Allow pop-ups for this site to open Razorpay checkout, then try again.')
       }
     } catch (reason) {
       setCheckoutError(reason instanceof Error ? reason.message : 'Could not start Razorpay checkout.')
