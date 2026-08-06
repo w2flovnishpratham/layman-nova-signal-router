@@ -4,6 +4,7 @@ import type { RuntimeStatus } from '../api'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { toast } from '../components/ui/toast'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
 import {
   getRiskConfiguration,
   getRiskOverview,
@@ -84,12 +85,14 @@ export function RiskAutomationCard({ runtime }: { runtime: RuntimeStatus | null 
           <div><dt>Entry cutoff</dt><dd>{cutoff === 'No cutoff' ? cutoff : `${cutoff} IST`}</dd></div>
         </dl>
       ) : (
-        <div className="terminal-risk-meters">
-          <RiskMeter label="Max Daily Loss" value={usage?.daily_loss} fallbackLimit={values?.daily_loss_cap} money />
-          <RiskMeter label="Max Trades / Day" value={usage?.trades} fallbackLimit={values?.max_trades_per_day} />
-          <RiskMeter label="Max Open Positions" value={usage?.open_positions} fallbackLimit={values?.max_open_positions} />
-          <RiskMeter label="Margin Exposure" value={usage?.margin_exposure} fallbackLimit={values?.margin_exposure_cap ?? undefined} money />
-        </div>
+        <TooltipProvider delay={120}>
+          <div className="terminal-risk-meters">
+            <RiskMeter label="Max Daily Loss" value={usage?.daily_loss} fallbackLimit={values?.daily_loss_cap} money />
+            <RiskMeter label="Max Trades / Day" value={usage?.trades} fallbackLimit={values?.max_trades_per_day} />
+            <RiskMeter label="Max Open Positions" value={usage?.open_positions} fallbackLimit={values?.max_open_positions} />
+            <RiskMeter label="Margin Exposure" value={usage?.margin_exposure} fallbackLimit={values?.margin_exposure_cap ?? undefined} money />
+          </div>
+        </TooltipProvider>
       )}
       {editing ? <Button variant="unstyled" className="terminal-risk-save" type="button" onClick={() => void save()}><Save size={13} /> Save shared limits</Button> : null}
       {error ? <p className="terminal-risk-error" role="alert">{error}</p> : null}
@@ -104,7 +107,15 @@ function RiskMeter({ label, value, fallbackLimit, money = false }: { label: stri
   const format = (amount: number) => money ? (value ? paise(amount) : rupees(amount)) : amount.toLocaleString('en-IN')
   return (
     <div>
-      <div><span>{label} <small>{limit > 0 ? format(limit) : 'No cap'}</small></span><strong>{pct.toFixed(pct < 10 ? 1 : 0)}% used</strong></div>
+      <div>
+        <span>{label} <small>{limit > 0 ? format(limit) : 'No cap'}</small></span>
+        <Tooltip>
+          <TooltipTrigger render={<strong tabIndex={0}>{pct.toFixed(pct < 10 ? 1 : 0)}% used</strong>} />
+          <TooltipContent side="top" sideOffset={8}>
+            {format(used)}{limit > 0 ? ` / ${format(limit)}` : ''} used
+          </TooltipContent>
+        </Tooltip>
+      </div>
       <div className="terminal-risk-track"><span style={{ width: `${pct}%` }} /></div>
     </div>
   )
