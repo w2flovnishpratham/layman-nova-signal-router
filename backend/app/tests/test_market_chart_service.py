@@ -343,3 +343,72 @@ def test_walk_back_is_bounded(monkeypatch):
 
     assert payload["status"] == "unavailable"
     assert calls["count"] == 1 + charts.MAX_TRADING_DAY_LOOKBACK
+
+
+def test_one_minute_interval_is_not_poisoned_by_its_own_fetch_cache(monkeypatch):
+    """Regression: the raw 1m fetch and the caller's request key were the same
+    string for interval="1m", so an empty fetch cached under it short-circuited
+    the next request before the walk-back could run -- 1m stayed broken while
+    5m/15m worked off identical data."""
+    empty_date = date(2026, 8, 6)
+    good_date = date(2026, 8, 5)
+
+    class FakeDhanClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_intraday_candles(self, **kwargs):
+            if kwargs["from_date"].startswith(good_date.isoformat()):
+                return {"success": True, "candles": _one_minute_candles(good_date)}
+            return {"success": True, "candles": []}
+
+    monkeypatch.setattr(charts, "RealDhanClient", FakeDhanClient)
+    monkeypatch.setattr(charts, "market_data_credentials", lambda: DhanCredentials("client", "token", "shared_market_data"))
+    monkeypatch.setattr(charts, "_market_is_open", lambda: False)
+    monkeypatch.setattr(charts, "chart_trading_date_ist", lambda: empty_date)
+    charts._CACHE.clear()
+
+    for interval in ("1m", "5m", "15m"):
+        payload = charts.get_nifty_candles(interval=interval)
+        assert payload["status"] == "ready", f"{interval} must resolve via the walk-back"
+        assert payload["candles"], interval
+        assert payload["trading_date"] == good_date.isoformat(), interval
+
+    # And repeating each request must still succeed, not return a cached failure.
+    for interval in ("1m", "5m", "15m"):
+        assert charts.get_nifty_candles(interval=interval)["status"] == "ready", interval
+
+
+def test_walk_back_result_is_cached_against_the_requested_date(monkeypatch):
+    """Regression: the payload was cached under the FALLBACK date while callers
+    look up by the RESOLVED date, so every poll redid the whole walk-back --
+    up to 1 + MAX_TRADING_DAY_LOOKBACK Dhan round trips, every time."""
+    empty_date = date(2026, 8, 6)
+    good_date = date(2026, 8, 5)
+    calls = {"count": 0}
+
+    class FakeDhanClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_intraday_candles(self, **kwargs):
+            calls["count"] += 1
+            if kwargs["from_date"].startswith(good_date.isoformat()):
+                return {"success": True, "candles": _one_minute_candles(good_date)}
+            return {"success": True, "candles": []}
+
+    monkeypatch.setattr(charts, "RealDhanClient", FakeDhanClient)
+    monkeypatch.setattr(charts, "market_data_credentials", lambda: DhanCredentials("client", "token", "shared_market_data"))
+    monkeypatch.setattr(charts, "_market_is_open", lambda: False)
+    monkeypatch.setattr(charts, "chart_trading_date_ist", lambda: empty_date)
+    charts._CACHE.clear()
+
+    assert charts.get_nifty_candles(interval="5m")["status"] == "ready"
+    after_first = calls["count"]
+
+    for _ in range(4):
+        assert charts.get_nifty_candles(interval="5m")["status"] == "ready"
+
+    assert calls["count"] == after_first, (
+        "repeat requests must hit the cache, not re-walk the provider every poll"
+    )

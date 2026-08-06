@@ -231,22 +231,24 @@ def get_nifty_candles(interval: str = "5m") -> dict[str, Any]:
             f"Interval {interval!r} is not supported. Choose 1m, 5m, or 15m.",
             interval_label=interval,
         )
-    trading_date = chart_trading_date_ist()
+    requested_date = chart_trading_date_ist()
     market_open = _market_is_open()
-    key = cache_key(interval, trading_date)
-    cached = _cached(key, market_open)
+    # Callers always look up by the date the calendar resolves to. The payload
+    # for it is cached under this key even when a walk-back served an earlier
+    # session, so a repeat request is a cache hit rather than another round of
+    # Dhan calls.
+    request_key = cache_key(interval, requested_date)
+    cached = _cached(request_key, market_open)
     if cached is not None:
         return cached
 
     with _FETCH_LOCK:
-        cached = _cached(key, market_open)
+        cached = _cached(request_key, market_open)
         if cached is not None:
             return cached
-        one_minute_key = cache_key("1m", trading_date)
-        one_minute = _cached(one_minute_key, market_open)
-        if one_minute is None:
-            one_minute = _fetch_authoritative_one_minute(trading_date)
-            _store_cache(one_minute_key, one_minute)
+
+        served_date = requested_date
+        one_minute = _one_minute_for(served_date, market_open)
         if one_minute.get("status") != "ready" and not market_open:
             # Walk back to the most recent session that actually has candles.
             # chart_trading_date_ist() already steps over weekends, but it can
@@ -261,34 +263,51 @@ def get_nifty_candles(interval: str = "5m") -> dict[str, Any]:
             # empty result means the session has just opened and candles are
             # still coming, and silently substituting a previous day's prices
             # into a live trading chart would be dangerous.
+            probe_date = served_date
             for _ in range(MAX_TRADING_DAY_LOOKBACK):
-                trading_date -= timedelta(days=1)
-                while trading_date.weekday() >= 5:
-                    trading_date -= timedelta(days=1)
-                one_minute_key = cache_key("1m", trading_date)
-                fallback = _cached(one_minute_key, market_open)
-                if fallback is None:
-                    fallback = _fetch_authoritative_one_minute(trading_date)
-                    _store_cache(one_minute_key, fallback)
+                probe_date -= timedelta(days=1)
+                while probe_date.weekday() >= 5:
+                    probe_date -= timedelta(days=1)
+                fallback = _one_minute_for(probe_date, market_open)
                 if fallback.get("status") == "ready":
                     one_minute = fallback
-                    key = cache_key(interval, trading_date)
+                    served_date = probe_date
                     break
+
         if one_minute.get("status") != "ready":
             unavailable = {
                 **one_minute,
                 "interval": interval,
             }
-            _store_cache(key, unavailable)
+            _store_cache(request_key, unavailable)
             return unavailable
         candles = aggregate_one_minute_candles(
             one_minute["candles"],
             interval_minutes=SUPPORTED_INTERVALS[interval],
-            trading_date=trading_date,
+            trading_date=served_date,
         )
-        payload = _ready_payload(interval, trading_date, candles)
-        _store_cache(key, payload)
+        payload = _ready_payload(interval, served_date, candles)
+        _store_cache(request_key, payload)
         return payload
+
+
+def _one_minute_for(trading_date: date, market_open: bool) -> dict[str, Any]:
+    """Fetch (or reuse) the authoritative 1m series for one date.
+
+    Cached under its own "raw1m" namespace, deliberately NOT cache_key("1m", d).
+    Those two collided: for interval="1m" the raw-fetch key and the caller's
+    request key were the same string, so an empty fetch stored under it was
+    returned to the next 1m request by the early cache lookup -- before the
+    walk-back could run. 1m stayed broken while 5m/15m (whose request keys
+    differ) worked off the very same data.
+    """
+    key = cache_key("raw1m", trading_date)
+    cached = _cached(key, market_open)
+    if cached is not None:
+        return cached
+    fetched = _fetch_authoritative_one_minute(trading_date)
+    _store_cache(key, fetched)
+    return fetched
 
 
 def _fetch_authoritative_one_minute(trading_date: date) -> dict[str, Any]:
