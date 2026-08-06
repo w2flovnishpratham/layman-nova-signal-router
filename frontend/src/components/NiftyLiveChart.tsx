@@ -29,6 +29,7 @@ import {
   markerCandleIndex,
   markerStyle,
   sameCandles,
+  sessionBarCount,
   sessionOnly,
 } from './NiftyLiveChart.helpers'
 
@@ -222,8 +223,18 @@ function NiftyLiveChartInner({
     if (sameCandles(previous, candles)) return
     candlesRef.current = [...candles]
     candleSeries.setData(candles.map(toBar))
-    if (previous.length === 0) chartRef.current?.timeScale().fitContent()
-    else if (candles[candles.length - 1].time > previous[previous.length - 1].time) chartRef.current?.timeScale().scrollToRealTime()
+    if (previous.length === 0) {
+      // Reserve the whole session's bar slots up front instead of fitContent(),
+      // which stretches however few candles exist right now to fill the full
+      // width -- thick/short bars early in the day, thin ones on a later
+      // reload, same chart. This keeps bar width constant all session: real
+      // candles fill in left-to-right, the rest stays empty until they arrive.
+      const totalBars = sessionBarCount(supportedTimeframe(series?.interval))
+      chartRef.current?.timeScale().setVisibleLogicalRange({
+        from: 0,
+        to: Math.max(totalBars - 1, candles.length - 1),
+      })
+    } else if (candles[candles.length - 1].time > previous[previous.length - 1].time) chartRef.current?.timeScale().scrollToRealTime()
   }, [candles, containerReady, hasCandles])
 
   useEffect(() => {

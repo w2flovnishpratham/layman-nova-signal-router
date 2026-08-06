@@ -8,8 +8,18 @@ export const TIMEFRAME_SECONDS: Record<ChartTimeframe, number> = {
 }
 const IST_OFFSET_SECONDS = 5.5 * 60 * 60
 const SESSION_OPEN_SECONDS = 9 * 60 * 60 + 15 * 60
-const SESSION_CLOSE_SECONDS = 15 * 60 * 60 + 30 * 60
+// F&O close moved 15:30 -> 15:40 IST with NSE's Closing Auction Session
+// change (2026-08-03) -- candles between 15:30 and 15:40 were being filtered
+// out of the chart entirely by istTimeframeBucket below.
+const SESSION_CLOSE_SECONDS = 15 * 60 * 60 + 40 * 60
 export const STALE_AFTER_MS = 45_000
+
+// Total bar slots in a full trading session for a given timeframe -- used to
+// reserve the chart's whole-day width up front instead of letting it stretch
+// to fit however few candles exist so far (see NiftyLiveChart.tsx).
+export function sessionBarCount(timeframe: ChartTimeframe): number {
+  return Math.ceil((SESSION_CLOSE_SECONDS - SESSION_OPEN_SECONDS) / TIMEFRAME_SECONDS[timeframe])
+}
 
 export function istTimeframeBucket(epoch: number, timeframe: ChartTimeframe): number | null {
   if (!Number.isFinite(epoch)) return null
