@@ -43,12 +43,17 @@ def test_failed_fetch_retries_sooner_than_a_successful_closed_market_cache(monke
 
     first = charts.get_nifty_candles(interval="5m")
     assert first["status"] == "unavailable"
-    assert calls["count"] == 1
+    # Counted as a delta rather than an absolute: with the provider returning
+    # nothing for every date, one attempt now also walks back through
+    # MAX_TRADING_DAY_LOOKBACK earlier sessions looking for candles. This test
+    # is about cache TTL, not about how many dates a single attempt probes.
+    after_first = calls["count"]
+    assert after_first >= 1
 
     clock["t"] += charts.CACHE_TTL_FAILURE_SECONDS + 1
     second = charts.get_nifty_candles(interval="5m")
     assert second["status"] == "unavailable"
-    assert calls["count"] == 2, (
+    assert calls["count"] > after_first, (
         "a failed fetch must retry after the short failure TTL, "
         "not sit cached for the full 5-minute closed-market TTL"
     )
@@ -239,3 +244,102 @@ def test_stale_native_one_minute_data_returns_explicit_unavailable(monkeypatch):
 
     assert payload["status"] == "unavailable"
     assert payload["reason"] == "authoritative_1m_stale"
+
+
+def _one_minute_candles(trading_date: date, count: int = 5) -> list[dict]:
+    start, _ = charts.session_bounds_ist(trading_date)
+    base = int(start.timestamp())
+    return [
+        {"time": base + i * 60, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 10}
+        for i in range(count)
+    ]
+
+
+def test_closed_market_walks_back_to_the_last_session_that_has_candles(monkeypatch):
+    """Dhan does not always serve the just-closed session: measured at 02:25 IST,
+    Aug 6 returned 0 candles while Aug 5/4/3 each returned 383. Without a
+    walk-back the chart shows an error every night and every pre-market morning.
+    chart_trading_date_ist() cannot fix this -- it only reasons about the
+    calendar, and cannot know a date came back empty."""
+    empty_date = date(2026, 8, 6)   # Thursday, resolved but empty
+    good_date = date(2026, 8, 5)    # Wednesday, has data
+    asked: list[str] = []
+
+    class FakeDhanClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_intraday_candles(self, **kwargs):
+            asked.append(kwargs["from_date"][:10])
+            if kwargs["from_date"].startswith(good_date.isoformat()):
+                return {"success": True, "candles": _one_minute_candles(good_date)}
+            return {"success": True, "candles": []}
+
+    monkeypatch.setattr(charts, "RealDhanClient", FakeDhanClient)
+    monkeypatch.setattr(charts, "market_data_credentials", lambda: DhanCredentials("client", "token", "shared_market_data"))
+    monkeypatch.setattr(charts, "_market_is_open", lambda: False)
+    monkeypatch.setattr(charts, "chart_trading_date_ist", lambda: empty_date)
+    charts._CACHE.clear()
+
+    payload = charts.get_nifty_candles(interval="5m")
+
+    assert payload["status"] == "ready"
+    assert payload["candles"], "expected the fallback session's candles"
+    assert payload["trading_date"] == good_date.isoformat(), (
+        "the response must report the session actually served, not the empty one"
+    )
+    assert asked[0] == empty_date.isoformat()
+    assert good_date.isoformat() in asked
+
+
+def test_open_market_never_substitutes_a_previous_session(monkeypatch):
+    """While the market is OPEN an empty result means the session has just begun
+    and candles are still arriving. Silently showing a previous day's prices on a
+    live trading chart would be dangerous, so the walk-back must not run."""
+    today = date(2026, 8, 6)
+    asked: list[str] = []
+
+    class FakeDhanClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_intraday_candles(self, **kwargs):
+            asked.append(kwargs["from_date"][:10])
+            return {"success": True, "candles": []}
+
+    monkeypatch.setattr(charts, "RealDhanClient", FakeDhanClient)
+    monkeypatch.setattr(charts, "market_data_credentials", lambda: DhanCredentials("client", "token", "shared_market_data"))
+    monkeypatch.setattr(charts, "_market_is_open", lambda: True)
+    monkeypatch.setattr(charts, "chart_trading_date_ist", lambda: today)
+    charts._CACHE.clear()
+
+    payload = charts.get_nifty_candles(interval="5m")
+
+    assert payload["status"] == "unavailable"
+    assert asked == [today.isoformat()], "must not walk back into a prior session while live"
+
+
+def test_walk_back_is_bounded(monkeypatch):
+    """Each step is a Dhan round trip, so a permanently empty provider must not
+    spin -- it stops after MAX_TRADING_DAY_LOOKBACK attempts."""
+    start_date = date(2026, 8, 6)
+    calls = {"count": 0}
+
+    class FakeDhanClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_intraday_candles(self, **kwargs):
+            calls["count"] += 1
+            return {"success": True, "candles": []}
+
+    monkeypatch.setattr(charts, "RealDhanClient", FakeDhanClient)
+    monkeypatch.setattr(charts, "market_data_credentials", lambda: DhanCredentials("client", "token", "shared_market_data"))
+    monkeypatch.setattr(charts, "_market_is_open", lambda: False)
+    monkeypatch.setattr(charts, "chart_trading_date_ist", lambda: start_date)
+    charts._CACHE.clear()
+
+    payload = charts.get_nifty_candles(interval="5m")
+
+    assert payload["status"] == "unavailable"
+    assert calls["count"] == 1 + charts.MAX_TRADING_DAY_LOOKBACK

@@ -42,6 +42,11 @@ CACHE_TTL_OPEN_SECONDS = 20.0
 CACHE_TTL_CLOSED_SECONDS = 300.0
 CACHE_TTL_FAILURE_SECONDS = 20.0
 MAX_OPEN_SOURCE_AGE_SECONDS = 180
+# How many trading days back get_nifty_candles() may walk looking for a session
+# that actually has candles, when the market is closed. Bounded because each
+# step is a Dhan round trip; 5 covers a long weekend plus adjacent holidays,
+# which is the realistic worst case.
+MAX_TRADING_DAY_LOOKBACK = 5
 TOKEN_EXPIRING_SOON_SECONDS = 30 * 60
 
 _CACHE_LOCK = threading.Lock()
@@ -236,6 +241,33 @@ def get_nifty_candles(interval: str = "5m") -> dict[str, Any]:
         if one_minute is None:
             one_minute = _fetch_authoritative_one_minute(trading_date)
             _store_cache(one_minute_key, one_minute)
+        if one_minute.get("status") != "ready" and not market_open:
+            # Walk back to the most recent session that actually has candles.
+            # chart_trading_date_ist() already steps over weekends, but it can
+            # only reason about the calendar -- it cannot know a date returned
+            # nothing. Two real cases it misses: a trading holiday (a weekday
+            # with no session), and Dhan not yet serving the just-closed
+            # session (measured: at 02:25 IST, Aug 6 returned 0 candles while
+            # Aug 5/4/3 each returned 383), which leaves the chart showing an
+            # error all night and every pre-market morning.
+            #
+            # Deliberately only while the market is CLOSED: during live hours an
+            # empty result means the session has just opened and candles are
+            # still coming, and silently substituting a previous day's prices
+            # into a live trading chart would be dangerous.
+            for _ in range(MAX_TRADING_DAY_LOOKBACK):
+                trading_date -= timedelta(days=1)
+                while trading_date.weekday() >= 5:
+                    trading_date -= timedelta(days=1)
+                one_minute_key = cache_key("1m", trading_date)
+                fallback = _cached(one_minute_key, market_open)
+                if fallback is None:
+                    fallback = _fetch_authoritative_one_minute(trading_date)
+                    _store_cache(one_minute_key, fallback)
+                if fallback.get("status") == "ready":
+                    one_minute = fallback
+                    key = cache_key(interval, trading_date)
+                    break
         if one_minute.get("status") != "ready":
             unavailable = {
                 **one_minute,
