@@ -31,7 +31,13 @@ AUTHORITATIVE_DHAN_INTERVAL = "1"
 SUPPORTED_INTERVALS = {"1m": 1, "5m": 5, "15m": 15}
 
 SESSION_OPEN_HOUR, SESSION_OPEN_MINUTE = 9, 15
-SESSION_CLOSE_HOUR, SESSION_CLOSE_MINUTE = 15, 30
+# 15:40, not 15:30: NSE's Closing Auction Session change (2026-08-03) extended
+# the F&O close by 10 minutes. This bounds both the Dhan fetch window and the
+# in-session candle filter below, so leaving it at 15:30 silently dropped the
+# last 10 minutes of every trading day from the chart -- and disagreed with
+# risk_manager._market_is_open() and the frontend's own session filter, which
+# both already moved to 15:40.
+SESSION_CLOSE_HOUR, SESSION_CLOSE_MINUTE = 15, 40
 CACHE_TTL_OPEN_SECONDS = 20.0
 CACHE_TTL_CLOSED_SECONDS = 300.0
 CACHE_TTL_FAILURE_SECONDS = 20.0
