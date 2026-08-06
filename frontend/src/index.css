@@ -5818,7 +5818,12 @@ pre {
   .engine-shell-grid {
     grid-template-columns: clamp(326px, 21vw, 410px) minmax(480px, 1fr) clamp(348px, 22.3vw, 435px);
     gap: 14px;
-    transition: grid-template-columns 400ms cubic-bezier(0.16, 1, 0.3, 1);
+    /* No CSS transition here on purpose: the panels are wrapped in Framer
+       Motion's `layout` prop (App.tsx), which already animates their resize
+       via its own FLIP-based measurement. A parallel CSS transition on this
+       grid track competed with that independently-timed animation and was
+       the likely source of the panel-reopen overlap glitch -- Framer Motion
+       is now the single source of truth for this resize. */
   }
 
   .engine-shell-grid.left-panel-collapsed {
