@@ -239,7 +239,23 @@ def test_strategy_webhook_event_claim_blocks_duplicate_and_body_mismatch(mu_db, 
     assert "different body" in mismatch.json()["error"]
 
     with session_scope() as db:
-        assert db.query(models.WebhookEvent).count() == 1
+        # Exactly one dedup claim (user_id NULL) no matter how many duplicate or
+        # tampered deliveries arrive -- that is what this test guards.
+        assert (
+            db.query(models.WebhookEvent).filter(models.WebhookEvent.user_id.is_(None)).count() == 1
+        )
+        # Plus one owned row per active subscriber, so the signal is visible on
+        # each subscriber's Signals page. list_signals() filters on user_id and
+        # the dedup claim above has none, so without these a broadcast
+        # strategy's signals are invisible to everyone.
+        assert (
+            db.query(models.WebhookEvent)
+            .filter(models.WebhookEvent.user_id == user.id)
+            .count()
+            == 1
+        )
+        # Rejected deliveries must not add either kind.
+        assert db.query(models.WebhookEvent).count() == 2
         assert db.query(models.StrategySignal).count() == 1
         assert db.query(models.StrategyExecutionJob).count() == 1
 
