@@ -279,6 +279,7 @@ function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
           // is fetched -- render them for real and placeholder only the cells.
           <div className="terminal-table-wrap" role="status" aria-busy="true" aria-label={`Loading ${TABS.find((item) => item.key === tab)?.label.toLowerCase()}`}>
             <Table variant="unstyled" className="terminal-table">
+              <colgroup>{columns.map((column) => <col key={column.key} style={{ width: columnWidth(column.key) }} />)}</colgroup>
               <TableHeader><TableRow>{columns.map((column) => <TableHead key={column.key}>{column.label}</TableHead>)}</TableRow></TableHeader>
               <TableBody>
                 {Array.from({ length: 5 }, (_, row) => (
@@ -336,6 +337,7 @@ function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
           ) : (
             <div className="terminal-table-wrap" ref={tableWrap} onScroll={onTableScroll}>
               <Table variant="unstyled" className="terminal-table">
+                <colgroup>{columns.map((column) => <col key={column.key} style={{ width: columnWidth(column.key) }} />)}</colgroup>
                 <TableHeader><TableRow>{columns.map((column) => <TableHead key={column.key}>{column.label}</TableHead>)}</TableRow></TableHeader>
                 <TableBody>
                   {rows.map((row) => (
@@ -436,6 +438,19 @@ function mergeAlerts(
     historical_items: historical,
     items: [...incoming.active_items, ...historical],
   }
+}
+
+// table-layout: fixed splits width evenly across every column by default,
+// which starves text-bearing columns (Strategy, Source, Message) too narrow
+// to fit even short words -- the browser then force-breaks them mid-word
+// rather than wrapping at a space, since a fixed-layout cell isn't allowed
+// to grow past its column width. An explicit <colgroup> gives each column a
+// deliberate share instead of an even split.
+const NARROW_COLUMN_WIDTH = '9%'
+const WIDE_COLUMN_KEYS = new Set(['strategy', 'source', 'message', 'category'])
+
+function columnWidth(key: string): string {
+  return WIDE_COLUMN_KEYS.has(key) ? '16%' : NARROW_COLUMN_WIDTH
 }
 
 function columnsFor(tab: TradingTerminalTab): Array<{ key: string; label: string }> {
