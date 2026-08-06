@@ -98,7 +98,7 @@ def test_only_enqueue_only_webhooks_route_to_the_intake_worker():
 
     # A dead intake worker must degrade to the engine, not drop webhooks.
     intake_upstream = nginx.split("upstream nova_intake {", 1)[1].split("}", 1)[0]
-    assert "server 127.0.0.1:8003;" in intake_upstream
+    assert "server 127.0.0.1:8102;" in intake_upstream
     assert "server 127.0.0.1:8002 backup;" in intake_upstream
 
 
@@ -111,7 +111,7 @@ def test_intake_worker_never_runs_singleton_background_workers():
         encoding="utf-8"
     )
     assert 'Environment="BACKGROUND_WORKER_RUNNER_ENABLED=false"' in intake
-    assert "--port 8003" in intake
+    assert "--port 8102" in intake
 
     engine = (REPO_ROOT / "deploy" / "layman-nova-signal-router.service").read_text(
         encoding="utf-8"
@@ -129,7 +129,7 @@ def test_deploy_installs_and_health_gates_both_workers():
     # engine's resolved LAYMAN_ENV_FILE rather than hardcoding a second copy.
     assert "layman-nova-signal-intake.service.d/override.conf" in deploy_script
     assert 'Environment="LAYMAN_ENV_FILE=%s"' in deploy_script
-    assert "http://127.0.0.1:8003/api/health" in deploy_script
+    assert "http://127.0.0.1:8102/api/health" in deploy_script
 
 
 def test_workflow_declares_production_secret_passthrough_names():

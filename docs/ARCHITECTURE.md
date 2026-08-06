@@ -57,7 +57,7 @@ MVP storage is file-backed:
 
 Two systemd units run the **same** application, split by route in nginx.
 
-| | Engine (`layman-nova-signal-router`, :8002) | Intake (`layman-nova-signal-intake`, :8003) |
+| | Engine (`layman-nova-signal-router`, :8002) | Intake (`layman-nova-signal-intake`, :8102) |
 |---|---|---|
 | `BACKGROUND_WORKER_RUNNER_ENABLED` | `true` | `false` |
 | Singleton workers (Dhan WS, option monitor, EOD square-off, ghost watcher, strategy job worker, shared-token refresh) | yes — **exactly one process may run these** | no |

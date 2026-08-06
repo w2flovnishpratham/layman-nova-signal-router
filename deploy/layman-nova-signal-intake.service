@@ -34,7 +34,7 @@ Environment="PYTHONUNBUFFERED=1"
 Environment="BACKGROUND_WORKER_RUNNER_ENABLED=false"
 # LAYMAN_ENV_FILE is supplied by a drop-in that deploy_vps.sh writes, mirroring
 # whatever the engine unit resolved, so both processes always read one env file.
-ExecStart=/root/layman-nova-signal-router/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8003 --no-access-log
+ExecStart=/root/layman-nova-signal-router/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8102 --no-access-log
 Restart=always
 RestartSec=3
 

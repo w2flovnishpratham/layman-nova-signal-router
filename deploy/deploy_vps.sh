@@ -91,7 +91,7 @@ fi
 
 intake_healthy=false
 for _ in $(seq 1 30); do
-  if curl --fail --silent http://127.0.0.1:8003/api/health >/dev/null; then
+  if curl --fail --silent http://127.0.0.1:8102/api/health >/dev/null; then
     intake_healthy=true
     break
   fi
@@ -99,7 +99,7 @@ for _ in $(seq 1 30); do
 done
 
 if [[ "$intake_healthy" != "true" ]]; then
-  echo "WARNING: webhook intake worker (:8003) did not become healthy." >&2
+  echo "WARNING: webhook intake worker (:8102) did not become healthy." >&2
   echo "Webhook routes fall back to the engine worker via nginx; concurrency isolation is lost until this is fixed." >&2
   systemctl status layman-nova-signal-intake.service --no-pager -l || true
   journalctl -u layman-nova-signal-intake.service -n 80 --no-pager -l || true
