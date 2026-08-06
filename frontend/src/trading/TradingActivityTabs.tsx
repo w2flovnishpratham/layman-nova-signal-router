@@ -26,6 +26,36 @@ const TABS: Array<{ key: TradingTerminalTab; label: string }> = [
 ]
 const TERMINAL_TABS = new Set(TABS.map((item) => item.key))
 
+// Tabs (besides Alerts, which has its own server-tracked unacknowledged
+// count) get a client-only "new since you last reset this tab" badge, keyed
+// off a per-tab last-seen timestamp persisted in localStorage.
+const LAST_SEEN_STORAGE_KEY = 'nova-terminal-last-seen'
+type LastSeenMap = Partial<Record<TradingTerminalTab, string>>
+
+function loadLastSeen(): LastSeenMap {
+  try {
+    const raw = localStorage.getItem(LAST_SEEN_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as LastSeenMap) : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveLastSeen(next: LastSeenMap) {
+  try {
+    localStorage.setItem(LAST_SEEN_STORAGE_KEY, JSON.stringify(next))
+  } catch {
+    // Best-effort only -- a badge count is not worth failing anything over.
+  }
+}
+
+function countNewRows(rows: TerminalRow[], since: string | undefined): number {
+  // No reset yet this browser -- everything currently loaded counts as new,
+  // same as Alerts' unacknowledged_count starting non-zero on a fresh session.
+  if (!since) return rows.length
+  return rows.filter((row) => row.occurred_at && row.occurred_at > since).length
+}
+
 interface Props {
   mode?: 'paper' | 'live' | null
   runId?: string | null
@@ -42,6 +72,8 @@ function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
   const [loading, setLoading] = useState(true)
   const [logPaused, setLogPaused] = useState(false)
   const [notificationStatus, setNotificationStatus] = useState('')
+  const [lastSeen, setLastSeen] = useState<LastSeenMap>(() => loadLastSeen())
+  const [tabCounts, setTabCounts] = useState<Partial<Record<TradingTerminalTab, number>>>({})
   const cursors = useRef<Partial<Record<TradingTerminalTab, string | null>>>({})
   const notificationPreferences = useRef<Record<string, boolean>>({})
   const tableWrap = useRef<HTMLDivElement | null>(null)
@@ -68,11 +100,15 @@ function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
           ? await getTradingActivity(options)
           : await getTradingEngineLog(options)
       }
-      setRows((current) => (
-        incremental && result.reconciliation_status === 'CURRENT'
+      setRows((current) => {
+        const next = incremental && result.reconciliation_status === 'CURRENT'
           ? mergeRows(current, result.items)
           : result.items
-      ))
+        if (active === 'activity' || active === 'engine') {
+          setTabCounts((counts) => ({ ...counts, [active]: countNewRows(next, lastSeen[active]) }))
+        }
+        return next
+      })
       cursors.current[active] = result.next_cursor
       setError('')
     } catch (cause) {
@@ -80,7 +116,17 @@ function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [mode, runId])
+  }, [mode, runId, lastSeen])
+
+  function resetTabCount(target: TradingTerminalTab) {
+    const now = new Date().toISOString()
+    setLastSeen((current) => {
+      const next = { ...current, [target]: now }
+      saveLastSeen(next)
+      return next
+    })
+    setTabCounts((counts) => ({ ...counts, [target]: 0 }))
+  }
 
   useEffect(() => {
     cursors.current[tab] = null
@@ -200,6 +246,9 @@ function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
             {item.key === 'alerts' && alerts?.unacknowledged_count ? (
               <span className="terminal-alert-count">{alerts.unacknowledged_count}</span>
             ) : null}
+            {(item.key === 'activity' || item.key === 'engine') && tabCounts[item.key] ? (
+              <span className="terminal-alert-count">{tabCounts[item.key]}</span>
+            ) : null}
           </TabsTrigger>
         ))}
       </TabsList>
@@ -258,6 +307,12 @@ function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
                   Acknowledge historical
                 </Button>
               ) : null}
+            </div>
+          ) : null}
+          {(tab === 'activity' || tab === 'engine') && tabCounts[tab] ? (
+            <div className="terminal-alert-summary">
+              <span className="is-active"><strong>{tabCounts[tab]}</strong> New since last reset</span>
+              <Button variant="unstyled" type="button" onClick={() => resetTabCount(tab)}>Reset</Button>
             </div>
           ) : null}
           {tab === 'engine' && logPaused ? (
