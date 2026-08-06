@@ -30,6 +30,7 @@ from app.services import (
     strategy_risk,
     webhook_replay_store,
 )
+from app.services.audit_logger import log_error_event
 from app.services.execution_context import bind_user_execution_context
 from app.services.signal_validator import validate_signal
 from app.services.user_context import CurrentUser
@@ -707,6 +708,15 @@ async def strategy_webhook(
         # auto-filled default Message text (a description of the strategy and
         # its inputs) in place instead of clearing it -- that default text is
         # not the novaWebhookPayload(...) JSON and TradingView sends it as-is.
+        # Logged (not just returned) so this is visible in the Engine Log --
+        # previously it was silent there and only visible in TradingView's own
+        # delivery log, which the trader might never check.
+        log_error_event(
+            "WEBHOOK_INVALID_JSON",
+            "Strategy webhook body was not valid JSON -- likely TradingView's "
+            "auto-filled default alert Message text was never replaced.",
+            metadata={"strategy_name": strategy_name},
+        )
         return JSONResponse(
             status_code=400,
             content={
@@ -720,6 +730,11 @@ async def strategy_webhook(
             },
         )
     if not isinstance(body, dict):
+        log_error_event(
+            "WEBHOOK_INVALID_JSON",
+            "Strategy webhook body decoded but was not a JSON object.",
+            metadata={"strategy_name": strategy_name},
+        )
         return JSONResponse(
             status_code=400,
             content={"ok": False, "error": "Payload must be an object."},
