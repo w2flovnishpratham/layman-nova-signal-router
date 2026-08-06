@@ -6388,20 +6388,31 @@ body * {
   background: var(--nova-surface);
 }
 
+/* The shadcn Table primitive wraps its own <table> in a div with
+   overflow-x-auto. Setting overflow-x alone makes overflow-y compute to
+   "auto" too (a CSS overflow-interaction quirk), so that inner div became a
+   second, competing vertical scroll container with nothing to scroll --
+   which is what ate trackpad/wheel scrolls and left only the visible
+   scrollbar thumb able to move the box. This box is the only scroll owner. */
+.nova-trade-detail-scroll [data-slot='table-container'] { overflow: visible; }
+
 /* index.css hides every scrollbar app-wide (see the `*` rules at the top).
    That is fine for a page that scrolls to a natural end, but here it hides the
    only cue that there are more trades below the fold -- so this container opts
-   back in. */
-.nova-trade-detail-scroll { scrollbar-width: thin !important; }
+   back in, styled glassy to match the panel chrome. */
+.nova-trade-detail-scroll { scrollbar-width: thin !important; scrollbar-color: rgba(255, 255, 255, 0.28) transparent !important; }
 .nova-trade-detail-scroll::-webkit-scrollbar { display: block !important; width: 10px !important; height: 10px !important; }
 .nova-trade-detail-scroll::-webkit-scrollbar-track { background: transparent; }
 .nova-trade-detail-scroll::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
+  border: 1px solid rgba(255, 255, 255, 0.32);
   border-radius: 999px;
-  background-clip: content-box;
-  background-color: color-mix(in srgb, var(--nova-text-muted) 55%, transparent);
+  background-color: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(6px);
 }
-.nova-trade-detail-scroll::-webkit-scrollbar-thumb:hover { background-color: var(--nova-text-muted); }
+.nova-trade-detail-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.5);
+}
 .nova-trade-table { width: 100%; min-width: 860px; border-collapse: collapse; font-size: 11.5px; }
 .nova-trade-table th {
   position: sticky; top: 0; z-index: 1;
