@@ -40,6 +40,7 @@ except Exception:  # pragma: no cover
 
 _ENGINE: "Engine | None" = None
 _SESSION_FACTORY = None
+_READONLY_SESSION_FACTORY = None
 _LOCK = threading.RLock()
 
 
@@ -87,7 +88,7 @@ def database_configured() -> bool:
 
 
 def get_engine() -> "Engine":
-    global _ENGINE, _SESSION_FACTORY
+    global _ENGINE, _SESSION_FACTORY, _READONLY_SESSION_FACTORY
     if _ENGINE is not None:
         return _ENGINE
     with _LOCK:
@@ -116,6 +117,29 @@ def get_engine() -> "Engine":
         )
         _ENGINE = engine
         _SESSION_FACTORY = sessionmaker(bind=engine, class_=Session, expire_on_commit=False, future=True)
+        # Read-only sessions run in AUTOCOMMIT. SQLAlchemy's default mode wraps
+        # every statement -- reads included -- in an explicit BEGIN...COMMIT,
+        # which costs two extra network round trips. Measured against this
+        # deployment (VPS in Mumbai, Neon in ap-southeast-1, ~65ms RTT):
+        # a trivial SELECT 1 is 277ms with the transaction wrapper and 60ms
+        # without it. Reads that never write don't need the transaction.
+        #
+        # engine.execution_options() returns a shallow copy sharing the SAME
+        # connection pool, so this does not double the connection count against
+        # Neon -- it only changes the isolation level for sessions bound to it.
+        #
+        # autoflush=False so a stray session.add() in a read scope can never be
+        # silently flushed by a later query. Combined with the guard in
+        # readonly_session_scope(), an accidental write is caught before it
+        # reaches the database rather than after AUTOCOMMIT has already made it
+        # permanent.
+        _READONLY_SESSION_FACTORY = sessionmaker(
+            bind=engine.execution_options(isolation_level="AUTOCOMMIT"),
+            class_=Session,
+            expire_on_commit=False,
+            autoflush=False,
+            future=True,
+        )
         logger.info("Database engine initialised (host=%s).", urlsplit(normalized).hostname)
         return _ENGINE
 
@@ -124,6 +148,12 @@ def get_session_factory():
     if _SESSION_FACTORY is None:
         get_engine()
     return _SESSION_FACTORY
+
+
+def get_readonly_session_factory():
+    if _READONLY_SESSION_FACTORY is None:
+        get_engine()
+    return _READONLY_SESSION_FACTORY
 
 
 @contextmanager
@@ -138,6 +168,46 @@ def session_scope() -> Iterator["Session"]:
         session.rollback()
         raise
     finally:
+        session.close()
+
+
+class ReadOnlySessionMisuse(RuntimeError):
+    """Raised when a read-only session scope was used to modify data."""
+
+
+@contextmanager
+def readonly_session_scope() -> Iterator["Session"]:
+    """AUTOCOMMIT session scope for queries that only read.
+
+    Skips the BEGIN/COMMIT round trips that a transactional scope pays -- worth
+    ~4.6x on this deployment's cross-region latency (see get_engine()). Use it
+    for read models and dashboards.
+
+    NOT for anything that writes: in AUTOCOMMIT each statement is durable
+    immediately, so there is no rollback to fall back on. Money paths, order
+    execution and anything with a compare-and-set must keep using
+    session_scope(). The guard below fails loudly on pending ORM changes rather
+    than letting a write quietly land through the read path.
+    """
+    factory = get_readonly_session_factory()
+    session = factory()
+    try:
+        yield session
+        if session.new or session.dirty or session.deleted:
+            # Discard the accidental writes before surfacing the misuse.
+            session.rollback()
+            raise ReadOnlySessionMisuse(
+                "readonly_session_scope() received pending writes "
+                f"(new={len(session.new)}, dirty={len(session.dirty)}, "
+                f"deleted={len(session.deleted)}). Use session_scope() instead."
+            )
+    finally:
+        # close() only -- deliberately no rollback on the success path. There is
+        # no open transaction to roll back under AUTOCOMMIT, and rollback()
+        # *expires* every ORM object in the identity map, so callers that return
+        # rows out of the scope (risk_overview, terminal feeds) would then raise
+        # DetachedInstanceError on attribute access. close() leaves already
+        # loaded values readable, matching what session_scope() gives callers.
         session.close()
 
 
@@ -156,7 +226,7 @@ def init_db() -> None:
 
 def reset_engine_for_tests() -> None:
     """Dispose and clear the cached engine (used by the test suite)."""
-    global _ENGINE, _SESSION_FACTORY
+    global _ENGINE, _SESSION_FACTORY, _READONLY_SESSION_FACTORY
     with _LOCK:
         if _ENGINE is not None:
             try:
@@ -165,3 +235,6 @@ def reset_engine_for_tests() -> None:
                 pass
         _ENGINE = None
         _SESSION_FACTORY = None
+        # Must clear too: it is bound to a shallow copy of the disposed engine,
+        # so leaving it set would hand tests a session on a dead pool.
+        _READONLY_SESSION_FACTORY = None

@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
 from app.db import models
-from app.db.engine import database_configured, session_scope
+from app.db.engine import database_configured, readonly_session_scope
 from app.services import risk_configuration, strategy_risk
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -45,14 +45,14 @@ def _utilisation(used: int, limit: int) -> dict[str, Any]:
 
 
 def _fetch_user_risk_control(user_id: uuid.UUID):
-    with session_scope() as db:
+    with readonly_session_scope() as db:
         return db.scalar(
             select(models.UserRiskControl).where(models.UserRiskControl.user_id == user_id)
         )
 
 
 def _fetch_override_names(user_id: uuid.UUID) -> set[str]:
-    with session_scope() as db:
+    with readonly_session_scope() as db:
         return set(
             db.scalars(
                 select(models.UserStrategyRiskControl.strategy_name).where(
@@ -63,7 +63,7 @@ def _fetch_override_names(user_id: uuid.UUID) -> set[str]:
 
 
 def _fetch_counters(user_id: uuid.UUID, trade_date) -> dict[str, Any]:
-    with session_scope() as db:
+    with readonly_session_scope() as db:
         return {
             row.strategy_name: row
             for row in db.scalars(
@@ -76,7 +76,7 @@ def _fetch_counters(user_id: uuid.UUID, trade_date) -> dict[str, Any]:
 
 
 def _fetch_trades(user_id: uuid.UUID, normalized_mode: str, begin, finish) -> list[Any]:
-    with session_scope() as db:
+    with readonly_session_scope() as db:
         return list(
             db.scalars(
                 select(models.PortfolioTrade).where(
@@ -90,7 +90,7 @@ def _fetch_trades(user_id: uuid.UUID, normalized_mode: str, begin, finish) -> li
 
 
 def _fetch_open_positions(user_id: uuid.UUID, normalized_mode: str) -> list[Any]:
-    with session_scope() as db:
+    with readonly_session_scope() as db:
         return list(
             db.scalars(
                 select(models.StrategyInstancePosition).where(
@@ -103,7 +103,7 @@ def _fetch_open_positions(user_id: uuid.UUID, normalized_mode: str) -> list[Any]
 
 
 def _fetch_audit_rows(user_id: uuid.UUID) -> list[Any]:
-    with session_scope() as db:
+    with readonly_session_scope() as db:
         return list(
             db.scalars(
                 select(models.AuditLog)

@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
 from app.db import models
-from app.db.engine import database_configured, session_scope
+from app.db.engine import database_configured, readonly_session_scope, session_scope
 from app.services import signals_feed
 from app.services.audit_logger import read_jsonl, sanitize_for_log
 from app.services.execution_context import current_execution_user
@@ -113,7 +113,7 @@ def _durable_execution_items(user_id: uuid.UUID) -> list[dict[str, Any]]:
     if not database_configured():
         return []
     items: list[dict[str, Any]] = []
-    with session_scope() as db:
+    with readonly_session_scope() as db:
         intents = db.scalars(
             select(models.LiveOrderIntent)
             .where(models.LiveOrderIntent.user_id == user_id)
@@ -633,7 +633,7 @@ def acknowledge(
 def _acknowledged_keys(user_id: uuid.UUID) -> set[str]:
     if not database_configured():
         return set()
-    with session_scope() as db:
+    with readonly_session_scope() as db:
         return set(
             db.scalars(
                 select(models.TerminalAlertAcknowledgement.event_key).where(

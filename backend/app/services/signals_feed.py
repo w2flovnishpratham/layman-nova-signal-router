@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from app.db import models
-from app.db.engine import database_configured, session_scope
+from app.db.engine import database_configured, readonly_session_scope
 
 # Real persisted values of WebhookEvent.processed_status. Deliberately NOT the
 # mockup's "routed/blocked/duplicate" vocabulary - we expose what is stored.
@@ -75,7 +75,7 @@ def list_signals(
     limit = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
     status = (status or "all").strip().lower()
 
-    with session_scope() as db:
+    with readonly_session_scope() as db:
         query = select(models.WebhookEvent).where(models.WebhookEvent.user_id == user_id)
 
         if status != "all":
