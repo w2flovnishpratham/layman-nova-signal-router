@@ -2274,7 +2274,30 @@ def route_reversal_signal(
             state="WAITING_EXIT",
             last_message=f"Reversal complete: entered {signal.option_side} in {get_engine_mode().upper()} mode",
         )
-        msg = f"Exited {open_position.get('option_side')} and entered {signal.option_side}."
+        # Qty/price on both legs plus the new SL/TP, not just which sides
+        # flipped -- the bare "Exited X and entered Y" gave no way to tell
+        # what actually happened without opening the Activity tab.
+        exit_price = exit_result.get("avg_price")
+        exit_qty = exit_result.get("filled_qty") or exit_decision.final_qty
+        entry_price = entry_result.get("avg_price")
+        entry_qty = entry_result.get("filled_qty") or reversal_decision.final_qty
+        entry_symbol = entry_result.get("trading_symbol") or position.get("trading_symbol")
+        exit_leg = (
+            f"Exited {open_position.get('option_side')} {exit_qty}@₹{exit_price:.2f}"
+            if exit_price is not None
+            else f"Exited {open_position.get('option_side')}"
+        )
+        entry_leg = (
+            f"entered {signal.option_side} {entry_qty}@₹{entry_price:.2f}"
+            if entry_price is not None
+            else f"entered {signal.option_side}"
+        )
+        msg = f"{exit_leg} and {entry_leg}" + (f" on {entry_symbol}." if entry_symbol else ".")
+        entry_levels = entry_result.get("active_exit_levels") or {}
+        sl_price = entry_levels.get("stopLossPrice")
+        tp_price = entry_levels.get("targetPrice")
+        if sl_price is not None and tp_price is not None:
+            msg += f" SL ₹{sl_price:.2f} / TP ₹{tp_price:.2f}."
         levels = entry_result.get("broker_exit_levels")
         if levels and levels.get("sl_disabled"):
             msg += " SL effectively disabled."

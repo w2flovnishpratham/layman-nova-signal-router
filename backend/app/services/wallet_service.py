@@ -151,10 +151,13 @@ def refresh_wallet_snapshot(
     (e.g. the standalone credential-verify check), use
     fetch_dhan_wallet_snapshot() instead — that one never substitutes Paper."""
     if get_engine_mode(legacy_fallback=False) == "paper":
-        snapshot = paper_wallet_snapshot()
-        if log_event:
-            log_audit_event("PAPER_WALLET_UPDATED", snapshot["message"], metadata=snapshot)
-        return snapshot
+        # This used to log a PAPER_WALLET_UPDATED audit event on every refresh
+        # (called after every entry and every exit) with the static message
+        # "Paper portfolio ready." -- content-free noise that showed up twice
+        # per trade cycle in the Engine Log and as a push notification,
+        # crowding out the entry/exit events that actually say what happened.
+        # Nothing reads this event_type; it was never anything but noise.
+        return paper_wallet_snapshot()
 
     current = get_wallet_snapshot()
     if not force and not wallet_is_stale(current):
