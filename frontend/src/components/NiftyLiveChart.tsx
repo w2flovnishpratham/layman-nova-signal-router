@@ -128,6 +128,10 @@ function NiftyLiveChartInner({
     return next
   }, [series])
   const hasCandles = candles.length > 0
+  // series.interval still holds the OLD timeframe's data until the new
+  // fetch resolves and calls setSeries -- comparing it to the just-clicked
+  // timeframe is enough to know we're mid-switch, no extra state needed.
+  const timeframeSwitching = series != null && series.interval !== timeframe
 
   // Latest candles/markers/timeframe mirrored into refs so the canvas's
   // native event listeners (attached once, see below) always read fresh
@@ -290,12 +294,19 @@ function NiftyLiveChartInner({
     <section className="nifty-chart-card">
       {header}
       {series.market_state === 'closed' ? <p className="nifty-chart-note">Market closed - showing today's latest candles.</p> : null}
-      <canvas
-        ref={canvasRef}
-        className="nifty-chart-canvas nova-live-chart"
-        role="img"
-        aria-label={`NIFTY ${series.interval} candlestick chart`}
-      />
+      <div className="nifty-chart-canvas-wrap">
+        <canvas
+          ref={canvasRef}
+          className={`nifty-chart-canvas nova-live-chart${timeframeSwitching ? ' is-switching' : ''}`}
+          role="img"
+          aria-label={`NIFTY ${series.interval} candlestick chart`}
+        />
+        {timeframeSwitching ? (
+          <div className="nifty-chart-switch-overlay" role="status" aria-label={`Loading ${timeframe} candles`}>
+            <Loader2 size={20} className="nifty-chart-retry-spinner" />
+          </div>
+        ) : null}
+      </div>
       {activeGroup ? (
         <div className="nifty-marker-popover-backdrop" onClick={() => setActiveGroup(null)}>
           <div

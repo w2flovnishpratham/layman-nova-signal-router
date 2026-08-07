@@ -3544,6 +3544,28 @@ pre {
   }
 }
 
+.nifty-chart-canvas-wrap {
+  position: relative;
+  min-height: 0;
+}
+
+.nifty-chart-canvas.is-switching {
+  filter: blur(3px);
+  transition: filter 120ms ease-out;
+}
+
+.nifty-chart-switch-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 9, 14, 0.25);
+  border-radius: 8px;
+  pointer-events: none;
+  color: var(--text-2);
+}
+
 /* --- Busy-candle trade popover ------------------------------------------ */
 .nifty-marker-popover-backdrop {
   position: fixed;

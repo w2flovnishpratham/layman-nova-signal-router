@@ -13,6 +13,9 @@ const GRID_COLOR = 'rgba(255,255,255,0.055)'
 const AXIS_TEXT_COLOR = 'rgba(247,243,255,0.38)'
 const TIME_TEXT_COLOR = 'rgba(247,243,255,0.34)'
 const CROSSHAIR_COLOR = 'rgba(255,255,255,0.16)'
+const CROSSHAIR_LABEL_COLOR = '#8fb4f7'
+const OHLC_BOX_COLOR = 'rgba(32,36,54,0.92)'
+const OHLC_BOX_BORDER = 'rgba(143,180,247,0.28)'
 const MONO_FONT = '10.5px "SF Mono", "Cascadia Mono", ui-monospace, Consolas, monospace'
 const SANS_FONT = '700 10px -apple-system, "Segoe UI", sans-serif'
 
@@ -146,7 +149,9 @@ export function paintChart(ctx: CanvasRenderingContext2D, layout: ChartLayout): 
     ctx.fillText(label.text, label.x - 14, dims.height - 8)
   }
 
-  // crosshair (drawn under candles so wicks stay legible on top)
+  // crosshair (drawn under candles so wicks stay legible on top). Both arms
+  // are dashed and snapped to the magnet point -- vertical to the candle's
+  // center, horizontal out to the price axis on the right.
   if (layout.crosshair) {
     ctx.save()
     ctx.strokeStyle = CROSSHAIR_COLOR
@@ -154,6 +159,8 @@ export function paintChart(ctx: CanvasRenderingContext2D, layout: ChartLayout): 
     ctx.beginPath()
     ctx.moveTo(layout.crosshair.x, plot.top)
     ctx.lineTo(layout.crosshair.x, plot.bottom)
+    ctx.moveTo(plot.left, Math.round(layout.crosshair.y) + 0.5)
+    ctx.lineTo(plot.right, Math.round(layout.crosshair.y) + 0.5)
     ctx.stroke()
     ctx.restore()
   }
@@ -202,17 +209,29 @@ export function paintChart(ctx: CanvasRenderingContext2D, layout: ChartLayout): 
     drawLabeledMarker(ctx, glyph)
   }
 
-  // crosshair OHLC readout, top-left, drawn last so it sits above everything
+  // crosshair OHLC readout, top-left, drawn last so it sits above everything.
+  // Boxed in a color distinct from the chart's own background so it reads as
+  // an overlay, not part of the plot.
   if (layout.crosshair) {
-    const { candle } = layout.crosshair
+    const { candle, y } = layout.crosshair
     ctx.font = MONO_FONT
     const text = `O ${candle.open.toFixed(2)}  H ${candle.high.toFixed(2)}  L ${candle.low.toFixed(2)}  C ${candle.close.toFixed(2)}`
     const metrics = ctx.measureText(text)
     const boxW = metrics.width + 16
-    ctx.fillStyle = 'rgba(10,9,17,0.78)'
+    ctx.fillStyle = OHLC_BOX_COLOR
     roundRect(ctx, plot.left + 4, 4, boxW, 20, 6)
     ctx.fill()
+    ctx.strokeStyle = OHLC_BOX_BORDER
+    ctx.lineWidth = 1
+    ctx.stroke()
     ctx.fillStyle = '#f7f3ff'
     ctx.fillText(text, plot.left + 12, 18)
+
+    // Magnetic price readout at the axis, matching where the horizontal arm lands.
+    ctx.fillStyle = CROSSHAIR_LABEL_COLOR
+    ctx.font = MONO_FONT
+    ctx.textBaseline = 'middle'
+    ctx.fillText(candle.close.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), plot.right + 8, y)
+    ctx.textBaseline = 'alphabetic'
   }
 }

@@ -71,7 +71,7 @@ export interface ChartLayout {
   grid: { y: number; price: number }[]
   timeAxisLabels: { x: number; text: string }[]
   priceAxisLabels: { y: number; text: string }[]
-  crosshair: { x: number; candle: NiftyCandle } | null
+  crosshair: { x: number; y: number; candle: NiftyCandle } | null
 }
 
 function niceStep(range: number, targetTicks: number): number {
@@ -116,6 +116,28 @@ export function buildChartLayout(args: {
 
   let lo = Math.min(...candles.map((c) => c.low))
   let hi = Math.max(...candles.map((c) => c.high))
+
+  // Entry/SL/TP for the latest open BUY can sit well outside the visible
+  // candle range (a wide SL on a cheap option, say) -- fold them into the
+  // axis bounds up front so the line is never clipped instead of just drawn
+  // off-canvas.
+  const latestMarker = [...markers].sort((left, right) => left.time - right.time).at(-1)
+  const levels: { price: number | null | undefined; color: string; title: string }[] = []
+  if (latestMarker && latestMarker.side === 'BUY') {
+    const entryColor = latestMarker.option_side === 'PE' ? '#fb7185' : '#34d399'
+    levels.push(
+      { price: latestMarker.price, color: entryColor, title: `BUY ${latestMarker.option_side ?? ''}`.trim() },
+      { price: latestMarker.stop_price, color: '#ef4444', title: 'SL' },
+      { price: latestMarker.target_price, color: '#22c55e', title: 'TP' },
+    )
+  }
+  for (const level of levels) {
+    if (level.price != null && Number.isFinite(level.price) && level.price > 0) {
+      lo = Math.min(lo, level.price)
+      hi = Math.max(hi, level.price)
+    }
+  }
+
   const pricePad = (hi - lo) * 0.08 || 1
   lo -= pricePad
   hi += pricePad
@@ -198,18 +220,9 @@ export function buildChartLayout(args: {
 
   // --- price lines: entry/SL/TP for the latest still-open BUY marker ---
   const priceLines: PriceLineLayout[] = []
-  const latest = [...markers].sort((left, right) => left.time - right.time).at(-1)
-  if (latest && latest.side === 'BUY') {
-    const entryColor = latest.option_side === 'PE' ? '#fb7185' : '#34d399'
-    const levels: { price: number | null | undefined; color: string; title: string }[] = [
-      { price: latest.price, color: entryColor, title: `BUY ${latest.option_side ?? ''}`.trim() },
-      { price: latest.stop_price, color: '#ef4444', title: 'SL' },
-      { price: latest.target_price, color: '#22c55e', title: 'TP' },
-    ]
-    for (const level of levels) {
-      if (level.price != null && Number.isFinite(level.price) && level.price > 0) {
-        priceLines.push({ y: yFor(level.price), price: level.price, color: level.color, title: level.title })
-      }
+  for (const level of levels) {
+    if (level.price != null && Number.isFinite(level.price) && level.price > 0) {
+      priceLines.push({ y: yFor(level.price), price: level.price, color: level.color, title: level.title })
     }
   }
 
@@ -231,11 +244,14 @@ export function buildChartLayout(args: {
     timeAxisLabels.push({ x: xFor(i), text: istTime(candles[i].time) })
   }
 
-  // --- crosshair: nearest candle to hoverX, if any ---
+  // --- crosshair: nearest candle to hoverX, if any -- "magnetic" because it
+  // snaps to that candle's center and close price rather than tracking the
+  // raw mouse pixel. ---
   let crosshair: ChartLayout['crosshair'] = null
   if (args.hoverX != null) {
     const index = Math.max(0, Math.min(candles.length - 1, Math.round((args.hoverX - plotLeft - barSlot / 2) / barSlot)))
-    crosshair = { x: xFor(index), candle: candles[index] }
+    const snapped = candles[index]
+    crosshair = { x: xFor(index), y: yFor(snapped.close), candle: snapped }
   }
 
   return {

@@ -63,6 +63,23 @@ describe('buildChartLayout', () => {
     expect(layout.priceLines).toContainEqual(expect.objectContaining({ price: 24210, title: 'TP', color: '#22c55e' }))
   })
 
+  it('expands the y-axis to fit a SL/TP that sits outside the visible candle range, instead of clipping it', () => {
+    const candles = [candle(0, 100, 102, 99, 101), candle(300, 101, 103, 100, 102)]
+    const markers: NiftyTradeMarker[] = [
+      marker({ time: SESSION_START + 310, side: 'BUY', option_side: 'CE', price: 101, stop_price: 40, target_price: 160 }),
+    ]
+    const layout = buildChartLayout({ candles, markers, timeframe: '5m', dims: DIMS })
+
+    expect(layout.priceRange.min).toBeLessThan(40)
+    expect(layout.priceRange.max).toBeGreaterThan(160)
+    const slLine = layout.priceLines.find((line) => line.title === 'SL')
+    const tpLine = layout.priceLines.find((line) => line.title === 'TP')
+    expect(slLine?.y).toBeGreaterThanOrEqual(0)
+    expect(slLine?.y).toBeLessThanOrEqual(DIMS.height)
+    expect(tpLine?.y).toBeGreaterThanOrEqual(0)
+    expect(tpLine?.y).toBeLessThanOrEqual(DIMS.height)
+  })
+
   it('omits price lines when the latest marker is an exit, not an open BUY', () => {
     const candles = [candle(0, 100, 102, 99, 101)]
     const markers = [marker({ time: SESSION_START, side: 'SELL', exit_kind: 'EOD' })]
@@ -97,6 +114,20 @@ describe('buildChartLayout', () => {
     const [glyph] = layout.markers
     expect(glyph.kind).toBe('triangle-up')
     if (glyph.kind !== 'badge') expect(glyph.text).toBe('BUY CE  22,932.15')
+  })
+})
+
+describe('crosshair', () => {
+  it('snaps to the hovered candle\'s center and close price, not the raw pixel', () => {
+    const candles = [candle(0, 100, 102, 99, 101), candle(300, 101, 108, 100, 105)]
+    const layout = buildChartLayout({ candles, markers: [], timeframe: '5m', dims: DIMS, hoverX: 400 })
+
+    expect(layout.crosshair).not.toBeNull()
+    expect(layout.crosshair?.candle).toBe(candles[1])
+    expect(layout.crosshair?.x).toBe(layout.candles[1].x)
+    // y must land on the close (105), not wherever hoverX's pixel happened to be.
+    const expectedY = layout.candles[1].bodyTop // close >= open here, so bodyTop is the close
+    expect(layout.crosshair?.y).toBeCloseTo(expectedY, 5)
   })
 })
 
