@@ -419,9 +419,9 @@ export function RiskPage({ runtime }: { runtime: RuntimeStatus | null }) {
                 <fieldset>
                   <legend>Account protection</legend>
                   <div className="nova-risk-fields">
-                    <label>Maximum daily loss (₹)<Input type="number" min={1} step={500} {...numberField(draft, 'daily_loss_cap', setDraft)} /></label>
-                    <label>Maximum trades per day<Input type="number" min={1} max={50} {...numberField(draft, 'max_trades_per_day', setDraft)} /></label>
-                    <label>Maximum open positions<Input type="number" min={1} max={20} {...numberField(draft, 'max_open_positions', setDraft)} /></label>
+                    <label>Maximum daily loss (₹, 0 for no limit)<Input type="number" min={0} step={500} {...numberField(draft, 'daily_loss_cap', setDraft)} /></label>
+                    <label>Maximum trades per day (0 for no limit)<Input type="number" min={0} max={50} {...numberField(draft, 'max_trades_per_day', setDraft)} /></label>
+                    <label>Maximum open positions (0 for no limit)<Input type="number" min={0} max={20} {...numberField(draft, 'max_open_positions', setDraft)} /></label>
                     <label>Cooldown after loss (minutes)<Input type="number" min={0} max={1440} {...numberField(draft, 'cooldown_minutes', setDraft)} /></label>
                   </div>
                 </fieldset>

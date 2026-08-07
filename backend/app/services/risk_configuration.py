@@ -115,17 +115,24 @@ def preset_values(key: str) -> dict[str, Any]:
     return deepcopy(_PRESETS[_preset(key)]["values"])
 
 
-def _integer(values: dict[str, Any], key: str, minimum: int, maximum: int) -> int:
+def _integer(values: dict[str, Any], key: str, minimum: int, maximum: int, *, allow_unlimited: bool = False) -> int:
     try:
         value = int(values.get(key))
     except (TypeError, ValueError):
         raise RiskConfigurationError(f"{key} must be a whole number.") from None
+    # 0 means "no limit" -- risk_overview._utilisation() and risk_manager's
+    # entry-limit checks already treat a 0/absent cap this way (that's how
+    # "No cap" shows up for margin exposure today); this input gate just
+    # never allowed 0 through for the other capped fields.
+    if allow_unlimited and value == 0:
+        return 0
     if not minimum <= value <= maximum:
-        raise RiskConfigurationError(f"{key} must be between {minimum} and {maximum}.")
+        message = f"{key} must be 0 (no limit) or between {minimum} and {maximum}." if allow_unlimited else f"{key} must be between {minimum} and {maximum}."
+        raise RiskConfigurationError(message)
     return value
 
 
-def _number(values: dict[str, Any], key: str, *, required: bool = True) -> float | None:
+def _number(values: dict[str, Any], key: str, *, required: bool = True, allow_unlimited: bool = False) -> float | None:
     raw = values.get(key)
     if raw in (None, "") and not required:
         return None
@@ -133,15 +140,18 @@ def _number(values: dict[str, Any], key: str, *, required: bool = True) -> float
         value = float(raw)
     except (TypeError, ValueError):
         raise RiskConfigurationError(f"{key} must be a number.") from None
+    if allow_unlimited and value == 0:
+        return 0.0
     if value <= 0:
-        raise RiskConfigurationError(f"{key} must be greater than zero.")
+        message = f"{key} must be 0 (no limit) or greater than zero." if allow_unlimited else f"{key} must be greater than zero."
+        raise RiskConfigurationError(message)
     return round(value, 2)
 
 
 def validate_values(values: dict[str, Any]) -> dict[str, Any]:
-    daily = _number(values, "daily_loss_cap")
+    daily = _number(values, "daily_loss_cap", allow_unlimited=True)
     per_trade = _number(values, "max_loss_per_trade")
-    if per_trade > daily:
+    if daily > 0 and per_trade > daily:
         raise RiskConfigurationError("Maximum loss per trade cannot exceed the daily loss cap.")
     lots_min = _integer(values, "lots_per_trade_min", 1, 20)
     lots_max = _integer(values, "lots_per_trade_max", 1, 20)
@@ -162,8 +172,8 @@ def validate_values(values: dict[str, Any]) -> dict[str, Any]:
     return {
         "daily_loss_cap": daily,
         "max_loss_per_trade": per_trade,
-        "max_trades_per_day": _integer(values, "max_trades_per_day", 1, 50),
-        "max_open_positions": _integer(values, "max_open_positions", 1, 20),
+        "max_trades_per_day": _integer(values, "max_trades_per_day", 1, 50, allow_unlimited=True),
+        "max_open_positions": _integer(values, "max_open_positions", 1, 20, allow_unlimited=True),
         "lots_per_trade_min": lots_min,
         "lots_per_trade_max": lots_max,
         "cooldown_minutes": _integer(values, "cooldown_minutes", 0, 1440),
