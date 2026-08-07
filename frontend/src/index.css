@@ -3531,8 +3531,10 @@ pre {
   position: relative;
   overflow: hidden;
   display: block;
-  /* Read-only chart: block all mouse/touch interaction. */
-  pointer-events: none;
+  /* Pan/zoom/scroll stay disabled at the chart-options level (handleScroll,
+     handleScale, kineticScroll all false), so this can accept pointer events
+     without turning into a draggable/zoomable chart -- clicks only matter
+     for opening a busy-candle's trade list. */
 }
 
 @media (max-width: 900px) {
@@ -3542,6 +3544,81 @@ pre {
     min-height: 240px;
   }
 }
+
+/* --- Busy-candle trade popover ------------------------------------------ */
+.nifty-marker-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.nifty-marker-popover {
+  position: fixed;
+  transform: translate(-50%, 10px);
+  width: 240px;
+  max-width: calc(100vw - 24px);
+  max-height: 260px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--nova-border, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nova-bg-soft, #14121d) 92%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.nifty-marker-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--nova-border, var(--border));
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--nova-text-secondary, var(--text-2));
+}
+
+.nifty-marker-popover-close {
+  border: none;
+  background: none;
+  color: var(--nova-text-muted, var(--text-3));
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.nifty-marker-popover-close:hover { color: var(--nova-text-secondary, var(--text-2)); }
+
+.nifty-marker-popover-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.nifty-marker-popover-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.nifty-marker-popover-list li:hover { background: color-mix(in srgb, var(--nova-blue, var(--accent)) 8%, transparent); }
+
+.nifty-marker-popover-side { font-weight: 700; flex: 0 0 auto; }
+.nifty-marker-popover-side.is-buy { color: #34d399; }
+.nifty-marker-popover-side.is-sell { color: #fb7185; }
+.nifty-marker-popover-contract { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--nova-text-secondary, var(--text-2)); }
+.nifty-marker-popover-price { flex: 0 0 auto; color: var(--nova-text-secondary, var(--text-2)); }
+.nifty-marker-popover-pnl { flex: 0 0 auto; font-weight: 600; }
+.nifty-marker-popover-pnl.is-profit { color: #34d399; }
+.nifty-marker-popover-pnl.is-loss { color: #fb7185; }
 
 .manual-exit-primary,
 .manual-exit-confirm {

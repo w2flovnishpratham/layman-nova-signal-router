@@ -12,6 +12,7 @@ import {
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   LineStyle,
+  type MouseEventParams,
   type SeriesMarker,
   type Time,
   type UTCTimestamp,
@@ -88,6 +89,11 @@ function NiftyLiveChartInner({
   const tradePriceLinesRef = useRef<IPriceLine[]>([])
   const candlesRef = useRef<NiftyCandle[]>([])
   const [containerReady, setContainerReady] = useState(false)
+  // Candle time -> every trade marker that landed on it. Populated by the
+  // marker-placement effect below, read by the chart's click handler so a
+  // busy-candle badge can be expanded without re-walking the marker list.
+  const markerGroupsRef = useRef<Map<number, NiftyTradeMarker[]>>(new Map())
+  const [activeGroup, setActiveGroup] = useState<{ x: number; y: number; markers: NiftyTradeMarker[] } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -155,6 +161,15 @@ function NiftyLiveChartInner({
   const candles = useMemo(() => (series ? sessionOnly(series) : []), [series])
   const hasCandles = candles.length > 0
 
+  // The chart instance survives a timeframe switch (only containerReady/
+  // hasCandles recreate it below), but candlesRef doesn't reset on its own --
+  // so without this, switching tabs fell into the scrollToRealTime() branch
+  // below and inherited whatever bar-count span the previous timeframe had
+  // zoomed to, instead of reserving the new timeframe's own full session.
+  useEffect(() => {
+    candlesRef.current = []
+  }, [timeframe])
+
   useEffect(() => {
     const container = containerRef.current
     if (!container || !hasCandles) {
@@ -209,6 +224,20 @@ function NiftyLiveChartInner({
     chartRef.current = chart
     seriesRef.current = candleSeries
     markersPluginRef.current = createSeriesMarkers(candleSeries, [])
+    // Only a click is wired up -- pan/zoom/scroll stay off via handleScroll/
+    // handleScale/kineticScroll above, so the chart still reads as static.
+    // A click only does something on a candle with >1 trade (the count
+    // badge); anywhere else it just closes whatever popover was open.
+    const handleClick = (param: MouseEventParams<Time>) => {
+      const group = param.time ? markerGroupsRef.current.get(param.time as number) : undefined
+      if (!group || group.length < 2 || !param.point) {
+        setActiveGroup(null)
+        return
+      }
+      const bounds = container.getBoundingClientRect()
+      setActiveGroup({ x: bounds.left + param.point.x, y: bounds.top + param.point.y, markers: group })
+    }
+    chart.subscribeClick(handleClick)
     let resizeFrame: number | null = null
     const resizeObserver = new ResizeObserver(([entry]) => {
       if (!entry) return
@@ -223,6 +252,7 @@ function NiftyLiveChartInner({
     })
     resizeObserver.observe(container)
     return () => {
+      chart.unsubscribeClick(handleClick)
       resizeObserver.disconnect()
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
       markersPluginRef.current = null
@@ -230,6 +260,7 @@ function NiftyLiveChartInner({
       seriesRef.current = null
       chartRef.current = null
       candlesRef.current = []
+      setActiveGroup(null)
       chart.remove()
     }
   }, [containerReady, hasCandles])
@@ -259,14 +290,22 @@ function NiftyLiveChartInner({
     const plugin = markersPluginRef.current
     if (!plugin) return
     const visibleCandles = candlesRef.current
-    const placed = markers
-      .map((marker): SeriesMarker<Time> | null => {
-        const index = markerCandleIndex(
-          visibleCandles,
-          marker.time,
-          supportedTimeframe(series?.interval),
-        )
-        if (index === null) return null
+    const timeframeValue = supportedTimeframe(series?.interval)
+    const groups = new Map<number, NiftyTradeMarker[]>()
+    for (const marker of markers) {
+      const index = markerCandleIndex(visibleCandles, marker.time, timeframeValue)
+      if (index === null) continue
+      const time = visibleCandles[index].time
+      const group = groups.get(time)
+      if (group) group.push(marker)
+      else groups.set(time, [marker])
+    }
+    markerGroupsRef.current = groups
+
+    const placed: SeriesMarker<Time>[] = []
+    groups.forEach((group, time) => {
+      if (group.length === 1) {
+        const marker = group[0]
         const style = markerStyle(marker)
         const indexLevel = marker.price != null
           ? marker.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -275,16 +314,29 @@ function NiftyLiveChartInner({
         // doesn't declutter overlapping labels -- a busy session turned the chart
         // into unreadable soup. That detail already lives in the Reports
         // drill-down table, so the on-chart label stays to a single short line.
-        return {
+        placed.push({
           ...style,
-          time: visibleCandles[index].time as UTCTimestamp,
+          time: time as UTCTimestamp,
           text: `${style.text}${indexLevel ? `  ${indexLevel}` : ''}${marker.mode === 'paper' ? ' (P)' : ''}`,
-        }
+        })
+        return
+      }
+      // More than one trade landed on this candle -- individual labels would
+      // just overlap into soup again. Collapse to a single clickable count
+      // badge; the click handler above looks it back up in markerGroupsRef.
+      placed.push({
+        time: time as UTCTimestamp,
+        position: 'aboveBar',
+        shape: 'circle',
+        color: '#8fb4f7',
+        text: String(group.length),
       })
-      .filter((marker): marker is SeriesMarker<Time> => marker !== null)
-      .sort((left, right) => (left.time as number) - (right.time as number))
+    })
+    placed.sort((left, right) => (left.time as number) - (right.time as number))
     plugin.setMarkers(placed)
   }, [markers, candles, containerReady, hasCandles, series?.interval])
+
+  useEffect(() => setActiveGroup(null), [timeframe])
 
   useEffect(() => {
     const candleSeries = seriesRef.current
@@ -365,6 +417,38 @@ function NiftyLiveChartInner({
       {header}
       {series.market_state === 'closed' ? <p className="nifty-chart-note">Market closed - showing today's latest candles.</p> : null}
       <div ref={containerRef} className="nifty-chart-canvas nova-live-chart" role="img" aria-label={`NIFTY ${series.interval} candlestick chart`} />
+      {activeGroup ? (
+        <div className="nifty-marker-popover-backdrop" onClick={() => setActiveGroup(null)}>
+          <div
+            className="nifty-marker-popover"
+            style={{ left: activeGroup.x, top: activeGroup.y }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="nifty-marker-popover-head">
+              <span>{activeGroup.markers.length} trades</span>
+              <button type="button" className="nifty-marker-popover-close" onClick={() => setActiveGroup(null)} aria-label="Close">×</button>
+            </div>
+            <ul className="nifty-marker-popover-list">
+              {activeGroup.markers.map((marker, i) => (
+                <li key={marker.id ?? i}>
+                  <span className={`nifty-marker-popover-side is-${marker.side === 'BUY' ? 'buy' : 'sell'}`}>
+                    {marker.side}{marker.option_side ? ` ${marker.option_side}` : ''}
+                  </span>
+                  <span className="nifty-marker-popover-contract">{marker.contract ?? istTime(marker.time)}</span>
+                  <span className="nifty-marker-popover-price">
+                    {marker.execution_price != null ? `₹${marker.execution_price.toFixed(2)}` : '—'}
+                  </span>
+                  {marker.pnl != null ? (
+                    <span className={`nifty-marker-popover-pnl ${marker.pnl >= 0 ? 'is-profit' : 'is-loss'}`}>
+                      {marker.pnl >= 0 ? '+' : '-'}₹{Math.abs(marker.pnl).toLocaleString('en-IN')}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }
