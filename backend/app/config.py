@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     FRONTEND_ORIGIN: str = "http://localhost:5173"
     BACKEND_PUBLIC_BASE_URL: str = "http://localhost:8001"
     SESSION_TOKEN_SECRET: str = "change-me-in-production"
-    SESSION_TOKEN_TTL_SECONDS: int = 60 * 60 * 12
+    SESSION_TOKEN_TTL_SECONDS: int = 60 * 60 * 24 * 30
 
     WEBHOOK_TRADING_ENABLED: bool = False
     # Phase 2A: shadow dual-write of JSON position state into PostgreSQL.
