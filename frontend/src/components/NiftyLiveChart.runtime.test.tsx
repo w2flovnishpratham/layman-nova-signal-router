@@ -126,9 +126,13 @@ describe('NiftyLiveChart responsive runtime', () => {
     expect(badge.kind).toBe('badge')
 
     const canvas = await screen.findByRole('img', { name: /NIFTY 5m candlestick chart/i })
-    fireEvent.click(canvas, { clientX: badge.x, clientY: badge.y })
-
-    expect(await screen.findByText('2 trades')).toBeInTheDocument()
+    // The repaint effect only picks up the fetched markers a tick or two
+    // after the mock resolves, so layoutRef isn't hit-testable yet at the
+    // instant the mock was called -- retry the click until it lands.
+    await waitFor(() => {
+      fireEvent.click(canvas, { clientX: badge.x, clientY: badge.y })
+      expect(screen.getByText('2 trades')).toBeInTheDocument()
+    })
     expect(screen.getByText('₹128.75')).toBeInTheDocument()
     expect(screen.getByText('₹120.40')).toBeInTheDocument()
   })

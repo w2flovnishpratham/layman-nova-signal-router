@@ -117,7 +117,7 @@ describe('RiskPage', () => {
     apiMocks.getRiskPageData.mockResolvedValue(pageData())
     apiMocks.saveRiskConfiguration.mockResolvedValue({ ...configuration, activeVersion: 9 })
     render(<RiskPage runtime={runtime()} />)
-    const daily = await screen.findByLabelText('Maximum daily loss (₹)')
+    const daily = await screen.findByLabelText('Maximum daily loss (₹, 0 for no limit)')
     await user.clear(daily)
     await user.type(daily, '18000')
     await user.click(screen.getByRole('button', { name: 'Save Risk Settings' }))
