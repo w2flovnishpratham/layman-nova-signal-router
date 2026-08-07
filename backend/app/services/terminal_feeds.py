@@ -410,9 +410,18 @@ def activity(
     # read here anymore rather than faked-scoped.
 
     durable = _durable_execution_items(user_id)
-    known_correlations = {
-        str(item.get("signal_id") or item.get("operation_id") or "")
-        for item in items
+    # Index (not just a membership set) so a durable execution can *upgrade*
+    # the lightweight "signal received" placeholder already in items for the
+    # same correlation, instead of being skipped by it. The placeholder never
+    # carries lots/price and isn't marked durable, so it always fails
+    # _is_actionable below -- skipping the real execution record here meant
+    # neither version of a correlation survived: the placeholder got filtered
+    # out for not being actionable, and the actionable durable record never
+    # even made it into items to replace it. Net effect: the tab looked
+    # empty despite real orders existing.
+    correlation_index: dict[str, int] = {
+        str(item.get("signal_id") or item.get("operation_id") or ""): index
+        for index, item in enumerate(items)
         if item.get("signal_id") or item.get("operation_id")
     }
     for execution in durable:
@@ -429,29 +438,36 @@ def activity(
             "order_id": execution.get("order_id"),
         }
         lifecycle_by_signal.setdefault(correlation, []).append(stage)
-        if correlation in known_correlations:
-            continue
-        items.append(
-            {
-                "id": f"activity:{execution['id']}",
-                "occurred_at": execution.get("occurred_at"),
-                "source": execution.get("source"),
-                "strategy": execution.get("strategy"),
-                "signal": execution.get("action") or execution.get("side"),
-                "signal_id": execution.get("signal_id"),
-                "correlation_id": correlation,
-                "instrument": execution.get("instrument"),
-                "order_type": "MARKET",
-                "lots": execution.get("requested_qty"),
-                "price": execution.get("average_price"),
-                "status": execution.get("status"),
-                "pnl": execution.get("pnl"),
-                "mode": execution.get("mode"),
-                "run_id": execution.get("run_id"),
-                "durable": True,
-            }
-        )
-        known_correlations.add(correlation)
+        durable_item = {
+            "id": f"activity:{execution['id']}",
+            "occurred_at": execution.get("occurred_at"),
+            "source": execution.get("source"),
+            "strategy": execution.get("strategy"),
+            "signal": execution.get("action") or execution.get("side"),
+            "signal_id": execution.get("signal_id"),
+            "correlation_id": correlation,
+            "instrument": execution.get("instrument"),
+            "order_type": "MARKET",
+            "lots": execution.get("requested_qty"),
+            "price": execution.get("average_price"),
+            "status": execution.get("status"),
+            "pnl": execution.get("pnl"),
+            "mode": execution.get("mode"),
+            "run_id": execution.get("run_id"),
+            "durable": True,
+        }
+        existing_index = correlation_index.get(correlation)
+        if existing_index is not None:
+            # Only upgrade the placeholder if it's not already actionable on
+            # its own (e.g. a signals_feed row that already carries real
+            # qty/price) -- that one should stay as the displayed row with
+            # this execution merged into its lifecycle above, not get
+            # swapped out.
+            if not _is_actionable(items[existing_index]):
+                items[existing_index] = durable_item
+        else:
+            items.append(durable_item)
+            correlation_index[correlation] = len(items) - 1
 
     filtered = [
         item for item in items
