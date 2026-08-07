@@ -958,6 +958,30 @@ def update_runtime_settings(**changes: Any) -> dict[str, Any]:
     return saved
 
 
+def update_mode_runtime_settings(mode: str, **changes: Any) -> dict[str, Any]:
+    """Mode-explicit variant of update_runtime_settings -- writes to the
+    given mode's settings file regardless of which mode the caller's engine
+    happens to be running right now. update_runtime_settings always targets
+    get_engine_mode()'s *current* file, which is wrong for a caller (like
+    risk_configuration.save_configuration) that knows exactly which mode's
+    settings it just validated and must not silently write into the other
+    one just because the user's live engine happens to be on a different
+    mode at that moment."""
+    with _LOCK:
+        path = _runtime_settings_file(mode)
+        data = _read_json(path, default_settings)
+        data.update({
+            key: value for key, value in changes.items()
+            if key in default_settings() and key != "_version"
+        })
+        try:
+            current_version = int(data.get("_version", 0))
+        except (TypeError, ValueError):
+            current_version = 0
+        data["_version"] = current_version + 1
+        return _write_json(path, data)
+
+
 def reset_to_waiting_entry(message: str = "Waiting for TradingView entry alert") -> None:
     clear_open_position()
     update_app_state(

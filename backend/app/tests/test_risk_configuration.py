@@ -6,9 +6,13 @@ import pytest
 from app.db import models
 from app.db.engine import session_scope
 from app.schemas.signal import NormalizedSignal
-from app.services import risk_configuration
+from app.services import risk_configuration, state_store
 from app.services.execution_router import _entry_position
 from app.tests.conftest_multiuser import make_user, mu_db  # noqa: F401
+
+
+def _isolate_runtime_settings(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(state_store, "SETTINGS_FILE", tmp_path / "runtime_state" / "settings.json")
 
 
 def test_first_time_defaults_are_backend_balanced_and_mode_separate(mu_db):  # noqa: F811
@@ -63,6 +67,47 @@ def test_paper_save_never_changes_live(mu_db):  # noqa: F811
     assert risk_configuration.configuration(user.id, "paper")["profileType"] == "CONSERVATIVE"
     assert risk_configuration.configuration(user.id, "live")["profileType"] == "BALANCED"
     assert risk_configuration.configuration(user.id, "live")["activeVersion"] == 0
+
+
+def test_save_syncs_max_trades_into_runtime_settings(mu_db, tmp_path, monkeypatch):  # noqa: F811
+    """Confirmed against production: an owner saved max_trades_per_day=0
+    (no limit) via this exact path, it displayed as saved everywhere, but
+    trades still got blocked at a stale value of 50 -- because
+    risk_manager's actual entry-blocking check reads runtime_settings, not
+    this table, and nothing was syncing the two. RiskPage.tsx and the
+    Trading-page widget both save through here directly (change_source
+    RISK_PAGE / TRADING_TERMINAL); only setup_configuration.py's own flow
+    (change_source SETUP, which passes _db=db) already handled its own
+    sync and must not get a second, redundant write here."""
+    _isolate_runtime_settings(tmp_path, monkeypatch)
+    user = make_user("risk-sync@example.com")
+    # Reproduce the exact production scenario: runtime_settings already has
+    # a stale explicit cap (this is what a prior SETUP-flow save, or the
+    # unpatched bug, leaves behind) -- 0's own default-value coincidence
+    # can't prove a sync happened, a stale nonzero value overwritten to 0 can.
+    state_store.update_mode_runtime_settings("paper", max_trades_per_day=50, max_daily_loss=25_000.0)
+    state_store.update_mode_runtime_settings("live", max_trades_per_day=7, max_daily_loss=9_000.0)
+    values = risk_configuration.preset_values("BALANCED")
+    values["max_trades_per_day"] = 0
+    values["daily_loss_cap"] = 0
+
+    risk_configuration.save_configuration(
+        user.id,
+        mode="paper",
+        based_on_preset="BALANCED",
+        values=values,
+        change_source="TRADING_TERMINAL",
+        expected_version=0,
+    )
+
+    synced = state_store.get_mode_runtime_settings("paper")
+    assert synced["max_trades_per_day"] == 0
+    assert synced["max_daily_loss"] == 0
+    # Live must stay untouched by a paper-mode save, same guarantee as the
+    # risk_configuration table itself.
+    live = state_store.get_mode_runtime_settings("live")
+    assert live["max_trades_per_day"] == 7
+    assert live["max_daily_loss"] == 9_000.0
 
 
 def test_stale_writer_is_rejected(mu_db):  # noqa: F811

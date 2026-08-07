@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from app.db import models
 from app.db.engine import database_configured, session_scope
+from app.services.state_store import update_mode_runtime_settings
 
 MODES = {"paper", "live"}
 PRESET_KEYS = {"CONSERVATIVE", "BALANCED", "AGGRESSIVE"}
@@ -374,7 +375,11 @@ def save_configuration(
             )
         )
         current_loss = max(0.0, -sum(float(value or 0) for value in realized))
-        if current_loss >= clean["daily_loss_cap"]:
+        # daily_loss_cap == 0 means no limit (see _number's allow_unlimited
+        # above) -- without this guard, any loss at all satisfied
+        # `current_loss >= 0` and logged a false "entries blocked" breaker
+        # event for an owner who explicitly asked for no cap.
+        if clean["daily_loss_cap"] > 0 and current_loss >= clean["daily_loss_cap"]:
             db.add(
                 models.AuditLog(
                     user_id=user_id,
@@ -391,6 +396,23 @@ def save_configuration(
                     },
                 )
             )
+    if _db is None:
+        # RiskPage.tsx and the Trading-page risk widget both save straight
+        # to this table with no dual-write -- only setup_configuration.py's
+        # own save flow (which passes _db=db here, so this branch is
+        # skipped for it) already keeps runtime_settings in sync itself.
+        # Without this, risk_manager's actual entry-blocking check -- which
+        # reads runtime_settings, NOT this table -- kept enforcing whatever
+        # was last saved through Setup and silently ignored every later
+        # edit made here. Confirmed against production: an owner set
+        # max_trades_per_day to 0 (no limit) here, it saved and displayed
+        # correctly everywhere, but trades still got blocked at the stale
+        # value of 50 because runtime_settings was never told about it.
+        update_mode_runtime_settings(
+            normalized_mode,
+            max_trades_per_day=clean["max_trades_per_day"],
+            max_daily_loss=clean["daily_loss_cap"],
+        )
     if _db is not None:
         return {
             "mode": normalized_mode.upper(),
