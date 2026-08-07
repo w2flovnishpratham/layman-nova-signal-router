@@ -4833,6 +4833,26 @@ pre {
   gap: 8px;
 }
 
+.terminal-card-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--nova-text-muted);
+  cursor: pointer;
+}
+
+.terminal-card-collapse-toggle:hover {
+  color: var(--nova-text-primary);
+}
+
+.terminal-engine-collapsible {
+  display: grid;
+  gap: 11px;
+  overflow: hidden;
+}
+
 .terminal-engine-strategy {
   display: grid;
   gap: 7px;
@@ -4911,6 +4931,10 @@ pre {
 .terminal-engine-values span {
   color: var(--nova-text-secondary);
   font-size: 11.5px;
+}
+
+.terminal-hint-icon {
+  cursor: pointer;
 }
 
 .terminal-engine-values input {
@@ -5223,6 +5247,7 @@ pre {
   font-family: "JetBrains Mono Variable", ui-monospace, monospace;
   font-size: 10.5px;
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .terminal-risk-track {
@@ -6550,7 +6575,7 @@ body * {
 .nova-pnl-weekdays { margin-bottom: 6px; }
 .nova-pnl-weekdays span { text-align: center; color: var(--nova-text-muted); font-size: 10px; font-weight: 700; }
 .nova-pnl-day, .nova-pnl-days .is-empty { min-height: 43px; }
-.nova-pnl-day { display: grid; place-content: center; gap: 1px; border: 1px solid transparent; border-radius: 7px; background: rgba(255,255,255,.035); color: var(--nova-text-muted); font-size: 11px; font-weight: 700; }
+.nova-pnl-day { display: grid; place-content: center; gap: 1px; border: 1px solid transparent; border-radius: 7px; background: rgba(255,255,255,.035); color: var(--nova-text-muted); font-size: 11px; font-weight: 700; cursor: pointer; }
 .nova-pnl-day small { font-size: 8px; font-weight: 650; line-height: 1; }
 .nova-pnl-day.is-profit { background: rgba(31, 138, 101, .54); color: #d8fff0; }
 .nova-pnl-day.is-loss { background: rgba(163, 66, 73, .66); color: #fff1f1; }
@@ -6578,7 +6603,7 @@ body * {
 .nova-report-strategies { display: grid; gap: 12px; padding: 15px 17px 17px; }
 .nova-report-strategy { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(100px, 1.25fr) auto; align-items: center; gap: 11px; font-size: 12.5px; }
 .nova-report-strategy > span { min-width: 0; display: flex; align-items: center; gap: 6px; }
-.nova-report-strategy > span b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.nova-report-strategy > span b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; cursor: pointer; }
 .nova-report-contribution { flex: 0 0 auto; padding: 2px 5px; border: 1px solid rgba(47,107,237,.3); border-radius: 999px; background: rgba(47,107,237,.1); color: #8fb1ff; font-size: 9px; font-weight: 700; }
 .nova-report-contribution.is-loss { border-color: rgba(255,107,122,.28); background: rgba(255,107,122,.09); color: var(--nova-danger); }
 .nova-report-strategy > div { height: 7px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.07); }

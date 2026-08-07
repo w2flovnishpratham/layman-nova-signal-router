@@ -200,9 +200,17 @@ function NiftyLiveChartInner({
     const handlePointerMove = (event: PointerEvent) => {
       if (event.pointerType !== 'mouse') return
       const rect = canvas.getBoundingClientRect()
-      redraw(event.clientX - rect.left)
+      const x = event.clientX - rect.left
+      redraw(x)
+      // A busy-candle badge opens the trade popover on click -- show that
+      // affordance while hovering it, same as any other clickable control.
+      const hovered = layoutRef.current ? hitTestMarker(layoutRef.current, x, event.clientY - rect.top) : null
+      canvas.style.cursor = hovered?.kind === 'badge' ? 'pointer' : 'default'
     }
-    const handlePointerLeave = () => redraw(null)
+    const handlePointerLeave = () => {
+      redraw(null)
+      canvas.style.cursor = 'default'
+    }
     const handleClick = (event: MouseEvent) => {
       const layout = layoutRef.current
       if (!layout) return

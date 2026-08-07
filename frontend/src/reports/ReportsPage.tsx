@@ -502,6 +502,7 @@ export function ReportsPage({ initialMode }: { initialMode?: ReportMode | null }
                             <Tooltip>
                               <TooltipTrigger render={(
                                 <b
+                                  className="nova-strategy-name"
                                   aria-label={`${strategy.display_name}. ${strategy.closed_trades} closed trades. ${metricText(strategy.win_rate.value, '%')} win rate.`}
                                   tabIndex={0}
                                 >
