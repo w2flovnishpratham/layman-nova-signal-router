@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { NiftyCandle, NiftyTradeMarker } from '../api'
-import { buildChartLayout, hitTestMarker } from './NiftyLiveChart.layout'
+import { buildChartLayout, hitTestMarker, zoomChartView } from './NiftyLiveChart.layout'
 import { sessionBarCount } from './NiftyLiveChart.helpers'
 
 const SESSION_START = Date.parse('2026-07-21T09:15:00+05:30') / 1000
@@ -130,16 +130,73 @@ describe('buildChartLayout', () => {
 })
 
 describe('crosshair', () => {
-  it('snaps to the hovered candle\'s center and close price, not the raw pixel', () => {
+  it('snaps X to the hovered candle\'s center, and without hoverY falls back to its close', () => {
     const candles = [candle(0, 100, 102, 99, 101), candle(300, 101, 108, 100, 105)]
     const layout = buildChartLayout({ candles, markers: [], timeframe: '5m', dims: DIMS, hoverX: 400 })
 
     expect(layout.crosshair).not.toBeNull()
     expect(layout.crosshair?.candle).toBe(candles[1])
     expect(layout.crosshair?.x).toBe(layout.candles[1].x)
-    // y must land on the close (105), not wherever hoverX's pixel happened to be.
     const expectedY = layout.candles[1].bodyTop // close >= open here, so bodyTop is the close
     expect(layout.crosshair?.y).toBeCloseTo(expectedY, 5)
+  })
+
+  it('tracks the exact cursor height for its price readout, not the candle close', () => {
+    const candles = [candle(0, 100, 102, 99, 101), candle(300, 101, 108, 100, 105)]
+    // Hover well above the second candle's close, inside the plot area.
+    const layout = buildChartLayout({ candles, markers: [], timeframe: '5m', dims: DIMS, hoverX: 400, hoverY: 40 })
+
+    expect(layout.crosshair?.candle).toBe(candles[1])
+    expect(layout.crosshair?.y).toBe(40)
+    expect(layout.crosshair?.price).not.toBeCloseTo(105, 0)
+    // The readout price must actually correspond to that y via the same
+    // scale the candles themselves are drawn on -- well above the close,
+    // near the top of the visible range.
+    expect(layout.crosshair?.price).toBeGreaterThan(106)
+  })
+})
+
+describe('zoomChartView', () => {
+  const plot = { left: 8, right: DIMS.width - 56 }
+
+  it('zooms in (fewer visible bars) on scroll-up, out (more) on scroll-down', () => {
+    const totalBars = sessionBarCount('5m')
+    const zoomedIn = zoomChartView({ current: null, deltaY: -100, hoverX: 300, timeframe: '5m', candleCount: 1, plot })
+    expect(zoomedIn).not.toBeNull()
+    expect(zoomedIn!.visibleBars).toBeLessThan(totalBars)
+
+    const zoomedOutAgain = zoomChartView({ current: zoomedIn, deltaY: 100, hoverX: 300, timeframe: '5m', candleCount: 1, plot })
+    expect(zoomedOutAgain === null || zoomedOutAgain.visibleBars > zoomedIn!.visibleBars).toBe(true)
+  })
+
+  it('never zooms out past the whole session -- the "9:15-15:30" ceiling', () => {
+    let zoom = zoomChartView({ current: null, deltaY: 100, hoverX: 300, timeframe: '5m', candleCount: 1, plot })
+    for (let i = 0; i < 5; i++) {
+      zoom = zoomChartView({ current: zoom, deltaY: 100, hoverX: 300, timeframe: '5m', candleCount: 1, plot })
+    }
+    // Scrolling out repeatedly settles back at "fully zoomed out", not an
+    // ever-widening window past the session's own bar count.
+    expect(zoom).toBeNull()
+  })
+
+  it('never zooms in past a minimum bar count, so candles stay legible', () => {
+    let zoom = zoomChartView({ current: null, deltaY: -100, hoverX: 300, timeframe: '5m', candleCount: 1, plot })
+    for (let i = 0; i < 20; i++) {
+      zoom = zoomChartView({ current: zoom, deltaY: -100, hoverX: 300, timeframe: '5m', candleCount: 1, plot })
+    }
+    expect(zoom!.visibleBars).toBeGreaterThanOrEqual(15)
+  })
+})
+
+describe('buildChartLayout with zoom', () => {
+  it('only positions candles inside the zoomed-in view window', () => {
+    const candles = Array.from({ length: 20 }, (_, i) => candle(i * 300, 100 + i, 101 + i, 99 + i, 100 + i))
+    const zoom = { visibleBars: 5, viewEndBar: 10 }
+    const layout = buildChartLayout({ candles, markers: [], timeframe: '5m', dims: DIMS, zoom })
+
+    // viewEndBar 10, visibleBars 5 -> candles 6..10 are in view, 0..5 and 11..19 are not.
+    expect(layout.candles).toHaveLength(5)
+    expect(layout.candles.map((c) => c.time)).toEqual(candles.slice(6, 11).map((c) => c.time))
   })
 })
 

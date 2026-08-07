@@ -12,7 +12,7 @@ import {
 } from '../api'
 import type { EngineMode } from '../types'
 import { sameCandles, sessionOnly } from './NiftyLiveChart.helpers'
-import { buildChartLayout, hitTestMarker, istTime, type ChartLayout } from './NiftyLiveChart.layout'
+import { buildChartLayout, hitTestMarker, istTime, zoomChartView, type ChartLayout, type ZoomState } from './NiftyLiveChart.layout'
 import { paintChart } from './NiftyLiveChart.paint'
 
 const CANDLE_POLL_MS = 20_000
@@ -49,6 +49,10 @@ function NiftyLiveChartInner({
   const [dims, setDims] = useState({ width: 0, height: 0 })
   const layoutRef = useRef<ChartLayout | null>(null)
   const [activeGroup, setActiveGroup] = useState<{ x: number; y: number; markers: NiftyTradeMarker[] } | null>(null)
+  // null = fully zoomed out (today's default, the whole session) -- see
+  // zoomChartView in NiftyLiveChart.layout.ts for how scroll clamps at that
+  // ceiling and never lets the view scroll outside 9:15-15:30.
+  const [zoom, setZoom] = useState<ZoomState | null>(null)
 
   // ---------------------------------------------------------------------
   // Polling fetch. Unchanged from the lightweight-charts version: this is
@@ -144,6 +148,8 @@ function NiftyLiveChartInner({
   timeframeForEventsRef.current = timeframe
   const dimsRef = useRef(dims)
   dimsRef.current = dims
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
 
   // ---------------------------------------------------------------------
   // Canvas lifecycle: size it (with devicePixelRatio scaling), keep it
@@ -178,13 +184,11 @@ function NiftyLiveChartInner({
     })
     resizeObserver.observe(canvas)
 
-    // Only a click does anything -- no pan/zoom/scroll wiring, so the chart
-    // stays exactly as static as the lightweight-charts version was (that
-    // one had to explicitly disable handleScroll/handleScale/kineticScroll;
-    // canvas has nothing like that to disable in the first place). Hover
-    // only drives the crosshair readout, gated to real mice so touch taps
-    // never get a flash of crosshair before the click fires.
-    const redraw = (hoverX: number | null) => {
+    // Click opens the busy-candle popover; wheel zooms (clamped to the whole
+    // session at max zoom-out, see zoomChartView). Hover drives the
+    // crosshair readout, gated to real mice so touch taps never get a flash
+    // of crosshair before the click fires.
+    const redraw = (hoverX: number | null, hoverY: number | null = null) => {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
       const layout = buildChartLayout({
@@ -192,7 +196,9 @@ function NiftyLiveChartInner({
         markers: markersForEventsRef.current,
         timeframe: timeframeForEventsRef.current,
         dims: dimsRef.current,
+        zoom: zoomRef.current,
         hoverX,
+        hoverY,
       })
       layoutRef.current = layout
       paintChart(ctx, layout)
@@ -201,10 +207,11 @@ function NiftyLiveChartInner({
       if (event.pointerType !== 'mouse') return
       const rect = canvas.getBoundingClientRect()
       const x = event.clientX - rect.left
-      redraw(x)
+      const y = event.clientY - rect.top
+      redraw(x, y)
       // A busy-candle badge opens the trade popover on click -- show that
       // affordance while hovering it, same as any other clickable control.
-      const hovered = layoutRef.current ? hitTestMarker(layoutRef.current, x, event.clientY - rect.top) : null
+      const hovered = layoutRef.current ? hitTestMarker(layoutRef.current, x, y) : null
       canvas.style.cursor = hovered?.kind === 'badge' ? 'pointer' : 'default'
     }
     const handlePointerLeave = () => {
@@ -218,9 +225,27 @@ function NiftyLiveChartInner({
       const glyph = hitTestMarker(layout, event.clientX - rect.left, event.clientY - rect.top)
       setActiveGroup(glyph && glyph.kind === 'badge' ? { x: event.clientX, y: event.clientY, markers: glyph.markers } : null)
     }
+    const handleWheel = (event: WheelEvent) => {
+      const layout = layoutRef.current
+      if (!layout) return
+      event.preventDefault()
+      const rect = canvas.getBoundingClientRect()
+      const next = zoomChartView({
+        current: zoomRef.current,
+        deltaY: event.deltaY,
+        hoverX: event.clientX - rect.left,
+        timeframe: timeframeForEventsRef.current,
+        candleCount: candlesForEventsRef.current.length,
+        plot: layout.plot,
+      })
+      zoomRef.current = next
+      setZoom(next)
+      redraw(event.clientX - rect.left, event.clientY - rect.top)
+    }
     canvas.addEventListener('pointermove', handlePointerMove)
     canvas.addEventListener('pointerleave', handlePointerLeave)
     canvas.addEventListener('click', handleClick)
+    canvas.addEventListener('wheel', handleWheel, { passive: false })
 
     return () => {
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
@@ -228,6 +253,7 @@ function NiftyLiveChartInner({
       canvas.removeEventListener('pointermove', handlePointerMove)
       canvas.removeEventListener('pointerleave', handlePointerLeave)
       canvas.removeEventListener('click', handleClick)
+      canvas.removeEventListener('wheel', handleWheel)
       layoutRef.current = null
       setActiveGroup(null)
     }
@@ -245,12 +271,17 @@ function NiftyLiveChartInner({
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx || dims.width <= 0 || dims.height <= 0) return
-    const layout = buildChartLayout({ candles, markers, timeframe, dims })
+    const layout = buildChartLayout({ candles, markers, timeframe, dims, zoom })
     layoutRef.current = layout
     paintChart(ctx, layout)
-  }, [candles, markers, dims, timeframe])
+  }, [candles, markers, dims, timeframe, zoom])
 
-  useEffect(() => setActiveGroup(null), [timeframe])
+  useEffect(() => {
+    // A 1m zoom window means nothing once you're looking at 15m bars --
+    // reset to the (still session-clamped) default view on every switch.
+    setActiveGroup(null)
+    setZoom(null)
+  }, [timeframe])
 
   const header = (
     <div className="nifty-chart-header">

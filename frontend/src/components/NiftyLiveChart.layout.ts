@@ -71,10 +71,54 @@ export interface ChartLayout {
   grid: { y: number; price: number }[]
   timeAxisLabels: { x: number; text: string }[]
   priceAxisLabels: { y: number; text: string }[]
-  crosshair: { x: number; y: number; candle: NiftyCandle } | null
+  crosshair: { x: number; y: number; price: number; candle: NiftyCandle } | null
 }
 
 const PRICE_AXIS_STEP = 10
+
+// Scroll-zoom: how many bar-slots are visible, and which bar-slot sits at
+// the view's right edge. Both are indices into the same fixed session-bar
+// space sessionBarCount() already reserves, not into the candles array --
+// that's what lets a zoomed-in view stay put as new candles arrive rather
+// than needing to be re-anchored on every poll.
+export interface ZoomState {
+  visibleBars: number
+  viewEndBar: number
+}
+
+const MIN_VISIBLE_BARS = 15
+const ZOOM_STEP = 0.85
+
+// Undefined/null current zoom means "fully zoomed out" -- the whole session,
+// exactly today's default. Clamped so visibleBars can never exceed the
+// session's own bar count, which is the "can't zoom out past 9:15-15:30"
+// limit: at max visibleBars, viewStartBar is forced to 0 and viewEndBar to
+// the last bar, i.e. this function alone enforces that ceiling.
+export function zoomChartView(args: {
+  current: ZoomState | null
+  deltaY: number
+  hoverX: number
+  timeframe: ChartTimeframe
+  candleCount: number
+  plot: { left: number; right: number }
+}): ZoomState | null {
+  const totalBars = Math.max(sessionBarCount(args.timeframe), args.candleCount)
+  const plotWidth = Math.max(1, args.plot.right - args.plot.left)
+  const prevVisible = args.current?.visibleBars ?? totalBars
+  const prevViewEnd = args.current?.viewEndBar ?? totalBars - 1
+  const prevBarSlot = plotWidth / prevVisible
+  const prevViewStart = prevViewEnd - prevVisible + 1
+  const cursorBar = prevViewStart + (args.hoverX - args.plot.left) / prevBarSlot
+
+  const factor = args.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP
+  const nextVisible = Math.min(totalBars, Math.max(MIN_VISIBLE_BARS, Math.round(prevVisible * factor)))
+  if (nextVisible >= totalBars) return null
+
+  const nextBarSlot = plotWidth / nextVisible
+  const rawViewStart = cursorBar - (args.hoverX - args.plot.left) / nextBarSlot
+  const nextViewStart = Math.max(0, Math.min(totalBars - nextVisible, rawViewStart))
+  return { visibleBars: nextVisible, viewEndBar: nextViewStart + nextVisible - 1 }
+}
 
 function emptyLayout(dims: { width: number; height: number }): ChartLayout {
   return {
@@ -97,6 +141,8 @@ export function buildChartLayout(args: {
   timeframe: ChartTimeframe
   dims: { width: number; height: number }
   hoverX?: number | null
+  hoverY?: number | null
+  zoom?: ZoomState | null
 }): ChartLayout {
   const { candles, markers, timeframe, dims } = args
   if (candles.length === 0 || dims.width <= 0 || dims.height <= 0) return emptyLayout(dims)
@@ -140,18 +186,28 @@ export function buildChartLayout(args: {
   function yFor(price: number): number {
     return plotTop + (1 - (price - lo) / (hi - lo)) * plotHeight
   }
+  function priceForY(y: number): number {
+    return lo + (1 - (y - plotTop) / plotHeight) * (hi - lo)
+  }
 
   const totalBars = Math.max(sessionBarCount(timeframe), candles.length)
-  const barSlot = plotWidth / totalBars
+  const visibleBars = Math.min(totalBars, args.zoom?.visibleBars ?? totalBars)
+  const viewEndBar = Math.min(totalBars - 1, Math.max(visibleBars - 1, args.zoom?.viewEndBar ?? totalBars - 1))
+  const viewStartBar = viewEndBar - visibleBars + 1
+  const barSlot = plotWidth / visibleBars
   const bodyWidth = Math.max(2, Math.min(10, barSlot * 0.62))
 
   function xFor(index: number): number {
-    return plotLeft + index * barSlot + barSlot / 2
+    return plotLeft + (index - viewStartBar) * barSlot + barSlot / 2
+  }
+  function inView(index: number): boolean {
+    return index >= viewStartBar && index <= viewEndBar
   }
 
-  const candleRects: CandleRect[] = candles.map((c, i) => {
+  const candleRects: CandleRect[] = candles.reduce<CandleRect[]>((rects, c, i) => {
+    if (!inView(i)) return rects
     const bull = c.close >= c.open
-    return {
+    rects.push({
       x: xFor(i),
       bodyWidth,
       bodyTop: yFor(Math.max(c.open, c.close)),
@@ -160,15 +216,16 @@ export function buildChartLayout(args: {
       wickBottom: yFor(c.low),
       bull,
       time: c.time,
-    }
-  })
+    })
+    return rects
+  }, [])
 
   // --- markers: group by candle index, single trade -> small directional
   // glyph, multiple trades on one candle -> one clickable count badge. ---
   const groups = new Map<number, NiftyTradeMarker[]>()
   for (const marker of markers) {
     const index = markerCandleIndex(candles, marker.time, timeframe)
-    if (index === null) continue
+    if (index === null || !inView(index)) continue
     const group = groups.get(index)
     if (group) group.push(marker)
     else groups.set(index, [marker])
@@ -233,21 +290,24 @@ export function buildChartLayout(args: {
     priceAxisLabels.push({ y, text: p.toLocaleString('en-IN', { maximumFractionDigits: 0 }) })
   }
 
-  // --- sparse time axis labels ---
+  // --- sparse time axis labels, only for candles actually in view ---
   const timeAxisLabels: { x: number; text: string }[] = []
-  const labelEvery = Math.max(1, Math.round(candles.length / 6))
-  for (let i = 0; i < candles.length; i += labelEvery) {
+  const visibleCandleCount = Math.min(candles.length, viewEndBar + 1) - Math.max(0, viewStartBar)
+  const labelEvery = Math.max(1, Math.round(visibleCandleCount / 6))
+  for (let i = Math.max(0, viewStartBar); i <= Math.min(candles.length - 1, viewEndBar); i += labelEvery) {
     timeAxisLabels.push({ x: xFor(i), text: istTime(candles[i].time) })
   }
 
-  // --- crosshair: nearest candle to hoverX, if any -- "magnetic" because it
-  // snaps to that candle's center and close price rather than tracking the
-  // raw mouse pixel. ---
+  // --- crosshair: X snaps to the nearest candle's center (so you're always
+  // reading a real bar, not a gap between two) -- Y tracks the raw cursor
+  // height so the price readout is the exact value under the pointer, not
+  // locked to that candle's close. ---
   let crosshair: ChartLayout['crosshair'] = null
   if (args.hoverX != null) {
-    const index = Math.max(0, Math.min(candles.length - 1, Math.round((args.hoverX - plotLeft - barSlot / 2) / barSlot)))
+    const index = Math.max(0, Math.min(candles.length - 1, viewStartBar + Math.round((args.hoverX - plotLeft - barSlot / 2) / barSlot)))
     const snapped = candles[index]
-    crosshair = { x: xFor(index), y: yFor(snapped.close), candle: snapped }
+    const y = args.hoverY != null ? Math.max(plotTop, Math.min(plotBottom, args.hoverY)) : yFor(snapped.close)
+    crosshair = { x: xFor(index), y, price: priceForY(y), candle: snapped }
   }
 
   return {

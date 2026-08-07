@@ -213,7 +213,7 @@ export function paintChart(ctx: CanvasRenderingContext2D, layout: ChartLayout): 
   // Boxed in a color distinct from the chart's own background so it reads as
   // an overlay, not part of the plot.
   if (layout.crosshair) {
-    const { candle, y } = layout.crosshair
+    const { candle, y, price } = layout.crosshair
     ctx.font = MONO_FONT
     const text = `O ${candle.open.toFixed(2)}  H ${candle.high.toFixed(2)}  L ${candle.low.toFixed(2)}  C ${candle.close.toFixed(2)}`
     const metrics = ctx.measureText(text)
@@ -227,11 +227,12 @@ export function paintChart(ctx: CanvasRenderingContext2D, layout: ChartLayout): 
     ctx.fillStyle = '#f7f3ff'
     ctx.fillText(text, plot.left + 12, 18)
 
-    // Magnetic price readout at the axis, matching where the horizontal arm lands.
+    // Price readout at the axis tracks the exact cursor height, not the
+    // candle's close -- matches where the horizontal arm lands.
     ctx.fillStyle = CROSSHAIR_LABEL_COLOR
     ctx.font = MONO_FONT
     ctx.textBaseline = 'middle'
-    ctx.fillText(candle.close.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), plot.right + 8, y)
+    ctx.fillText(price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), plot.right + 8, y)
     ctx.textBaseline = 'alphabetic'
   }
 }
