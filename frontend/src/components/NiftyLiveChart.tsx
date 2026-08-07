@@ -1,22 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Loader2 } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  CandlestickSeries,
-  CrosshairMode,
-  createChart,
-  createSeriesMarkers,
-  type IChartApi,
-  type IPriceLine,
-  type ISeriesApi,
-  type ISeriesMarkersPluginApi,
-  LineStyle,
-  type MouseEventParams,
-  type SeriesMarker,
-  type Time,
-  type UTCTimestamp,
-} from 'lightweight-charts'
+import { memo, useEffect, useRef, useState, useMemo } from 'react'
 import {
   getNiftyCandles,
   getNiftyMarkers,
@@ -26,13 +11,9 @@ import {
   type NiftyTradeMarker,
 } from '../api'
 import type { EngineMode } from '../types'
-import {
-  markerCandleIndex,
-  markerStyle,
-  sameCandles,
-  sessionBarCount,
-  sessionOnly,
-} from './NiftyLiveChart.helpers'
+import { sameCandles, sessionOnly } from './NiftyLiveChart.helpers'
+import { buildChartLayout, hitTestMarker, istTime, type ChartLayout } from './NiftyLiveChart.layout'
+import { paintChart } from './NiftyLiveChart.paint'
 
 const CANDLE_POLL_MS = 20_000
 const MARKER_POLL_MS = 12_000
@@ -48,24 +29,6 @@ function supportedTimeframe(value: string | null | undefined): ChartTimeframe {
   return value === '1m' || value === '15m' ? value : '5m'
 }
 
-function istTime(epoch: number): string {
-  return new Date(epoch * 1000).toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'Asia/Kolkata',
-  })
-}
-
-function toBar(candle: NiftyCandle) {
-  return {
-    time: candle.time as UTCTimestamp,
-    open: candle.open,
-    high: candle.high,
-    low: candle.low,
-    close: candle.close,
-  }
-}
-
 function NiftyLiveChartInner({
   engineMode,
   defaultTimeframe,
@@ -76,25 +39,21 @@ function NiftyLiveChartInner({
   const [timeframe, setTimeframe] = useState<ChartTimeframe>(() => supportedTimeframe(defaultTimeframe))
   const [series, setSeries] = useState<NiftyCandleSeries | null>(null)
   // Drives the poll backoff below. Deliberately a boolean off the series rather
-  // than the series itself, so it only changes when the session flips.
+  // than the series object, so it only changes when the session flips.
   const marketClosed = series?.market_state === 'closed'
   const [markers, setMarkers] = useState<NiftyTradeMarker[]>([])
   const [loadFailed, setLoadFailed] = useState(false)
   const tradingDateRef = useRef<string | null>(null)
 
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const chartRef = useRef<IChartApi | null>(null)
-  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
-  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
-  const tradePriceLinesRef = useRef<IPriceLine[]>([])
-  const candlesRef = useRef<NiftyCandle[]>([])
-  const [containerReady, setContainerReady] = useState(false)
-  // Candle time -> every trade marker that landed on it. Populated by the
-  // marker-placement effect below, read by the chart's click handler so a
-  // busy-candle badge can be expanded without re-walking the marker list.
-  const markerGroupsRef = useRef<Map<number, NiftyTradeMarker[]>>(new Map())
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [dims, setDims] = useState({ width: 0, height: 0 })
+  const layoutRef = useRef<ChartLayout | null>(null)
   const [activeGroup, setActiveGroup] = useState<{ x: number; y: number; markers: NiftyTradeMarker[] } | null>(null)
 
+  // ---------------------------------------------------------------------
+  // Polling fetch. Unchanged from the lightweight-charts version: this is
+  // pure data plumbing, independent of how candles/markers get rendered.
+  // ---------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false
     let candleRequest: AbortController | null = null
@@ -158,213 +117,128 @@ function NiftyLiveChartInner({
     }
   }, [engineMode, timeframe, marketClosed])
 
-  const candles = useMemo(() => (series ? sessionOnly(series) : []), [series])
+  // Keeps the same array reference across polls that return identical
+  // candles, so the repaint effect below (deps: candles, ...) doesn't fire
+  // on every 20s poll -- only when something actually changed.
+  const previousCandlesRef = useRef<NiftyCandle[]>([])
+  const candles = useMemo(() => {
+    const next = series ? sessionOnly(series) : []
+    if (sameCandles(previousCandlesRef.current, next)) return previousCandlesRef.current
+    previousCandlesRef.current = next
+    return next
+  }, [series])
   const hasCandles = candles.length > 0
 
-  // The chart instance survives a timeframe switch (only containerReady/
-  // hasCandles recreate it below), but candlesRef doesn't reset on its own --
-  // so without this, switching tabs fell into the scrollToRealTime() branch
-  // below and inherited whatever bar-count span the previous timeframe had
-  // zoomed to, instead of reserving the new timeframe's own full session.
-  useEffect(() => {
-    candlesRef.current = []
-  }, [timeframe])
+  // Latest candles/markers/timeframe mirrored into refs so the canvas's
+  // native event listeners (attached once, see below) always read fresh
+  // values without needing to be re-attached on every data change.
+  const candlesForEventsRef = useRef<NiftyCandle[]>([])
+  candlesForEventsRef.current = candles
+  const markersForEventsRef = useRef<NiftyTradeMarker[]>([])
+  markersForEventsRef.current = markers
+  const timeframeForEventsRef = useRef<ChartTimeframe>(timeframe)
+  timeframeForEventsRef.current = timeframe
+  const dimsRef = useRef(dims)
+  dimsRef.current = dims
 
+  // ---------------------------------------------------------------------
+  // Canvas lifecycle: size it (with devicePixelRatio scaling), keep it
+  // sized on resize, and wire up click/hover. Runs once per hasCandles
+  // mount -- there's no persistent chart instance to recreate, just a
+  // canvas element, so this is simpler than the old two-ResizeObserver
+  // version (one observed the container, the other let the chart library
+  // resize its own instance).
+  // ---------------------------------------------------------------------
   useEffect(() => {
-    const container = containerRef.current
-    if (!container || !hasCandles) {
-      setContainerReady(false)
-      return
-    }
-    const observeSize = () => {
-      const rect = container.getBoundingClientRect()
-      if (rect.width > 0 && rect.height > 0) setContainerReady(true)
-      if (chartRef.current && rect.width > 0 && rect.height > 0) {
-        chartRef.current.resize(Math.floor(rect.width), Math.floor(rect.height))
-      }
-    }
-    observeSize()
-    const observer = new ResizeObserver(observeSize)
-    observer.observe(container)
-    return () => observer.disconnect()
-  }, [hasCandles])
+    const canvas = canvasRef.current
+    if (!canvas || !hasCandles) return
 
-  useEffect(() => {
-    const container = containerRef.current
-    if (!container || !hasCandles || !containerReady || chartRef.current) return
-    const bounds = container.getBoundingClientRect()
-    if (bounds.width <= 0 || bounds.height <= 0) return
-    const chart = createChart(container, {
-      width: Math.floor(bounds.width),
-      height: Math.floor(bounds.height),
-      layout: { background: { color: 'transparent' }, textColor: 'rgba(148, 155, 175, 0.9)', fontSize: 10 },
-      grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(255, 255, 255, 0.06)' } },
-      rightPriceScale: { borderVisible: false },
-      timeScale: {
-        borderVisible: false,
-        timeVisible: true,
-        secondsVisible: false,
-        tickMarkFormatter: (time: UTCTimestamp) => istTime(time),
-      },
-      localization: { timeFormatter: (time: UTCTimestamp) => istTime(time) },
-      crosshair: { mode: CrosshairMode.Hidden },
-      handleScroll: false,
-      handleScale: false,
-      kineticScroll: { touch: false, mouse: false },
-    })
-    const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#34d399',
-      downColor: '#fb7185',
-      wickUpColor: '#34d399',
-      wickDownColor: '#fb7185',
-      borderVisible: false,
-      priceLineVisible: true,
-      lastValueVisible: true,
-    })
-    chartRef.current = chart
-    seriesRef.current = candleSeries
-    markersPluginRef.current = createSeriesMarkers(candleSeries, [])
-    // Only a click is wired up -- pan/zoom/scroll stay off via handleScroll/
-    // handleScale/kineticScroll above, so the chart still reads as static.
-    // A click only does something on a candle with >1 trade (the count
-    // badge); anywhere else it just closes whatever popover was open.
-    const handleClick = (param: MouseEventParams<Time>) => {
-      const group = param.time ? markerGroupsRef.current.get(param.time as number) : undefined
-      if (!group || group.length < 2 || !param.point) {
-        setActiveGroup(null)
-        return
-      }
-      const bounds = container.getBoundingClientRect()
-      setActiveGroup({ x: bounds.left + param.point.x, y: bounds.top + param.point.y, markers: group })
-    }
-    chart.subscribeClick(handleClick)
     let resizeFrame: number | null = null
-    const resizeObserver = new ResizeObserver(([entry]) => {
-      if (!entry) return
-      const width = Math.floor(entry.contentRect.width)
-      const height = Math.floor(entry.contentRect.height)
-      if (width <= 0 || height <= 0) return
+    const applySize = () => {
+      const rect = canvas.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) return
+      const dpr = window.devicePixelRatio || 1
+      canvas.width = Math.floor(rect.width * dpr)
+      canvas.height = Math.floor(rect.height * dpr)
+      const ctx = canvas.getContext('2d')
+      ctx?.setTransform(dpr, 0, 0, dpr, 0, 0)
+      setDims({ width: rect.width, height: rect.height })
+    }
+    applySize()
+    const resizeObserver = new ResizeObserver(() => {
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
       resizeFrame = window.requestAnimationFrame(() => {
         resizeFrame = null
-        chart.resize(width, height)
+        applySize()
       })
     })
-    resizeObserver.observe(container)
+    resizeObserver.observe(canvas)
+
+    // Only a click does anything -- no pan/zoom/scroll wiring, so the chart
+    // stays exactly as static as the lightweight-charts version was (that
+    // one had to explicitly disable handleScroll/handleScale/kineticScroll;
+    // canvas has nothing like that to disable in the first place). Hover
+    // only drives the crosshair readout, gated to real mice so touch taps
+    // never get a flash of crosshair before the click fires.
+    const redraw = (hoverX: number | null) => {
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      const layout = buildChartLayout({
+        candles: candlesForEventsRef.current,
+        markers: markersForEventsRef.current,
+        timeframe: timeframeForEventsRef.current,
+        dims: dimsRef.current,
+        hoverX,
+      })
+      layoutRef.current = layout
+      paintChart(ctx, layout)
+    }
+    const handlePointerMove = (event: PointerEvent) => {
+      if (event.pointerType !== 'mouse') return
+      const rect = canvas.getBoundingClientRect()
+      redraw(event.clientX - rect.left)
+    }
+    const handlePointerLeave = () => redraw(null)
+    const handleClick = (event: MouseEvent) => {
+      const layout = layoutRef.current
+      if (!layout) return
+      const rect = canvas.getBoundingClientRect()
+      const glyph = hitTestMarker(layout, event.clientX - rect.left, event.clientY - rect.top)
+      setActiveGroup(glyph && glyph.kind === 'badge' ? { x: event.clientX, y: event.clientY, markers: glyph.markers } : null)
+    }
+    canvas.addEventListener('pointermove', handlePointerMove)
+    canvas.addEventListener('pointerleave', handlePointerLeave)
+    canvas.addEventListener('click', handleClick)
+
     return () => {
-      chart.unsubscribeClick(handleClick)
-      resizeObserver.disconnect()
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
-      markersPluginRef.current = null
-      tradePriceLinesRef.current = []
-      seriesRef.current = null
-      chartRef.current = null
-      candlesRef.current = []
+      resizeObserver.disconnect()
+      canvas.removeEventListener('pointermove', handlePointerMove)
+      canvas.removeEventListener('pointerleave', handlePointerLeave)
+      canvas.removeEventListener('click', handleClick)
+      layoutRef.current = null
       setActiveGroup(null)
-      chart.remove()
     }
-  }, [containerReady, hasCandles])
+  }, [hasCandles])
 
+  // ---------------------------------------------------------------------
+  // Recompute layout and repaint whenever the data or size actually
+  // changes. No setVisibleLogicalRange/scrollToRealTime/candlesRef-reset
+  // dance here: buildChartLayout is a pure function of its arguments, so
+  // every timeframe switch just gets that timeframe's own full-session
+  // width fresh -- there's no persistent chart instance left to inherit a
+  // stale zoom/scroll position from, so that whole bug class can't recur.
+  // ---------------------------------------------------------------------
   useEffect(() => {
-    const candleSeries = seriesRef.current
-    if (!candleSeries || candles.length === 0) return
-    const previous = candlesRef.current
-    if (sameCandles(previous, candles)) return
-    candlesRef.current = [...candles]
-    candleSeries.setData(candles.map(toBar))
-    if (previous.length === 0) {
-      // Reserve the whole session's bar slots up front instead of fitContent(),
-      // which stretches however few candles exist right now to fill the full
-      // width -- thick/short bars early in the day, thin ones on a later
-      // reload, same chart. This keeps bar width constant all session: real
-      // candles fill in left-to-right, the rest stays empty until they arrive.
-      const totalBars = sessionBarCount(supportedTimeframe(series?.interval))
-      chartRef.current?.timeScale().setVisibleLogicalRange({
-        from: 0,
-        to: Math.max(totalBars - 1, candles.length - 1),
-      })
-    } else if (candles[candles.length - 1].time > previous[previous.length - 1].time) chartRef.current?.timeScale().scrollToRealTime()
-  }, [candles, containerReady, hasCandles])
-
-  useEffect(() => {
-    const plugin = markersPluginRef.current
-    if (!plugin) return
-    const visibleCandles = candlesRef.current
-    const timeframeValue = supportedTimeframe(series?.interval)
-    const groups = new Map<number, NiftyTradeMarker[]>()
-    for (const marker of markers) {
-      const index = markerCandleIndex(visibleCandles, marker.time, timeframeValue)
-      if (index === null) continue
-      const time = visibleCandles[index].time
-      const group = groups.get(time)
-      if (group) group.push(marker)
-      else groups.set(time, [marker])
-    }
-    markerGroupsRef.current = groups
-
-    const placed: SeriesMarker<Time>[] = []
-    groups.forEach((group, time) => {
-      if (group.length === 1) {
-        const marker = group[0]
-        const style = markerStyle(marker)
-        const indexLevel = marker.price != null
-          ? marker.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-          : null
-        // Contract name and P&L used to ride along here too, but lightweight-charts
-        // doesn't declutter overlapping labels -- a busy session turned the chart
-        // into unreadable soup. That detail already lives in the Reports
-        // drill-down table, so the on-chart label stays to a single short line.
-        placed.push({
-          ...style,
-          time: time as UTCTimestamp,
-          text: `${style.text}${indexLevel ? `  ${indexLevel}` : ''}${marker.mode === 'paper' ? ' (P)' : ''}`,
-        })
-        return
-      }
-      // More than one trade landed on this candle -- individual labels would
-      // just overlap into soup again. Collapse to a single clickable count
-      // badge; the click handler above looks it back up in markerGroupsRef.
-      placed.push({
-        time: time as UTCTimestamp,
-        position: 'aboveBar',
-        shape: 'circle',
-        color: '#8fb4f7',
-        text: String(group.length),
-      })
-    })
-    placed.sort((left, right) => (left.time as number) - (right.time as number))
-    plugin.setMarkers(placed)
-  }, [markers, candles, containerReady, hasCandles, series?.interval])
+    const canvas = canvasRef.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx || dims.width <= 0 || dims.height <= 0) return
+    const layout = buildChartLayout({ candles, markers, timeframe, dims })
+    layoutRef.current = layout
+    paintChart(ctx, layout)
+  }, [candles, markers, dims, timeframe])
 
   useEffect(() => setActiveGroup(null), [timeframe])
-
-  useEffect(() => {
-    const candleSeries = seriesRef.current
-    if (!candleSeries) return
-    tradePriceLinesRef.current.forEach((line) => candleSeries.removePriceLine(line))
-    tradePriceLinesRef.current = []
-    const latest = [...markers].sort((left, right) => left.time - right.time).at(-1)
-    if (!latest || latest.side !== 'BUY') return
-    const entryColor = latest.option_side === 'PE' ? '#fb7185' : '#34d399'
-    const levels = [
-      { price: latest.price, color: entryColor, title: `BUY ${latest.option_side ?? ''}`.trim() },
-      { price: latest.stop_price, color: '#ef4444', title: 'SL' },
-      { price: latest.target_price, color: '#22c55e', title: 'TP' },
-    ]
-    tradePriceLinesRef.current = levels.flatMap((level) => (
-      level.price != null && Number.isFinite(level.price) && level.price > 0
-        ? [candleSeries.createPriceLine({
-            price: level.price,
-            color: level.color,
-            lineWidth: 1,
-            lineStyle: LineStyle.Dashed,
-            lineVisible: true,
-            axisLabelVisible: true,
-            title: level.title,
-          })]
-        : []
-    ))
-  }, [markers, containerReady, hasCandles])
 
   const header = (
     <div className="nifty-chart-header">
@@ -416,7 +290,12 @@ function NiftyLiveChartInner({
     <section className="nifty-chart-card">
       {header}
       {series.market_state === 'closed' ? <p className="nifty-chart-note">Market closed - showing today's latest candles.</p> : null}
-      <div ref={containerRef} className="nifty-chart-canvas nova-live-chart" role="img" aria-label={`NIFTY ${series.interval} candlestick chart`} />
+      <canvas
+        ref={canvasRef}
+        className="nifty-chart-canvas nova-live-chart"
+        role="img"
+        aria-label={`NIFTY ${series.interval} candlestick chart`}
+      />
       {activeGroup ? (
         <div className="nifty-marker-popover-backdrop" onClick={() => setActiveGroup(null)}>
           <div

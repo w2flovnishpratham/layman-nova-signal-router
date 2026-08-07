@@ -3531,10 +3531,9 @@ pre {
   position: relative;
   overflow: hidden;
   display: block;
-  /* Pan/zoom/scroll stay disabled at the chart-options level (handleScroll,
-     handleScale, kineticScroll all false), so this can accept pointer events
-     without turning into a draggable/zoomable chart -- clicks only matter
-     for opening a busy-candle's trade list. */
+  /* Hand-rendered canvas: there's no pan/zoom/scroll to disable -- it was
+     never wired up in the first place. Pointer events only drive the hover
+     crosshair and a click on a busy-candle badge, both read-only. */
 }
 
 @media (max-width: 900px) {
