@@ -4,8 +4,9 @@ import { Input } from '@/components/ui/input'
 import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
+import { useQuery } from '@tanstack/react-query'
 import { Check, CircleAlert, Loader2, ShieldX } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RuntimeStatus } from '../api'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -14,10 +15,8 @@ import {
   rupees,
   saveRiskConfiguration,
   triggerRiskKillSwitch,
-  type RiskConfiguration,
   type RiskExitMode,
   type RiskMode,
-  type RiskPageOverview,
   type RiskPreset,
   type RiskPresetKey,
   type RiskUtilisation,
@@ -279,38 +278,37 @@ function RiskBodySkeleton() {
 export function RiskPage({ runtime }: { runtime: RuntimeStatus | null }) {
   const search = new URLSearchParams(window.location.search)
   const [mode, setMode] = useState<RiskMode>(search.get('mode') === 'live' ? 'live' : 'paper')
-  const [presets, setPresets] = useState<RiskPreset[]>([])
-  const [configuration, setConfiguration] = useState<RiskConfiguration | null>(null)
-  const [overview, setOverview] = useState<RiskPageOverview | null>(null)
   const [draft, setDraft] = useState<RiskValues | null>(null)
   const [selectedPreset, setSelectedPreset] = useState<RiskPresetKey>('BALANCED')
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const result = await getRiskPageData(mode)
-      setPresets(result.presets)
-      setConfiguration(result.configuration)
-      setOverview(result.overview)
-      setDraft(result.configuration.values)
-      setSelectedPreset(result.configuration.basedOnPreset)
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Could not load risk settings.')
-    } finally {
-      setLoading(false)
-    }
-  }, [mode])
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search)
     query.set('mode', mode)
     window.history.replaceState(null, '', `${window.location.pathname}?${query}`)
-    void load()
-  }, [load, mode])
+  }, [mode])
+
+  // Cached per mode -- flipping between Paper/Live shows what you saw last
+  // instantly instead of a fresh spinner. See queryClient.ts for the
+  // WS-driven invalidation that refetches this after a save elsewhere or a
+  // trade that changes today's usage.
+  const { data: riskData, isLoading: loading, error: loadError, refetch } = useQuery({
+    queryKey: ['risk', mode],
+    queryFn: () => getRiskPageData(mode),
+  })
+  const presets = riskData?.presets ?? []
+  const configuration = riskData?.configuration ?? null
+  const overview = riskData?.overview ?? null
+  const error = loadError ? (loadError instanceof Error ? loadError.message : 'Could not load risk settings.') : ''
+
+  // The draft is a locally-editable copy, so it only re-seeds when the
+  // fetched configuration itself actually changes (a mode switch, a save
+  // elsewhere) -- not on every render.
+  useEffect(() => {
+    if (!configuration) return
+    setDraft(configuration.values)
+    setSelectedPreset(configuration.basedOnPreset)
+  }, [configuration])
 
   const selectedTemplate = useMemo(
     () => presets.find((preset) => preset.key === selectedPreset) ?? null,
@@ -335,7 +333,7 @@ export function RiskPage({ runtime }: { runtime: RuntimeStatus | null }) {
         changeSource: 'RISK_PAGE',
         expectedVersion: configuration.activeVersion,
       })
-      await load()
+      await refetch()
       toast.add({
         title: 'Risk settings saved.',
         description: 'New entries now use this version.',
@@ -376,7 +374,7 @@ export function RiskPage({ runtime }: { runtime: RuntimeStatus | null }) {
         <RiskBodySkeleton />
       ) : error && !draft ? (
         <p className="nova-signals-state" role="alert"><CircleAlert size={16} /> {error}
-          <Button variant="unstyled" className="conv-pill" onClick={() => void load()}>Retry</Button>
+          <Button variant="unstyled" className="conv-pill" onClick={() => void refetch()}>Retry</Button>
         </p>
       ) : !configuration || !draft || !overview ? null : (
         <>
@@ -503,7 +501,7 @@ export function RiskPage({ runtime }: { runtime: RuntimeStatus | null }) {
                   try {
                     const result = await triggerRiskKillSwitch(mode)
                     toast.add({ title: result.outcome, type: 'success' })
-                    await load()
+                    await refetch()
                   } catch (killError) {
                     toast.add({
                       title: killError instanceof Error ? killError.message : 'Kill switch failed.',

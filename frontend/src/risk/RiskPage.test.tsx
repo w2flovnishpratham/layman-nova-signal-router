@@ -1,5 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const apiMocks = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ vi.mock('./riskApi', async (importOriginal) => ({
 import { RiskPage } from './RiskPage'
 import type { RuntimeStatus } from '../api'
 import type { RiskConfiguration, RiskPreset, RiskValues } from './riskApi'
+import { withQueryClient } from '../test/testQueryClient'
 
 const balanced: RiskValues = {
   daily_loss_cap: 25_000,
@@ -87,7 +89,7 @@ afterEach(() => {
 describe('RiskPage', () => {
   it('loads the saved owner/mode configuration and real usage', async () => {
     apiMocks.getRiskPageData.mockResolvedValue(pageData())
-    render(<RiskPage runtime={runtime()} />)
+    render(withQueryClient(<RiskPage runtime={runtime()} />))
     expect(await screen.findByText(/^Custom$/)).toBeInTheDocument()
     expect(screen.getByText(/Updated from Trading Terminal/)).toBeInTheDocument()
     expect(screen.getByDisplayValue('20000')).toBeInTheDocument()
@@ -105,7 +107,7 @@ describe('RiskPage', () => {
   it('loads a fixed preset into the editor without saving it', async () => {
     const user = userEvent.setup()
     apiMocks.getRiskPageData.mockResolvedValue(pageData())
-    render(<RiskPage runtime={runtime()} />)
+    render(withQueryClient(<RiskPage runtime={runtime()} />))
     await user.click(await screen.findByRole('button', { name: /Conservative.*Lower exposure/i }))
     expect(screen.getByDisplayValue('10000')).toBeInTheDocument()
     expect(screen.getByText(/Unsaved changes/)).toBeInTheDocument()
@@ -116,7 +118,7 @@ describe('RiskPage', () => {
     const user = userEvent.setup()
     apiMocks.getRiskPageData.mockResolvedValue(pageData())
     apiMocks.saveRiskConfiguration.mockResolvedValue({ ...configuration, activeVersion: 9 })
-    render(<RiskPage runtime={runtime()} />)
+    render(withQueryClient(<RiskPage runtime={runtime()} />))
     const daily = await screen.findByLabelText('Maximum daily loss (₹, 0 for no limit)')
     await user.clear(daily)
     await user.type(daily, '18000')
@@ -133,7 +135,7 @@ describe('RiskPage', () => {
   it('keeps Paper and Live as separate requests', async () => {
     const user = userEvent.setup()
     apiMocks.getRiskPageData.mockResolvedValue(pageData())
-    render(<RiskPage runtime={runtime()} />)
+    render(withQueryClient(<RiskPage runtime={runtime()} />))
     await user.click(await screen.findByRole('tab', { name: 'Live' }))
     await waitFor(() => expect(apiMocks.getRiskPageData).toHaveBeenCalledWith('live'))
     expect(window.location.search).toContain('mode=live')
@@ -142,13 +144,19 @@ describe('RiskPage', () => {
 
   it('only enables the kill switch for the running engine mode', async () => {
     apiMocks.getRiskPageData.mockResolvedValue(pageData())
-    const { rerender } = render(<RiskPage runtime={runtime()} />)
+    // Same provider element across rerenders, same underlying QueryClient --
+    // rewrapping with a fresh client per rerender would drop the cache and
+    // force a spurious refetch between assertions.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}><RiskPage runtime={runtime()} /></QueryClientProvider>,
+    )
     expect(await screen.findByRole('button', { name: 'Engine Stopped' })).toBeDisabled()
 
-    rerender(<RiskPage runtime={runtime(true, 'paper')} />)
+    rerender(<QueryClientProvider client={queryClient}><RiskPage runtime={runtime(true, 'paper')} /></QueryClientProvider>)
     expect(screen.getByRole('button', { name: 'Hold to Stop & Square Off' })).toBeEnabled()
 
-    rerender(<RiskPage runtime={runtime(true, 'live')} />)
+    rerender(<QueryClientProvider client={queryClient}><RiskPage runtime={runtime(true, 'live')} /></QueryClientProvider>)
     expect(screen.getByRole('button', { name: 'Engine Stopped' })).toBeDisabled()
   })
 })

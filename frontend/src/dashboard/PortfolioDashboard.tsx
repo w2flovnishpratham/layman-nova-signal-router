@@ -1,6 +1,7 @@
 import { NativeSelect } from "@/components/ui/native-select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from '@/components/ui/button'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Download, RefreshCw, ShieldAlert } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -66,13 +67,7 @@ export function PortfolioDashboard({
   preview,
   actionPending = false,
 }: Props) {
-  const [data, setData] = useState<PortfolioAnalytics | null>(preview?.data ?? null)
-  const [risk, setRisk] = useState<RiskOverview | null>(preview?.risk ?? null)
-  const [signals, setSignals] = useState<SignalsPage | null>(preview?.signals ?? null)
-  const [webhooks, setWebhooks] = useState<WebhooksOverview | null>(preview?.webhooks ?? null)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(!preview)
-  const [refreshing, setRefreshing] = useState(false)
+  const [forcing, setForcing] = useState(false)
   const [exportRange, setExportRange] = useState<ExportRange>('today')
   const [equityRange, setEquityRange] = useState<EquityRange>('1m')
   const [viewMode, setViewMode] = useState<'paper' | 'live'>(() => {
@@ -102,42 +97,67 @@ export function PortfolioDashboard({
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
   }, [])
 
-  const load = useCallback(async (soft = false, forceWalletRefresh = false) => {
-    if (preview) return
-    if (soft) setRefreshing(true)
+  // Cached per (viewMode, tradeOrigin) so switching Paper/Live or the origin
+  // filter shows what you last saw instantly. Each still polls every 15s
+  // (refetchInterval, same cadence as the old manual timer) and refetches
+  // early on the WS invalidation wired in queryClient.ts, so it doesn't lag
+  // stale between polls when a trade actually lands.
+  const dashboardPortfolioKey = ['dashboard-portfolio', viewMode, tradeOrigin] as const
+  const {
+    data: portfolioAnalytics,
+    isLoading: portfolioLoading,
+    isFetching: portfolioFetching,
+    error: portfolioQueryError,
+    refetch: refetchPortfolio,
+  } = useQuery({
+    queryKey: dashboardPortfolioKey,
+    queryFn: () => getPortfolioAnalytics(viewMode, { tradeOrigin }),
+    enabled: !preview,
+    refetchInterval: 15_000,
+  })
+  const { data: riskOverview } = useQuery({
+    queryKey: ['dashboard-risk'],
+    queryFn: () => getRiskOverview(),
+    enabled: !preview,
+    refetchInterval: 15_000,
+  })
+  const { data: signalsData } = useQuery({
+    queryKey: ['dashboard-signals'],
+    queryFn: () => getSignals({ limit: 1 }),
+    enabled: !preview,
+    refetchInterval: 15_000,
+  })
+  const { data: webhooksData } = useQuery({
+    queryKey: ['dashboard-webhooks'],
+    queryFn: () => getWebhooksOverview(),
+    enabled: !preview,
+    refetchInterval: 15_000,
+  })
 
-    const [portfolioResult, riskResult, signalResult, webhookResult] = await Promise.allSettled([
-      getPortfolioAnalytics(viewMode, { force: forceWalletRefresh, tradeOrigin }),
-      getRiskOverview(),
-      getSignals({ limit: 1 }),
-      getWebhooksOverview(),
-    ])
+  const data = preview?.data ?? portfolioAnalytics ?? null
+  const risk = preview?.risk ?? riskOverview ?? null
+  const signals = preview?.signals ?? signalsData ?? null
+  const webhooks = preview?.webhooks ?? webhooksData ?? null
+  const loading = !preview && portfolioLoading
+  const refreshing = !preview && (portfolioFetching || forcing)
+  const error = portfolioQueryError
+    ? portfolioQueryError instanceof Error ? portfolioQueryError.message : 'Could not load portfolio analytics'
+    : ''
 
-    if (portfolioResult.status === 'fulfilled') {
-      setData(portfolioResult.value)
-      setError('')
-    } else {
-      setError(
-        portfolioResult.reason instanceof Error
-          ? portfolioResult.reason.message
-          : 'Could not load portfolio analytics',
-      )
+  const queryClient = useQueryClient()
+  // The refresh button asks the backend to bypass its own wallet-balance
+  // cache -- distinct from our client-side cache above, so it writes the
+  // fresh result straight into the query cache rather than going through
+  // the normal (uncached-bypassing) refetch.
+  async function forceRefresh() {
+    setForcing(true)
+    try {
+      const fresh = await getPortfolioAnalytics(viewMode, { force: true, tradeOrigin })
+      queryClient.setQueryData(dashboardPortfolioKey, fresh)
+    } finally {
+      setForcing(false)
     }
-    if (riskResult.status === 'fulfilled') setRisk(riskResult.value)
-    if (signalResult.status === 'fulfilled') setSignals(signalResult.value)
-    if (webhookResult.status === 'fulfilled') setWebhooks(webhookResult.value)
-
-    setLoading(false)
-    setRefreshing(false)
-  }, [preview, viewMode, tradeOrigin])
-
-  useEffect(() => {
-    if (preview) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load()
-    const timer = window.setInterval(() => void load(true), 15_000)
-    return () => window.clearInterval(timer)
-  }, [load, preview])
+  }
 
   const filteredEquity = useMemo(
     () => (data ? filterEquity(data, equityRange) : []),
@@ -233,7 +253,7 @@ export function PortfolioDashboard({
     return (
       <div className="nv-dash-state">
         <p className="nv-dash-error">{error}</p>
-        <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void load()}>
+        <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void refetchPortfolio()}>
           <RefreshCw size={14} /> Retry
         </Button>
       </div>
@@ -333,7 +353,7 @@ export function PortfolioDashboard({
           <Button variant="unstyled"
             className="nv-icon-refresh"
             type="button"
-            onClick={() => void load(true, true)}
+            onClick={() => void forceRefresh()}
             aria-label="Refresh dashboard"
             title="Refresh dashboard"
           >

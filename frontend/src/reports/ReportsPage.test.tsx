@@ -9,6 +9,7 @@ vi.mock('./reportsApi', async (importOriginal) => ({
 }))
 
 import { ReportsPage } from './ReportsPage'
+import { withQueryClient } from '../test/testQueryClient'
 
 const report = (over: Record<string, unknown> = {}) => ({
   ok: true,
@@ -71,7 +72,7 @@ describe('ReportsPage', () => {
   it('renders monthly metrics, daily sessions, calendar and manual attribution', async () => {
     apiMocks.getReport.mockResolvedValue(report())
     window.history.replaceState(null, '', '/app/reports?month=2026-07')
-    render(<ReportsPage initialMode="paper" />)
+    render(withQueryClient(<ReportsPage initialMode="paper" />))
     expect((await screen.findAllByText('+₹400')).length).toBeGreaterThan(0)
     expect(screen.getAllByText('50%').length).toBeGreaterThan(0)
     expect(screen.getByText('NOVA Supertrend · Manual Orders')).toBeInTheDocument()
@@ -90,7 +91,7 @@ describe('ReportsPage', () => {
     const user = userEvent.setup()
     apiMocks.getReport.mockResolvedValue(report())
     window.history.replaceState(null, '', '/app/reports?month=2026-07')
-    render(<ReportsPage initialMode="paper" />)
+    render(withQueryClient(<ReportsPage initialMode="paper" />))
     await screen.findAllByText('+₹400')
     await user.click(screen.getByRole('button', { name: 'Live' }))
     await user.click(screen.getByRole('button', { name: 'Manual Only' }))
@@ -108,13 +109,13 @@ describe('ReportsPage', () => {
       by_strategy: [],
     }))
     window.history.replaceState(null, '', '/app/reports?mode=paper&origin=manual&month=2026-07')
-    render(<ReportsPage />)
+    render(withQueryClient(<ReportsPage />))
     expect(await screen.findByText('No manual trades recorded for this period.')).toBeInTheDocument()
   })
 
   it('offers filter-scoped CSV and PDF downloads', async () => {
     apiMocks.getReport.mockResolvedValue(report())
-    render(<ReportsPage />)
+    render(withQueryClient(<ReportsPage />))
     const csv = await screen.findByRole('link', { name: /Download CSV/i })
     const pdf = screen.getByRole('link', { name: /Download PDF/i })
     expect(csv.getAttribute('href')).toContain('/api/reports/export.csv')

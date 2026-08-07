@@ -3,9 +3,10 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PortfolioDashboard } from './PortfolioDashboard'
 import { dashboardPreviewBundle, dashboardPreviewHealth, dashboardPreviewRuntime } from './previewData'
+import { withQueryClient } from '../test/testQueryClient'
 
 function renderDashboard(overrides: { onKill?: () => void } = {}) {
-  render(
+  render(withQueryClient(
     <PortfolioDashboard
       runtime={dashboardPreviewRuntime}
       health={dashboardPreviewHealth}
@@ -14,7 +15,7 @@ function renderDashboard(overrides: { onKill?: () => void } = {}) {
       onManageStrategies={vi.fn()}
       onViewHealth={vi.fn()}
     />,
-  )
+  ))
 }
 
 afterEach(() => {

@@ -3,14 +3,14 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ChevronRight, Download, TrendingDown, TrendingUp } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   getReport,
   reportExportUrl,
   rupees,
   type DailySession,
-  type Report,
   type ReportMode,
   type TradeDetail,
   type TradeOrigin,
@@ -337,32 +337,25 @@ export function ReportsPage({ initialMode }: { initialMode?: ReportMode | null }
   const [origin, setOrigin] = useState<TradeOrigin>(
     search.get('origin') === 'manual' ? 'manual' : search.get('origin') === 'automated' ? 'automated' : 'all',
   )
-  const [data, setData] = useState<Report | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
   // One session expanded at a time -- the detail table is wide, and stacking
   // several open at once buries the summary rows it hangs off.
   const [expandedSession, setExpandedSession] = useState<string | null>(null)
   const bounds = useMemo(() => monthBounds(month), [month])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const report = await getReport(bounds.start, bounds.end, mode, origin)
-      setData(report)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load the report.')
-    } finally {
-      setLoading(false)
-    }
-  }, [bounds.end, bounds.start, mode, origin])
-
   useEffect(() => {
     const query = new URLSearchParams({ mode, origin, month })
     window.history.replaceState(null, '', `${window.location.pathname}?${query}`)
-    void load()
-  }, [load, mode, month, origin])
+  }, [mode, month, origin])
+
+  // Cached per (bounds, mode, origin) so flipping back to a month/mode you
+  // already viewed this session shows it instantly instead of a fresh
+  // spinner -- see queryClient.ts for the staleTime and the WS-driven
+  // invalidation that keeps it from ever looking stale after a trade closes.
+  const { data, isLoading: loading, error: loadError, refetch } = useQuery({
+    queryKey: ['report', bounds.start, bounds.end, mode, origin],
+    queryFn: () => getReport(bounds.start, bounds.end, mode, origin),
+  })
+  const error = loadError ? (loadError instanceof Error ? loadError.message : 'Could not load the report.') : ''
 
   const maxStrategyPnl = Math.max(1, ...(data?.by_strategy.map((strategy) => Math.abs(strategy.realized_pnl)) ?? []))
 
@@ -412,7 +405,7 @@ export function ReportsPage({ initialMode }: { initialMode?: ReportMode | null }
       ) : error ? (
         <p className="nova-signals-state" role="alert">
           <AlertTriangle size={16} /> {error}
-          <Button variant="unstyled" type="button" className="conv-pill" onClick={() => void load()}>Retry</Button>
+          <Button variant="unstyled" type="button" className="conv-pill" onClick={() => void refetch()}>Retry</Button>
         </p>
       ) : !data ? null : (
         <>
