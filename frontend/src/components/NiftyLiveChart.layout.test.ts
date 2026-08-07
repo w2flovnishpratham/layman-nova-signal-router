@@ -28,6 +28,18 @@ describe('buildChartLayout', () => {
     expect(layout.candles[2].x).toBeCloseTo(8 + 2 * barSlot + barSlot / 2, 1)
   })
 
+  it('spaces the price axis at a fixed 10-point step regardless of range', () => {
+    const candles = [candle(0, 24600, 24695, 24595, 24636)]
+    const layout = buildChartLayout({ candles, markers: [], timeframe: '5m', dims: DIMS })
+
+    const prices = layout.grid.map((line) => line.price)
+    expect(prices.length).toBeGreaterThan(1)
+    for (let i = 1; i < prices.length; i++) {
+      expect(prices[i] - prices[i - 1]).toBeCloseTo(10, 5)
+    }
+    expect(prices.every((p) => p % 10 === 0)).toBe(true)
+  })
+
   it('never needs a reset on timeframe switch -- each call is pure', () => {
     const candles = [candle(0, 100, 102, 99, 101)]
     const oneMinute = buildChartLayout({ candles, markers: [], timeframe: '1m', dims: DIMS })

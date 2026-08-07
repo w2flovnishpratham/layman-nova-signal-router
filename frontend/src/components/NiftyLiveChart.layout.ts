@@ -74,13 +74,7 @@ export interface ChartLayout {
   crosshair: { x: number; y: number; candle: NiftyCandle } | null
 }
 
-function niceStep(range: number, targetTicks: number): number {
-  const raw = range / targetTicks
-  const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)))
-  const norm = raw / mag
-  const step = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10
-  return step * mag
-}
+const PRICE_AXIS_STEP = 10
 
 function emptyLayout(dims: { width: number; height: number }): ChartLayout {
   return {
@@ -226,10 +220,12 @@ export function buildChartLayout(args: {
     }
   }
 
-  // --- grid + price axis labels ---
+  // --- grid + price axis labels: fixed 10-point rungs, not a tick-count
+  // target -- NIFTY's own point scale makes 10 the readable, expected step
+  // regardless of how much range a given timeframe happens to show. ---
   const grid: { y: number; price: number }[] = []
   const priceAxisLabels: { y: number; text: string }[] = []
-  const step = niceStep(hi - lo, 5)
+  const step = PRICE_AXIS_STEP
   const firstLine = Math.ceil(lo / step) * step
   for (let p = firstLine; p < hi; p += step) {
     const y = yFor(p)
