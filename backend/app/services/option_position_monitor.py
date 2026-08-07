@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -44,6 +45,12 @@ logger = logging.getLogger("option_position_monitor")
 _STOP_EVENT = threading.Event()
 _THREAD: threading.Thread | None = None
 _THREAD_LOCK = threading.RLock()
+# Per-user checks are network I/O (quote fetch, sometimes a second confirming
+# fetch) and independent of each other -- fanned out here instead of a
+# sequential loop so one busy pass can't starve every other user's SL/TP
+# check for the whole cycle. 16 is a guess at "more than enough concurrent
+# open positions in practice"; bump it if that stops being true.
+_MONITOR_EXECUTOR = ThreadPoolExecutor(max_workers=16, thread_name_prefix="option-monitor")
 
 EXIT_COOLDOWN_SECONDS = 15.0
 _LAST_REST_FALLBACK_AT: dict[tuple[str, str], float] = {}
@@ -1005,12 +1012,22 @@ def _monitor_loop() -> None:
                     load_user_context,
                 )
 
-                for user_id in _active_monitor_user_ids(active_routing_user_ids):
-                    user = load_user_context(user_id)
-                    if user is None:
-                        continue
-                    with bind_user_execution_context(user):
-                        monitor_once()
+                def _check_user(user_id: uuid.UUID) -> None:
+                    try:
+                        user = load_user_context(user_id)
+                        if user is None:
+                            return
+                        with bind_user_execution_context(user):
+                            monitor_once()
+                    except Exception as exc:
+                        # Isolated per user -- previously an exception here aborted
+                        # the whole pass, leaving every other user's position
+                        # unchecked until the next cycle.
+                        logger.exception("Option position monitor failed for user %s", user_id)
+                        log_error_event("OPTION_POSITION_MONITOR_USER_ERROR", str(exc))
+
+                user_ids = _active_monitor_user_ids(active_routing_user_ids)
+                list(_MONITOR_EXECUTOR.map(_check_user, user_ids))
             else:
                 monitor_once()
         except Exception as exc:
