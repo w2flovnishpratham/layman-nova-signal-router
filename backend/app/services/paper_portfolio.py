@@ -117,7 +117,12 @@ def get_paper_portfolio() -> PaperPortfolio:
     portfolio = PaperPortfolio(**defaults)
     if portfolio.session_start_date_ist != _today():
         portfolio.session_start_date_ist = _today()
-        portfolio.session_start_balance = portfolio.available_balance
+        # Equity, not just cash -- available_balance alone excludes whatever's
+        # locked in a position still open at the moment IST midnight ticks
+        # over (an overnight-carried trade). Baselining off cash-only made
+        # every session_pnl for the rest of the day overstate profit (or
+        # understate loss) by exactly that position's utilized capital.
+        portfolio.session_start_balance = portfolio.available_balance + portfolio.utilized_amount
         portfolio.session_pnl = 0.0
         return _write(portfolio)
     return portfolio

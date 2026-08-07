@@ -33,12 +33,19 @@ def _parse_ts(value: str | None) -> datetime | None:
 def _snapshot_from_result(result: DhanFundsResult, previous: dict[str, Any] | None = None) -> dict[str, Any]:
     previous = previous or default_wallet_snapshot()
     available = result.available_balance
+    # Equity, not just cash: available_balance excludes whatever margin is
+    # blocked in a position still open at the moment of the snapshot. Without
+    # this, baselining/measuring session_pnl off available_balance alone
+    # understates the day's real P&L by exactly that open position's margin
+    # whenever a position is open at the reset instant or at read time.
+    utilized = result.utilized_amount or 0.0
+    equity = available + utilized if available is not None else None
 
     # R1 — Daily reset of session_start_balance at IST midnight.
-    # When the IST date changes, treat the current available balance as the
-    # new session start and zero out session_pnl. This makes session_pnl
-    # equivalent to "intraday realised P&L since today\'s first wallet read"
-    # session_pnl is still used by the dashboard for the day's P&L display.
+    # When the IST date changes, treat the current equity as the new session
+    # start and zero out session_pnl. This makes session_pnl equivalent to
+    # "intraday realised P&L since today\'s first wallet read" -- session_pnl
+    # is still used by the dashboard for the day's P&L display.
     today_ist = _ist_date_str()
     prev_date_ist = previous.get("session_start_date_ist")
     session_start = previous.get("session_start_balance")
@@ -47,18 +54,18 @@ def _snapshot_from_result(result: DhanFundsResult, previous: dict[str, Any] | No
     date_rollover = (
         prev_date_ist is not None
         and prev_date_ist != today_ist
-        and available is not None
+        and equity is not None
     )
     if date_rollover:
-        session_start = available
+        session_start = equity
         session_start_date_ist = today_ist
-    elif session_start is None and available is not None:
-        session_start = available
+    elif session_start is None and equity is not None:
+        session_start = equity
         session_start_date_ist = today_ist
 
     session_pnl = None
-    if session_start is not None and available is not None:
-        session_pnl = round(float(available) - float(session_start), 2)
+    if session_start is not None and equity is not None:
+        session_pnl = round(float(equity) - float(session_start), 2)
 
     snapshot = default_wallet_snapshot()
     snapshot.update(
