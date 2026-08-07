@@ -271,12 +271,14 @@ function NiftyLiveChartInner({
         const indexLevel = marker.price != null
           ? marker.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
           : null
-        const fill = [marker.contract, marker.execution_price != null ? `₹${marker.execution_price.toFixed(2)}` : null].filter(Boolean).join(' @ ')
-        const details = [fill, marker.pnl != null ? `P&L ${marker.pnl >= 0 ? '+' : '-'}₹${Math.abs(marker.pnl).toLocaleString('en-IN')}` : null].filter(Boolean).join('\n')
+        // Contract name and P&L used to ride along here too, but lightweight-charts
+        // doesn't declutter overlapping labels -- a busy session turned the chart
+        // into unreadable soup. That detail already lives in the Reports
+        // drill-down table, so the on-chart label stays to a single short line.
         return {
           ...style,
           time: visibleCandles[index].time as UTCTimestamp,
-          text: `${style.text}${indexLevel ? `  ${indexLevel}` : ''}${marker.mode === 'paper' ? ' (P)' : ''}${details ? `\n${details}` : ''}`,
+          text: `${style.text}${indexLevel ? `  ${indexLevel}` : ''}${marker.mode === 'paper' ? ' (P)' : ''}`,
         }
       })
       .filter((marker): marker is SeriesMarker<Time> => marker !== null)
