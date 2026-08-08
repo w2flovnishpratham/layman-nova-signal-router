@@ -50,6 +50,7 @@ export type ServerEventType =
   | 'order.rejected'
   | 'tick.pnl'
   | 'market.snapshot'
+  | 'market.candles'
   | 'position.update'
   | 'funds.update'
   | 'trade.exit'

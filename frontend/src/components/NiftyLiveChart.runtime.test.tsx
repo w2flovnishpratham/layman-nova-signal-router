@@ -60,6 +60,7 @@ beforeEach(() => {
   })
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(createStubCtx() as unknown as CanvasRenderingContext2D)
   apiMocks.getNiftyCandles.mockClear()
+  apiMocks.getNiftyMarkers.mockClear()
   apiMocks.getNiftyMarkers.mockResolvedValue({ trading_date: '2026-07-21', markers: [] })
 })
 
@@ -135,5 +136,74 @@ describe('NiftyLiveChart responsive runtime', () => {
     })
     expect(screen.getByText('₹128.75')).toBeInTheDocument()
     expect(screen.getByText('₹120.40')).toBeInTheDocument()
+  })
+
+  it('refreshes markers immediately on an order.filled/trade.exit push, not just on the poll', async () => {
+    render(<NiftyLiveChart engineMode="paper" />)
+    await waitFor(() => expect(apiMocks.getNiftyMarkers).toHaveBeenCalledTimes(1))
+
+    window.dispatchEvent(new CustomEvent('nova:terminal-delta', {
+      detail: { id: 'evt-1', type: 'order.filled', ts: '2026-07-21T04:05:00Z', data: {} },
+    }))
+    await waitFor(() => expect(apiMocks.getNiftyMarkers).toHaveBeenCalledTimes(2))
+
+    window.dispatchEvent(new CustomEvent('nova:terminal-delta', {
+      detail: { id: 'evt-2', type: 'trade.exit', ts: '2026-07-21T04:06:00Z', data: {} },
+    }))
+    await waitFor(() => expect(apiMocks.getNiftyMarkers).toHaveBeenCalledTimes(3))
+
+    // An unrelated event type must not trigger a refetch.
+    window.dispatchEvent(new CustomEvent('nova:terminal-delta', {
+      detail: { id: 'evt-3', type: 'system.event', ts: '2026-07-21T04:07:00Z', data: {} },
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(apiMocks.getNiftyMarkers).toHaveBeenCalledTimes(3)
+  })
+
+  it('applies a pushed market.candles series for the current timeframe without an extra fetch', async () => {
+    const ctx = createStubCtx()
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D)
+
+    render(<NiftyLiveChart engineMode="paper" />)
+    await waitFor(() => expect(apiMocks.getNiftyCandles).toHaveBeenCalledTimes(1))
+    const paintsBeforePush = ctx.clearRect.mock.calls.length
+
+    window.dispatchEvent(new CustomEvent('nova:terminal-delta', {
+      detail: {
+        id: 'evt-candles', type: 'market.candles', ts: '2026-07-21T04:10:00Z',
+        data: {
+          symbol: 'NIFTY', interval: '5m', source: 'dhan_authoritative_1m', status: 'ready', market_state: 'open',
+          trading_date: '2026-07-21', updated_at: '2026-07-21T04:10:00Z',
+          candles: [
+            { time: CANDLE_TIME, open: 24100, high: 24120, low: 24090, close: 24110, volume: 1 },
+            { time: CANDLE_TIME + 300, open: 24110, high: 24130, low: 24105, close: 24125, volume: 1 },
+          ],
+        },
+      },
+    }))
+
+    await waitFor(() => expect(ctx.clearRect.mock.calls.length).toBeGreaterThan(paintsBeforePush))
+    // Applied directly from the push, not by triggering a second REST fetch.
+    expect(apiMocks.getNiftyCandles).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a pushed candle series for a timeframe the user is not currently viewing', async () => {
+    render(<NiftyLiveChart engineMode="paper" />)
+    await waitFor(() => expect(apiMocks.getNiftyCandles).toHaveBeenCalledWith('5m', expect.any(AbortSignal)))
+
+    window.dispatchEvent(new CustomEvent('nova:terminal-delta', {
+      detail: {
+        id: 'evt-candles-1m', type: 'market.candles', ts: '2026-07-21T04:10:00Z',
+        data: {
+          symbol: 'NIFTY', interval: '1m', source: 'dhan_authoritative_1m', status: 'ready', market_state: 'open',
+          trading_date: '2026-07-21', updated_at: '2026-07-21T04:10:00Z',
+          candles: [{ time: CANDLE_TIME, open: 1, high: 1, low: 1, close: 1, volume: 1 }],
+        },
+      },
+    }))
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    // Still showing the 5m header -- a 1m push while viewing 5m must be a no-op.
+    expect(await screen.findByRole('img', { name: /NIFTY 5m candlestick chart/i })).toBeInTheDocument()
   })
 })

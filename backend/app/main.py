@@ -44,6 +44,7 @@ from app.services.state_store import get_app_state, get_engine_mode, get_runtime
 from app.services.startup_reconciler import reconcile_open_position_on_startup
 from app.workers.eod_squareoff import start_eod_squareoff_worker, stop_eod_squareoff_worker
 from app.workers.ghost_position_watcher import start_ghost_position_watcher, stop_ghost_position_watcher
+from app.workers.nifty_candle_pusher import start_nifty_candle_pusher, stop_nifty_candle_pusher
 from app.workers.strategy_job_worker import (
     start_strategy_job_worker,
     stop_strategy_job_worker,
@@ -281,6 +282,11 @@ async def lifespan(app: FastAPI):
     if background_workers_enabled and shared_market_data_configured():
         start_shared_token_worker()
         logger.info("Shared market-data token worker enabled (global paper-mode feed).")
+    if background_workers_enabled:
+        # Global market data, one push worker per engine process regardless
+        # of single- vs multi-user mode -- unlike the per-user option monitor
+        # below, this isn't scoped to any particular user's positions.
+        start_nifty_candle_pusher()
     runtime_settings = get_runtime_settings()
     logger.info("NOVA Signal Router backend starting.")
     logger.info("APP_ENV=%s", settings.APP_ENV)
@@ -344,6 +350,7 @@ async def lifespan(app: FastAPI):
     stop_strategy_job_worker()
     stop_pine_conversion_worker()
     stop_shared_token_worker()
+    stop_nifty_candle_pusher()
     stop_option_position_monitor()
     stop_eod_squareoff_worker()
     stop_ghost_position_watcher()

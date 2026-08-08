@@ -10,7 +10,7 @@ import {
   type NiftyCandleSeries,
   type NiftyTradeMarker,
 } from '../api'
-import type { EngineMode } from '../types'
+import type { EngineMode, ServerEvent } from '../types'
 import { sameCandles, sessionOnly } from './NiftyLiveChart.helpers'
 import { buildChartLayout, hitTestMarker, istTime, zoomChartView, type ChartLayout, type ZoomState } from './NiftyLiveChart.layout'
 import { paintChart } from './NiftyLiveChart.paint'
@@ -63,16 +63,23 @@ function NiftyLiveChartInner({
     let candleRequest: AbortController | null = null
     let markerRequest: AbortController | null = null
 
+    // Shared by the poll's success path and a pushed market.candles event --
+    // same day-rollover bookkeeping either way, just a different source for
+    // the series itself.
+    function applySeries(next: NiftyCandleSeries) {
+      if (next.trading_date && tradingDateRef.current && next.trading_date !== tradingDateRef.current) setMarkers([])
+      tradingDateRef.current = next.trading_date ?? tradingDateRef.current
+      setSeries(next)
+      setLoadFailed(false)
+    }
+
     async function loadCandles() {
       if (document.hidden || candleRequest) return
       candleRequest = new AbortController()
       try {
         const next = await getNiftyCandles(timeframe, candleRequest.signal)
         if (cancelled) return
-        if (next.trading_date && tradingDateRef.current && next.trading_date !== tradingDateRef.current) setMarkers([])
-        tradingDateRef.current = next.trading_date ?? tradingDateRef.current
-        setSeries(next)
-        setLoadFailed(false)
+        applySeries(next)
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === 'AbortError')) setLoadFailed(true)
       } finally {
@@ -112,12 +119,28 @@ function NiftyLiveChartInner({
       () => void loadMarkers(),
       marketClosed ? CLOSED_MARKER_POLL_MS : MARKER_POLL_MS,
     )
+    // A fill/exit means a new marker exists right now -- refresh immediately
+    // instead of waiting out the poll interval. Same window event
+    // TradingActivityTabs already listens on. A pushed candle series for the
+    // currently-viewed timeframe applies directly, no fetch needed. Both
+    // polls above stay as the backstop for a dropped WS message or a brief
+    // reconnect.
+    const handleTerminalDelta = (raw: Event) => {
+      const event = (raw as CustomEvent<ServerEvent>).detail
+      if (event?.type === 'order.filled' || event?.type === 'trade.exit') void loadMarkers()
+      if (event?.type === 'market.candles') {
+        const pushed = event.data as unknown as NiftyCandleSeries
+        if (pushed.interval === timeframe) applySeries(pushed)
+      }
+    }
+    window.addEventListener('nova:terminal-delta', handleTerminalDelta)
     return () => {
       cancelled = true
       candleRequest?.abort()
       markerRequest?.abort()
       window.clearInterval(candleTimer)
       window.clearInterval(markerTimer)
+      window.removeEventListener('nova:terminal-delta', handleTerminalDelta)
     }
   }, [engineMode, timeframe, marketClosed])
 
