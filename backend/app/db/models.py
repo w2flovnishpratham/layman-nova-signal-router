@@ -528,6 +528,12 @@ class StrategySignal(Base):
     strategy_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     signal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(30), default="accepted", nullable=False)
+    # The webhook_replay_store provider string this signal's inbound webhook
+    # was claimed under (e.g. "strategy:<name>" or "instance-webhook:<id>").
+    # Nullable: only needed to close that WebhookEvent's processed_status out
+    # once this signal reaches a terminal state -- see
+    # strategy_job_worker._refresh_signal_summary.
+    webhook_event_provider: Mapped[str | None] = mapped_column(String(160), nullable=True)
     result_summary: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

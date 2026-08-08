@@ -270,8 +270,18 @@ def claim_strategy_signal(strategy_name: str, signal_id: str) -> bool:
 def enqueue_strategy_signal(
     strategy_name: str,
     signal: NormalizedSignal,
+    *,
+    webhook_event_provider: str | None = None,
 ) -> dict[str, Any]:
-    """Atomically claim an inbound alert and enqueue one immutable job per user."""
+    """Atomically claim an inbound alert and enqueue one immutable job per user.
+
+    webhook_event_provider is the caller's already-computed
+    webhook_replay_store provider string (e.g. f"strategy:{path_strategy}"),
+    passed through verbatim rather than rebuilt here from the
+    (possibly-canonicalized) strategy_name below -- they must stay
+    byte-identical to the string claim_webhook_event() was called with, or
+    the later status-close lookup in strategy_job_worker silently no-ops.
+    """
     strategy_name = canonical_strategy_name(strategy_name)
     try:
         with session_scope() as db:
@@ -279,6 +289,7 @@ def enqueue_strategy_signal(
                 strategy_name=strategy_name,
                 signal_id=signal.signal_id,
                 status="queued",
+                webhook_event_provider=webhook_event_provider,
             )
             db.add(signal_row)
             db.flush()

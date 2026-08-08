@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
@@ -136,6 +136,32 @@ def update_webhook_event(
             existing = row.event_metadata if isinstance(row.event_metadata, dict) else {}
             row.event_metadata = {**existing, **metadata}
         row.updated_at = utcnow()
+
+
+_STUCK_STATUSES = ("received", "queued", "accepted")
+
+
+def count_stuck_webhook_events(*, older_than_seconds: int = 120) -> int:
+    """Events still non-terminal well past when processing should have
+    finished -- e.g. the async intake path (strategy_job_worker) crashing or
+    otherwise never calling update_webhook_event. A nonzero count means a
+    signal's fate is undetected, not necessarily lost -- worth alerting on,
+    not proof of a lost trade by itself."""
+    if not database_configured():
+        return 0
+    cutoff = utcnow() - timedelta(seconds=older_than_seconds)
+    with session_scope() as db:
+        return int(
+            db.scalar(
+                select(func.count())
+                .select_from(models.WebhookEvent)
+                .where(
+                    models.WebhookEvent.processed_status.in_(_STUCK_STATUSES),
+                    models.WebhookEvent.updated_at < cutoff,
+                )
+            )
+            or 0
+        )
 
 
 def prune_webhook_replay_records(retention_seconds: int | None = None) -> dict[str, int]:

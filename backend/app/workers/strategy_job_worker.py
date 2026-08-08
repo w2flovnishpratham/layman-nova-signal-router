@@ -205,6 +205,26 @@ def _refresh_signal_summary(strategy_signal_id: uuid.UUID) -> None:
             "results": results,
         }
         signal.updated_at = _now()
+        webhook_event_provider = signal.webhook_event_provider
+        signal_id = signal.signal_id
+        terminal_status = signal.status
+
+    # Closes the webhook_event this signal's inbound webhook was claimed
+    # under -- without this, every event on this (async intake) path stays
+    # at "queued"/"accepted" forever, success or failure, with no way to
+    # tell a completed signal from a lost one. Non-fatal: a failure here
+    # just leaves the event undetected-stuck, same as before this existed,
+    # never blocks the signal's own already-committed terminal state above.
+    if webhook_event_provider:
+        try:
+            webhook_replay_store.update_webhook_event(
+                provider=webhook_event_provider,
+                event_id=signal_id,
+                processed_status="completed" if terminal_status == "completed" else "failed",
+                error=None if terminal_status == "completed" else "one_or_more_jobs_failed",
+            )
+        except Exception:
+            logger.exception("Could not close webhook_event status for signal %s", strategy_signal_id)
 
 
 def _execute_job(job: dict[str, Any]) -> None:

@@ -840,7 +840,7 @@ async def strategy_webhook(
             )
         event_claimed = event_claim.get("status") == "fresh"
 
-    queued = strategy_fanout.enqueue_strategy_signal(path_strategy, signal)
+    queued = strategy_fanout.enqueue_strategy_signal(path_strategy, signal, webhook_event_provider=event_provider)
     if not queued["accepted"]:
         if event_claimed:
             try:

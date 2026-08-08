@@ -267,6 +267,77 @@ def test_flat_buy_ce_places_paper_entry(client, per_user_runtime, deterministic_
     assert position["qty"] == 2 * current_nifty_lot_size()
 
 
+def test_completed_job_closes_its_webhook_event_status(client, per_user_runtime, deterministic_paper_market, worker_enabled):
+    # The async intake path (private webhook -> StrategyExecutionJob -> this
+    # worker) used to leave every WebhookEvent stuck at "queued"/"accepted"
+    # forever, success or failure -- no way to detect a lost trade short of a
+    # user noticing. The worker's completion path must close it out using the
+    # exact provider string ingest() claimed it under -- this is an
+    # end-to-end test through the real router, not a direct function call,
+    # specifically to prove that provider-string threading is correct.
+    from sqlalchemy import select
+
+    from app.db import models
+    from app.db.engine import session_scope
+
+    user = make_user("webhook-status-close@gmail.com")
+    instance_id = _make_instance(user, lots=1)
+    token = _issue_token(user, instance_id)
+    _start_paper_engine(user)
+
+    signal_id = _ingest(client, token, action="BUY_CE")
+    assert _run_worker() == 1
+
+    provider = f"instance-webhook:{instance_id}"
+    with session_scope() as db:
+        event = db.scalar(
+            select(models.WebhookEvent).where(
+                models.WebhookEvent.provider == provider.lower(),
+                models.WebhookEvent.event_id == signal_id,
+            )
+        )
+        assert event is not None
+        assert event.processed_status == "completed"
+
+
+def test_failed_job_closes_its_webhook_event_as_failed(client, per_user_runtime, deterministic_paper_market, worker_enabled):
+    # Same recovered-job retry-safety guard as
+    # test_worker_retry_of_money_mode_job_fails_safe -- the one proven,
+    # reliable way in this suite to force job.status == "failed" (as opposed
+    # to a "completed" job whose nested execution_result merely failed).
+    from sqlalchemy import select, update
+
+    from app.db import models
+    from app.db.engine import session_scope
+
+    user = make_user("webhook-status-fail@gmail.com")
+    instance_id = _make_instance(user, lots=1)
+    token = _issue_token(user, instance_id)
+    _start_paper_engine(user)
+
+    signal_id = _ingest(client, token, action="BUY_CE")
+    with session_scope() as db:
+        db.execute(
+            update(models.StrategyExecutionJob)
+            .where(models.StrategyExecutionJob.strategy_name == f"instance:{instance_id}")
+            .values(attempts=1)
+        )
+    assert _run_worker() == 1
+    assert _job_rows(instance_id)[0]["status"] == "failed"
+
+    provider = f"instance-webhook:{instance_id}"
+    with session_scope() as db:
+        event = db.scalar(
+            select(models.WebhookEvent).where(
+                models.WebhookEvent.provider == provider.lower(),
+                models.WebhookEvent.event_id == signal_id,
+            )
+        )
+        assert event is not None
+        assert event.processed_status == "failed"
+        assert event.error == "one_or_more_jobs_failed"
+
+
 def test_duplicate_same_side_entry_is_no_op(client, per_user_runtime, deterministic_paper_market, worker_enabled):
     user = make_user("trade-noop@gmail.com")
     instance_id = _make_instance(user)

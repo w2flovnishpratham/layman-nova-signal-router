@@ -1096,3 +1096,51 @@ def test_additive_schema_upgrades_pre_release_user_egress_table(tmp_path):
         "last_observed_ip",
         "verification_error",
     }.issubset(columns)
+
+
+@pytest.mark.usefixtures("ready_default_strategy")
+def test_broadcast_signal_closes_its_webhook_event_on_completion(mu_db, monkeypatch):
+    # Broadcast/shared-strategy counterpart to the private-webhook coverage
+    # in test_private_webhook_execution.py: the async intake path used to
+    # leave every WebhookEvent stuck at "queued"/"accepted" forever. Real
+    # router POST (not a direct enqueue_strategy_signal call) to prove
+    # routers/strategies.py's event_provider threading is correct too.
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.db import models
+    from app.db.engine import session_scope
+    from app.routers.strategies import router
+    from app.services import strategy_fanout
+    from app.workers.strategy_job_worker import process_queued_jobs_once
+
+    secret = "strategy-secret-1234567890-strong"
+    monkeypatch.setattr(settings, "STRATEGY_WEBHOOK_SECRET", secret, raising=False)
+    user = make_user("webhook-status-broadcast@gmail.com")
+    strategy_fanout.subscribe_user(user.id, "supertrend", lots=1, execution_mode="signal_only")
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    body = {
+        "secret": secret,
+        "signal_id": "tv-webhook-status-broadcast-1",
+        "action": "BUY_CE",
+        "signal_time": "2026-07-31T09:00:00Z",
+    }
+
+    response = client.post("/api/webhook/strategy/supertrend", json=body)
+    assert response.status_code == 202
+    assert process_queued_jobs_once(limit=5) == 1
+
+    with session_scope() as db:
+        event = db.scalar(
+            select(models.WebhookEvent).where(
+                models.WebhookEvent.provider == "strategy:supertrend",
+                models.WebhookEvent.event_id == "tv-webhook-status-broadcast-1",
+            )
+        )
+        assert event is not None
+        assert event.processed_status == "completed"
+        signal = db.query(models.StrategySignal).filter_by(signal_id="tv-webhook-status-broadcast-1").one()
+        assert signal.webhook_event_provider == "strategy:supertrend"

@@ -489,9 +489,10 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
 
     strategy_name = instance_strategy_name(auth["instance_id"])
     fingerprint = payload_fingerprint(payload, action)
+    event_provider = f"instance-webhook:{auth['instance_id']}"
     try:
         claim = webhook_replay_store.claim_webhook_event(
-            provider=f"instance-webhook:{auth['instance_id']}",
+            provider=event_provider,
             event_id=payload.signal_id,
             raw_body=fingerprint,
             user_id=auth["user_id"],
@@ -566,7 +567,7 @@ def ingest(auth: dict[str, Any], payload: PrivateWebhookPayload) -> dict[str, An
                 except Exception:
                     logger.debug("HOLD failure evidence could not be stored.", exc_info=True)
     else:
-        result = _persist_execution_job(auth, payload, action, strategy_name, received_at)
+        result = _persist_execution_job(auth, payload, action, strategy_name, received_at, event_provider)
         # R1B-2B3: optional post-commit trading-intent evidence. Runs only
         # after the signal/job transaction inside _persist_execution_job has
         # committed and only for the request that won the durable event claim.
@@ -728,6 +729,7 @@ def _persist_execution_job(
     action: str,
     strategy_name: str,
     received_at: datetime,
+    webhook_event_provider: str,
 ) -> dict[str, Any]:
     signal = build_normalized_signal(auth, payload, action, received_at=received_at)
     try:
@@ -767,6 +769,7 @@ def _persist_execution_job(
                 strategy_name=strategy_name,
                 signal_id=payload.signal_id,
                 status="queued",
+                webhook_event_provider=webhook_event_provider,
                 result_summary={
                     "action": action,
                     "signal_time": payload.signal_time.astimezone(timezone.utc).isoformat(),

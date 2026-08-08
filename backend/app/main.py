@@ -33,6 +33,7 @@ from app.workers.pine_conversion_worker import start_pine_conversion_worker, sto
 from app.services.audit_logger import log_audit_event
 from app.services.chat_event_publisher import bind_chat_event_loop, clear_chat_event_loop
 from app.services.credential_vault import vault_status
+from app.services import webhook_replay_store
 from app.services.instrument_resolver import start_instrument_cache_warmup
 from app.services.shared_market_data import (
     shared_market_data_configured,
@@ -441,6 +442,7 @@ def _health() -> dict:
         "multi_user_mode": _multi_user_mode(),
         "legacy_single_user_workers_enabled": not _multi_user_mode(),
         "strategy_job_worker": strategy_job_worker_status(),
+        "stuck_webhook_events": webhook_replay_store.count_stuck_webhook_events(),
     }
 
 
