@@ -151,6 +151,49 @@ def test_production_migration_validation_accepts_current_head(monkeypatch, tmp_p
     main_module.validate_production_database_migration_state()
 
 
+def test_unreachable_database_does_not_block_startup(monkeypatch, tmp_path):
+    """A restart during a database outage must still boot.
+
+    Production incident: Neon refused connections ("data transfer quota
+    exceeded") and this guard turned an already-degraded engine into a
+    hard-down one -- the running process was riding the outage out fine, but
+    once restarted it could not start again until the database came back.
+    """
+    import app.main as main_module
+    from sqlalchemy.exc import OperationalError
+
+    class UnreachableEngine:
+        def connect(self):
+            raise OperationalError("SELECT 1", {}, Exception("data transfer quota exceeded"))
+
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://user:secret@db.example/nova", raising=False)
+    monkeypatch.setattr(main_module, "_current_alembic_heads", lambda: {"current_head"})
+    monkeypatch.setattr(main_module, "get_engine", lambda: UnreachableEngine())
+
+    main_module.validate_production_database_migration_state()
+
+
+def test_reachable_database_at_wrong_revision_still_fails_closed(monkeypatch, tmp_path):
+    """The relaxation above must not weaken the actual guarantee: a database we
+    CAN reach, sitting at the wrong revision, still refuses to start."""
+    import app.main as main_module
+
+    db_path = tmp_path / "stale.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(64) NOT NULL)"))
+        connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('an_older_revision')"))
+
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://user:secret@db.example/nova", raising=False)
+    monkeypatch.setattr(main_module, "_current_alembic_heads", lambda: {"current_head"})
+    monkeypatch.setattr(main_module, "get_engine", lambda: engine)
+
+    with pytest.raises(RuntimeError, match="not at the current Alembic head"):
+        main_module.validate_production_database_migration_state()
+
+
 def test_production_migration_validation_requires_alembic_version_safely(monkeypatch, tmp_path):
     import app.main as main_module
 

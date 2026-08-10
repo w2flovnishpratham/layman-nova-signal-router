@@ -29,6 +29,7 @@ from app.routers import personal_pine as personal_pine_router
 from app.routers import pine_conversion as pine_conversion_router
 from app.routers import tradingview_setup as tradingview_setup_router
 from app.auth import google as google_auth
+from app.db import backoff as db_backoff
 from app.db.engine import database_configured, get_engine, init_db
 from app.services.user_credential_vault import vault_ready as user_vault_ready
 from app.services.pine_conversion_provider import validate_provider_configuration
@@ -104,6 +105,21 @@ def validate_production_database_migration_state() -> None:
             }
     except RuntimeError:
         raise
+    except db_backoff.DB_UNAVAILABLE_ERRORS:
+        # An unreachable database is not a schema problem, and refusing to boot
+        # for one turns a recoverable outage into a hard-down service: the check
+        # only runs at startup, so a process that was already up rides the same
+        # outage out and recovers on its own, while a restarted one can never
+        # come back until the database does. Nothing can be corrupted against a
+        # database we cannot connect to, and the deploy path still runs
+        # `alembic upgrade head` before restarting, so a freshly deployed
+        # process is never silently started against an unmigrated schema.
+        # Observed in production during a Neon quota outage.
+        logger.error(
+            "Could not reach the database to verify migration state; starting anyway. "
+            "Database-backed requests will fail until connectivity returns."
+        )
+        return
     except Exception as exc:
         raise RuntimeError(
             "Database migration validation failed. Run `python -m alembic upgrade head` "
