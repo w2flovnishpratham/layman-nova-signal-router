@@ -80,6 +80,43 @@ async function openEditor(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('ImportedPinePage', () => {
+  it('opens the import editor from an empty Pine library', async () => {
+    api.list.mockResolvedValue([])
+    const user = userEvent.setup()
+    render(<ImportedPinePage />)
+
+    await user.click(await screen.findByRole('button', { name: /import pine script/i }))
+    expect(await screen.findByLabelText('Pine source')).toBeInTheDocument()
+  })
+
+  it('routes the empty setup state back to the Pine library', async () => {
+    api.list.mockResolvedValue([])
+    const user = userEvent.setup()
+    render(<ImportedPinePage />)
+
+    await user.click(await screen.findByRole('button', { name: /setup & verify/i }))
+    expect(await screen.findByText('Choose a Pine version to prepare')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /open pine library/i }))
+
+    expect(await screen.findByRole('button', { name: /import pine script/i })).toBeInTheDocument()
+  })
+
+  it('runs validation from the Static findings empty state', async () => {
+    const user = userEvent.setup()
+    const draft = { ...version, status: 'draft', validation: null }
+    const passed = { ...version, validation: { ...validation, status: 'PASSED', warning_count: 0, findings: [] } }
+    api.get.mockResolvedValueOnce({ strategy, versions: [draft] }).mockResolvedValue({ strategy, versions: [passed] })
+    api.validate.mockResolvedValue({ version: passed, report: passed.validation, reused: false })
+    render(<ImportedPinePage />)
+
+    await openEditor(user)
+    expect(await screen.findByText('Validate this exact version')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /run validation/i }))
+
+    await waitFor(() => expect(api.validate).toHaveBeenCalledWith('s1', 'v1'))
+    expect(await screen.findByText('No static findings')).toBeInTheDocument()
+  })
+
   it('renders untrusted source as text, findings navigate, and no browser persistence or URL state is used', async () => {
     const user = userEvent.setup()
     const originalUrl = window.location.href

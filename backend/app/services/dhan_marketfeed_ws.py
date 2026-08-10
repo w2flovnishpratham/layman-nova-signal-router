@@ -7,7 +7,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote
 
 import websockets
@@ -178,6 +178,7 @@ class DhanMarketFeedWsManager:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._desired_targets: set[tuple[str, str]] = set()
+        self._persistent_targets: set[tuple[str, str]] = set()
         self._active_targets: set[tuple[str, str]] = set()
         self._connected = False
         self._last_error: str | None = None
@@ -186,13 +187,30 @@ class DhanMarketFeedWsManager:
         self._last_subscribed_at: str | None = None
         self._reconnect_count = 0
         self._ticks: dict[tuple[str, str], dict[str, Any]] = {}
+        self._listeners: set[Callable[[MarketFeedPacket], None]] = set()
 
-    def ensure_subscription(self, *, exchange_segment: str, security_id: str) -> None:
+    def add_listener(self, listener: Callable[[MarketFeedPacket], None]) -> None:
+        with self._lock:
+            self._listeners.add(listener)
+
+    def remove_listener(self, listener: Callable[[MarketFeedPacket], None]) -> None:
+        with self._lock:
+            self._listeners.discard(listener)
+
+    def ensure_subscription(
+        self,
+        *,
+        exchange_segment: str,
+        security_id: str,
+        persistent: bool = False,
+    ) -> None:
         target = _target_key(exchange_segment, security_id)
         if not target[0] or not target[1]:
             return
         with self._lock:
             self._desired_targets.add(target)
+            if persistent:
+                self._persistent_targets.add(target)
             if self._thread and self._thread.is_alive():
                 return
             self._stop_event.clear()
@@ -220,7 +238,7 @@ class DhanMarketFeedWsManager:
 
     def clear_subscription(self) -> None:
         with self._lock:
-            self._desired_targets.clear()
+            self._desired_targets = set(self._persistent_targets)
             self._active_targets.clear()
 
     def stop(self, timeout: float = 2.0) -> None:
@@ -228,6 +246,7 @@ class DhanMarketFeedWsManager:
             thread = self._thread
             self._stop_event.set()
             self._desired_targets.clear()
+            self._persistent_targets.clear()
         if thread:
             thread.join(timeout=timeout)
 
@@ -385,6 +404,7 @@ class DhanMarketFeedWsManager:
         packet = parse_marketfeed_packet(message)
         if not packet:
             return
+        listeners: list[Callable[[MarketFeedPacket], None]] = []
         with self._lock:
             self._last_message_at = utc_now()
             if packet.ltp is not None and packet.exchange_segment:
@@ -399,8 +419,14 @@ class DhanMarketFeedWsManager:
                     "received_at": utc_now(),
                     "received_monotonic": _now_monotonic(),
                 }
+                listeners = list(self._listeners)
             elif packet.response_code == FEED_DISCONNECT_RESPONSE_CODE:
                 self._last_error = f"feed_disconnect_{packet.disconnect_code}"
+        for listener in listeners:
+            try:
+                listener(packet)
+            except Exception:
+                logger.exception("Dhan market-feed tick listener failed.")
 
     def _handle_text(self, message: str) -> bool:
         safe_message = message[:500]
@@ -413,8 +439,17 @@ class DhanMarketFeedWsManager:
 _MANAGER = DhanMarketFeedWsManager()
 
 
-def ensure_marketfeed_subscription(*, exchange_segment: str, security_id: str) -> None:
-    _MANAGER.ensure_subscription(exchange_segment=exchange_segment, security_id=security_id)
+def ensure_marketfeed_subscription(
+    *,
+    exchange_segment: str,
+    security_id: str,
+    persistent: bool = False,
+) -> None:
+    _MANAGER.ensure_subscription(
+        exchange_segment=exchange_segment,
+        security_id=security_id,
+        persistent=persistent,
+    )
 
 
 def ensure_marketfeed_subscriptions(targets: list[dict[str, str]] | set[tuple[str, str]]) -> None:
@@ -439,3 +474,11 @@ def get_marketfeed_ltp(*, exchange_segment: str, security_id: str, max_age_secon
 
 def marketfeed_ws_status() -> dict[str, Any]:
     return _MANAGER.status()
+
+
+def add_marketfeed_listener(listener: Callable[[MarketFeedPacket], None]) -> None:
+    _MANAGER.add_listener(listener)
+
+
+def remove_marketfeed_listener(listener: Callable[[MarketFeedPacket], None]) -> None:
+    _MANAGER.remove_listener(listener)

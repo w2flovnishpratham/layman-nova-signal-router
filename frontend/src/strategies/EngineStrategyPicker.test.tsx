@@ -24,6 +24,16 @@ beforeEach(() => vi.clearAllMocks())
 afterEach(() => cleanup())
 
 describe('EngineStrategyPicker', () => {
+  it('routes an empty picker to strategy setup', async () => {
+    api.getEngineStrategies.mockResolvedValue(feed([]))
+    const onManage = vi.fn()
+    const user = userEvent.setup()
+    render(<EngineStrategyPicker onManage={onManage} />)
+
+    await user.click(await screen.findByRole('button', { name: /open strategy setup/i }))
+    expect(onManage).toHaveBeenCalledWith('')
+  })
+
   it('persists the selected strategy instance via the backend and reflects it', async () => {
     api.getEngineStrategies
       .mockResolvedValueOnce(feed([strategy()], null))

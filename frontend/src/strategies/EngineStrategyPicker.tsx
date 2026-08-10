@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
 import { toast } from '@/components/ui/toast'
-import { Check, Lock, Play, Settings2 } from 'lucide-react'
+import { ArrowRight, Check, CircleDashed, Play, Settings2, ShieldCheck } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { getEngineStrategies, setEngineSelection, type EngineStrategy } from '../api'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -114,7 +114,7 @@ export function EngineStrategyPicker({ onManage }: { onManage: (instanceId: stri
               <Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage(selected.instance_id)}><Settings2 size={14} /> Manage</Button>
             </CardFooter>
           </Card>
-        ) : <div className="ps-empty-small"><Lock size={22} /><strong>No strategy selected</strong><span>Select a verified strategy below to point the engine at it.</span></div>}
+        ) : <div className="ps-empty-state ps-empty-state-engine"><span className="ps-empty-icon"><CircleDashed size={22} /></span><span className="ps-empty-kicker">Engine idle</span><strong>No strategy selected</strong><span>Choose a verified strategy below. Nothing will run until you make an explicit selection.</span><em className="ps-empty-chip">Waiting for selection</em></div>}
       </section>
 
       <section className="ps-picker-section">
@@ -142,7 +142,7 @@ export function EngineStrategyPicker({ onManage }: { onManage: (instanceId: stri
               )
             })}
           </div>
-        ) : <div className="ps-empty-small"><Lock size={22} /><strong>No verified strategies yet</strong><span>Finish TradingView setup and paper verification to unlock a strategy.</span></div>}
+        ) : <div className="ps-empty-state ps-empty-state-engine"><span className="ps-empty-icon"><ShieldCheck size={22} /></span><span className="ps-empty-kicker">Verification required</span><strong>No verified strategies yet</strong><span>Complete TradingView setup, confirm HOLD routing, and pass a Paper entry and exit before selection unlocks.</span><div className="ps-empty-checks" aria-label="Verification requirements"><span><CircleDashed size={12} /> TradingView setup</span><span><CircleDashed size={12} /> HOLD route</span><span><CircleDashed size={12} /> Paper entry & exit</span></div><Button variant="unstyled" type="button" className="secondary-button" onClick={() => onManage('')}>Open strategy setup <ArrowRight size={14} /></Button></div>}
       </section>
 
       {pending.length ? (

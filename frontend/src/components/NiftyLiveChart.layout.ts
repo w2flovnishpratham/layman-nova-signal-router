@@ -75,6 +75,8 @@ export interface ChartLayout {
 }
 
 const PRICE_AXIS_STEP = 10
+const TIME_LABEL_MIN_GAP = 64
+const MAX_TIME_LABELS = 6
 
 // Scroll-zoom: how many bar-slots are visible, and which bar-slot sits at
 // the view's right edge. Both are indices into the same fixed session-bar
@@ -293,7 +295,8 @@ export function buildChartLayout(args: {
   // --- sparse time axis labels, only for candles actually in view ---
   const timeAxisLabels: { x: number; text: string }[] = []
   const visibleCandleCount = Math.min(candles.length, viewEndBar + 1) - Math.max(0, viewStartBar)
-  const labelEvery = Math.max(1, Math.round(visibleCandleCount / 6))
+  const maxTimeLabels = Math.max(2, Math.min(MAX_TIME_LABELS, Math.floor(plotWidth / TIME_LABEL_MIN_GAP)))
+  const labelEvery = Math.max(1, Math.ceil(visibleCandleCount / maxTimeLabels))
   for (let i = Math.max(0, viewStartBar); i <= Math.min(candles.length - 1, viewEndBar); i += labelEvery) {
     timeAxisLabels.push({ x: xFor(i), text: istTime(candles[i].time) })
   }

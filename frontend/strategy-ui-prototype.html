@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NOVA strategy workspace prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #06070b;
+      --panel: #0d0f16;
+      --panel-2: #121520;
+      --panel-3: #181c29;
+      --line: rgba(255, 255, 255, .09);
+      --line-strong: rgba(255, 255, 255, .16);
+      --text: #f7f8fb;
+      --muted: #9aa2b1;
+      --subtle: #697184;
+      --blue: #4f7cff;
+      --blue-2: #315bd7;
+      --cyan: #63d7ff;
+      --green: #45d39c;
+      --amber: #f2c258;
+      --red: #ff7b86;
+      --radius: 12px;
+      --shadow: 0 18px 60px rgba(0, 0, 0, .28);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--bg); }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 76% 0%, rgba(79, 124, 255, .09), transparent 28%), var(--bg); color: var(--text); }
+    button, input, select, textarea { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    [hidden] { display: none !important; }
+
+    .app-header {
+      position: sticky; top: 0; z-index: 20; min-height: 64px; padding: 10px 24px;
+      display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 24px;
+      background: rgba(6, 7, 11, .92); border-bottom: 1px solid var(--line); backdrop-filter: blur(18px);
+    }
+    .brand { min-width: 0; }
+    .brand strong { display: block; font-size: 16px; letter-spacing: .04em; }
+    .brand span { display: block; color: var(--subtle); font-size: 11px; }
+    .global-nav { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+    .global-nav button { flex: 0 0 auto; border: 0; border-radius: 8px; padding: 8px 10px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
+    .global-nav .active { background: var(--panel-3); color: var(--text); }
+    .account { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .mode { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid rgba(242, 194, 88, .28); border-radius: 999px; padding: 6px 10px; background: rgba(242, 194, 88, .08); color: #f7d77f; font-size: 11px; font-weight: 700; }
+    .avatar { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #263665; color: #dfe7ff; font-size: 12px; font-weight: 800; }
+
+    .loading-line { position: fixed; inset: 0 100% auto 0; z-index: 50; height: 2px; background: linear-gradient(90deg, var(--blue), var(--cyan)); opacity: 0; transition: inset 240ms ease, opacity 120ms ease; }
+    .loading-line.active { inset-right: 8%; opacity: 1; }
+
+    .workspace { width: min(1240px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 64px; }
+    .page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; margin-bottom: 22px; }
+    .page-head > div { min-width: 0; }
+    .eyebrow { margin: 0 0 7px; color: var(--cyan); font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(26px, 3vw, 34px); letter-spacing: -.035em; line-height: 1.12; }
+    .lede { max-width: 720px; margin: 9px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+    .head-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+
+    .btn { min-height: 36px; padding: 8px 13px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel-2); font-size: 13px; font-weight: 700; cursor: pointer; transition: transform 120ms ease, border-color 120ms ease, background 120ms ease; }
+    .btn:hover { border-color: rgba(255, 255, 255, .26); background: var(--panel-3); }
+    .btn:active { transform: translateY(1px); }
+    .btn.primary { border-color: var(--blue); background: var(--blue); color: white; }
+    .btn.primary:hover { background: #5b84ff; }
+    .btn.danger { border-color: rgba(255, 123, 134, .28); background: rgba(255, 123, 134, .08); color: #ffadb4; }
+    .btn.small { min-height: 30px; padding: 5px 9px; font-size: 11px; }
+    .btn:disabled { cursor: not-allowed; opacity: .45; }
+    .btn.loading { pointer-events: none; }
+    .spinner { display: inline-block; width: 14px; height: 14px; margin-right: 7px; vertical-align: -2px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+
+    .lifecycle-nav { display: flex; gap: 4px; margin-bottom: 26px; padding: 4px; overflow-x: auto; border: 1px solid var(--line); border-radius: 11px; background: rgba(13, 15, 22, .72); scrollbar-width: none; }
+    .lifecycle-nav button { flex: 1 0 150px; min-height: 40px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 700; cursor: pointer; }
+    .lifecycle-nav button[aria-selected="true"] { background: var(--panel-3); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+    .lifecycle-nav small { display: inline-block; margin-right: 6px; color: var(--subtle); font-size: 10px; }
+    .lifecycle-nav button[aria-selected="true"] small { color: var(--cyan); }
+
+    .screen { animation: reveal 280ms cubic-bezier(.16, 1, .3, 1); }
+    .card { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(180deg, rgba(18, 21, 32, .92), rgba(12, 14, 21, .95)); box-shadow: var(--shadow); }
+    .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+    .card-head > div { min-width: 0; }
+    .card-head h2, .card-head h3 { margin: 0; font-size: 17px; letter-spacing: -.015em; }
+    .card-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .card-body { padding: 20px; }
+    .badge { display: inline-flex; align-items: center; max-width: 100%; min-height: 24px; padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 999px; overflow: hidden; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .04em; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; }
+    .badge.ready { border-color: rgba(69, 211, 156, .28); background: rgba(69, 211, 156, .08); color: #79e4b8; }
+    .badge.warning { border-color: rgba(242, 194, 88, .28); background: rgba(242, 194, 88, .08); color: #f7d77f; }
+    .badge.error { border-color: rgba(255, 123, 134, .3); background: rgba(255, 123, 134, .09); color: #ffadb4; }
+    .badge.review { border-color: rgba(79, 124, 255, .36); background: rgba(79, 124, 255, .1); color: #9db5ff; }
+
+    .summary-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .metric { min-width: 0; padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(18, 21, 32, .6); }
+    .metric span { display: block; margin-bottom: 6px; color: var(--subtle); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .metric strong { display: block; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
+    .metric small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+
+    .split { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: start; }
+    .list-card { position: sticky; top: 86px; overflow: hidden; }
+    .search { width: 100%; min-height: 38px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: #090b11; color: var(--text); font-size: 12px; }
+    .strategy-list { display: grid; gap: 7px; margin-top: 12px; }
+    .strategy-item { width: 100%; min-width: 0; padding: 12px; border: 1px solid transparent; border-radius: 9px; background: transparent; text-align: left; cursor: pointer; }
+    .strategy-item:hover { background: rgba(255, 255, 255, .03); }
+    .strategy-item.active { border-color: rgba(79, 124, 255, .48); background: rgba(79, 124, 255, .09); }
+    .strategy-item .top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .strategy-item strong, .strategy-item span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .strategy-item strong { font-size: 13px; }
+    .strategy-item span { margin-top: 5px; color: var(--muted); font-size: 11px; }
+
+    .progress { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+    .progress li { position: relative; min-width: 0; padding-top: 20px; color: var(--subtle); font-size: 11px; font-weight: 700; }
+    .progress li::before { content: ""; position: absolute; inset: 3px 0 auto; height: 3px; border-radius: 999px; background: var(--line-strong); }
+    .progress li.done { color: var(--text); }
+    .progress li.done::before { background: var(--green); }
+    .progress li.current { color: var(--text); }
+    .progress li.current::before { background: linear-gradient(90deg, var(--blue) 55%, var(--line-strong) 55%); }
+    .progress span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .section-title { margin: 24px 0 10px; color: var(--subtle); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .definition-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--line); }
+    .definition-grid div { min-width: 0; padding: 14px; background: var(--panel); }
+    .definition-grid span { display: block; margin-bottom: 5px; color: var(--subtle); font-size: 10px; text-transform: uppercase; }
+    .definition-grid strong { display: block; overflow-wrap: anywhere; font-size: 13px; }
+    .callout { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-top: 16px; padding: 14px 15px; border: 1px solid rgba(99, 215, 255, .22); border-radius: 10px; background: rgba(99, 215, 255, .06); }
+    .callout strong { display: block; font-size: 13px; }
+    .callout p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+
+    .step-layout { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 16px; align-items: start; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
+    label, fieldset { min-width: 0; }
+    label > span, legend { display: block; margin-bottom: 7px; color: var(--muted); font-size: 11px; font-weight: 700; }
+    input, select, textarea { width: 100%; min-width: 0; border: 1px solid var(--line-strong); border-radius: 9px; background: #090b11; color: var(--text); }
+    input, select { min-height: 40px; padding: 9px 11px; }
+    textarea { min-height: 128px; padding: 11px; resize: vertical; line-height: 1.5; }
+    .code { min-height: 280px; font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; white-space: pre; overflow: auto; }
+    .hint { display: block; margin-top: 6px; color: var(--subtle); font-size: 10px; line-height: 1.45; }
+    .check-row { display: flex; align-items: flex-start; gap: 9px; margin-top: 14px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .check-row input { width: 15px; min-height: 15px; margin-top: 1px; accent-color: var(--blue); }
+
+    .import-card .card-body { padding: 18px 20px 20px; }
+    .import-basics { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, .72fr); gap: 14px; }
+    .source-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; margin: 19px 0 8px; }
+    .source-heading > div { min-width: 0; }
+    .source-heading strong { display: block; font-size: 12px; }
+    .source-heading span { display: block; margin-top: 4px; color: var(--subtle); font-size: 10px; }
+    .source-heading .badge { flex: 0 0 auto; }
+    .editor-shell { overflow: hidden; border: 1px solid var(--line-strong); border-radius: 11px; background: #080a10; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .025); }
+    .editor-toolbar, .editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+    .editor-toolbar { min-height: 42px; padding: 6px 9px 6px 13px; border-bottom: 1px solid var(--line); background: #0d1018; }
+    .file-tab { min-width: 0; overflow: hidden; color: var(--text); font-family: "JetBrains Mono", Consolas, monospace; font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .editor-meta { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; color: var(--subtle); font-size: 10px; }
+    .text-button { min-height: 28px; padding: 4px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 700; cursor: pointer; }
+    .text-button:hover { background: var(--panel-3); color: var(--text); }
+    .editor-body { display: grid; grid-template-columns: 44px minmax(0, 1fr); min-height: 320px; }
+    .line-numbers { height: 320px; margin: 0; padding: 14px 10px 14px 0; overflow: hidden; border-right: 1px solid var(--line); color: #475065; background: #090b11; font: 11px/1.8 "JetBrains Mono", Consolas, monospace; text-align: right; user-select: none; }
+    .line-numbers span { display: block; min-height: 19.8px; }
+    .line-numbers .line-error { color: var(--red); font-weight: 800; }
+    .line-numbers .line-warning { color: var(--amber); font-weight: 800; }
+    .code-stage { position: relative; min-width: 0; height: 320px; overflow: hidden; background: #080a10; }
+    .code-highlight, .editor-body .code { position: absolute; inset: 0; width: 100%; height: 320px; min-height: 320px; margin: 0; padding: 14px 16px; border: 0; border-radius: 0; font: 12px/1.65 "JetBrains Mono", Consolas, monospace; tab-size: 2; white-space: pre; }
+    .code-highlight { z-index: 1; overflow: hidden; color: #d8dee9; pointer-events: none; }
+    .editor-body .code { z-index: 2; overflow: auto; resize: none; background: transparent; color: transparent; caret-color: #f8fafc; -webkit-text-fill-color: transparent; }
+    .editor-body .code::selection { background: rgba(79, 124, 255, .32); }
+    .editor-body .code:focus-visible { outline: 0; box-shadow: inset 3px 0 0 var(--blue); }
+    .token-comment { color: #6a9955; font-style: italic; }
+    .token-keyword { color: #c792ea; font-weight: 650; }
+    .token-builtin { color: #82aaff; }
+    .token-function { color: #ffd580; }
+    .token-string { color: #ecc48d; }
+    .token-number { color: #f78c6c; }
+    .token-constant { color: #89ddff; font-weight: 650; }
+    .token-operator { color: #f07178; }
+    .editor-footer { min-height: 42px; padding: 7px 9px 7px 13px; border-top: 1px solid var(--line); background: #0d1018; color: var(--subtle); font-size: 10px; }
+    .upload-control { position: relative; display: inline-flex; align-items: center; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel-2); color: var(--text); font-size: 10px; font-weight: 800; cursor: pointer; }
+    .upload-control:hover { background: var(--panel-3); }
+    .upload-control input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .consent-card { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, .018); cursor: pointer; }
+    .consent-card input { flex: 0 0 auto; width: 15px; min-height: 15px; margin-top: 2px; accent-color: var(--blue); }
+    .consent-card strong { display: block; font-size: 11px; }
+    .consent-card small { display: block; margin-top: 3px; color: var(--subtle); font-size: 10px; line-height: 1.45; }
+    .import-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 14px; }
+    .import-actions > span { color: var(--subtle); font-size: 10px; }
+    .import-actions .actions { flex: 0 0 auto; margin-top: 0; }
+
+    .findings { display: grid; gap: 8px; }
+    .finding { padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, .02); }
+    .finding strong { display: block; font-size: 12px; }
+    .finding span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .finding.ok { border-color: rgba(69, 211, 156, .2); }
+    .finding.warn { border-color: rgba(242, 194, 88, .22); }
+    .finding.error { border-color: rgba(255, 123, 134, .3); background: rgba(255, 123, 134, .045); }
+    .finding-meta { color: var(--subtle); font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+
+    .setup-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .55fr); gap: 16px; }
+    .step-stack { display: grid; gap: 10px; }
+    .setup-step { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .015); }
+    .step-number { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-size: 11px; font-weight: 800; }
+    .setup-step.done .step-number { border-color: rgba(69, 211, 156, .4); background: rgba(69, 211, 156, .1); color: var(--green); }
+    .setup-step.current { border-color: rgba(79, 124, 255, .38); background: rgba(79, 124, 255, .05); }
+    .setup-step h3 { margin: 0; font-size: 13px; }
+    .setup-step p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+    .secret { margin-top: 12px; padding: 12px; border: 1px solid rgba(242, 194, 88, .26); border-radius: 9px; background: rgba(242, 194, 88, .06); }
+    .secret code { display: block; max-width: 100%; overflow: hidden; color: #f6d47c; font-family: Consolas, monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .admin-tabs { display: flex; gap: 4px; margin-bottom: 14px; padding: 4px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); scrollbar-width: none; }
+    .admin-tabs button { flex: 0 0 auto; min-height: 34px; padding: 7px 11px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 700; cursor: pointer; }
+    .admin-tabs button[aria-selected="true"] { background: var(--panel-3); color: var(--text); }
+    .admin-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th { padding: 11px 12px; color: var(--subtle); font-size: 10px; letter-spacing: .06em; text-align: left; text-transform: uppercase; }
+    td { max-width: 240px; padding: 12px; border-top: 1px solid var(--line); overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+    td strong { color: var(--text); }
+    tr[data-selected="true"] { background: rgba(79, 124, 255, .06); }
+    .row-button { border: 0; background: transparent; color: var(--text); font-size: 12px; font-weight: 700; cursor: pointer; }
+    .review-note { min-height: 88px; }
+    .timeline { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+    .timeline li { position: relative; padding: 0 0 20px 28px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .timeline li::before { content: ""; position: absolute; left: 6px; top: 4px; width: 8px; height: 8px; border: 2px solid var(--green); border-radius: 50%; background: var(--panel); }
+    .timeline li::after { content: ""; position: absolute; left: 10px; top: 16px; bottom: 2px; width: 1px; background: var(--line-strong); }
+    .timeline li:last-child::after { display: none; }
+    .timeline strong { display: block; color: var(--text); }
+
+    .toast { position: fixed; right: 20px; bottom: 20px; z-index: 60; max-width: min(360px, calc(100% - 40px)); padding: 12px 14px; border: 1px solid rgba(69, 211, 156, .3); border-radius: 10px; background: #101a17; box-shadow: var(--shadow); color: #b9f5dc; font-size: 12px; font-weight: 700; transform: translateY(18px); opacity: 0; pointer-events: none; transition: 220ms ease; }
+    .toast.show { transform: translateY(0); opacity: 1; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes reveal { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+    @media (max-width: 980px) {
+      .app-header { grid-template-columns: auto minmax(0, 1fr); }
+      .account { display: none; }
+      .split, .step-layout, .setup-grid, .admin-layout { grid-template-columns: 1fr; }
+      .list-card { position: static; }
+      .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 680px) {
+      .app-header { padding: 9px 14px; gap: 14px; }
+      .global-nav { justify-content: flex-end; }
+      .global-nav button:not(.active) { display: none; }
+      .workspace { width: min(100% - 24px, 1240px); padding-top: 24px; }
+      .page-head { align-items: flex-start; flex-direction: column; }
+      .head-actions { width: 100%; }
+      .head-actions .btn { flex: 1; }
+      .summary-strip, .form-grid, .definition-grid { grid-template-columns: 1fr; }
+      .import-basics { grid-template-columns: 1fr; }
+      .source-heading { align-items: flex-start; }
+      .import-actions { align-items: stretch; flex-direction: column; }
+      .import-actions .actions { width: 100%; }
+      .import-actions .btn { flex: 1; }
+      .progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .callout { flex-direction: column; }
+      .setup-step { grid-template-columns: 32px minmax(0, 1fr); }
+      .setup-step > .badge { grid-column: 2; justify-self: start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="loading-line" id="loading-line" aria-hidden="true"></div>
+  <header class="app-header">
+    <div class="brand"><strong>NOVA</strong><span>Signal Router</span></div>
+    <nav class="global-nav" aria-label="Primary navigation">
+      <button>Dashboard</button><button>Trading</button><button class="active">Strategies</button><button>Signals</button><button>Automations</button><button>Webhooks</button><button>Risk</button>
+    </nav>
+    <div class="account"><span class="mode">Paper mode · Stopped</span><span class="avatar">LD</span></div>
+  </header>
+
+  <main class="workspace">
+    <header class="page-head">
+      <div>
+        <p class="eyebrow">Strategy workspace</p>
+        <h1>Build, verify, then activate.</h1>
+        <p class="lede">Every strategy follows one visible path. You always know what is ready, what is blocked, and what to do next.</p>
+      </div>
+      <div class="head-actions"><button class="btn">Refresh</button><button class="btn primary" data-go="import">Add strategy</button></div>
+    </header>
+
+    <nav class="lifecycle-nav" aria-label="Strategy workflow">
+      <button aria-selected="true" data-screen="library"><small>01</small>Library</button>
+      <button aria-selected="false" data-screen="import"><small>02</small>Import &amp; validate</button>
+      <button aria-selected="false" data-screen="setup"><small>03</small>Setup &amp; verify</button>
+      <button aria-selected="false" data-screen="admin"><small>04</small>Admin</button>
+    </nav>
+
+    <section class="screen" id="screen-library" aria-labelledby="library-title">
+      <div class="summary-strip">
+        <div class="metric"><span>Total strategies</span><strong>4</strong><small>2 imported · 2 NOVA</small></div>
+        <div class="metric"><span>Ready for paper</span><strong>2</strong><small>All checks passed</small></div>
+        <div class="metric"><span>Needs attention</span><strong>1</strong><small>TradingView HOLD pending</small></div>
+        <div class="metric"><span>Selected engine</span><strong>NIFTY Momentum</strong><small>Paper · 1 lot</small></div>
+      </div>
+
+      <div class="split">
+        <aside class="card list-card" aria-label="Strategy library">
+          <div class="card-body">
+            <input class="search" type="search" placeholder="Search strategies" aria-label="Search strategies" />
+            <div class="strategy-list">
+              <button class="strategy-item active"><span class="top"><strong>NIFTY Momentum</strong><span class="badge ready">Ready</span></span><span>TradingView · Paper · 1 lot</span></button>
+              <button class="strategy-item"><span class="top"><strong>Supertrend v6</strong><span class="badge warning">Verify</span></span><span>Imported Pine · HOLD pending</span></button>
+              <button class="strategy-item"><span class="top"><strong>Opening Range</strong><span class="badge review">Review</span></span><span>Admin review · Submitted today</span></button>
+              <button class="strategy-item"><span class="top"><strong>NOVA Classic</strong><span class="badge">Paused</span></span><span>Built-in · Paper · 2 lots</span></button>
+            </div>
+          </div>
+        </aside>
+
+        <article class="card">
+          <div class="card-head">
+            <div><h2 id="library-title">NIFTY Momentum</h2><p>TradingView strategy · Last signal 12 minutes ago</p></div>
+            <span class="badge ready">Paper ready</span>
+          </div>
+          <div class="card-body">
+            <ol class="progress" aria-label="Strategy readiness">
+              <li class="done"><span>Imported</span></li><li class="done"><span>Validated</span></li><li class="done"><span>Verified</span></li><li class="current"><span>Selected</span></li>
+            </ol>
+            <p class="section-title">Current configuration</p>
+            <div class="definition-grid">
+              <div><span>Execution</span><strong>Paper only</strong></div><div><span>Order size</span><strong>1 lot · 65 qty</strong></div><div><span>Routing</span><strong>TradingView webhook</strong></div>
+              <div><span>Credential</span><strong>Active · nv_89c…</strong></div><div><span>HOLD check</span><strong>Passed 09 Aug</strong></div><div><span>Engine</span><strong>Selected · Stopped</strong></div>
+            </div>
+            <div class="callout"><div><strong>Ready to trade in Paper mode</strong><p>Setup and verification are complete. Starting remains a separate action in Trading.</p></div><span class="badge ready">No blockers</span></div>
+            <div class="actions"><button class="btn primary" data-go="setup">Open setup</button><button class="btn">View signal activity</button><button class="btn">Duplicate</button></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="screen" id="screen-import" aria-labelledby="import-title" hidden>
+      <div class="step-layout">
+        <article class="card import-card">
+          <div class="card-head"><div><h2 id="import-title">Import a Pine strategy</h2><p>Source stays private. Validation checks structure and NOVA's signal contract; it does not claim TradingView compilation.</p></div><span class="badge review">Step 1 of 3</span></div>
+          <div class="card-body">
+            <div class="import-basics">
+              <label><span>Strategy name</span><input id="strategy-name" value="Supertrend v6" maxlength="80" /><small class="hint">A clear name users will recognize in the library.</small></label>
+              <label><span>Source filename</span><input id="source-filename" value="supertrend-v6.pine" maxlength="120" /><small class="hint">Used for version history and downloads.</small></label>
+            </div>
+            <div class="source-heading"><div><strong>Pine source</strong><span>Paste the complete script or choose a .pine/.txt file.</span></div><span class="badge">Private source</span></div>
+            <div class="editor-shell">
+              <div class="editor-toolbar"><span class="file-tab" id="editor-filename">supertrend-v6.pine</span><div class="editor-meta"><span id="source-stats">5 lines · 181 characters</span><button class="text-button" id="clear-source" type="button">Clear</button></div></div>
+              <div class="editor-body">
+                <pre class="line-numbers" id="line-numbers" aria-hidden="true">1
+2
+3
+4
+5</pre>
+                <div class="code-stage"><pre class="code-highlight" id="code-highlight" aria-hidden="true"></pre><textarea id="pine-source" class="code" wrap="off" spellcheck="false" aria-label="Pine source">//@version=6
+strategy("Supertrend v6", overlay=true)
+
+longCondition = ta.crossover(close, ta.sma(close, 20))
+if longCondition
+    strategy.entry("Long", strategy.long)</textarea></div>
+              </div>
+              <div class="editor-footer"><span>UTF-8 · Pine Script v6 · Tab inserts 2 spaces</span><label class="upload-control">Choose file<input id="pine-file" type="file" accept=".pine,.txt,text/plain" aria-label="Choose Pine source file" /></label></div>
+            </div>
+            <label class="consent-card"><input id="validation-consent" type="checkbox" checked /><span><strong>I understand what validation does.</strong><small>NOVA checks this source statically. Validation and admin approval do not compile it on TradingView or start the trading engine.</small></span></label>
+            <div class="import-actions"><span>Preflight catches common mistakes; TradingView remains the final compiler.</span><div class="actions"><button class="btn" data-go="library">Save draft</button><button class="btn primary js-validate">Run Pine preflight</button></div></div>
+          </div>
+        </article>
+
+        <aside class="card">
+          <div class="card-head"><div><h3>Pine preflight</h3><p id="validation-copy" aria-live="polite">Fast local checks before submission.</p></div><span class="badge" id="validation-badge">Not checked</span></div>
+          <div class="card-body findings" id="findings" aria-live="polite">
+            <div class="finding"><strong>Syntax &amp; structure</strong><span>Run preflight to check version, declaration, strings, and brackets.</span></div>
+            <div class="finding"><strong>NOVA contract</strong><span>Signal and unsupported-behavior checks run at the same time.</span></div>
+            <div class="finding"><strong>TradingView compiler</strong><span>Still required for authoritative Pine validation.</span></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" id="screen-setup" aria-labelledby="setup-title" hidden>
+      <div class="setup-grid">
+        <article class="card">
+          <div class="card-head"><div><h2 id="setup-title">Setup &amp; verify Supertrend v6</h2><p>One guided checklist replaces separate webhook, credential, and engine-picker tabs.</p></div><span class="badge warning">1 blocker</span></div>
+          <div class="card-body step-stack">
+            <div class="setup-step done"><span class="step-number">1</span><div><h3>Choose execution settings</h3><p>Paper mode · 1 lot · NIFTY · 5 minute timeframe</p></div><span class="badge ready">Complete</span></div>
+            <div class="setup-step done"><span class="step-number">2</span><div><h3>Install TradingView alert</h3><p>Webhook URL and exact alert JSON copied to TradingView.</p></div><span class="badge ready">Complete</span></div>
+            <div class="setup-step current"><span class="step-number">3</span><div><h3>Verify a genuine HOLD</h3><p>Send one HOLD alert from the installed TradingView chart. NOVA will detect it automatically.</p><div class="actions"><button class="btn primary js-action" data-success="Listening for the next TradingView HOLD signal.">Start listening</button><button class="btn">Copy alert JSON</button></div></div><span class="badge warning">Next</span></div>
+            <div class="setup-step"><span class="step-number">4</span><div><h3>Paper entry and exit test</h3><p>Unlocks after HOLD connectivity passes. Live orders remain unavailable.</p></div><span class="badge">Locked</span></div>
+          </div>
+        </article>
+
+        <aside class="card">
+          <div class="card-head"><div><h3>Execution settings</h3><p>Changes apply to the next entry only.</p></div></div>
+          <div class="card-body">
+            <label><span>Mode</span><select><option>Paper</option><option disabled>Live — unavailable</option></select></label>
+            <label style="display:block;margin-top:14px"><span>Order size (lots)</span><input type="number" min="1" max="20" value="1" /></label>
+            <label style="display:block;margin-top:14px"><span>Strategy label</span><input value="Supertrend v6 Paper" maxlength="80" /></label>
+            <div class="secret"><span class="eyebrow" style="margin-bottom:7px;color:#f7d77f">One-time credential</span><code>nv_live_••••••••••••••••••••89c</code></div>
+            <div class="actions"><button class="btn primary js-action" data-success="Execution settings saved.">Save settings</button><button class="btn danger">Rotate credential</button></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" id="screen-admin" aria-labelledby="admin-title" hidden>
+      <div class="card-head card" style="margin-bottom:14px">
+        <div><p class="eyebrow" style="color:#ff9ea7">Admin workspace</p><h2 id="admin-title">Review, install, verify.</h2><p>Actions are grouped by operational stage. Destructive controls stay secondary and explicit.</p></div><span class="badge review">3 waiting</span>
+      </div>
+      <nav class="admin-tabs" aria-label="Admin strategy workflow">
+        <button aria-selected="true" data-admin="reviews">Review queue</button>
+        <button aria-selected="false" data-admin="installations">Installations</button>
+        <button aria-selected="false" data-admin="verification">Verification</button>
+        <button aria-selected="false" data-admin="registry">Registry</button>
+      </nav>
+
+      <div data-admin-panel="reviews" class="admin-layout">
+        <article class="card">
+          <div class="card-head"><div><h3>Review queue</h3><p>Candidate source, validation, and decision stay in one workspace.</p></div><input class="search" style="width:210px" type="search" placeholder="Search queue" /></div>
+          <div class="table-wrap"><table><thead><tr><th>Strategy</th><th>Owner</th><th>Validation</th><th>Age</th><th>Status</th></tr></thead><tbody>
+            <tr data-selected="true"><td><button class="row-button">Opening Range</button></td><td>Arjun S.</td><td>Passed · 2 warnings</td><td>18 min</td><td><span class="badge review">Review</span></td></tr>
+            <tr><td><button class="row-button">EMA Pullback</button></td><td>Priya M.</td><td>Passed</td><td>2 hr</td><td><span class="badge review">Review</span></td></tr>
+            <tr><td><button class="row-button">VWAP Reversal</button></td><td>Sam K.</td><td>Manual check</td><td>1 day</td><td><span class="badge warning">Manual</span></td></tr>
+          </tbody></table></div>
+        </article>
+        <aside class="card">
+          <div class="card-head"><div><h3>Opening Range</h3><p>Candidate a8c41e… · Pine v6</p></div><span class="badge review">Ready</span></div>
+          <div class="card-body">
+            <div class="definition-grid" style="grid-template-columns:1fr 1fr"><div><span>Contract</span><strong>Passed</strong></div><div><span>Warnings</span><strong>2 reviewed</strong></div></div>
+            <label style="display:block;margin-top:14px"><span>Internal review note</span><textarea class="review-note" placeholder="Required when rejecting; optional when approving."></textarea></label>
+            <label class="check-row"><input type="checkbox" /> I reviewed the exact candidate hash and warnings.</label>
+            <div class="actions"><button class="btn primary js-action" data-success="Candidate approved for TradingView compile.">Approve candidate</button><button class="btn danger">Reject</button></div>
+          </div>
+        </aside>
+      </div>
+
+      <div data-admin-panel="installations" hidden>
+        <article class="card">
+          <div class="card-head"><div><h3>TradingView installations</h3><p>Create the owner-bound installation only after the approved candidate compiles.</p></div><button class="btn primary js-action" data-success="Installation form is ready.">New installation</button></div>
+          <div class="card-body form-grid">
+            <label><span>Approved strategy</span><select><option>Opening Range · a8c41e</option><option>EMA Pullback · 23ac8b</option></select></label>
+            <label><span>Owner</span><select><option>Arjun S. · arjun@example.com</option><option>Priya M. · priya@example.com</option></select></label>
+            <label><span>Installation mode</span><select><option>Self managed</option><option>NOVA managed</option></select></label>
+            <label><span>Instance label</span><input value="Opening Range Paper" /></label>
+            <div class="actions" style="grid-column:1/-1"><button class="btn primary js-action" data-success="Owner-bound installation created.">Create installation</button><button class="btn">Save draft</button></div>
+          </div>
+        </article>
+      </div>
+
+      <div data-admin-panel="verification" hidden class="admin-layout">
+        <article class="card"><div class="card-head"><div><h3>Verification evidence</h3><p>Opening Range · Arjun S. · Self managed</p></div><span class="badge warning">In progress</span></div><div class="card-body"><ol class="timeline"><li><strong>Credential active</strong>09 Aug · 10:18 IST</li><li><strong>HOLD connectivity passed</strong>09 Aug · 10:26 IST</li><li><strong>Paper entry confirmed</strong>09 Aug · 10:42 IST</li><li><strong>Paper exit pending</strong>Waiting for a genuine TradingView exit signal.</li></ol></div></article>
+        <aside class="card"><div class="card-head"><div><h3>Decision</h3><p>Mark ready only after both entry and exit evidence exist.</p></div></div><div class="card-body"><div class="callout" style="margin-top:0"><div><strong>Exit evidence missing</strong><p>The ready action remains disabled to prevent premature activation.</p></div></div><div class="actions"><button class="btn primary" disabled>Mark paper ready</button><button class="btn danger">Suspend</button></div></div></aside>
+      </div>
+
+      <div data-admin-panel="registry" hidden>
+        <article class="card"><div class="card-head"><div><h3>Strategy registry</h3><p>Published catalog entries and owner-bound private strategies.</p></div><input class="search" style="width:210px" type="search" placeholder="Search registry" /></div><div class="table-wrap"><table><thead><tr><th>Strategy</th><th>Type</th><th>Version</th><th>Paper eligible</th><th>Published</th></tr></thead><tbody><tr><td><strong>NOVA Classic</strong></td><td>Catalog</td><td>v2.3</td><td>Yes</td><td><span class="badge ready">Published</span></td></tr><tr><td><strong>Opening Range</strong></td><td>Private Pine</td><td>v1</td><td>Pending</td><td><span class="badge">Private</span></td></tr><tr><td><strong>EMA Pullback</strong></td><td>Catalog candidate</td><td>v4</td><td>No</td><td><span class="badge warning">Draft</span></td></tr></tbody></table></div></article>
+      </div>
+    </section>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const screens = [...document.querySelectorAll('[data-screen]')]
+    const panels = [...document.querySelectorAll('.screen')]
+    const loadingLine = document.querySelector('#loading-line')
+    const toast = document.querySelector('#toast')
+
+    function showScreen(name) {
+      loadingLine.classList.add('active')
+      screens.forEach(button => button.setAttribute('aria-selected', String(button.dataset.screen === name)))
+      panels.forEach(panel => { panel.hidden = panel.id !== `screen-${name}` })
+      setTimeout(() => loadingLine.classList.remove('active'), 260)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+
+    function notify(message) {
+      toast.textContent = message
+      toast.classList.add('show')
+      clearTimeout(window.novaToastTimer)
+      window.novaToastTimer = setTimeout(() => toast.classList.remove('show'), 2600)
+    }
+
+    screens.forEach(button => button.addEventListener('click', () => showScreen(button.dataset.screen)))
+    document.querySelectorAll('[data-go]').forEach(button => button.addEventListener('click', () => showScreen(button.dataset.go)))
+    document.querySelectorAll('.strategy-item').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('.strategy-item').forEach(item => item.classList.remove('active'))
+      button.classList.add('active')
+    }))
+
+    document.querySelectorAll('[data-admin]').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('[data-admin]').forEach(item => item.setAttribute('aria-selected', String(item === button)))
+      document.querySelectorAll('[data-admin-panel]').forEach(panel => { panel.hidden = panel.dataset.adminPanel !== button.dataset.admin })
+    }))
+
+    const pineSource = document.querySelector('#pine-source')
+    const sourceFilename = document.querySelector('#source-filename')
+    const editorFilename = document.querySelector('#editor-filename')
+    const lineNumbers = document.querySelector('#line-numbers')
+    const codeHighlight = document.querySelector('#code-highlight')
+    const sourceStats = document.querySelector('#source-stats')
+    const strategyName = document.querySelector('#strategy-name')
+    const validationConsent = document.querySelector('#validation-consent')
+    const validateButton = document.querySelector('.js-validate')
+    const validationCopy = document.querySelector('#validation-copy')
+    const validationBadge = document.querySelector('#validation-badge')
+    const findings = document.querySelector('#findings')
+    const pineKeywords = new Set(['and', 'as', 'break', 'by', 'continue', 'else', 'export', 'for', 'if', 'import', 'in', 'method', 'not', 'or', 'return', 'switch', 'type', 'var', 'varip', 'while'])
+    const pineBuiltins = new Set(['alert', 'array', 'barstate', 'box', 'color', 'indicator', 'input', 'label', 'library', 'line', 'map', 'math', 'matrix', 'plot', 'request', 'runtime', 'session', 'strategy', 'str', 'syminfo', 'ta', 'table', 'ticker', 'timeframe'])
+    const pineConstants = new Set(['false', 'na', 'true'])
+
+    function escapeCode(value) {
+      return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    }
+
+    function highlightPine(source) {
+      let html = ''
+      let index = 0
+      const token = (type, value) => `<span class="token-${type}">${escapeCode(value)}</span>`
+      while (index < source.length) {
+        const char = source[index]
+        if (char === '/' && source[index + 1] === '/') {
+          const end = source.indexOf('\n', index)
+          const stop = end < 0 ? source.length : end
+          html += token('comment', source.slice(index, stop))
+          index = stop
+          continue
+        }
+        if (char === '"' || char === "'") {
+          let end = index + 1
+          while (end < source.length) {
+            if (source[end] === '\\') { end += 2; continue }
+            if (source[end] === char) { end += 1; break }
+            end += 1
+          }
+          html += token('string', source.slice(index, end))
+          index = end
+          continue
+        }
+        const number = source.slice(index).match(/^\d+(?:\.\d+)?/)
+        if (number) {
+          html += token('number', number[0])
+          index += number[0].length
+          continue
+        }
+        const identifier = source.slice(index).match(/^[A-Za-z_][A-Za-z0-9_]*/)
+        if (identifier) {
+          const value = identifier[0]
+          const next = source.slice(index + value.length).match(/^\s*(.)/)?.[1]
+          const type = pineKeywords.has(value) ? 'keyword' : pineBuiltins.has(value) ? 'builtin' : pineConstants.has(value) ? 'constant' : next === '(' ? 'function' : ''
+          html += type ? token(type, value) : escapeCode(value)
+          index += value.length
+          continue
+        }
+        if ('+-*/%<>=!?:'.includes(char)) html += token('operator', char)
+        else html += escapeCode(char)
+        index += 1
+      }
+      return html
+    }
+
+    function updateValidateState() {
+      validateButton.disabled = !strategyName.value.trim() || !pineSource.value.trim() || !validationConsent.checked
+    }
+
+    function renderLineNumbers(lines, diagnostics = []) {
+      const errors = new Set(diagnostics.filter(item => item.type === 'error').map(item => item.line))
+      const warnings = new Set(diagnostics.filter(item => item.type === 'warning').map(item => item.line))
+      lineNumbers.innerHTML = lines.map((_, index) => {
+        const line = index + 1
+        const state = errors.has(line) ? 'line-error' : warnings.has(line) ? 'line-warning' : ''
+        return `<span class="${state}">${line}</span>`
+      }).join('')
+    }
+
+    function checkPine(source) {
+      const diagnostics = []
+      const add = (type, line, scope, message) => diagnostics.push({ type, line: Math.max(1, line), scope, message })
+      const version = source.match(/^\s*\/\/\s*@version\s*=\s*(\d+)/m)
+      if (!version) add('warning', 1, 'Version', 'Add //@version=6 so Pine uses the intended language version.')
+      else if (Number(version[1]) > 6 || Number(version[1]) < 1) add('error', 1, 'Version', `Pine version ${version[1]} is not supported.`)
+
+      const declaration = source.match(/^\s*(strategy|indicator|library)\s*\(/m)
+      if (!declaration) add('error', 1, 'Declaration', 'Expected one strategy(...) declaration.')
+      else if (declaration[1] !== 'strategy') add('error', source.slice(0, declaration.index).split('\n').length, 'Declaration', `This importer requires strategy(...), not ${declaration[1]}(...).`)
+
+      const pairs = { ')': '(', ']': '[', '}': '{' }
+      const stack = []
+      let line = 1
+      let quote = ''
+      let quoteLine = 1
+      let comment = false
+      for (let index = 0; index < source.length; index += 1) {
+        const char = source[index]
+        if (comment) {
+          if (char === '\n') { comment = false; line += 1 }
+          continue
+        }
+        if (quote) {
+          if (char === '\\') { index += 1; continue }
+          if (char === quote) { quote = ''; continue }
+          if (char === '\n') { add('error', quoteLine, 'String', 'String is not closed before the end of the line.'); quote = ''; line += 1 }
+          continue
+        }
+        if (char === '/' && source[index + 1] === '/') { comment = true; index += 1; continue }
+        if (char === '"' || char === "'") { quote = char; quoteLine = line; continue }
+        if ('([{'.includes(char)) stack.push({ char, line })
+        else if (pairs[char]) {
+          const opener = stack.pop()
+          if (!opener || opener.char !== pairs[char]) add('error', line, 'Bracket', `Unexpected ${char}.`)
+        }
+        if (char === '\n') line += 1
+      }
+      if (quote) add('error', quoteLine, 'String', 'String is not closed.')
+      stack.slice(-4).forEach(item => add('error', item.line, 'Bracket', `${item.char} is not closed.`))
+
+      const lastLine = source.split(/\r?\n/).length
+      if (!/\bstrategy\.(entry|order)\s*\(/.test(source)) add('warning', lastLine, 'NOVA contract', 'No strategy entry or order call was found.')
+      if (!/\bstrategy\.(exit|close|close_all)\s*\(/.test(source)) add('warning', lastLine, 'NOVA contract', 'No strategy exit or close call was found.')
+      const lookaheadLine = source.split(/\r?\n/).findIndex(value => /lookahead\s*=\s*barmerge\.lookahead_on/.test(value))
+      if (lookaheadLine >= 0) add('warning', lookaheadLine + 1, 'Repainting risk', 'lookahead_on can use future data and repaint historical signals.')
+      return diagnostics
+    }
+
+    function renderDiagnostics(diagnostics) {
+      const errors = diagnostics.filter(item => item.type === 'error')
+      const warnings = diagnostics.filter(item => item.type === 'warning')
+      validationBadge.className = `badge ${errors.length ? 'error' : warnings.length ? 'warning' : 'ready'}`
+      validationBadge.textContent = errors.length ? 'Needs fixes' : warnings.length ? 'Warnings' : 'Passed'
+      validationCopy.textContent = errors.length
+        ? `${errors.length} ${errors.length === 1 ? 'error' : 'errors'} and ${warnings.length} ${warnings.length === 1 ? 'warning' : 'warnings'} found.`
+        : warnings.length ? `Syntax looks valid with ${warnings.length} ${warnings.length === 1 ? 'warning' : 'warnings'}.` : 'No local syntax or contract issues found.'
+      const clear = '<div class="finding ok"><div class="finding-meta">Local preflight</div><strong>Syntax and structure look valid</strong><span>Version, declaration, strings, and brackets passed.</span></div>'
+      const cards = diagnostics.map(item => `<div class="finding ${item.type === 'error' ? 'error' : 'warn'}"><div class="finding-meta">${escapeCode(item.type)} · line ${item.line} · ${escapeCode(item.scope)}</div><strong>${item.type === 'error' ? 'Fix required' : 'Review warning'}</strong><span>${escapeCode(item.message)}</span></div>`).join('')
+      findings.innerHTML = `${errors.length ? '' : clear}${cards}<div class="finding"><div class="finding-meta">Authoritative check</div><strong>TradingView compile still required</strong><span>Pine has no supported standalone compiler API, so final compilation stays in TradingView.</span></div>`
+      renderLineNumbers(pineSource.value.split(/\r?\n/), diagnostics)
+    }
+
+    function updateSourceMeta() {
+      const lines = pineSource.value.split(/\r?\n/)
+      renderLineNumbers(lines)
+      codeHighlight.innerHTML = `${highlightPine(pineSource.value)}\n`
+      sourceStats.textContent = `${lines.length} ${lines.length === 1 ? 'line' : 'lines'} · ${pineSource.value.length} characters`
+      updateValidateState()
+    }
+
+    pineSource.addEventListener('input', () => {
+      updateSourceMeta()
+      if (validationBadge.textContent !== 'Not checked') {
+        validationBadge.className = 'badge warning'
+        validationBadge.textContent = 'Edited'
+        validationCopy.textContent = 'Source changed. Run preflight again.'
+      }
+    })
+    pineSource.addEventListener('scroll', () => {
+      lineNumbers.scrollTop = pineSource.scrollTop
+      codeHighlight.scrollTop = pineSource.scrollTop
+      codeHighlight.scrollLeft = pineSource.scrollLeft
+    })
+    pineSource.addEventListener('keydown', event => {
+      if (event.key !== 'Tab') return
+      event.preventDefault()
+      pineSource.setRangeText('  ', pineSource.selectionStart, pineSource.selectionEnd, 'end')
+      updateSourceMeta()
+    })
+    strategyName.addEventListener('input', updateValidateState)
+    validationConsent.addEventListener('change', updateValidateState)
+    sourceFilename.addEventListener('input', () => { editorFilename.textContent = sourceFilename.value.trim() || 'untitled.pine' })
+    document.querySelector('#clear-source').addEventListener('click', () => {
+      if (pineSource.value && !window.confirm('Clear the pasted Pine source?')) return
+      pineSource.value = ''
+      pineSource.focus()
+      updateSourceMeta()
+    })
+    document.querySelector('#pine-file').addEventListener('change', event => {
+      const file = event.target.files?.[0]
+      if (!file) return
+      if (file.size > 1_000_000) { notify('Choose a Pine file smaller than 1 MB.'); event.target.value = ''; return }
+      const reader = new FileReader()
+      reader.onload = () => {
+        pineSource.value = String(reader.result || '')
+        sourceFilename.value = file.name
+        editorFilename.textContent = file.name
+        updateSourceMeta()
+        notify(`${file.name} loaded into the editor.`)
+      }
+      reader.onerror = () => notify('The selected file could not be read.')
+      reader.readAsText(file)
+    })
+    updateSourceMeta()
+    console.assert(highlightPine('if ta.crossover("x", 1) // HOLD').includes('token-comment') && highlightPine('if ta.crossover("x", 1) // HOLD').includes('token-keyword'), 'Pine syntax highlighting failed.')
+    console.assert(checkPine('//@version=6\nstrategy("Test")\nstrategy.entry("L", strategy.long)\nstrategy.close("L")').length === 0 && checkPine('strategy("Broken"').some(item => item.type === 'error'), 'Pine preflight checks failed.')
+
+    validateButton.addEventListener('click', event => {
+      const button = event.currentTarget
+      button.classList.add('loading')
+      button.innerHTML = '<span class="spinner"></span>Checking source'
+      validationCopy.textContent = 'Running local syntax and contract checks…'
+      setTimeout(() => {
+        const diagnostics = checkPine(pineSource.value)
+        button.classList.remove('loading')
+        button.textContent = 'Run again'
+        renderDiagnostics(diagnostics)
+        notify(diagnostics.some(item => item.type === 'error') ? 'Preflight found issues to fix.' : 'Pine preflight complete.')
+      }, 650)
+    })
+
+    document.querySelectorAll('.js-action').forEach(button => button.addEventListener('click', () => {
+      const original = button.textContent
+      button.classList.add('loading')
+      button.innerHTML = '<span class="spinner"></span>Working'
+      setTimeout(() => { button.classList.remove('loading'); button.textContent = original; notify(button.dataset.success || 'Saved.') }, 850)
+    }))
+
+    console.assert(screens.length === panels.length && screens.length === 4, 'Strategy screen wiring is incomplete.')
+  </script>
+</body>
+</html>

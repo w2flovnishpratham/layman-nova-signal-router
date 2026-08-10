@@ -32,10 +32,13 @@ def test_every_revision_id_fits_alembic_version_column():
     )
 
 
-def test_single_head_is_strategy_webhook_provider():
+def test_single_head_is_market_candles_1m():
     script = _script_directory()
     # One head, never a branch: two heads mean an ambiguous upgrade target.
-    assert script.get_heads() == ["0024_strategy_webhook_provider"]
+    assert script.get_heads() == ["0025_market_candles_1m"]
+    head = script.get_revision("0025_market_candles_1m")
+    assert head.down_revision == "0024_strategy_webhook_provider"
+    assert len(head.revision) <= ALEMBIC_VERSION_NUM_MAXLEN
     head = script.get_revision("0024_strategy_webhook_provider")
     assert head.down_revision == "0023_paper_trading_entitlement"
     assert len(head.revision) <= ALEMBIC_VERSION_NUM_MAXLEN

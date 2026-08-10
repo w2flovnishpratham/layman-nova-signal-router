@@ -1,4 +1,4 @@
-import type { ChartTimeframe, NiftyCandle, NiftyCandleSeries, NiftyTradeMarker } from '../api'
+import type { ChartTimeframe, NiftyCandle, NiftyCandleSeries, NiftyCandleUpsert, NiftyTradeMarker } from '../api'
 
 export const FIVE_MINUTE_SECONDS = 5 * 60
 export const TIMEFRAME_SECONDS: Record<ChartTimeframe, number> = {
@@ -70,6 +70,26 @@ export function sameCandles(left: NiftyCandle[], right: NiftyCandle[]): boolean 
     return candle.time === other.time && candle.open === other.open && candle.high === other.high
       && candle.low === other.low && candle.close === other.close && candle.volume === other.volume
   })
+}
+
+export function upsertCandle(
+  series: NiftyCandleSeries | null,
+  delta: NiftyCandleUpsert,
+): NiftyCandleSeries | null {
+  if (!series || series.interval !== delta.interval || series.trading_date !== delta.trading_date) return series
+  const candles = [...series.candles]
+  const index = candles.findIndex((candle) => candle.time === delta.candle.time)
+  if (index >= 0) candles[index] = delta.candle
+  else candles.push(delta.candle)
+  candles.sort((left, right) => left.time - right.time)
+  return {
+    ...series,
+    source: delta.source,
+    market_state: delta.market_state,
+    updated_at: delta.updated_at,
+    candle_count: delta.candle_count,
+    candles,
+  }
 }
 
 export function sessionOnly(series: NiftyCandleSeries): NiftyCandle[] {

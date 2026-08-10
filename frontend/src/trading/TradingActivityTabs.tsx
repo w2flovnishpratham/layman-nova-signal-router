@@ -285,7 +285,7 @@ function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
                 {Array.from({ length: 5 }, (_, row) => (
                   <TableRow key={row}>
                     {columns.map((column) => (
-                      <TableCell key={column.key}><Skeleton className="h-3 w-full" /></TableCell>
+                      <TableCell key={column.key} data-label={column.label}><Skeleton className="h-3 w-full" /></TableCell>
                     ))}
                   </TableRow>
                 ))}
@@ -359,7 +359,7 @@ function TradingActivityTabsInner({ mode = null, runId = null }: Props) {
                       {columns.map((column) => {
                         const value = terminalColumnValue(row, column.key)
                         return (
-                          <TableCell key={column.key} className={`terminal-cell-${column.key}`}>
+                          <TableCell key={column.key} className={`terminal-cell-${column.key}`} data-label={column.label}>
                             {renderTerminalValue(column.key, value)}
                           </TableCell>
                         )

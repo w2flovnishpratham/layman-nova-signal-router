@@ -143,6 +143,22 @@ def publish_nifty_candles_from_sync(*, interval: str, series: dict[str, Any]) ->
     return True
 
 
+def publish_nifty_candle_upsert_from_sync(*, delta: dict[str, Any]) -> bool:
+    loop = _MAIN_LOOP
+    if loop is None or loop.is_closed():
+        return False
+    coroutine = publish_nifty_candle_upsert(delta=delta)
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+    if running_loop is loop:
+        loop.create_task(coroutine)
+    else:
+        asyncio.run_coroutine_threadsafe(coroutine, loop)
+    return True
+
+
 def publish_active_trade_from_sync(position: dict[str, Any], mode: str | None) -> None:
     loop = _MAIN_LOOP
     if loop is None or loop.is_closed():
@@ -181,6 +197,26 @@ async def publish_nifty_candles(
 ) -> None:
     for session_id in await _runtime_recipient_session_ids(user_id):
         await session_store.append_event(session_id, event("market.candles", **series))
+
+
+async def publish_nifty_candle_upsert(
+    *,
+    delta: dict[str, Any],
+    user_id: str | None = None,
+) -> None:
+    session_ids = (
+        await session_store.owner_session_ids(user_id)
+        if user_id
+        else await session_store.subscribed_session_ids()
+    )
+    for session_id in session_ids:
+        # Initial/reconnect recovery comes from the REST snapshot, so high-rate
+        # candle deltas are subscriber-only and never bloat session history.
+        await session_store.append_event(
+            session_id,
+            event("market.candle.upsert", **delta),
+            retain=False,
+        )
 
 
 async def publish_tick_pnl(

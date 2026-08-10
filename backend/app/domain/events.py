@@ -23,6 +23,7 @@ EventType = Literal[
     "tick.pnl",
     "market.snapshot",
     "market.candles",
+    "market.candle.upsert",
     "position.update",
     "funds.update",
     "trade.exit",

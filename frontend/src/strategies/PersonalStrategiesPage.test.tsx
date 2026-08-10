@@ -115,7 +115,7 @@ describe('PersonalStrategiesPage', () => {
     const user = userEvent.setup()
     render(<PersonalStrategiesPage />)
     await screen.findByText('No personal strategies')
-    await user.click(screen.getByRole('button', { name: /new strategy/i }))
+    await user.click(screen.getByRole('button', { name: /create personal strategy/i }))
     const create = screen.getByRole('button', { name: /^create strategy$/i })
     expect(create).toBeDisabled()
     await user.type(screen.getByLabelText('Strategy name'), 'Opening range route')

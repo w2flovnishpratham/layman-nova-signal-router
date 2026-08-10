@@ -60,6 +60,12 @@ beforeEach(() => {
   })
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(createStubCtx() as unknown as CanvasRenderingContext2D)
   apiMocks.getNiftyCandles.mockClear()
+  apiMocks.getNiftyCandles.mockImplementation((timeframe: string) => Promise.resolve({
+    symbol: 'NIFTY', interval: timeframe, source: 'dhan_authoritative_1m', status: 'ready', market_state: 'open',
+    trading_date: '2026-07-21', session_start: '2026-07-21T09:15:00+05:30',
+    session_end: '2026-07-21T15:30:00+05:30', updated_at: '2026-07-21T04:00:00Z',
+    candles: [{ time: CANDLE_TIME, open: 24100, high: 24120, low: 24090, close: 24110, volume: 1 }],
+  }))
   apiMocks.getNiftyMarkers.mockClear()
   apiMocks.getNiftyMarkers.mockResolvedValue({ trading_date: '2026-07-21', markers: [] })
 })
@@ -85,6 +91,33 @@ describe('NiftyLiveChart responsive runtime', () => {
     render(<NiftyLiveChart engineMode="paper" defaultTimeframe="1h" />)
     await waitFor(() => expect(apiMocks.getNiftyCandles).toHaveBeenCalledWith('5m', expect.any(AbortSignal)))
     expect(screen.getByRole('button', { name: '5m' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('can render an isolated preview without calling the backend candle endpoint', async () => {
+    const previewLoader = vi.fn().mockImplementation((timeframe: string) => Promise.resolve({
+      symbol: 'NIFTY', interval: timeframe, source: 'terminal_preview', status: 'ready', market_state: 'open',
+      trading_date: '2026-07-21', candles: [{ time: CANDLE_TIME, open: 24100, high: 24120, low: 24090, close: 24110, volume: 1 }],
+    }))
+
+    render(<NiftyLiveChart engineMode="paper" candleLoader={previewLoader} />)
+
+    expect(await screen.findByRole('img', { name: /NIFTY 5m candlestick chart/i })).toBeInTheDocument()
+    expect(previewLoader).toHaveBeenCalledWith('5m', expect.any(AbortSignal))
+    expect(apiMocks.getNiftyCandles).not.toHaveBeenCalled()
+  })
+
+  it('shows setup guidance instead of an endless reconnect spinner when market data is not configured', async () => {
+    apiMocks.getNiftyCandles.mockResolvedValue({
+      symbol: 'NIFTY', interval: '5m', source: 'dhan_authoritative_1m', status: 'unavailable', market_state: 'closed',
+      trading_date: '2026-07-21', candles: [], reason: 'market_data_unavailable',
+      message: 'Authoritative 1m NIFTY candles are unavailable. Nova is reconnecting market data.',
+    })
+
+    render(<NiftyLiveChart engineMode="paper" />)
+
+    expect(await screen.findByText('NIFTY market data is not configured for this environment.')).toBeInTheDocument()
+    expect(screen.getByText('Connect the shared Dhan data account to load authoritative candles.')).toBeInTheDocument()
+    expect(screen.queryByText(/Retrying automatically/i)).not.toBeInTheDocument()
   })
 
   it('paints without throwing once candles and markers arrive', async () => {
@@ -184,6 +217,28 @@ describe('NiftyLiveChart responsive runtime', () => {
 
     await waitFor(() => expect(ctx.clearRect.mock.calls.length).toBeGreaterThan(paintsBeforePush))
     // Applied directly from the push, not by triggering a second REST fetch.
+    expect(apiMocks.getNiftyCandles).toHaveBeenCalledTimes(1)
+  })
+
+  it('upserts one pushed candle without fetching the full series again', async () => {
+    const ctx = createStubCtx()
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D)
+    render(<NiftyLiveChart engineMode="paper" />)
+    await waitFor(() => expect(apiMocks.getNiftyCandles).toHaveBeenCalledTimes(1))
+    const paintsBeforePush = ctx.clearRect.mock.calls.length
+
+    window.dispatchEvent(new CustomEvent('nova:terminal-delta', {
+      detail: {
+        id: 'evt-candle-upsert', type: 'market.candle.upsert', ts: '2026-07-21T04:10:00Z',
+        data: {
+          symbol: 'NIFTY', interval: '5m', source: 'dhan_marketfeed_ws', market_state: 'open',
+          trading_date: '2026-07-21', updated_at: '2026-07-21T04:10:00Z', candle_count: 1,
+          candle: { time: CANDLE_TIME, open: 24100, high: 24125, low: 24090, close: 24120, volume: 1 },
+        },
+      },
+    }))
+
+    await waitFor(() => expect(ctx.clearRect.mock.calls.length).toBeGreaterThan(paintsBeforePush))
     expect(apiMocks.getNiftyCandles).toHaveBeenCalledTimes(1)
   })
 

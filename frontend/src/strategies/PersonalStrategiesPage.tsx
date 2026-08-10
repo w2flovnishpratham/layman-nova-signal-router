@@ -410,7 +410,12 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
               <span>Last result: {instance.last_execution_status ? friendlyStatus(instance.last_execution_status) : 'None'} · Created {formatDate(instance.created_at)}</span>
             </Button>
           )) : (
-            <div className="ps-empty-small"><Webhook size={22} /><strong>No personal strategies</strong><span>Create one to begin.</span></div>
+            <div className="ps-empty-state ps-empty-state-compact">
+              <span className="ps-empty-icon"><Webhook size={20} /></span>
+              <span className="ps-empty-kicker">Private workspace</span>
+              <strong>No personal strategies</strong>
+              <span>Create a Paper-only route to start receiving TradingView signals.</span>
+            </div>
           )}
         </aside>
 
@@ -473,7 +478,18 @@ function TradingViewStrategiesPage({ focusInstanceId }: { focusInstanceId?: stri
               onDateFilter={setDateFilter}
             />
           ) : (
-            <div className="ps-card ps-empty"><Webhook size={28} /><h2>Select or create a strategy</h2><p>Your setup steps will appear here.</p></div>
+            <div className="ps-card ps-empty-state ps-empty-state-hero">
+              <span className="ps-empty-icon"><Webhook size={25} /></span>
+              <span className="ps-empty-kicker">Your first route</span>
+              <h2>Connect TradingView in three clear steps</h2>
+              <p>Create a private Paper strategy, add the alert messages, then verify the complete entry and exit path.</p>
+              <ol className="ps-empty-steps" aria-label="Strategy setup steps">
+                <li><span>1</span>Create route</li>
+                <li><span>2</span>Add alerts</li>
+                <li><span>3</span>Verify Paper</li>
+              </ol>
+              <Button variant="unstyled" type="button" className="ps-primary" onClick={() => setShowCreate(true)}><Plus size={14} /> Create personal strategy</Button>
+            </div>
           )}
         </main>
       </div>

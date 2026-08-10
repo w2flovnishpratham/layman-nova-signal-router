@@ -42,6 +42,89 @@ Focused region comparison was not needed after the corrected full-view capture b
 
 final result: passed
 
+## Trading terminal mobile tabs and alert cards — 2026-08-09
+
+- Source defect captures: `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-ba942bdd-4882-4237-9baa-102634fcb05f.png` (436×70), `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-c13658a6-b4e9-4ef6-9274-9865e7d4de1e.png` (444×373), and `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-ab9bff1c-f43c-43e5-9583-097ea5e39dd2.png` (426×207).
+- Browser-rendered implementation: `C:\Users\anubh\nova-signal-router-deployed\artifacts\terminal-alerts-mobile-full.png` and focused card evidence `C:\Users\anubh\nova-signal-router-deployed\artifacts\terminal-alerts-mobile-cards.png` (390×843).
+- Viewport: 390×844 CSS pixels at device scale 1; no density normalization was required. The source images are defect crops, so comparison used matching tab, summary, and alert-row regions rather than full-frame geometry.
+- State: safe Paper terminal preview, Alerts selected, 0 active conditions, 27 historical alerts, and persisted warning/error rows.
+
+### Findings
+
+No actionable P0/P1/P2 issues remain. The three tabs fit inside the 373px content width, summary controls use a stable two-column layout, and the six-column table becomes labeled two-column cards below 640px.
+
+- Fonts/typography: existing Inter and terminal text hierarchy are preserved. Labels remain compact uppercase text, while values wrap at word boundaries instead of breaking into vertical character stacks.
+- Spacing/layout rhythm: each alert card uses two 176px tracks; Condition and Message span the full 351px content width. Tabs occupy the complete row without cropping, and the acknowledgement action receives its own full-width row.
+- Colors/tokens: existing NOVA surfaces, borders, blue active underline, warning yellow, danger red, and muted historical state remain unchanged.
+- Image quality/assets: the affected region contains no raster assets. Existing icon-library dock icons remain unchanged and sharp.
+- Copy/content: tab names, counts, alert categories, messages, type, state, and acknowledgement action are unchanged.
+
+### Interaction and responsive checks
+
+- Alerts deep link loaded with the correct selected tab and all 27 rows.
+- Document width equals the 390px viewport; no page-level horizontal overflow exists.
+- Tab list client and scroll widths both measure 373px, so no hidden tab content remains.
+- Every first-card cell has equal client and scroll dimensions, confirming no clipped content.
+- Browser console checked: zero application errors.
+- Focused component tests passed 4/4; TypeScript compilation passed.
+
+### Comparison history
+
+- Initial P1: Alerts was cropped outside the tab strip and the fixed-layout table broke headers, badges, and words character-by-character.
+- Initial P2: alert counters and acknowledgement action competed for one narrow row.
+- Fix: added mobile-only tab grid sizing, summary stacking, and labeled responsive cards while retaining the single semantic table DOM.
+- Visual pass 1 found unused tab-row width and stretched status badges; both were tightened with full-width tab distribution and start-aligned card content.
+- Final focused evidence shows complete tab labels, intact words, compact badges, readable metadata, and no horizontal overflow.
+
+final result: passed
+
+## Imported Pine strategy workspace implementation — 2026-08-09
+
+- Source visual truth: `frontend/strategy-ui-prototype.html`, captured at 1440×1000 in the Import & validate state.
+- Browser-rendered implementation: `/app/strategies` → Imported Pine scripts, captured at the same 1440×1000 viewport with representative Pine v6 source.
+- State: authenticated admin account; owner Library, Import & validate, Setup & verify, and admin-only Admin navigation were exercised.
+- Full-view comparison: the prototype and implementation were placed side by side in one 1440×500 comparison image before sign-off.
+- Hierarchy and layout: the production page now carries the prototype's workspace heading, numbered lifecycle navigation, compact context toolbar, two-column editor/findings layout, and separate readiness view while retaining the application's existing shell and tokens.
+- Pine editor: line numbers, syntax colors, filename/language metadata, line/character counts, UTF-8 status, synchronized scrolling, and two-space Tab indentation were verified. Source remains a native accessible textarea and is rendered as text, not HTML.
+- Validation language: the page explicitly distinguishes deterministic NOVA static validation from authoritative TradingView compilation and from Paper verification.
+- Flow preservation: manual conversion packages, Claude conversion consent/history, immutable version creation, admin review, managed TradingView setup, and owner-bound setup actions remain connected to the existing APIs.
+- Authorization: the Admin lifecycle item is rendered only when the authenticated user is marked admin; no backend permission or routing behavior was changed.
+- Responsive verification: at 390×844 the workspace had no document-level horizontal overflow; lifecycle controls wrapped to two columns and admin subtabs retained their intentional internal scrolling.
+- Automated verification: 40 focused strategy tests passed, including a new editor tokenization/Tab behavior test; TypeScript compilation and the Vite production build passed.
+- Risk review: tenant isolation, idempotency, money correctness, and migrations are unchanged because this is a frontend-only presentation refactor. Rollback is limited to the strategy component, shared editor, styles, and focused test added in this change.
+
+No actionable P0/P1/P2 visual differences remain. The implementation intentionally keeps the real application shell and the persistent static-findings rail instead of reproducing prototype-only mock actions.
+
+final result: passed
+
+## Trading Engine card partial collapse — 2026-08-09
+
+- Source visual truth: `C:\Users\anubh\.codex\visualizations\2026\08\08\019fe308-20f0-7720-a382-31c2902b5485\engine-card-reference.png`
+- Expanded implementation: `C:\Users\anubh\.codex\visualizations\2026\08\08\019fe308-20f0-7720-a382-31c2902b5485\engine-card-expanded.jpg`
+- Collapsed implementation: `C:\Users\anubh\.codex\visualizations\2026\08\08\019fe308-20f0-7720-a382-31c2902b5485\engine-card-collapsed.jpg`
+- Viewport and pixels: 431×621 CSS pixels and image pixels, device scale 1; no density normalization required.
+- State: production Engine card rendered with a running Paper engine and Pivot Extension selected.
+
+### Findings
+
+No actionable P0/P1/P2 differences remain. The selected strategy and Stop Engine action stay mounted in both states. The chevron now collapses only Allowed sides, Lots, Default SL, Default TP, Max trades/day, and the disabled Stop-engine-to-save action.
+
+- Fonts/typography: existing Inter and JetBrains Mono hierarchy is unchanged.
+- Spacing/layout rhythm: expanded ordering matches the source; collapsed height contracts to the three persistent regions without empty internal gaps.
+- Colors/tokens: existing NOVA dark surfaces, green runtime status, blue settings action, and red stop action are unchanged.
+- Image quality/assets: no raster assets are used; the existing Lucide chevron remains sharp.
+- Copy/content: all labels and runtime-derived values remain unchanged.
+
+### Interaction and comparison history
+
+- Initial P1 behavior: collapsing removed the selected strategy and emergency Stop Engine action.
+- Fix: moved both persistent regions outside the animated settings container.
+- Post-fix evidence: the collapsed capture retains Engine status, selected strategy, and Stop Engine while the settings container is absent.
+- Expand and collapse were exercised in the browser; no Vite error overlay appeared. Focused component tests passed 2/2.
+- The whole card is the focused comparison region, so a separate crop was unnecessary.
+
+final result: passed
+
 ## Trading terminal button hover feedback — 2026-08-01
 
 - Source visual truth: `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-7f5c5a21-c44a-43c7-9018-79827b19c3e4.png`
@@ -650,5 +733,123 @@ No actionable P0/P1/P2 differences remain. Native number-input spinner arrows ar
 - Interaction: Increase changed 1 to 2; Decrease restored 1; the lower-bound button is disabled at 1.
 - Browser verification: every remaining number input computed to `appearance: textfield`; no native spinner control remains. Browser console contained no application errors.
 - Comparison history: one focused native-density comparison pass; no P0/P1/P2 correction was required.
+
+final result: passed
+
+## Strategy empty states — 2026-08-09
+
+- Source visual truth: the two user-provided captures of empty Personal TradingView and Engine picker states.
+- Implementation: `/app/strategies`, captured in the same empty account state at 655px wide; source and implementation were reviewed together in one 2×2 comparison image.
+- Hierarchy: passive empty boxes now use a consistent icon tile, eyebrow, concise title, explanatory copy, and compact status/progress details.
+- Actions: the TradingView state opens the existing creation form; the Engine state routes to the existing strategy setup workspace. No new route or backend behavior was introduced.
+- Semantics: unfinished verification requirements use neutral pending markers rather than success checkmarks.
+- Responsive behavior: the shared app shell now permits grid children to shrink. At 390px, both cards wrap fully with a measured document width equal to the viewport and no clipped strategy content.
+- Accessibility: headings, ordered setup steps, labeled verification requirements, and native buttons remain exposed in the browser accessibility tree.
+- Verification: 16 focused strategy tests, TypeScript compilation, and the Vite production build passed. The production build retains one pre-existing CSS optimizer warning outside this change.
+- Risk impact: tenant isolation, idempotency, money correctness, and migrations are unchanged; the change is frontend presentation and navigation only.
+
+No actionable P0/P1/P2 visual differences remain. The larger production cards intentionally add helpful next-step content and actions instead of preserving the reference's empty vertical space.
+
+final result: passed
+
+## Imported Pine library empty state — 2026-08-09
+
+- Source visual truth: `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-a3a12978-80a2-4829-bfd7-55056f410b0f.png`.
+- Implementation: `/app/strategies` → Imported Pine scripts → Library, captured at 1280×820 and compared beside the source in one combined image.
+- Hierarchy: the sidebar now distinguishes an empty private library from an empty search result; the main panel introduces the import outcome before the steps.
+- Guidance: the onboarding card presents Paste source, Validate contract, and Setup & verify as a compact sequence.
+- Action: Import Pine script opens the existing Import & validate editor; no new route or backend behavior was introduced.
+- Responsive behavior: the browse grid stacks below 900px. At 390px, document width equals viewport width and both empty-state cards retain full readable width.
+- Accessibility: the onboarding heading, ordered setup steps, and native CTA remain exposed in the browser accessibility tree.
+- Verification: 15 focused Imported Pine tests, TypeScript compilation, and the Vite production build passed. The production build retains one pre-existing CSS optimizer warning outside this change.
+
+No actionable P0/P1/P2 visual differences remain. The refined state intentionally replaces passive blank space with concise first-use guidance.
+
+final result: passed
+
+## Pine Static findings empty state — 2026-08-09
+
+- Source visual truth: `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-84fadc31-0e24-4f80-9bd6-6c06a98b42c8.png`.
+- Implementation: `/app/strategies` → Imported Pine scripts → Import & validate, captured at 1280×820 with a focused Static findings crop and compared beside the source.
+- State model: the former generic empty box now distinguishes an unsaved script, a saved version awaiting checks, and a completed report with zero findings.
+- Hierarchy and copy: icon tile, status kicker, concise title, explanatory copy, and scope chips follow the established strategy empty-state system. TradingView remains explicitly identified as the compilation authority.
+- Interaction: saved eligible versions expose Run validation in the panel using the existing deterministic validation request; the primary editor Validate action shares that handler.
+- Responsive behavior: at 390×844 the panel stacks below the editor, retains its full readable width, and document width equals viewport width.
+- Accessibility: semantic headings, native buttons, and labeled validation scope/result remain exposed to assistive technology.
+- Verification: 16 focused Imported Pine tests, TypeScript compilation, and the Vite production build passed. The production build retains one pre-existing CSS optimizer warning outside this change.
+
+No actionable P0/P1/P2 visual differences remain. The new state adds useful guidance without changing validation authority or backend behavior.
+
+final result: passed
+
+## Admin Pine conversion queue empty state — 2026-08-09
+
+- Source visual truth: `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-f4c56801-fc10-4ff7-8b30-e781691e3764.png` (618×792 pixels).
+- Implementation: `/app/strategies` → Imported Pine scripts → Admin → Review queue, captured at 620×900 and cropped to the same empty-queue region for a combined comparison.
+- State: authenticated local admin with an empty conversion queue; the Admin lifecycle item remains absent for non-admin users through the existing authorization check.
+- Fonts/typography: existing NOVA Inter and JetBrains Mono tokens are retained, with clearer eyebrow, title, body, and step hierarchy.
+- Spacing/layout rhythm: the queue explanation and review onboarding remain two distinct cards, stack cleanly below 900px, and use the established dashed empty-state treatment.
+- Colors/tokens: existing dark surfaces, blue guidance accent, muted borders, and red admin filter state are preserved.
+- Image quality/assets: installed Lucide Inbox and ListChecks icons render sharply; no raster or generated assets are required.
+- Copy/content: the queue identifies owner requests and admin-submitted Pine as inputs, then explains source, findings, disclosure, and decision review without claiming that approval starts trading.
+- Interaction: Start a submission scrolls to and focuses the existing strategy-name field; filtered-empty state offers a working Clear filters action.
+- Responsive evidence: at 390×844 the queue and review cards are full-width, text and steps wrap cleanly, and document width equals viewport width.
+- Verification: 15 focused Admin Pine Conversion tests, TypeScript compilation, and the Vite production build passed. The production build retains one pre-existing CSS optimizer warning outside this change.
+
+No actionable P0/P1/P2 visual differences remain. The refined cards intentionally replace passive blank space with concise admin guidance and a real next action.
+
+final result: passed
+
+## Pine Setup & verify empty state — 2026-08-09
+
+- Source visual truth: `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-18401aba-f7e8-4141-a3a2-c10b019f61bf.png` (603×517 pixels).
+- Implementation: `/app/strategies` → Imported Pine scripts → Setup & verify, captured at 620×820 and cropped to the 560×435 setup card for a combined comparison.
+- State: authenticated user with no saved Pine strategy or version selected.
+- Fonts/typography: the existing NOVA type tokens now establish one stable section title, a compact status badge, an onboarding title, supporting copy, and step labels without repeated empty-state headlines.
+- Spacing/layout rhythm: the inner dashed card uses the established icon tile and onboarding rhythm while preserving the outer readiness container and toolbar relationship.
+- Colors/tokens: existing dark surfaces, blue guidance accent, muted borders, and neutral not-started status remain consistent with the strategy workspace.
+- Image quality/assets: the installed Lucide Settings2 and Library icons remain sharp at desktop and mobile sizes; no raster assets are needed.
+- Copy/content: the state previews selection, TradingView connection, and Paper verification as separate gates and does not imply that setup enables trading automatically.
+- Interaction: Open Pine library routes to the existing Library state; no new route or backend behavior was introduced.
+- Responsive evidence: at 390×844 the title, status, steps, and CTA wrap cleanly and document width equals viewport width.
+- Verification: 17 focused Imported Pine tests, TypeScript compilation, and the Vite production build passed. The build retains one pre-existing CSS optimizer warning outside this change.
+
+No actionable P0/P1/P2 visual differences remain. The refined state removes redundant copy and provides a clear, working next step.
+
+final result: passed
+
+## Responsive hamburger navigation — 2026-08-09
+
+- Source visual truth: `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-e0937324-bd44-441c-969f-3032f136bd4e.png` and `C:\Users\anubh\AppData\Local\Temp\codex-clipboard-21dee2c7-2d21-4c4a-ae40-49f472ee444e.png`, showing the clipped mobile route strip.
+- Focused implementation: `C:\Users\anubh\AppData\Local\Temp\nova-responsive-hamburger\header-mobile-390.png`.
+- Open-state implementation: `C:\Users\anubh\AppData\Local\Temp\nova-responsive-hamburger\drawer-mobile-390.png`.
+- Viewport and density: 390×844 CSS pixels at device scale 1; focused header capture 390×60 pixels. The selected source crop is 425×63 pixels and was compared structurally because it records the overflow defect rather than a desired final composition.
+- State: authenticated local user on Strategies; hamburger drawer open with Strategies active.
+
+### Findings
+
+No actionable P0/P1/P2 differences remain. The hidden horizontal route strip is replaced at widths up to 1023px by a compact NOVA/page-title header and a visible hamburger. The drawer exposes all ten existing routes, clearly marks the current route, preserves the account button, and reports the current engine mode at the bottom.
+
+- Fonts/typography: existing Inter hierarchy is preserved; route descriptions use the existing muted text token and remain single-line within the drawer.
+- Spacing/layout rhythm: 36px header controls, a 60px compact header, 54px navigation targets, and a bounded 340px drawer preserve the existing shell density while providing reliable touch targets.
+- Colors/tokens: the implementation uses the existing NOVA background, border, blue active state, warning, and success tokens.
+- Image quality/assets: no raster assets were required; the installed Lucide Menu and X icons remain sharp at native density.
+- Copy/content: all route names and descriptions come from the existing route metadata, avoiding duplicated or divergent navigation copy.
+
+### Interaction and responsive checks
+
+- Opened and closed the drawer, navigated from Strategies to Trading, and verified Escape closes the drawer and restores trigger focus in the component test.
+- At 390px, document width equals viewport width and opening the drawer locks background scrolling.
+- At 768px, the full route strip is hidden, the hamburger is visible, and document width equals viewport width.
+- The Trading route was opened from the drawer. The current account is still in setup state, so the live terminal remains correctly gated until a strategy is eligible and the Paper engine is running.
+- Focused Header test: 22/22 passed. TypeScript compilation and the Vite production build passed.
+
+### Comparison history
+
+- Initial P1: persistent routes extended outside the viewport with no hamburger or alternative access.
+- Fix: replaced the route strip at phone/tablet widths with a compact header, animated drawer, backdrop, body scroll lock, Escape behavior, route-close behavior, and engine-status footer.
+- Post-fix evidence: the 390px header and open drawer show complete navigation with no page-level overflow.
+
+Focused comparison was required because the source images only show the defective header crop; the full drawer capture verifies the new interaction state.
 
 final result: passed

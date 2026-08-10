@@ -412,3 +412,94 @@ def test_walk_back_result_is_cached_against_the_requested_date(monkeypatch):
     assert calls["count"] == after_first, (
         "repeat requests must hit the cache, not re-walk the provider every poll"
     )
+
+
+def test_tick_batch_updates_one_minute_and_derives_small_interval_deltas(monkeypatch):
+    trading_date = date(2026, 8, 7)
+    start = int(charts.session_bounds_ist(trading_date)[0].timestamp())
+    persisted = []
+    monkeypatch.setattr(charts, "load_session", lambda _date: None)
+    monkeypatch.setattr(
+        charts,
+        "upsert_session",
+        lambda _date, candles: persisted.append(candles) or True,
+    )
+    monkeypatch.setattr(charts, "_market_is_open", lambda: True)
+    charts._CACHE.clear()
+
+    deltas = charts.apply_nifty_ticks([
+        (24000.0, start + 1),
+        (24005.0, start + 10),
+        (23995.0, start + 20),
+        (24002.0, start + 30),
+    ])
+
+    assert len(persisted) == 1
+    assert persisted[0][-1] == {
+        "time": start,
+        "open": 24000.0,
+        "high": 24005.0,
+        "low": 23995.0,
+        "close": 24002.0,
+        "volume": 0.0,
+    }
+    assert [delta["interval"] for delta in deltas] == ["1m", "5m", "15m"]
+    assert all(set(delta) - {"candle"} != {"candles"} for delta in deltas)
+    assert all("candles" not in delta for delta in deltas)
+
+
+def test_closed_market_serves_latest_persisted_session_without_dhan(monkeypatch):
+    requested_date = date(2026, 8, 9)
+    persisted_date = date(2026, 8, 7)
+    persisted = _one_minute_candles(persisted_date)
+    monkeypatch.setattr(charts, "chart_trading_date_ist", lambda: requested_date)
+    monkeypatch.setattr(charts, "_market_is_open", lambda: False)
+    monkeypatch.setattr(charts, "load_session", lambda _date: None)
+    monkeypatch.setattr(
+        charts,
+        "load_latest_session",
+        lambda _date: (persisted_date, {"candles": persisted, "updated_at": "stored"}),
+    )
+
+    class NoDhanCall:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("persisted closed-market data must be served before Dhan")
+
+    monkeypatch.setattr(charts, "RealDhanClient", NoDhanCall)
+    charts._CACHE.clear()
+
+    payload = charts.get_nifty_candles("5m")
+
+    assert payload["status"] == "ready"
+    assert payload["trading_date"] == persisted_date.isoformat()
+
+
+def test_reconcile_requests_from_the_last_persisted_minute(monkeypatch):
+    trading_date = date(2026, 8, 7)
+    start = int(charts.session_bounds_ist(trading_date)[0].timestamp())
+    stored = _one_minute_candles(trading_date, count=2)
+    requested_from = []
+    monkeypatch.setattr(charts, "chart_trading_date_ist", lambda: trading_date)
+    monkeypatch.setattr(
+        charts,
+        "load_session",
+        lambda _date: {"candles": stored, "updated_at": "2026-08-07T04:00:00+00:00"},
+    )
+    monkeypatch.setattr(charts, "upsert_session", lambda _date, _candles: True)
+    monkeypatch.setattr(charts, "_market_is_open", lambda: True)
+
+    def fetch(_date, *, from_time=None):
+        requested_from.append(int(from_time.timestamp()))
+        return charts._ready_payload(
+            "1m",
+            trading_date,
+            [_candle(start + 120, open_=101, high=102, low=100, close=101.5)],
+        )
+
+    monkeypatch.setattr(charts, "_fetch_authoritative_one_minute", fetch)
+    charts._CACHE.clear()
+
+    reconciled = charts.reconcile_nifty_one_minute()
+
+    assert requested_from == [start + 60]
+    assert [candle["time"] for candle in reconciled["candles"]] == [start, start + 60, start + 120]

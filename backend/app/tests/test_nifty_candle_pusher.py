@@ -1,74 +1,67 @@
-"""The candle push worker must only broadcast when the cached candle payload
-actually changed -- a cache hit between Dhan fetches is a no-op, not a
-redundant WS push to every open session."""
 from __future__ import annotations
 
+import asyncio
+import queue
+import threading
+
+from app.services.dhan_marketfeed_ws import MarketFeedPacket
+from app.services import chat_event_publisher
+from app.store.redis_session import InMemorySessionStore
 from app.workers import nifty_candle_pusher as pusher
 
 
-def _payload(updated_at: str) -> dict:
-    return {"symbol": "NIFTY", "interval": "5m", "status": "ready", "updated_at": updated_at, "candles": []}
-
-
-def test_pushes_once_then_skips_an_unchanged_payload(monkeypatch):
-    monkeypatch.setattr(pusher, "_LAST_PUSHED_AT", {})
-    monkeypatch.setattr(pusher, "get_nifty_candles", lambda interval: _payload("t1"))
-    pushes = []
-    monkeypatch.setattr(
-        pusher,
-        "publish_nifty_candles_from_sync",
-        lambda *, interval, series: pushes.append((interval, series["updated_at"])) or True,
+def _packet(*, security_id: str = "13", ltp: float = 24001.5) -> MarketFeedPacket:
+    return MarketFeedPacket(
+        response_code=2,
+        message_length=16,
+        exchange_segment_code=0,
+        exchange_segment="IDX_I",
+        security_id=security_id,
+        ltp=ltp,
+        last_trade_time=1_800_000_000,
     )
 
-    pusher._push_if_changed("5m")
-    pusher._push_if_changed("5m")
 
-    assert pushes == [("5m", "t1")]
+def test_only_nifty_ticks_enter_the_candle_batch(monkeypatch):
+    monkeypatch.setattr(pusher, "_TICKS", queue.SimpleQueue())
+    monkeypatch.setattr(pusher, "_TICK_EVENT", threading.Event())
+
+    pusher._queue_tick(_packet(security_id="99"))
+    pusher._queue_tick(_packet())
+
+    assert pusher._drain_ticks() == [(24001.5, 1_800_000_000)]
 
 
-def test_pushes_again_once_updated_at_changes(monkeypatch):
-    monkeypatch.setattr(pusher, "_LAST_PUSHED_AT", {})
-    current = {"updated_at": "t1"}
-    monkeypatch.setattr(pusher, "get_nifty_candles", lambda interval: _payload(current["updated_at"]))
-    pushes = []
+def test_tick_batch_publishes_only_returned_candle_deltas(monkeypatch):
+    deltas = [{"interval": "1m"}, {"interval": "5m"}, {"interval": "15m"}]
+    monkeypatch.setattr(pusher, "apply_nifty_ticks", lambda ticks: deltas)
+    pushed = []
     monkeypatch.setattr(
         pusher,
-        "publish_nifty_candles_from_sync",
-        lambda *, interval, series: pushes.append(series["updated_at"]) or True,
+        "publish_nifty_candle_upsert_from_sync",
+        lambda *, delta: pushed.append(delta) or True,
     )
 
-    pusher._push_if_changed("5m")
-    current["updated_at"] = "t2"
-    pusher._push_if_changed("5m")
+    pusher._publish_tick_batch([(24001.5, 1_800_000_000)])
 
-    assert pushes == ["t1", "t2"]
+    assert pushed == deltas
 
 
-def test_intervals_are_tracked_independently(monkeypatch):
-    monkeypatch.setattr(pusher, "_LAST_PUSHED_AT", {})
-    monkeypatch.setattr(pusher, "get_nifty_candles", lambda interval: _payload("same"))
-    pushes = []
-    monkeypatch.setattr(
-        pusher,
-        "publish_nifty_candles_from_sync",
-        lambda *, interval, series: pushes.append(interval) or True,
-    )
+def test_candle_delta_reaches_idle_connected_session_without_bloating_history(monkeypatch):
+    async def check() -> None:
+        store = InMemorySessionStore()
+        monkeypatch.setattr(chat_event_publisher, "session_store", store)
+        session = await store.create()
+        queue_ = await store.subscribe(session.id)
+        assert await store.subscribed_session_ids() == [session.id]
+        retained_before = len(session.events)
+        delta = {"interval": "5m", "candle": {"time": 1}}
 
-    pusher._push_if_changed("5m")
-    pusher._push_if_changed("15m")
-    pusher._push_if_changed("5m")
+        await chat_event_publisher.publish_nifty_candle_upsert(delta=delta)
 
-    assert pushes == ["5m", "15m"]
+        pushed = await queue_.get()
+        assert pushed.type == "market.candle.upsert"
+        assert pushed.data["candle"] == {"time": 1}
+        assert len(session.events) == retained_before
 
-
-def test_does_not_record_a_push_that_failed_to_publish(monkeypatch):
-    # publish_*_from_sync returns False when there's no bound event loop yet
-    # (e.g. during startup) -- a payload that never actually reached anyone
-    # must not be remembered as pushed, or a real later push gets skipped.
-    monkeypatch.setattr(pusher, "_LAST_PUSHED_AT", {})
-    monkeypatch.setattr(pusher, "get_nifty_candles", lambda interval: _payload("t1"))
-    monkeypatch.setattr(pusher, "publish_nifty_candles_from_sync", lambda *, interval, series: False)
-
-    pusher._push_if_changed("5m")
-
-    assert pusher._LAST_PUSHED_AT.get("5m") is None
+    asyncio.run(check())

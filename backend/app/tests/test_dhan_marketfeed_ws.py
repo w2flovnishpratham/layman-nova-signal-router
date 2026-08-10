@@ -1,6 +1,7 @@
 import struct
 
 from app.services.dhan_marketfeed_ws import (
+    DhanMarketFeedWsManager,
     SUBSCRIBE_TICKER_REQUEST_CODE,
     _subscription_message,
     _subscription_message_many,
@@ -56,3 +57,25 @@ def test_subscription_message_many_includes_all_targets_without_credentials():
     assert '"ExchangeSegment":"NSE_FNO"' in message
     assert '"SecurityId":"56376"' in message
     assert "token" not in message.lower()
+
+
+def test_tick_listener_receives_parsed_packet():
+    manager = DhanMarketFeedWsManager()
+    received = []
+    manager.add_listener(received.append)
+
+    manager._handle_binary(struct.pack("<BHBifi", 2, 16, 0, 13, 24001.5, 1716880000))
+
+    assert [(packet.exchange_segment, packet.security_id, packet.ltp) for packet in received] == [
+        ("IDX_I", "13", 24001.5)
+    ]
+
+
+def test_clearing_transient_targets_keeps_the_persistent_nifty_subscription():
+    manager = DhanMarketFeedWsManager()
+    manager._persistent_targets.add(("IDX_I", "13"))
+    manager._desired_targets.update({("IDX_I", "13"), ("NSE_FNO", "49081")})
+
+    manager.clear_subscription()
+
+    assert manager._desired_targets == {("IDX_I", "13")}

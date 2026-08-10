@@ -40,6 +40,16 @@ describe('buildChartLayout', () => {
     expect(prices.every((p) => p % 10 === 0)).toBe(true)
   })
 
+  it('reduces time labels to fit a phone-width plot without overlap', () => {
+    const candles = Array.from({ length: 76 }, (_, index) => candle(index * 300, 100, 102, 99, 101))
+    const layout = buildChartLayout({ candles, markers: [], timeframe: '5m', dims: { width: 349, height: 320 } })
+
+    expect(layout.timeAxisLabels).toHaveLength(4)
+    for (let index = 1; index < layout.timeAxisLabels.length; index++) {
+      expect(layout.timeAxisLabels[index].x - layout.timeAxisLabels[index - 1].x).toBeGreaterThanOrEqual(64)
+    }
+  })
+
   it('never needs a reset on timeframe switch -- each call is pure', () => {
     const candles = [candle(0, 100, 102, 99, 101)]
     const oneMinute = buildChartLayout({ candles, markers: [], timeframe: '1m', dims: DIMS })

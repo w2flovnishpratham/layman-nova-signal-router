@@ -8,14 +8,15 @@ import {
   type ChartTimeframe,
   type NiftyCandle,
   type NiftyCandleSeries,
+  type NiftyCandleUpsert,
   type NiftyTradeMarker,
 } from '../api'
 import type { EngineMode, ServerEvent } from '../types'
-import { sameCandles, sessionOnly } from './NiftyLiveChart.helpers'
+import { sameCandles, sessionOnly, upsertCandle } from './NiftyLiveChart.helpers'
 import { buildChartLayout, hitTestMarker, istTime, zoomChartView, type ChartLayout, type ZoomState } from './NiftyLiveChart.layout'
 import { paintChart } from './NiftyLiveChart.paint'
 
-const CANDLE_POLL_MS = 20_000
+const CANDLE_POLL_MS = 300_000
 const MARKER_POLL_MS = 12_000
 // With the market closed the candle series is finished and no new trades can
 // arrive, so polling at live cadence just burns requests all night. Still
@@ -32,9 +33,11 @@ function supportedTimeframe(value: string | null | undefined): ChartTimeframe {
 function NiftyLiveChartInner({
   engineMode,
   defaultTimeframe,
+  candleLoader = getNiftyCandles,
 }: {
   engineMode: EngineMode | null
   defaultTimeframe?: string | null
+  candleLoader?: typeof getNiftyCandles
 }) {
   const [timeframe, setTimeframe] = useState<ChartTimeframe>(() => supportedTimeframe(defaultTimeframe))
   const [series, setSeries] = useState<NiftyCandleSeries | null>(null)
@@ -77,7 +80,7 @@ function NiftyLiveChartInner({
       if (document.hidden || candleRequest) return
       candleRequest = new AbortController()
       try {
-        const next = await getNiftyCandles(timeframe, candleRequest.signal)
+        const next = await candleLoader(timeframe, candleRequest.signal)
         if (cancelled) return
         applySeries(next)
       } catch (error) {
@@ -132,6 +135,17 @@ function NiftyLiveChartInner({
         const pushed = event.data as unknown as NiftyCandleSeries
         if (pushed.interval === timeframe) applySeries(pushed)
       }
+      if (event?.type === 'market.candle.upsert') {
+        const delta = event.data as unknown as NiftyCandleUpsert
+        if (delta.interval !== timeframe) return
+        if (tradingDateRef.current && delta.trading_date !== tradingDateRef.current) {
+          void loadCandles()
+          return
+        }
+        tradingDateRef.current = delta.trading_date
+        setSeries((current) => upsertCandle(current, delta))
+        setLoadFailed(false)
+      }
     }
     window.addEventListener('nova:terminal-delta', handleTerminalDelta)
     return () => {
@@ -142,7 +156,7 @@ function NiftyLiveChartInner({
       window.clearInterval(markerTimer)
       window.removeEventListener('nova:terminal-delta', handleTerminalDelta)
     }
-  }, [engineMode, timeframe, marketClosed])
+  }, [candleLoader, engineMode, timeframe, marketClosed])
 
   // Keeps the same array reference across polls that return identical
   // candles, so the repaint effect below (deps: candles, ...) doesn't fire
@@ -341,15 +355,22 @@ function NiftyLiveChartInner({
       />
     </section>
   )
-  if (loadFailed || !series || series.status === 'unavailable') return (
-    <section className="nifty-chart-card">
-      {header}
-      <div className="nifty-chart-empty">
-        <p>{series?.message ?? `Authoritative NIFTY ${timeframe} candles unavailable.`}</p>
-        <span className="nifty-chart-retry-hint"><Loader2 size={13} className="nifty-chart-retry-spinner" /> Retrying automatically…</span>
-      </div>
-    </section>
-  )
+  if (loadFailed || !series || series.status === 'unavailable') {
+    const configurationMissing = series?.reason === 'market_data_unavailable'
+    return (
+      <section className="nifty-chart-card">
+        {header}
+        <div className="nifty-chart-empty">
+          <p>{configurationMissing ? 'NIFTY market data is not configured for this environment.' : (series?.message ?? `Authoritative NIFTY ${timeframe} candles unavailable.`)}</p>
+          {configurationMissing ? (
+            <span className="nifty-chart-retry-hint">Connect the shared Dhan data account to load authoritative candles.</span>
+          ) : (
+            <span className="nifty-chart-retry-hint"><Loader2 size={13} className="nifty-chart-retry-spinner" /> Retrying automatically…</span>
+          )}
+        </div>
+      </section>
+    )
+  }
   if (!hasCandles) return <section className="nifty-chart-card">{header}<div className="nifty-chart-empty">No NIFTY {timeframe} candles available for this session.</div></section>
 
   return (

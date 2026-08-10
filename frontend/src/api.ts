@@ -539,6 +539,17 @@ export interface NiftyCandleSeries {
   note?: string | null
 }
 
+export interface NiftyCandleUpsert {
+  symbol: string
+  interval: ChartTimeframe
+  source: string
+  trading_date: string
+  market_state: 'open' | 'closed' | string
+  updated_at: string
+  candle_count: number
+  candle: NiftyCandle
+}
+
 export interface NiftyTradeMarker {
   id?: string
   time: number

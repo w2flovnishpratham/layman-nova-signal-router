@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { RuntimeStatus } from '../api'
@@ -6,7 +6,7 @@ import { EngineConfigCard } from './EngineConfigCard'
 
 afterEach(cleanup)
 
-it('starts collapsed, hiding the configuration fields until expanded', async () => {
+it('keeps the strategy and stop action visible while collapsing only the configuration fields', async () => {
   const user = userEvent.setup()
   const runtime = {
     engine: { state: 'STOPPED', mode: 'paper' },
@@ -15,10 +15,19 @@ it('starts collapsed, hiding the configuration fields until expanded', async () 
   } as unknown as RuntimeStatus
 
   render(<EngineConfigCard runtime={runtime} onStop={vi.fn()} onSaveConfig={vi.fn()} side="BOTH" onSideChange={vi.fn()} />)
+  expect(screen.getByText('Supertrend (NIFTY)')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Stop Engine' })).toBeInTheDocument()
   expect(screen.queryByRole('group', { name: 'Lots' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Save configuration' })).not.toBeInTheDocument()
 
   await user.click(screen.getByRole('button', { name: 'Expand engine configuration' }))
   expect(screen.getByRole('group', { name: 'Lots' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Save configuration' })).toBeInTheDocument()
+
+  await user.click(screen.getByRole('button', { name: 'Collapse engine configuration' }))
+  expect(screen.getByText('Supertrend (NIFTY)')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Stop Engine' })).toBeInTheDocument()
+  await waitFor(() => expect(screen.queryByRole('group', { name: 'Lots' })).not.toBeInTheDocument())
 })
 
 it('edits and saves the stopped engine configuration', async () => {

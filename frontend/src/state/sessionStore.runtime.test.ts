@@ -135,4 +135,21 @@ describe('runtime REST hydration failover', () => {
     applyRestMarketSnapshot(rest, 1)
     expect(useSessionStore.getState()).toMatchObject({ marketSnapshot: push, marketSnapshotSource: 'push' })
   })
+
+  it('forwards candle upserts to the chart without adding chat noise', () => {
+    let forwarded: ServerEvent | null = null
+    const listener = (event: Event) => { forwarded = (event as CustomEvent<ServerEvent>).detail }
+    window.addEventListener('nova:terminal-delta', listener)
+    const messagesBefore = useSessionStore.getState().messages.length
+    const delta = {
+      id: 'candle-1', type: 'market.candle.upsert', ts: '2026-07-21T08:00:03Z',
+      data: { interval: '5m', trading_date: '2026-07-21', candle: { time: 1 } },
+    } as unknown as ServerEvent
+
+    useSessionStore.getState().applyServerEvent(delta)
+    window.removeEventListener('nova:terminal-delta', listener)
+
+    expect(forwarded).toBe(delta)
+    expect(useSessionStore.getState().messages).toHaveLength(messagesBefore)
+  })
 })

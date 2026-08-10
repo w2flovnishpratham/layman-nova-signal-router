@@ -6,6 +6,7 @@ validated, clipped to one IST session, and then used as the sole source for
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -13,6 +14,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.services.dhan_client import RealDhanClient
+from app.services.market_candle_store import load_latest_session, load_session, upsert_session
 from app.services.risk_manager import _market_is_open
 from app.services.shared_market_data import (
     market_data_credentials,
@@ -20,6 +22,8 @@ from app.services.shared_market_data import (
     shared_market_data_status,
 )
 from app.services.state_store import utc_now
+
+logger = logging.getLogger("nova_signal_router.market_chart_service")
 
 _IST = ZoneInfo("Asia/Kolkata")
 IST_TIMEZONE_NAME = "Asia/Kolkata"
@@ -50,9 +54,9 @@ CACHE_TTL_FAILURE_SECONDS = 20.0
 MAX_OPEN_SOURCE_AGE_SECONDS = 180
 # How many trading days back get_nifty_candles() may walk looking for a session
 # that actually has candles, when the market is closed. Bounded because each
-# step is a Dhan round trip; 5 covers a long weekend plus adjacent holidays,
-# which is the realistic worst case.
-MAX_TRADING_DAY_LOOKBACK = 5
+# step can be a Dhan round trip only when durable storage is empty. Twenty is a
+# bounded disaster-recovery window; persisted sessions bypass the walk entirely.
+MAX_TRADING_DAY_LOOKBACK = 20
 TOKEN_EXPIRING_SOON_SECONDS = 30 * 60
 
 _CACHE_LOCK = threading.Lock()
@@ -224,6 +228,64 @@ def _store_cache(key: str, data: dict[str, Any]) -> None:
         _CACHE[key] = {"data": data, "built_monotonic": time.monotonic()}
 
 
+def _raw_one_minute_cached(trading_date: date) -> dict[str, Any] | None:
+    """Read the process cache without TTL; durable storage is the authority."""
+    with _CACHE_LOCK:
+        entry = _CACHE.get(cache_key("raw1m", trading_date))
+        data = entry.get("data") if entry else None
+        return data if data and data.get("status") == "ready" else None
+
+
+def _remember_one_minute(
+    trading_date: date,
+    candles: list[dict[str, Any]],
+    *,
+    persist: bool,
+    updated_at: str | None = None,
+    persist_times: set[int] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """persist_times narrows the write to the minutes that actually changed.
+
+    The cache always holds the whole session, but the tick path only ever
+    touches the current minute -- writing the full day back on every 0.35s
+    batch made each tick cost a session-sized read/write against Neon.
+    Full refreshes (REST fetch, reconciliation) leave it None and persist
+    everything, which is correct and rare.
+    """
+    filtered = filter_today_session(candles, trading_date)
+    previous = _raw_one_minute_cached(trading_date)
+    changed = previous is None or previous.get("candles") != filtered
+    storage_changed = False
+    if persist:
+        try:
+            to_store = (
+                filtered
+                if persist_times is None
+                else [candle for candle in filtered if int(candle["time"]) in persist_times]
+            )
+            storage_changed = upsert_session(trading_date, to_store)
+        except Exception:
+            # Keep the live read model available; the bounded reconciliation
+            # loop retries durable storage without another full-day fetch.
+            logger.exception("NIFTY 1m candle persistence failed.")
+    if previous is not None and not changed and not storage_changed:
+        return previous, False
+    payload = _ready_payload(
+        "1m",
+        trading_date,
+        filtered,
+        updated_at=updated_at or utc_now(),
+    )
+    with _CACHE_LOCK:
+        _CACHE[cache_key("raw1m", trading_date)] = {
+            "data": payload,
+            "built_monotonic": time.monotonic(),
+        }
+        for interval in SUPPORTED_INTERVALS:
+            _CACHE.pop(cache_key(interval, trading_date), None)
+    return payload, True
+
+
 def get_nifty_candles(interval: str = "5m") -> dict[str, Any]:
     if interval not in SUPPORTED_INTERVALS:
         return _unavailable(
@@ -249,6 +311,8 @@ def get_nifty_candles(interval: str = "5m") -> dict[str, Any]:
 
         served_date = requested_date
         one_minute = _one_minute_for(served_date, market_open)
+        if one_minute.get("status") == "ready" and one_minute.get("trading_date"):
+            served_date = date.fromisoformat(str(one_minute["trading_date"]))
         if one_minute.get("status") != "ready" and not market_open:
             # Walk back to the most recent session that actually has candles.
             # chart_trading_date_ist() already steps over weekends, but it can
@@ -286,7 +350,12 @@ def get_nifty_candles(interval: str = "5m") -> dict[str, Any]:
             interval_minutes=SUPPORTED_INTERVALS[interval],
             trading_date=served_date,
         )
-        payload = _ready_payload(interval, served_date, candles)
+        payload = _ready_payload(
+            interval,
+            served_date,
+            candles,
+            updated_at=one_minute.get("updated_at"),
+        )
         _store_cache(request_key, payload)
         return payload
 
@@ -302,15 +371,44 @@ def _one_minute_for(trading_date: date, market_open: bool) -> dict[str, Any]:
     differ) worked off the very same data.
     """
     key = cache_key("raw1m", trading_date)
-    cached = _cached(key, market_open)
+    cached = _raw_one_minute_cached(trading_date)
     if cached is not None:
         return cached
+    stored = load_session(trading_date)
+    if stored:
+        return _remember_one_minute(
+            trading_date,
+            stored["candles"],
+            persist=False,
+            updated_at=stored.get("updated_at"),
+        )[0]
+    if not market_open:
+        latest = load_latest_session(trading_date)
+        if latest:
+            latest_date, latest_session = latest
+            return _remember_one_minute(
+                latest_date,
+                latest_session["candles"],
+                persist=False,
+                updated_at=latest_session.get("updated_at"),
+            )[0]
     fetched = _fetch_authoritative_one_minute(trading_date)
+    if fetched.get("status") == "ready":
+        return _remember_one_minute(
+            trading_date,
+            fetched["candles"],
+            persist=True,
+            updated_at=fetched.get("updated_at"),
+        )[0]
     _store_cache(key, fetched)
     return fetched
 
 
-def _fetch_authoritative_one_minute(trading_date: date) -> dict[str, Any]:
+def _fetch_authoritative_one_minute(
+    trading_date: date,
+    *,
+    from_time: datetime | None = None,
+) -> dict[str, Any]:
     session_start, session_end = session_bounds_ist(trading_date)
     now_ist = datetime.now(_IST)
     creds = market_data_credentials()
@@ -333,7 +431,7 @@ def _fetch_authoritative_one_minute(trading_date: date) -> dict[str, Any]:
         exchange_segment=NIFTY_INDEX_EXCHANGE_SEGMENT,
         instrument=NIFTY_INDEX_INSTRUMENT,
         interval=AUTHORITATIVE_DHAN_INTERVAL,
-        from_date=session_start.strftime("%Y-%m-%d %H:%M:%S"),
+        from_date=max(session_start, from_time or session_start).strftime("%Y-%m-%d %H:%M:%S"),
         to_date=min(now_ist, session_end).strftime("%Y-%m-%d %H:%M:%S"),
     )
     if not result.get("success"):
@@ -402,6 +500,150 @@ def _fetch_authoritative_one_minute(trading_date: date) -> dict[str, Any]:
     return _ready_payload("1m", trading_date, candles)
 
 
+def reconcile_nifty_one_minute() -> dict[str, Any]:
+    """Load persisted candles and fetch only the missing/current REST window."""
+    trading_date = chart_trading_date_ist()
+    current = _raw_one_minute_cached(trading_date)
+    stored = None if current else load_session(trading_date)
+    base = current or (
+        _ready_payload(
+            "1m",
+            trading_date,
+            stored["candles"],
+            updated_at=stored.get("updated_at"),
+        )
+        if stored
+        else None
+    )
+    existing = list(base.get("candles") or []) if base else []
+    if not base and market_state() == "closed":
+        return get_nifty_candles("1m")
+    session_start, session_end = session_bounds_ist(trading_date)
+    session_minutes = int((session_end - session_start).total_seconds() // 60)
+    if base and market_state() == "closed" and len(existing) >= session_minutes:
+        return _remember_one_minute(
+            trading_date,
+            existing,
+            persist=False,
+            updated_at=base.get("updated_at"),
+        )[0]
+    from_time = (
+        datetime.fromtimestamp(int(existing[-1]["time"]), tz=_IST)
+        if existing
+        else None
+    )
+    fetched = _fetch_authoritative_one_minute(trading_date, from_time=from_time)
+    if fetched.get("status") != "ready":
+        if base:
+            return _remember_one_minute(
+                trading_date,
+                existing,
+                persist=False,
+                updated_at=base.get("updated_at"),
+            )[0]
+        return fetched
+    merged = {int(candle["time"]): candle for candle in existing}
+    merged.update({int(candle["time"]): candle for candle in fetched["candles"]})
+    return _remember_one_minute(
+        trading_date,
+        list(merged.values()),
+        persist=True,
+        updated_at=fetched.get("updated_at"),
+    )[0]
+
+
+def apply_nifty_ticks(ticks: list[tuple[float, int]]) -> list[dict[str, Any]]:
+    """Fold a short tick batch into 1m, persist once, and return candle deltas."""
+    if not ticks:
+        return []
+    latest_stamp = max(int(stamp) for _, stamp in ticks)
+    trading_date = datetime.fromtimestamp(latest_stamp, tz=_IST).date()
+    session_start, session_end = session_bounds_ist(trading_date)
+    start_epoch, end_epoch = int(session_start.timestamp()), int(session_end.timestamp())
+    current = _raw_one_minute_cached(trading_date)
+    if current is None:
+        stored = load_session(trading_date)
+        if stored:
+            current = _remember_one_minute(
+                trading_date,
+                stored["candles"],
+                persist=False,
+                updated_at=stored.get("updated_at"),
+            )[0]
+    candles = {
+        int(candle["time"]): dict(candle)
+        for candle in (current.get("candles") if current else [])
+    }
+    affected_minutes: set[int] = set()
+    for raw_ltp, raw_stamp in sorted(ticks, key=lambda item: item[1]):
+        ltp, stamp = float(raw_ltp), int(raw_stamp)
+        minute = stamp - stamp % 60
+        if ltp <= 0 or minute < start_epoch or minute >= end_epoch:
+            continue
+        candle = candles.get(minute)
+        if candle is None:
+            candles[minute] = {
+                "time": minute,
+                "open": ltp,
+                "high": ltp,
+                "low": ltp,
+                "close": ltp,
+                "volume": 0.0,
+            }
+            affected_minutes.add(minute)
+            continue
+        updated = {
+            **candle,
+            "high": max(float(candle["high"]), ltp),
+            "low": min(float(candle["low"]), ltp),
+            "close": ltp,
+        }
+        if updated != candle:
+            candles[minute] = updated
+            affected_minutes.add(minute)
+    if not affected_minutes:
+        return []
+    updated_at = utc_now()
+    one_minute, changed = _remember_one_minute(
+        trading_date,
+        list(candles.values()),
+        persist=True,
+        updated_at=updated_at,
+        persist_times=affected_minutes,
+    )
+    if not changed:
+        return []
+    deltas: list[dict[str, Any]] = []
+    for interval, minutes in SUPPORTED_INTERVALS.items():
+        aggregated = aggregate_one_minute_candles(
+            one_minute["candles"],
+            interval_minutes=minutes,
+            trading_date=trading_date,
+        )
+        by_time = {int(candle["time"]): candle for candle in aggregated}
+        bucket_seconds = minutes * 60
+        bucket_times = {
+            start_epoch + ((minute - start_epoch) // bucket_seconds) * bucket_seconds
+            for minute in affected_minutes
+        }
+        for bucket_time in sorted(bucket_times):
+            candle = by_time.get(bucket_time)
+            if candle is None:
+                continue
+            deltas.append({
+                "symbol": "NIFTY",
+                "interval": interval,
+                "source": "dhan_marketfeed_ws",
+                "timezone": IST_TIMEZONE_NAME,
+                "trading_date": trading_date.isoformat(),
+                "market_state": market_state(),
+                "updated_at": updated_at,
+                "candle_count": len(aggregated),
+                "candle": candle,
+            })
+    return deltas
+
+
 def _fetch_candles(
     _dhan_interval: str,
     interval_label: str,
@@ -430,7 +672,12 @@ def _fetch_candles(
     )
 
 
-def _base_payload(interval_label: str, trading_date: date) -> dict[str, Any]:
+def _base_payload(
+    interval_label: str,
+    trading_date: date,
+    *,
+    updated_at: str | None = None,
+) -> dict[str, Any]:
     session_start, session_end = session_bounds_ist(trading_date)
     return {
         "symbol": "NIFTY",
@@ -442,7 +689,7 @@ def _base_payload(interval_label: str, trading_date: date) -> dict[str, Any]:
         "session_end": session_end.isoformat(),
         "market_state": market_state(),
         "token_status": token_status(),
-        "updated_at": utc_now(),
+        "updated_at": updated_at or utc_now(),
     }
 
 
@@ -450,9 +697,11 @@ def _ready_payload(
     interval_label: str,
     trading_date: date,
     candles: list[dict[str, Any]],
+    *,
+    updated_at: str | None = None,
 ) -> dict[str, Any]:
     return {
-        **_base_payload(interval_label, trading_date),
+        **_base_payload(interval_label, trading_date, updated_at=updated_at),
         "status": "ready",
         "candle_count": len(candles),
         "candles": candles,

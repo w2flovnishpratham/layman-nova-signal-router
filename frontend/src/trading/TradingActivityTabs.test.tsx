@@ -148,6 +148,7 @@ describe('TradingActivityTabs', () => {
     render(<TradingActivityTabs mode="paper" />)
     expect(await screen.findByText('75 / 75')).toBeInTheDocument()
     expect(screen.getByText('24550 CE')).toBeInTheDocument()
+    expect(screen.getByText('24550 CE').closest('td')).toHaveAttribute('data-label', 'Strike')
     expect(screen.getByText('ENTRY')).toHaveClass('terminal-signal-value', 'is-positive')
     expect(screen.queryByRole('columnheader', { name: 'Instrument' })).toBeNull()
     expect(screen.queryByRole('tab', { name: 'Executions' })).toBeNull()

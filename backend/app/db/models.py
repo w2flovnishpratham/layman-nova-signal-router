@@ -13,6 +13,7 @@ A portable GUID type stores native UUIDs on PostgreSQL and CHAR(36) elsewhere
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from datetime import date, datetime, timezone
 
 from sqlalchemy import (
@@ -26,6 +27,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -1955,3 +1957,29 @@ class PortfolioSnapshot(Base):
     fetch_status: Mapped[str] = mapped_column(String(20), default="ok", nullable=False)
     safe_error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class MarketCandle1m(Base):
+    """Global authoritative NIFTY one-minute candles.
+
+    This is shared market data, so it intentionally has no user/tenant key.
+    Higher intervals remain derived read models rather than duplicated rows.
+    """
+
+    __tablename__ = "market_candles_1m"
+    __table_args__ = (
+        Index("ix_market_candles_1m_date_time", "trading_date", "candle_time"),
+    )
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    candle_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    trading_date: Mapped[date] = mapped_column(Date, nullable=False)
+    open: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    high: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    low: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    close: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    volume: Mapped[Decimal] = mapped_column(Numeric(24, 4), nullable=False, default=0)
+    source: Mapped[str] = mapped_column(String(40), nullable=False, default="dhan_authoritative_1m")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )

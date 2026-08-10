@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeStatus } from '../api'
@@ -123,6 +123,35 @@ describe('Header runtime reliability controls', () => {
     render(<Header {...props()} />)
     expect(screen.getByRole('button', { name: 'Trading' })).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByRole('button', { name: 'Setup' })).not.toBeInTheDocument()
+  })
+
+  it('opens mobile navigation and closes it after choosing a route', async () => {
+    const user = userEvent.setup()
+    const callbacks = props()
+    render(<Header {...callbacks} />)
+
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }))
+    const mobileNavigation = screen.getByRole('navigation', { name: 'Mobile navigation' })
+    expect(mobileNavigation).toBeInTheDocument()
+    expect(mobileNavigation).toHaveAttribute('data-lenis-prevent')
+    expect(document.querySelector('.mobile-nav-backdrop')).toHaveAttribute('data-lenis-prevent')
+    expect(document.documentElement.style.overflow).toBe('hidden')
+
+    await user.click(within(mobileNavigation).getByRole('button', { name: /^Strategies/ }))
+    expect(callbacks.onNavigate).toHaveBeenCalledWith('strategies')
+    await waitFor(() => expect(screen.queryByRole('navigation', { name: 'Mobile navigation' })).not.toBeInTheDocument())
+    expect(document.documentElement.style.overflow).toBe('')
+  })
+
+  it('closes mobile navigation with Escape', async () => {
+    const user = userEvent.setup()
+    render(<Header {...props()} />)
+
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }))
+    await user.keyboard('{Escape}')
+
+    await waitFor(() => expect(screen.queryByRole('navigation', { name: 'Mobile navigation' })).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveFocus()
   })
 
   it('shows runtime details but keeps system health and secondary engine actions out of the account menu', async () => {

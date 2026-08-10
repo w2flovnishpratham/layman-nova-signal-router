@@ -145,9 +145,13 @@ export function paintChart(ctx: CanvasRenderingContext2D, layout: ChartLayout): 
 
   // time axis
   ctx.fillStyle = TIME_TEXT_COLOR
+  ctx.textAlign = 'center'
   for (const label of layout.timeAxisLabels) {
-    ctx.fillText(label.text, label.x - 14, dims.height - 8)
+    const halfWidth = ctx.measureText(label.text).width / 2
+    const x = Math.max(plot.left + halfWidth, Math.min(plot.right - halfWidth, label.x))
+    ctx.fillText(label.text, x, dims.height - 8)
   }
+  ctx.textAlign = 'left'
 
   // crosshair (drawn under candles so wicks stay legible on top). Both arms
   // are dashed and snapped to the magnet point -- vertical to the candle's

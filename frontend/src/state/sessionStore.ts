@@ -199,6 +199,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       || event.type === 'system.event'
       || event.type === 'bot.message'
       || event.type === 'market.candles'
+      || event.type === 'market.candle.upsert'
     )) {
       window.dispatchEvent(new CustomEvent('nova:terminal-delta', { detail: event }))
     }
@@ -404,7 +405,7 @@ function reduceSessionEvent(state: SessionStore, event: ServerEvent): Partial<Se
     }
   }
 
-  if (event.type === 'market.candles') {
+  if (event.type === 'market.candles' || event.type === 'market.candle.upsert') {
     // NiftyLiveChart reads this straight off the nova:terminal-delta window
     // event dispatched below, not off the store -- nothing to reduce here,
     // and without this early return it would fall through to the default

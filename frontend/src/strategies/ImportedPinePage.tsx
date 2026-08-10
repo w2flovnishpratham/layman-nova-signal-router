@@ -2,8 +2,9 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { NativeSelect } from "@/components/ui/native-select"
 import { Button } from '@/components/ui/button'
-import { AlertTriangle, Check, Copy, Download, FileCode2, Loader2, Plus, Shield, Sparkles, Trash2, Upload, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, Check, Copy, Download, FileCode2, Library, Loader2, Plus, Settings2, Shield, ShieldCheck, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { toast } from '@/components/ui/toast'
 import {
   acceptPineConversion,
@@ -50,26 +51,66 @@ import {
 } from '../api'
 import { AdminPineConversionWorkspace } from './AdminPineConversion'
 import { Skeleton } from '@/components/ui/skeleton'
+import { PineCodeEditor } from './PineCodeEditor'
 
 const MAX_BYTES = 256 * 1024
+type PineSection = 'library' | 'import' | 'setup' | 'admin'
 
 export function ImportedPinePage({ isAdmin = false }: { isAdmin?: boolean }) {
-  const [mode, setMode] = useState<'owner' | 'admin'>('owner')
+  const [section, setSection] = useState<PineSection>('library')
+  const steps: Array<{ id: PineSection; label: string; detail: string; icon: typeof Library }> = [
+    { id: 'library', label: 'Library', detail: 'Your private scripts', icon: Library },
+    { id: 'import', label: 'Import & validate', detail: 'Source and checks', icon: FileCode2 },
+    { id: 'setup', label: 'Setup & verify', detail: 'Paper readiness', icon: Settings2 },
+    ...(isAdmin ? [{ id: 'admin' as const, label: 'Admin', detail: 'Review and publish', icon: Shield }] : []),
+  ]
   return (
     <div className="pine-page">
-      {isAdmin ? (
-        <div className="ps-toolbar-row">
-          <p className="ps-note">Import private Pine, convert it with Claude, and follow its admin approval and TradingView installation.</p>
-          <Button variant="unstyled" className="secondary-button" type="button" onClick={() => setMode(mode === 'owner' ? 'admin' : 'owner')}>{mode === 'owner' ? 'Admin review queue' : 'My scripts'}</Button>
+      <header className="pine-workspace-head">
+        <div>
+          <span className="ps-eyebrow"><Sparkles size={13} /> Strategy workspace</span>
+          <h2>Build, verify, then activate</h2>
+          <p>Move from private Pine source to a paper-verified strategy without losing track of the next step.</p>
         </div>
-      ) : null}
-      <div className="ps-warning"><AlertTriangle size={16} /><span>Conversion and admin approval do not place orders. The installed strategy remains HOLD-only until genuine TradingView routing and Paper entry/exit verification pass.</span></div>
-      {mode === 'admin' ? <AdminWorkspace /> : <OwnerWorkspace />}
+        <span className="pine-private-badge"><Shield size={13} /> Private by default</span>
+      </header>
+      <nav className="pine-lifecycle" aria-label="Pine strategy workflow">
+        {steps.map((step, index) => {
+          const Icon = step.icon
+          return (
+            <Button
+              variant="unstyled"
+              type="button"
+              key={step.id}
+              className={section === step.id ? 'active' : ''}
+              aria-label={step.id === 'admin' ? 'Admin review queue' : step.label}
+              aria-current={section === step.id ? 'step' : undefined}
+              onClick={() => setSection(step.id)}
+            >
+              <span className="pine-step-number">{String(index + 1).padStart(2, '0')}</span>
+              <Icon size={15} />
+              <span><strong>{step.label}</strong><small>{step.detail}</small></span>
+            </Button>
+          )
+        })}
+      </nav>
+      <div className="ps-warning"><AlertTriangle size={16} /><span>Static validation checks structure and NOVA's signal contract; TradingView remains the authoritative Pine compiler. Conversion and admin approval do not place orders, and the strategy remains HOLD-only until genuine routing and Paper entry/exit verification pass.</span></div>
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={section === 'admin' ? 'admin' : 'owner'}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: 0.16, ease: 'easeOut' }}
+        >
+          {section === 'admin' ? <AdminWorkspace /> : <OwnerWorkspace section={section} onSectionChange={setSection} />}
+        </motion.div>
+      </AnimatePresence>
     </div>
   )
 }
 
-function OwnerWorkspace() {
+function OwnerWorkspace({ section, onSectionChange }: { section: Exclude<PineSection, 'admin'>; onSectionChange: (section: PineSection) => void }) {
   const [strategies, setStrategies] = useState<PineStrategy[]>([])
   const [strategyId, setStrategyId] = useState('')
   const [versions, setVersions] = useState<PineVersion[]>([])
@@ -96,7 +137,6 @@ function OwnerWorkspace() {
   const [setupType, setSetupType] = useState<TradingViewSetupType>('USER_MANAGED_TRADINGVIEW')
   const [tvSetup, setTvSetup] = useState<TradingViewSetup | null>(null)
   const [conversionHistory, setConversionHistory] = useState<PineConversion[]>([])
-  const [mode, setMode] = useState<'browse' | 'edit'>('browse')
   const [search, setSearch] = useState('')
   const sourceRef = useRef<HTMLTextAreaElement>(null)
 
@@ -219,6 +259,14 @@ function OwnerWorkspace() {
     await refreshList(id)
   }
 
+  async function runStaticValidation() {
+    if (!selected) return
+    await run('Static validation', async () => {
+      await validatePineVersion(strategyId, selected.id)
+      await reloadStrategy(strategyId, selected.id)
+    }, { loading: 'Validating this Pine version…', success: 'Pine validation finished.' })
+  }
+
   function jumpTo(finding: PineFinding) {
     if (!finding.line || !sourceRef.current) return
     const lines = source.split('\n')
@@ -285,7 +333,7 @@ function OwnerWorkspace() {
     </div>
   )
 
-  if (mode === 'browse') {
+  if (section === 'library') {
     const filteredStrategies = strategies.filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
     const currentName = strategies.find((s) => s.id === strategyId)?.name
     return (
@@ -293,14 +341,14 @@ function OwnerWorkspace() {
         <aside className="ps-list" aria-label="Imported Pine scripts">
           <div className="ps-list-toolbar">
             <Input variant="unstyled" aria-label="Search scripts" placeholder="Search scripts…" value={search} onChange={(e) => setSearch(e.target.value)} />
-            <Button variant="unstyled" type="button" className="ps-primary" onClick={() => { setStrategyId(''); setVersions([]); setVersionId(''); setMode('edit') }}><Plus size={14} /> New</Button>
+            <Button variant="unstyled" type="button" className="ps-primary" onClick={() => { setStrategyId(''); setVersions([]); setVersionId(''); onSectionChange('import') }}><Plus size={14} /> New</Button>
           </div>
           {filteredStrategies.length ? filteredStrategies.map((s) => (
             <Button variant="unstyled" type="button" key={s.id} className={`ps-list-item${strategyId === s.id ? ' active' : ''}`} onClick={() => setStrategyId(s.id)}>
               <strong>{s.name}</strong>
               <span>{s.latest_version ? `${s.latest_version.version} · ${s.latest_version.status}` : 'No version yet'}</span>
             </Button>
-          )) : <div className="ps-empty-small"><FileCode2 size={20} /><strong>No scripts match</strong></div>}
+          )) : <div className="ps-empty-state ps-empty-state-compact"><span className="ps-empty-icon"><FileCode2 size={20} /></span><span className="ps-empty-kicker">{strategies.length ? 'Search results' : 'Private Pine library'}</span><strong>{strategies.length ? 'No scripts match' : 'No imported scripts'}</strong><span>{strategies.length ? 'Try another name or clear the search.' : 'Paste or upload your first Pine strategy to begin.'}</span></div>}
         </aside>
         {strategyId && selected ? (
           <div className="pine-grid">
@@ -311,17 +359,17 @@ function OwnerWorkspace() {
               </div>
               <div className="ps-actions">
                 <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void copySource()}><Copy size={14} /> Copy source</Button>
-                <Button variant="unstyled" className="secondary-button" type="button" onClick={() => setMode('edit')}><FileCode2 size={14} /> Edit</Button>
+                <Button variant="unstyled" className="secondary-button" type="button" onClick={() => onSectionChange('import')}><FileCode2 size={14} /> Edit</Button>
                 <Button variant="unstyled" className="ps-danger" type="button" disabled={!!busy} onClick={() => void withdrawStrategy()}><Trash2 size={14} /> Delete</Button>
               </div>
               <pre className="pine-review-source">{source.split('\n').map((line, i) => <span key={i}><i>{i + 1}</i>{line}{'\n'}</span>)}</pre>
             </section>
             <aside className="ps-card pine-findings">
               <div className="ps-card-head"><div><span>NOVA Pine Contract v1</span><h2>Static findings</h2></div>{selected.validation ? <strong>{selected.validation.error_count}E · {selected.validation.warning_count}W</strong> : null}</div>
-              {findings.length ? findings.map((finding, index) => <div key={`${finding.code}-${index}`} className={`pine-finding ${finding.severity.toLowerCase()}`}><span>{finding.severity} · {finding.code}{finding.line ? ` · line ${finding.line}` : ''}</span><strong>{finding.title}</strong><small>{finding.explanation}</small><em>{finding.remediation}</em></div>) : <div className="ps-empty-small"><FileCode2 size={22} /><strong>No validation report</strong><span>Run deterministic static validation for this exact version.</span></div>}
+              {findings.length ? findings.map((finding, index) => <div key={`${finding.code}-${index}`} className={`pine-finding ${finding.severity.toLowerCase()}`}><span>{finding.severity} · {finding.code}{finding.line ? ` · line ${finding.line}` : ''}</span><strong>{finding.title}</strong><small>{finding.explanation}</small><em>{finding.remediation}</em></div>) : <PineValidationState version={selected} action={!selected.validation ? <Button variant="unstyled" className="secondary-button" type="button" onClick={() => onSectionChange('import')}><ShieldCheck size={14} /> Open validation</Button> : null} />}
             </aside>
           </div>
-        ) : <div className="ps-card ps-empty"><FileCode2 size={28} /><h2>Select a script</h2><p>Pick one from the list to view its source and static findings.</p></div>}
+        ) : strategies.length ? <div className="ps-card ps-empty-state ps-empty-state-engine"><span className="ps-empty-icon"><FileCode2 size={22} /></span><span className="ps-empty-kicker">Library</span><strong>Select a script</strong><span>Choose one from the list to inspect its source, versions, and static findings.</span></div> : <div className="ps-card ps-empty-state ps-empty-state-hero"><span className="ps-empty-icon"><FileCode2 size={25} /></span><span className="ps-empty-kicker">Your first Pine import</span><h2>Bring a private Pine strategy into NOVA</h2><p>Keep the source owner-bound, run deterministic contract checks, then move through approval and Paper verification.</p><ol className="ps-empty-steps" aria-label="Pine import steps"><li><span>1</span>Paste source</li><li><span>2</span>Validate contract</li><li><span>3</span>Setup & verify</li></ol><Button variant="unstyled" type="button" className="ps-primary" onClick={() => onSectionChange('import')}><Plus size={14} /> Import Pine script</Button></div>}
       </div>
     )
   }
@@ -330,13 +378,15 @@ function OwnerWorkspace() {
     <>
       {error ? <div className="ps-message error" role="alert">{error}</div> : null}
       <div className="pine-toolbar ps-card">
-        <Button variant="unstyled" className="secondary-button" type="button" onClick={() => setMode('browse')}>← Back to browse</Button>
-        <label>Script<NativeSelect variant="unstyled" value={strategyId} onChange={(e) => { const id = e.target.value; setStrategyId(id); if (!id) { setVersions([]); setVersionId('') } }}><option value="">New script</option>{strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</NativeSelect></label>
-        <label>Version<NativeSelect variant="unstyled" value={versionId} disabled={!strategyId} onChange={(e) => setVersionId(e.target.value)}>{versions.map((v) => <option key={v.id} value={v.id}>{v.version} · {v.status}</option>)}</NativeSelect></label>
-        <label>New script name<Input variant="unstyled" value={name} maxLength={160} onChange={(e) => setName(e.target.value)} placeholder="My NIFTY Pine strategy" /></label>
+        <Button variant="unstyled" className="secondary-button pine-back-button" type="button" onClick={() => onSectionChange('library')}>← Back to library</Button>
+        <div className="pine-toolbar-fields">
+          <label>Script<NativeSelect variant="unstyled" value={strategyId} onChange={(e) => { const id = e.target.value; setStrategyId(id); if (!id) { setVersions([]); setVersionId('') } }}><option value="">New script</option>{strategies.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</NativeSelect></label>
+          <label>Version<NativeSelect variant="unstyled" value={versionId} disabled={!strategyId} onChange={(e) => setVersionId(e.target.value)}>{versions.map((v) => <option key={v.id} value={v.id}>{v.version} · {v.status}</option>)}</NativeSelect></label>
+          {section === 'import' ? <label>New script name<Input variant="unstyled" value={name} maxLength={160} onChange={(e) => setName(e.target.value)} placeholder="My NIFTY Pine strategy" /></label> : null}
+        </div>
         {strategyId ? <Button variant="unstyled" className="ps-danger" type="button" disabled={!!busy} onClick={() => void withdrawStrategy()}><Trash2 size={14} /> Withdraw script</Button> : null}
       </div>
-      <div className="pine-grid">
+      {section === 'import' ? <div className="pine-grid">
         <section className="ps-card pine-editor-card">
           <div className="ps-card-head"><div><span>Private source</span><h2>{selected ? `Immutable version ${selected.version}` : 'Paste or upload Pine'}</h2></div><span className="ps-status">{selected?.status ?? 'new'}</span></div>
           {rejectionNote ? (
@@ -346,11 +396,11 @@ function OwnerWorkspace() {
             </div>
           ) : null}
           <div className="pine-file-row"><label className="secondary-button"><Upload size={14} /> Upload .pine/.txt<Input variant="unstyled" className="pine-file-input" type="file" accept=".pine,.txt,text/plain" onChange={(e) => void readFile(e.target.files?.[0])} /></label><Input variant="unstyled" aria-label="Source filename" value={filename} maxLength={120} onChange={(e) => { setFilename(e.target.value); setDirty(true) }} /></div>
-          <Textarea variant="unstyled" ref={sourceRef} className="pine-source" aria-label="Pine source" spellCheck={false} value={source} onChange={(e) => { setSource(e.target.value); setDirty(true) }} />
+          <PineCodeEditor ref={sourceRef} filename={filename} ariaLabel="Pine source" value={source} onChange={(value) => { setSource(value); setDirty(true) }} />
           <label className="pine-changelog">Version note<Input variant="unstyled" value={changelog} maxLength={1000} onChange={(e) => setChangelog(e.target.value)} placeholder="What changed?" /></label>
           <div className="ps-actions">
             {!strategyId ? <Button variant="unstyled" className="ps-primary" type="button" disabled={!name.trim() || !source.trim() || !!busy} onClick={() => void run('Script creation', async () => { const result = await createPineStrategy({ name: name.trim(), source, filename }); setDirty(false); await reloadStrategy(result.strategy.id, result.version.id) })}><Plus size={14} /> Create immutable version</Button> : <Button variant="unstyled" className="ps-primary" type="button" disabled={!dirty || !source.trim() || !!busy} onClick={() => void run('New version', async () => { const result = await createPineVersion(strategyId, { source, filename, changelog }); setDirty(false); await reloadStrategy(strategyId, result.version.id) })}><Plus size={14} /> Save as new version</Button>}
-            {selected && ['draft', 'validation_failed', 'ready_for_review'].includes(selected.status) ? <Button variant="unstyled" className="secondary-button" type="button" disabled={!!busy} onClick={() => void run('Static validation', async () => { await validatePineVersion(strategyId, selected.id); await reloadStrategy(strategyId, selected.id) }, { loading: 'Validating this Pine version…', success: 'Pine validation finished.' })}>{busy === 'Static validation' ? <Loader2 className="ps-spin" size={14} /> : <FileCode2 size={14} />} Validate</Button> : null}
+            {selected && ['draft', 'validation_failed', 'ready_for_review'].includes(selected.status) ? <Button variant="unstyled" className="secondary-button" type="button" disabled={!!busy} onClick={() => void runStaticValidation()}>{busy === 'Static validation' ? <Loader2 className="ps-spin" size={14} /> : <FileCode2 size={14} />} Validate</Button> : null}
             {selected ? <Button variant="unstyled" className="secondary-button" type="button" onClick={() => void copySource()}><Copy size={14} /> Copy</Button> : null}
             {selected?.status === 'approved' ? <Button variant="unstyled" className="secondary-button" type="button" onClick={downloadSource}><Download size={14} /> Download</Button> : null}
           </div>
@@ -422,9 +472,14 @@ function OwnerWorkspace() {
         </section>
         <aside className="ps-card pine-findings">
           <div className="ps-card-head"><div><span>NOVA Pine Contract v1</span><h2>Static findings</h2></div>{selected?.validation ? <strong>{selected.validation.error_count}E · {selected.validation.warning_count}W</strong> : null}</div>
-          {findings.length ? findings.map((finding, index) => <Button variant="unstyled" type="button" key={`${finding.code}-${index}`} className={`pine-finding ${finding.severity.toLowerCase()}`} onClick={() => jumpTo(finding)}><span>{finding.severity} · {finding.code}{finding.line ? ` · line ${finding.line}` : ''}</span><strong>{finding.title}</strong><small>{finding.explanation}</small><em>{finding.remediation}</em></Button>) : <div className="ps-empty-small"><FileCode2 size={22} /><strong>No validation report</strong><span>Run deterministic static validation for this exact version.</span></div>}
+          {findings.length ? findings.map((finding, index) => <Button variant="unstyled" type="button" key={`${finding.code}-${index}`} className={`pine-finding ${finding.severity.toLowerCase()}`} onClick={() => jumpTo(finding)}><span>{finding.severity} · {finding.code}{finding.line ? ` · line ${finding.line}` : ''}</span><strong>{finding.title}</strong><small>{finding.explanation}</small><em>{finding.remediation}</em></Button>) : <PineValidationState version={selected} action={selected && !selected.validation && ['draft', 'validation_failed', 'ready_for_review'].includes(selected.status) ? <Button variant="unstyled" className="secondary-button" type="button" disabled={!!busy} onClick={() => void runStaticValidation()}>{busy === 'Static validation' ? <Loader2 className="ps-spin" size={14} /> : <ShieldCheck size={14} />} {busy === 'Static validation' ? 'Validating…' : 'Run validation'}</Button> : null} />}
         </aside>
-      </div>
+      </div> : (
+        <section className="ps-card pine-setup-overview">
+          <div className="ps-card-head"><div><span>Selected version readiness</span><h2>Setup and paper verification</h2></div><span className="ps-status">{selected?.status ?? 'not started'}</span></div>
+          {selected ? <><p className="ps-note">Compilation, installation, HOLD routing, and Paper entry/exit are separate evidence gates. Completing one never silently marks the next one ready.</p><div className="ps-summary-grid"><div><span>Static validation</span><strong>{selected.validation?.status.replaceAll('_', ' ') ?? 'Not run'}</strong></div><div><span>Admin review</span><strong>{selected.status.replaceAll('_', ' ')}</strong></div><div><span>TradingView & Paper</span><strong>{tvSetup?.ready_for_paper ? 'Ready for paper' : tvSetup?.status.replaceAll('_', ' ') ?? 'Not configured'}</strong></div></div></> : <div className="ps-empty-state ps-empty-state-hero pine-setup-empty"><span className="ps-empty-icon"><Settings2 size={24} /></span><span className="ps-empty-kicker">Setup starts after selection</span><h2>Choose a Pine version to prepare</h2><p>Select a saved strategy first, then connect TradingView and complete the HOLD and Paper verification gates.</p><ol className="ps-empty-steps" aria-label="Pine setup readiness steps"><li><span>1</span>Select version</li><li><span>2</span>Connect TradingView</li><li><span>3</span>Verify Paper</li></ol><Button variant="unstyled" className="ps-primary" type="button" onClick={() => onSectionChange('library')}><Library size={14} /> Open Pine library</Button></div>}
+        </section>
+      )}
       {claudeConversion ? <OwnerClaudeStatus conversion={claudeConversion} /> : null}
       {strategyId && claudeHistory.some((row) => row.strategy_id === strategyId) ? (
         <section className="ps-card pine-conversion-history">
@@ -471,6 +526,39 @@ export function claudeCompletionError(
     return `Claude conversion needs attention: ${conversion.conversion_status.replaceAll('_', ' ').toLowerCase()}.`
   }
   return null
+}
+
+function PineValidationState({ version, action }: { version: PineVersion | null; action?: ReactNode }) {
+  const report = version?.validation
+  const content = report ? {
+    kicker: 'Validation complete',
+    title: 'No static findings',
+    copy: 'This exact source passed NOVA’s deterministic checks. TradingView compilation is still required.',
+    items: [`${report.error_count} errors`, `${report.warning_count} warnings`, `SHA ${version.source_sha256.slice(0, 8)}…`],
+  } : version ? {
+    kicker: 'Ready to check',
+    title: 'Validate this exact version',
+    copy: 'Run deterministic checks against the saved source hash before review or conversion.',
+    items: ['Pine structure', 'NOVA alerts', 'Unsupported behavior'],
+  } : {
+    kicker: 'Save a version first',
+    title: 'Create a version to validate',
+    copy: 'Paste your Pine source and save an immutable version. Its report will stay bound to that exact source.',
+    items: ['Paste source', 'Save version', 'Run checks'],
+  }
+
+  return (
+    <div className={`ps-empty-state pine-validation-empty${report ? ' is-passed' : ''}`}>
+      <span className="ps-empty-icon"><ShieldCheck size={22} /></span>
+      <span className="ps-empty-kicker">{content.kicker}</span>
+      <strong>{content.title}</strong>
+      <span>{content.copy}</span>
+      <div className="pine-validation-scope" aria-label={report ? 'Validation result' : 'Validation scope'}>
+        {content.items.map((item) => <span key={item}>{item}</span>)}
+      </div>
+      {action}
+    </div>
+  )
 }
 
 function OwnerClaudeStatus({ conversion }: { conversion: AdminPineConversion }) {

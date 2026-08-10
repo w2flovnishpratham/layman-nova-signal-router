@@ -2,7 +2,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from '@/components/ui/button'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Check, Copy, FileCode2, Loader2, Pencil, RefreshCcw, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { AlertTriangle, Check, Copy, FileCode2, Inbox, ListChecks, Loader2, Pencil, Plus, RefreshCcw, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import { toast } from '@/components/ui/toast'
 import { backendHttpUrl } from '../lib/backend'
 import {
@@ -22,6 +22,7 @@ import {
 } from '../api'
 import type { AdminPineConversion } from '../api'
 import { C2AdminPanel } from './C2AdminPanel'
+import { PineCodeEditor } from './PineCodeEditor'
 
 const QUEUE_FILTERS = [
   { key: 'all', label: 'All', test: () => true },
@@ -167,6 +168,12 @@ export function AdminPineConversionWorkspace() {
     }
   }
 
+  function focusSubmission() {
+    const input = document.getElementById('admin-conversion-name') as HTMLInputElement | null
+    input?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    input?.focus({ preventScroll: true })
+  }
+
   return (
     <section className="ps-card c1-workspace" aria-label="Admin Pine Conversion">
       <p className="ps-note">Claude returns an untrusted strategy layer. NOVA appends Transport V2 and validates the final candidate. No strategy instance, credential, alert, or order is created here.</p>
@@ -174,12 +181,12 @@ export function AdminPineConversionWorkspace() {
 
       <div className="c1-submit-grid">
         <div className="c1-submit-form">
-          <label>Strategy name<Input variant="unstyled" aria-label="Conversion strategy name" value={strategyName} maxLength={160} onChange={(event) => setStrategyName(event.target.value)} /></label>
+          <label>Strategy name<Input variant="unstyled" id="admin-conversion-name" aria-label="Conversion strategy name" value={strategyName} maxLength={160} onChange={(event) => setStrategyName(event.target.value)} /></label>
           <label>Original filename<Input variant="unstyled" aria-label="Original Pine filename" value={filename} maxLength={120} onChange={(event) => setFilename(event.target.value)} /></label>
           <label>Internal notes<Textarea variant="unstyled" aria-label="Internal conversion notes" value={notes} maxLength={2000} onChange={(event) => setNotes(event.target.value)} /></label>
           <label className="secondary-button c1-file-button"><Upload size={14} /> Upload Pine<Input variant="unstyled" className="pine-file-input" aria-label="Upload Pine source for conversion" type="file" accept=".pine,.txt,text/plain" onChange={(event) => void readFile(event.target.files?.[0])} /></label>
         </div>
-        <label className="c1-source-label">Exact Pine source<Textarea variant="unstyled" aria-label="Admin Pine source" className="pine-source" value={source} onChange={(event) => setSource(event.target.value)} /></label>
+        <div className="c1-source-label"><span>Exact Pine source</span><PineCodeEditor ariaLabel="Admin Pine source" filename={filename} minHeight={360} value={source} onChange={setSource} /></div>
       </div>
       <Button variant="unstyled" className="ps-primary" type="button" disabled={!strategyName.trim() || !source.trim() || !!busy} onClick={() => void submit()}>{busy === 'Source submission' ? <Loader2 className="ps-spin" size={14} /> : <FileCode2 size={14} />} Submit and analyze</Button>
 
@@ -204,7 +211,7 @@ export function AdminPineConversionWorkspace() {
                 <Button variant="unstyled" type="button" className="ps-danger" disabled={!!busy} onClick={() => void forceDelete(item)}><Trash2 size={11} /> Delete</Button>
               </div>
             </div>
-          )) : <div className="ps-empty-small"><FileCode2 size={20} /><strong>No conversions match this filter</strong></div>) : <div className="ps-empty-small"><FileCode2 size={20} /><strong>No conversion submissions</strong></div>}
+          )) : <div className="ps-empty-state ps-empty-state-compact c1-empty-queue"><span className="ps-empty-icon"><Inbox size={20} /></span><span className="ps-empty-kicker">Filtered queue</span><strong>No conversions match this filter</strong><span>Try another status or clear the current search.</span><Button variant="unstyled" className="secondary-button" type="button" onClick={() => { setSearch(''); setQueueFilter('all') }}>Clear filters</Button></div>) : <div className="ps-empty-state ps-empty-state-compact c1-empty-queue"><span className="ps-empty-icon"><Inbox size={20} /></span><span className="ps-empty-kicker">Review queue</span><strong>No conversion submissions</strong><span>Submit Pine source above or wait for an owner conversion request.</span><span className="ps-empty-chip">0 awaiting review</span></div>}
           {items.length ? <p className="c1-list-count">{visibleItems.length} of {items.length} shown</p> : null}
         </aside>
         <main className="c1-detail">
@@ -254,7 +261,7 @@ export function AdminPineConversionWorkspace() {
                 type: 'success',
               })
             })}
-          /> : <div className="ps-empty"><FileCode2 size={28} /><h2>Select a conversion</h2></div>}
+          /> : items.length ? <div className="ps-empty-state ps-empty-state-engine c1-empty-detail"><span className="ps-empty-icon"><ListChecks size={22} /></span><span className="ps-empty-kicker">Admin review</span><strong>Select a conversion</strong><span>Choose a queue item to inspect its source, findings, conversion disclosure, and review history.</span></div> : <div className="ps-empty-state ps-empty-state-hero c1-empty-detail"><span className="ps-empty-icon"><ListChecks size={24} /></span><span className="ps-empty-kicker">Admin review flow</span><h2>Review Pine submissions with clear evidence</h2><p>Each submission keeps its owner, source hash, deterministic findings, and conversion disclosure together before any decision.</p><ol className="ps-empty-steps" aria-label="Admin conversion review steps"><li><span>1</span>Inspect source</li><li><span>2</span>Review findings</li><li><span>3</span>Approve or return</li></ol><Button variant="unstyled" className="ps-primary" type="button" onClick={focusSubmission}><Plus size={14} /> Start a submission</Button></div>}
         </main>
       </div>
     </section>

@@ -71,6 +71,10 @@ export function EngineConfigCard({ runtime, onStop, onSaveConfig, side, onSideCh
           </Button>
         </span>
       </div>
+      <label className="terminal-engine-strategy">
+        <span>Selected strategy</span>
+        <strong>{runtime?.selected_strategy?.display_name ?? 'No strategy selected'}</strong>
+      </label>
       <AnimatePresence initial={false}>
         {!collapsed ? (
           <motion.div
@@ -80,10 +84,6 @@ export function EngineConfigCard({ runtime, onStop, onSaveConfig, side, onSideCh
             exit={{ height: 0, opacity: 0 }}
             transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: softEase }}
           >
-            <label className="terminal-engine-strategy">
-              <span>Selected strategy</span>
-              <strong>{runtime?.selected_strategy?.display_name ?? 'No strategy selected'}</strong>
-            </label>
             <div>
               <span className="terminal-engine-label">Allowed sides</span>
               <div className="terminal-side-options" role="group" aria-label="Allowed automated option sides">
@@ -120,10 +120,10 @@ export function EngineConfigCard({ runtime, onStop, onSaveConfig, side, onSideCh
             <Button variant="unstyled" type="button" className="terminal-save-config" disabled={saving || runtime?.engine.state !== 'STOPPED'} onClick={() => void save()}>
               {saving ? 'Saving…' : runtime?.engine.state === 'STOPPED' ? 'Save configuration' : 'Stop engine to save'}
             </Button>
-            <Button variant="unstyled" type="button" className="terminal-stop-engine" loading={actionPending} onClick={onStop}>Stop Engine</Button>
           </motion.div>
         ) : null}
       </AnimatePresence>
+      <Button variant="unstyled" type="button" className="terminal-stop-engine" loading={actionPending} onClick={onStop}>Stop Engine</Button>
     </section>
   )
 }

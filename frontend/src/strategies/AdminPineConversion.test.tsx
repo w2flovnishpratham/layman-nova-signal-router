@@ -133,6 +133,8 @@ describe('AdminPineConversionWorkspace', () => {
     api.list.mockResolvedValue([])
     render(<AdminPineConversionWorkspace />)
     await screen.findByText('No conversion submissions')
+    await user.click(screen.getByRole('button', { name: /start a submission/i }))
+    expect(screen.getByLabelText('Conversion strategy name')).toHaveFocus()
     await user.type(screen.getByLabelText('Conversion strategy name'), 'New strategy')
     const uploaded = new File([SOURCE], 'source.pine', { type: 'text/plain' })
     fireEvent.change(screen.getByLabelText('Upload Pine source for conversion'), { target: { files: [uploaded] } })

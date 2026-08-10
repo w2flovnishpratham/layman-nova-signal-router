@@ -93,6 +93,15 @@ class InMemorySessionStore:
                 if session.user_id == user_id and session.state is not SetupState.ENDED
             ]
 
+    async def subscribed_session_ids(self) -> list[str]:
+        """Every session with at least one currently connected WebSocket."""
+        async with self._lock:
+            return sorted(
+                session_id
+                for session_id, subscribers in self._subscribers.items()
+                if subscribers
+            )
+
     async def synchronize_runtime_state(
         self,
         session_id: str,
@@ -136,10 +145,17 @@ class InMemorySessionStore:
             session_id = self._secret_index.get(webhook_secret)
             return self._sessions.get(session_id) if session_id else None
 
-    async def append_event(self, session_id: str, item: ServerEvent) -> None:
+    async def append_event(
+        self,
+        session_id: str,
+        item: ServerEvent,
+        *,
+        retain: bool = True,
+    ) -> None:
         async with self._lock:
             session = self._sessions[session_id]
-            session.events.append(item)
+            if retain:
+                session.events.append(item)
             subscribers = list(self._subscribers.get(session_id, set()))
 
         for queue in subscribers:

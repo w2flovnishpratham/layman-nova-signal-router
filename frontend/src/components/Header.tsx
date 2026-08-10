@@ -1,11 +1,11 @@
 import { Input } from "@/components/ui/input"
 import { Button } from '@/components/ui/button'
-import { Check, Copy, LogOut, ShieldAlert, Wifi, X } from 'lucide-react'
+import { Check, Copy, LogOut, Menu, ShieldAlert, Wifi, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import type { AuthUser, LogoutEngineAction, RuntimeStatus } from '../api'
 import { getEgressStatus } from '../api'
-import type { AppRoute } from '../appRoutes'
+import { ROUTE_META, type AppRoute } from '../appRoutes'
 import { modeBadgeText } from '../lib/mode'
 import { MotionPing, MotionProgressFill, softEase, useAppReducedMotion } from './MotionPrimitives'
 import type { EngineMode, MarketSnapshot, SetupState, WsStatus } from '../types'
@@ -49,6 +49,7 @@ export function Header({
 }: Props) {
   const [killDialogOpen, setKillDialogOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
   const [holdingKill, setHoldingKill] = useState(false)
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false)
   const [lots, setLots] = useState<number | null>(null)
@@ -58,6 +59,7 @@ export function Header({
   const [ipCopied, setIpCopied] = useState(false)
   const [clock, setClock] = useState(() => new Date())
   const holdTimer = useRef<number | null>(null)
+  const navTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   // Fetch the assigned Nova Static IP whenever the account menu opens, so a
   // paid user can view/copy their dedicated IP at any time (e.g. to whitelist
@@ -75,6 +77,29 @@ export function Header({
     const timer = window.setInterval(() => setClock(new Date()), 1000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    setNavOpen(false)
+  }, [route])
+
+  useEffect(() => {
+    if (!navOpen) return
+    const previousRootOverflow = document.documentElement.style.overflow
+    const previousOverflow = document.body.style.overflow
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setNavOpen(false)
+      navTriggerRef.current?.focus()
+    }
+    document.documentElement.style.overflow = 'hidden'
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.documentElement.style.overflow = previousRootOverflow
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [navOpen])
 
   const activeConfig = runtime?.config.active
   const displayedLots = lots ?? Number(activeConfig?.configured_lots ?? 1)
@@ -128,6 +153,8 @@ export function Header({
           <span className="brand-copy"><strong>NOVA</strong><span>Signal Router</span></span>
         </div>
 
+        <span className="mobile-route-label">{ROUTE_META[route].label}</span>
+
         <nav className="top-navigation" aria-label="Primary navigation">
           {TOP_NAVIGATION.map((item) => (
             <Button variant="unstyled"
@@ -157,6 +184,21 @@ export function Header({
         </div>
 
         <div className="header-actions relative flex items-center gap-2">
+          <Button variant="unstyled"
+            ref={navTriggerRef}
+            type="button"
+            className="mobile-nav-trigger"
+            aria-label={navOpen ? 'Close navigation' : 'Open navigation'}
+            aria-controls="mobile-navigation"
+            aria-expanded={navOpen}
+            onClick={() => {
+              setMenuOpen(false)
+              setNavOpen((open) => !open)
+            }}
+          >
+            {navOpen ? <X size={18} /> : <Menu size={18} />}
+          </Button>
+
           <div className={`mode-badge mode-badge-${engineMode ?? 'unset'}${engineLive ? '' : ' mode-badge-stopped'}`}>
             <MotionPing className={status === 'live' && engineLive ? 'mode-status-ok' : 'mode-status-warn'} />
             {modeBadgeText(engineMode)} - {engineLive ? statusLabel(status, setupState) : 'Stopped'}
@@ -165,7 +207,10 @@ export function Header({
           <Button variant="unstyled"
             type="button"
             className="header-user"
-            onClick={() => setMenuOpen(!menuOpen)}
+            onClick={() => {
+              setNavOpen(false)
+              setMenuOpen(!menuOpen)
+            }}
             aria-label="Open account menu"
             aria-expanded={menuOpen}
             aria-haspopup="menu"
@@ -343,6 +388,64 @@ export function Header({
           </AnimatePresence>
         </div>
       </header>
+
+      <AnimatePresence initial={false}>
+        {navOpen ? (
+          <>
+            <motion.button
+              key="mobile-navigation-backdrop"
+              type="button"
+              className="mobile-nav-backdrop"
+              data-lenis-prevent
+              aria-label="Close navigation"
+              onClick={() => setNavOpen(false)}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={popTransition}
+            />
+            <motion.nav
+              key="mobile-navigation"
+              id="mobile-navigation"
+              className="mobile-navigation"
+              data-lenis-prevent
+              aria-label="Mobile navigation"
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={popTransition}
+            >
+              <div className="mobile-navigation-head">
+                <div><strong>Navigation</strong><span>Move around NOVA</span></div>
+                <Button variant="unstyled" type="button" aria-label="Close navigation" onClick={() => {
+                  setNavOpen(false)
+                  navTriggerRef.current?.focus()
+                }}><X size={18} /></Button>
+              </div>
+              <div className="mobile-navigation-list">
+                {TOP_NAVIGATION.map((item) => (
+                  <Button variant="unstyled"
+                    type="button"
+                    key={item.route}
+                    className={route === item.route ? 'is-active' : ''}
+                    aria-current={route === item.route ? 'page' : undefined}
+                    onClick={() => {
+                      setNavOpen(false)
+                      onNavigate(item.route)
+                    }}
+                  >
+                    <span><strong>{item.label}</strong><small>{ROUTE_META[item.route].description}</small></span>
+                  </Button>
+                ))}
+              </div>
+              <div className="mobile-navigation-status">
+                <span className={status === 'live' && engineLive ? 'is-live' : ''} />
+                <div><strong>{modeBadgeText(engineMode)}</strong><small>{engineLive ? statusLabel(status, setupState) : 'Engine stopped'}</small></div>
+              </div>
+            </motion.nav>
+          </>
+        ) : null}
+      </AnimatePresence>
 
       <AnimatePresence initial={false}>
         {killDialogOpen ? (

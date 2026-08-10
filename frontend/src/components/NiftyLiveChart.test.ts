@@ -7,6 +7,7 @@ import {
   markerCandleIndex,
   markerStyle,
   sessionOnly,
+  upsertCandle,
 } from './NiftyLiveChart.helpers'
 
 const marker = (overrides: Partial<NiftyTradeMarker>): NiftyTradeMarker => ({
@@ -47,6 +48,27 @@ describe('TradingView chart helpers', () => {
     expect(istTimeframeBucket(start + 155, '1m')).toBe(start + 120)
     expect(istTimeframeBucket(start + 155, '5m')).toBe(start)
     expect(istTimeframeBucket(start + 755, '15m')).toBe(start)
+  })
+
+  it('replaces or appends one pushed candle without replacing the session', () => {
+    const start = Date.parse('2026-07-15T09:15:00+05:30') / 1000
+    const series = {
+      symbol: 'NIFTY', interval: '5m', source: 'rest', status: 'ready', market_state: 'open',
+      trading_date: '2026-07-15', candles: [candle(start)],
+    }
+    const replaced = upsertCandle(series, {
+      symbol: 'NIFTY', interval: '5m', source: 'dhan_marketfeed_ws', trading_date: '2026-07-15',
+      market_state: 'open', updated_at: 'now', candle_count: 1,
+      candle: { ...candle(start), close: 1.75 },
+    })
+    expect(replaced?.candles).toHaveLength(1)
+    expect(replaced?.candles[0].close).toBe(1.75)
+    const appended = upsertCandle(replaced, {
+      symbol: 'NIFTY', interval: '5m', source: 'dhan_marketfeed_ws', trading_date: '2026-07-15',
+      market_state: 'open', updated_at: 'later', candle_count: 2,
+      candle: candle(start + 300),
+    })
+    expect(appended?.candles.map((item) => item.time)).toEqual([start, start + 300])
   })
 
   it('places markers in the selected presentation bucket', () => {
