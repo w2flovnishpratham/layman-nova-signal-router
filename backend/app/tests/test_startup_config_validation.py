@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -488,3 +489,74 @@ def test_test_market_data_provider_is_environment_locked(monkeypatch):
     monkeypatch.setattr(settings, "ENABLE_LIVE_ORDERS", False, raising=False)
     monkeypatch.setattr(settings, "DHAN_MODE", "MOCK", raising=False)
     validate_production_configuration()
+
+
+def test_startup_starts_the_monitors_when_the_database_is_unreachable(monkeypatch):
+    """The whole point of the guard relaxations: an outage at boot must not
+    leave open positions unwatched.
+
+    Production incident: with Neon refusing connections, the migration guard
+    stopped the process outright. Relaxing only that guard moved the crash one
+    step down, to the unguarded active_routing_user_ids() call that builds the
+    reconciliation list -- so the option monitor, EOD square-off and ghost
+    watcher still never started.
+    """
+    import app.main as main_module
+    from sqlalchemy.exc import OperationalError
+
+    started: list[str] = []
+
+    def unreachable(*_args, **_kwargs):
+        raise OperationalError("SELECT 1", {}, Exception("data transfer quota exceeded"))
+
+    monkeypatch.setattr(settings, "APP_ENV", "production", raising=False)
+    monkeypatch.setattr(settings, "AUTH_REQUIRED", True, raising=False)
+    monkeypatch.setattr(settings, "BACKGROUND_WORKER_RUNNER_ENABLED", True, raising=False)
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://user:secret@db.example/nova", raising=False)
+
+    # Everything the database is needed for at boot is unreachable.
+    monkeypatch.setattr(main_module, "validate_production_database_migration_state", lambda: None)
+    monkeypatch.setattr("app.services.strategy_fanout.active_routing_user_ids", unreachable)
+
+    # The monitors are the thing that must survive.
+    monkeypatch.setattr(main_module, "start_option_position_monitor", lambda: started.append("monitor"))
+    monkeypatch.setattr(main_module, "start_eod_squareoff_worker", lambda: started.append("eod"))
+    monkeypatch.setattr(main_module, "start_ghost_position_watcher", lambda: started.append("ghost"))
+
+    for name in (
+        "start_instrument_cache_warmup",
+        "start_strategy_job_worker",
+        "start_pine_conversion_worker",
+        "start_nifty_candle_pusher",
+        "start_shared_token_worker",
+        "validate_provider_configuration",
+        "validate_production_configuration",
+        "validate_background_worker_runner_configuration",
+        "init_runtime_files",
+        "sync_runtime_flags_from_env",
+    ):
+        monkeypatch.setattr(main_module, name, lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(main_module, "vault_status", lambda: {"ready": True, "error": None})
+    monkeypatch.setattr(main_module, "user_vault_ready", lambda: True)
+    monkeypatch.setattr(main_module, "shared_market_data_configured", lambda: False)
+    monkeypatch.setattr(main_module, "log_audit_event", lambda *a, **k: None)
+    monkeypatch.setattr(main_module, "bind_chat_event_loop", lambda *a, **k: None)
+    monkeypatch.setattr(main_module, "clear_chat_event_loop", lambda *a, **k: None)
+    for name in (
+        "stop_strategy_job_worker",
+        "stop_pine_conversion_worker",
+        "stop_shared_token_worker",
+        "stop_nifty_candle_pusher",
+        "stop_option_position_monitor",
+        "stop_eod_squareoff_worker",
+        "stop_ghost_position_watcher",
+    ):
+        monkeypatch.setattr(main_module, name, lambda *a, **k: None, raising=False)
+
+    async def run_lifespan() -> None:
+        async with main_module.lifespan(None):
+            pass
+
+    asyncio.run(run_lifespan())
+
+    assert started == ["monitor", "eod", "ghost"]

@@ -337,7 +337,23 @@ async def lifespan(app: FastAPI):
             load_user_context,
         )
 
-        for user_id in active_routing_user_ids(real_orders_only=True):
+        # Startup reconciliation is a best-effort catch-up, but the call that
+        # builds the user list sits in the for-statement itself, so an
+        # unreachable database took the whole process down before a single
+        # monitor started -- leaving every open position unwatched even once
+        # connectivity returned. The per-user reconcile below was already
+        # guarded; this is the same guarantee one level up.
+        try:
+            routing_user_ids = active_routing_user_ids(real_orders_only=True)
+        except db_backoff.DB_UNAVAILABLE_ERRORS:
+            logger.error(
+                "Could not load routing users for startup reconciliation; skipping it and "
+                "starting the monitors anyway. They poll with backoff and pick positions up "
+                "when the database returns."
+            )
+            routing_user_ids = []
+
+        for user_id in routing_user_ids:
             user = load_user_context(user_id)
             if user is None:
                 continue
@@ -350,7 +366,12 @@ async def lifespan(app: FastAPI):
         start_eod_squareoff_worker()
         start_ghost_position_watcher()
     elif background_workers_enabled:
-        reconcile_open_position_on_startup()
+        try:
+            reconcile_open_position_on_startup()
+        except db_backoff.DB_UNAVAILABLE_ERRORS:
+            # Same reasoning as the multi-user branch above: never let a
+            # best-effort catch-up stop the monitors from starting.
+            logger.error("Could not reconcile at startup; starting the monitors anyway.")
         start_option_position_monitor()
         # EOD square-off worker (15:15 IST). Runs as daemon; idempotent.
         start_eod_squareoff_worker()
