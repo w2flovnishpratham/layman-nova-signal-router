@@ -318,10 +318,19 @@ def process_queued_jobs_once(*, limit: int | None = None) -> int:
 
 def _loop() -> None:
     logger.info("Durable strategy job worker started.")
-    recover_stale_jobs()
+    # Recovery used to run here, before the loop and outside its except, so a
+    # database outage at startup raised straight out of the thread and killed
+    # it for good -- the loop below is built to ride an outage out with
+    # backoff, but never got to run, and queued jobs sat unprocessed until
+    # someone restarted the process. Observed during a Neon quota outage.
+    # Retrying inside the loop keeps the recovery and drops the fragility.
+    stale_jobs_recovered = False
     poll_seconds = max(float(settings.STRATEGY_JOB_WORKER_POLL_SECONDS), 0.1)
     while not _STOP_EVENT.is_set():
         try:
+            if not stale_jobs_recovered:
+                recover_stale_jobs()
+                stale_jobs_recovered = True
             processed = process_queued_jobs_once()
         except Exception:
             logger.exception("Durable strategy job worker loop failed")
