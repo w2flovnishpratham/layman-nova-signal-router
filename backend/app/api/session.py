@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 import secrets
 
@@ -111,7 +112,7 @@ async def _hydrate_recent_strategy_results(session_id: str, user: CurrentUser) -
     if user.is_dev or not database_configured():
         return
 
-    jobs = await _recent_strategy_jobs(user)
+    jobs = await asyncio.to_thread(_recent_strategy_jobs, user)
     if not jobs:
         return
 
@@ -129,9 +130,11 @@ async def _hydrate_recent_strategy_results(session_id: str, user: CurrentUser) -
         await append_chat_result_to_session(session_id, signal, execution_result, restored_recent=True)
 
 
-async def _recent_strategy_jobs(
+def _recent_strategy_jobs(
     user: CurrentUser,
 ) -> list[tuple[NormalizedSignal, dict[str, object]]]:
+    """Sync on purpose: this is a blocking SQLAlchemy query plus parsing, with
+    nothing to await. Callers push it off the event loop via asyncio.to_thread."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=RECENT_STRATEGY_REPLAY_HOURS)
     with session_scope() as db:
         rows = db.scalars(

@@ -20,6 +20,7 @@ Replay protection:
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -87,6 +88,41 @@ def _check_and_record_nonce(user_id: str, nonce: str) -> bool:
         return True
 
 
+def _record_accepted_signal(
+    *,
+    user: CurrentUser,
+    user_id: str,
+    nonce: str,
+    signal: str,
+    symbol: str,
+    strategy: str,
+) -> None:
+    """Best-effort audit + replay-status persistence for an accepted signal.
+
+    Both writes are already non-fatal (a failure here must not reject a
+    signal that authenticated cleanly); grouped into one function so the
+    caller can push all of it off the event loop in a single hop.
+    """
+    try:
+        with session_scope() as db:
+            crud.add_audit_log(
+                db,
+                user_id=user.id,
+                action="WEBHOOK_SIGNAL_RECEIVED",
+                metadata={"signal": signal, "symbol": symbol, "strategy": strategy},
+            )
+    except Exception:
+        pass
+    try:
+        webhook_replay_store.update_webhook_event(
+            provider="user",
+            event_id=f"{user_id}:{nonce}",
+            processed_status="accepted",
+        )
+    except Exception:
+        pass
+
+
 def _resolve_user(user_id: str) -> CurrentUser | None:
     if not database_configured():
         return None
@@ -142,7 +178,8 @@ async def user_webhook(user_id: str, request: Request) -> JSONResponse:
         return JSONResponse(status_code=400, content={"ok": False, "error": "Stale timestamp."})
 
     # Resolve the user and their secret.
-    user = _resolve_user(user_id)
+    # Sync SQLAlchemy: off the event loop, like every blocking call below.
+    user = await asyncio.to_thread(_resolve_user, user_id)
     if user is None:
         # Do not reveal whether the user exists.
         return JSONResponse(status_code=401, content={"ok": False, "error": "Unauthorized."})
@@ -174,7 +211,8 @@ async def user_webhook(user_id: str, request: Request) -> JSONResponse:
 
     if database_configured():
         try:
-            event_claim = webhook_replay_store.claim_webhook_event(
+            event_claim = await asyncio.to_thread(
+                webhook_replay_store.claim_webhook_event,
                 provider="user",
                 event_id=f"{user_id}:{nonce}",
                 raw_body=raw_body,
@@ -192,24 +230,15 @@ async def user_webhook(user_id: str, request: Request) -> JSONResponse:
     # run after the live-engine safety gates pass — this endpoint never places an
     # order for another user.
     if database_configured() and not user.is_dev:
-        try:
-            with session_scope() as db:
-                crud.add_audit_log(
-                    db,
-                    user_id=user.id,
-                    action="WEBHOOK_SIGNAL_RECEIVED",
-                    metadata={"signal": signal, "symbol": symbol, "strategy": strategy},
-                )
-        except Exception:
-            pass
-        try:
-            webhook_replay_store.update_webhook_event(
-                provider="user",
-                event_id=f"{user_id}:{nonce}",
-                processed_status="accepted",
-            )
-        except Exception:
-            pass
+        await asyncio.to_thread(
+            _record_accepted_signal,
+            user=user,
+            user_id=user_id,
+            nonce=nonce,
+            signal=signal,
+            symbol=symbol,
+            strategy=strategy,
+        )
 
     return JSONResponse(
         status_code=202,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -206,6 +207,39 @@ def _route_payload(payload: NormalizedSignal, client_host: str) -> tuple[dict | 
     finally:
         if BLOCK_DUPLICATE_SIGNALS:
             _finish_processing_signal(payload.signal_id)
+
+
+def _route_payload_under_strategy_lock(
+    payload: NormalizedSignal,
+    client_host: str,
+) -> tuple[dict | None, JSONResponse | None]:
+    """Serialize same-strategy alerts, then route the signal.
+
+    Both halves block: the lock wait parks until whichever alert is already
+    in flight for this strategy finishes, and _route_payload -> route_signal
+    drives dhan_client's SYNCHRONOUS httpx.Client with time.sleep() retry
+    backoff. This function must therefore never run on the asyncio event
+    loop -- see the asyncio.to_thread() call in tradingview_webhook. Doing it
+    inline froze the entire engine process (WS event delivery, every other
+    user's request, health checks) for the length of a broker round-trip.
+    """
+    strategy_key, strategy_lock = _get_strategy_lock(payload.strategy_code)
+    if not strategy_lock.acquire(blocking=False):
+        log_audit_event(
+            "STRATEGY_SIGNAL_QUEUED",
+            f"Signal queued because strategy {strategy_key} is already processing another alert.",
+            metadata={
+                "signal_id": payload.signal_id,
+                "strategy_code": payload.strategy_code,
+                "payload_format": payload.payload_format,
+            },
+        )
+        strategy_lock.acquire()
+
+    try:
+        return _route_payload(payload, client_host)
+    finally:
+        strategy_lock.release()
 
 
 @router.post("/tradingview")
@@ -597,23 +631,13 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
             ),
         )
 
-    strategy_key, strategy_lock = _get_strategy_lock(payload.strategy_code)
-    if not strategy_lock.acquire(blocking=False):
-        log_audit_event(
-            "STRATEGY_SIGNAL_QUEUED",
-            f"Signal queued because strategy {strategy_key} is already processing another alert.",
-            metadata={
-                "signal_id": payload.signal_id,
-                "strategy_code": payload.strategy_code,
-                "payload_format": payload.payload_format,
-            },
-        )
-        strategy_lock.acquire()
-
-    try:
-        execution_result, error_response = _route_payload(payload, client_host)
-    finally:
-        strategy_lock.release()
+    # Off the event loop: the strategy lock wait and the broker round-trip
+    # inside route_signal() are both blocking. to_thread copies the current
+    # contextvars.Context, so execution_context's per-user scoping still
+    # applies inside the worker thread.
+    execution_result, error_response = await asyncio.to_thread(
+        _route_payload_under_strategy_lock, payload, client_host
+    )
 
     if error_response is not None:
         if event_claimed:
