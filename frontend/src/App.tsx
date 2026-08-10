@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { toast } from '@/components/ui/toast'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { AuthScreen } from './components/AuthScreen'
+import { consumeAuthErrorFromUrl } from './lib/authError'
 import { EngineLeftPanel } from './components/EngineLeftPanel'
 import { NiftyLiveChart } from './components/NiftyLiveChart'
 import { EngineSidebar } from './components/EngineSidebar'
@@ -95,7 +96,11 @@ function App() {
   const [setupSnapshot, setSetupSnapshot] = useState<SetupSnapshot | null>(null)
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
-  const [authError, setAuthError] = useState('')
+  // A failed OAuth callback redirects back here with ?auth_error=<reason>
+  // rather than rendering JSON on the API domain, so the reason has to be read
+  // off the URL once on mount -- otherwise the user lands on a bare login
+  // screen with no idea why they were bounced.
+  const [authError, setAuthError] = useState(consumeAuthErrorFromUrl)
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [runtimeLoading, setRuntimeLoading] = useState(true)
@@ -156,7 +161,10 @@ function App() {
       .catch((error: unknown) => {
         if (!mounted) return
         setAuthUser(null)
-        setAuthError(error instanceof Error ? error.message : 'Could not verify login')
+        // A bounced OAuth attempt always lands here too (no session yet), so
+        // keep the specific reason read off the URL rather than replacing it
+        // with the generic session-check failure.
+        setAuthError((previous) => previous || (error instanceof Error ? error.message : 'Could not verify login'))
       })
       .finally(() => {
         if (mounted) setAuthLoading(false)

@@ -8,6 +8,7 @@ import './index.css'
 import { AppRouter } from './AppRouter.tsx'
 import { Toaster } from './components/ui/toast'
 import { SmoothScroll } from './components/SmoothScroll'
+import { consumeAuthErrorFromUrl } from './lib/authError'
 import { queryClient, wireQueryInvalidation } from './lib/queryClient'
 import { initializePreferences, motionConfigMode } from './state/sessionStore'
 
@@ -43,6 +44,10 @@ window.addEventListener('load', () => {
 
 initializePreferences()
 wireQueryInvalidation()
+// Read before anything renders or navigates: a bounced sign-in lands on "/",
+// and the hop into /app/* is a pushState that would otherwise drop the reason
+// out of the URL before the sign-in screen ever mounts to display it.
+consumeAuthErrorFromUrl()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
