@@ -52,6 +52,22 @@ def test_old_non_terminal_event_counts_as_stuck(mu_db):
     assert webhook_replay_store.count_stuck_webhook_events(older_than_seconds=120) == 1
 
 
+def test_count_returns_none_instead_of_raising_when_the_database_is_down(mu_db, monkeypatch):
+    """Regression: this metric is read by /api/health. When Neon was
+    unreachable (data-transfer quota exceeded) the raised OperationalError
+    turned /api/health into a 500 -- monitoring went blind at exactly the
+    moment the database was down. Unknown must degrade to None, not explode.
+    """
+    from app.services import webhook_replay_store
+
+    def exploding_session_scope():
+        raise RuntimeError("connection failed: data transfer quota exceeded")
+
+    monkeypatch.setattr(webhook_replay_store, "session_scope", exploding_session_scope)
+
+    assert webhook_replay_store.count_stuck_webhook_events() is None
+
+
 def test_old_event_closed_to_a_terminal_status_does_not_count(mu_db):
     from app.services import webhook_replay_store
 

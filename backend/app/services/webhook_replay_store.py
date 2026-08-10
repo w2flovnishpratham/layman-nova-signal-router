@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,6 +13,9 @@ from sqlalchemy.exc import IntegrityError
 from app.config import settings
 from app.db import models
 from app.db.engine import database_configured, session_scope
+
+
+logger = logging.getLogger("nova_signal_router.webhook_replay_store")
 
 
 class WebhookReplayStoreUnavailable(RuntimeError):
@@ -141,27 +145,38 @@ def update_webhook_event(
 _STUCK_STATUSES = ("received", "queued", "accepted")
 
 
-def count_stuck_webhook_events(*, older_than_seconds: int = 120) -> int:
+def count_stuck_webhook_events(*, older_than_seconds: int = 120) -> int | None:
     """Events still non-terminal well past when processing should have
     finished -- e.g. the async intake path (strategy_job_worker) crashing or
     otherwise never calling update_webhook_event. A nonzero count means a
     signal's fate is undetected, not necessarily lost -- worth alerting on,
-    not proof of a lost trade by itself."""
+    not proof of a lost trade by itself.
+
+    Returns None (not 0) when the database can't answer, and never raises:
+    this is a reconciliation metric consumed by /api/health, and a health
+    endpoint that 500s because an optional metric is unavailable is useless
+    exactly when the database is down and you most need it to respond. None
+    means "unknown"; 0 would be a lie.
+    """
     if not database_configured():
-        return 0
+        return None
     cutoff = utcnow() - timedelta(seconds=older_than_seconds)
-    with session_scope() as db:
-        return int(
-            db.scalar(
-                select(func.count())
-                .select_from(models.WebhookEvent)
-                .where(
-                    models.WebhookEvent.processed_status.in_(_STUCK_STATUSES),
-                    models.WebhookEvent.updated_at < cutoff,
+    try:
+        with session_scope() as db:
+            return int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(models.WebhookEvent)
+                    .where(
+                        models.WebhookEvent.processed_status.in_(_STUCK_STATUSES),
+                        models.WebhookEvent.updated_at < cutoff,
+                    )
                 )
+                or 0
             )
-            or 0
-        )
+    except Exception:
+        logger.warning("Stuck-webhook reconciliation count unavailable.", exc_info=True)
+        return None
 
 
 def prune_webhook_replay_records(retention_seconds: int | None = None) -> dict[str, int]:
