@@ -13,6 +13,7 @@ import threading
 from typing import Any
 
 from app.config import settings
+from app.db import backoff as db_backoff
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.credential_vault import get_dhan_credentials
 from app.services.dhan_client import DHAN_OPEN_ORDER_STATUSES, DHAN_TERMINAL_STATUSES, RealDhanClient
@@ -577,7 +578,7 @@ def _loop() -> None:
         except Exception as exc:  # pragma: no cover
             logger.exception("Ghost-position watcher loop error: %s", exc)
             log_error_event("GHOST_POSITION_WATCHER_EXCEPTION", str(exc))
-        _STOP_EVENT.wait(POLL_SECONDS)
+        _STOP_EVENT.wait(db_backoff.poll_delay(POLL_SECONDS))
     logger.info("Ghost-position watcher stopped.")
 
 

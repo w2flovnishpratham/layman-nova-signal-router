@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.config import DEFAULT_EXCHANGE_SEGMENT, DEFAULT_ORDER_TYPE, DEFAULT_PRODUCT_TYPE, DISABLED_OPTION_SL_PRICE_FRACTION
+from app.db import backoff as db_backoff
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.chat_event_publisher import (
@@ -1033,7 +1034,11 @@ def _monitor_loop() -> None:
         except Exception as exc:
             logger.exception("Option position monitor loop error")
             log_error_event("OPTION_POSITION_MONITOR_ERROR", str(exc))
-        _STOP_EVENT.wait(_poll_seconds(runtime))
+        # db_backoff, not the raw poll interval: per-user failures are
+        # swallowed inside _check_user above, so this loop cannot otherwise
+        # tell that the database is unreachable and would keep polling at
+        # full rate (0.5s x every user) straight through an outage.
+        _STOP_EVENT.wait(db_backoff.poll_delay(_poll_seconds(runtime)))
     log_audit_event("OPTION_POSITION_MONITOR_STOPPED", "Server-side option premium monitor stopped.")
 
 

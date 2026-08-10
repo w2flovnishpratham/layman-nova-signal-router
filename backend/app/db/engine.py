@@ -22,6 +22,7 @@ from typing import Iterator
 from urllib.parse import urlsplit, urlunsplit
 
 from app.config import settings
+from app.db import backoff
 
 logger = logging.getLogger("nova_signal_router.db")
 
@@ -164,9 +165,15 @@ def session_scope() -> Iterator["Session"]:
     try:
         yield session
         session.commit()
-    except Exception:
+    except Exception as exc:
         session.rollback()
+        # Observation only -- the exception still propagates unchanged. Lets
+        # background pollers back off when the database is unreachable; see
+        # app/db/backoff.py for why detection has to live here.
+        backoff.note_outcome(exc)
         raise
+    else:
+        backoff.note_outcome(None)
     finally:
         session.close()
 

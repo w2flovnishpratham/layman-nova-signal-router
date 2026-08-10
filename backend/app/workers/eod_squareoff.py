@@ -33,6 +33,7 @@ import threading
 import time
 from datetime import datetime, time as dtime, timedelta, timezone
 
+from app.db import backoff as db_backoff
 from app.schemas.signal import NormalizedSignal
 from app.services.audit_logger import log_audit_event, log_error_event, log_order_event
 from app.services.credential_vault import get_webhook_secret
@@ -248,7 +249,7 @@ def _loop() -> None:
         except Exception as exc:  # pragma: no cover
             logger.exception("EOD square-off loop error: %s", exc)
         # Sleep with quick wake on stop request.
-        _STOP_EVENT.wait(_POLL_SECONDS)
+        _STOP_EVENT.wait(db_backoff.poll_delay(_POLL_SECONDS))
     logger.info("EOD square-off worker stopped.")
 
 

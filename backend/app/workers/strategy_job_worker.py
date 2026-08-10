@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.config import settings
+from app.db import backoff as db_backoff
 from app.db import models
 from app.db.engine import database_configured, get_engine, session_scope
 from app.schemas.signal import NormalizedSignal
@@ -327,7 +328,9 @@ def _loop() -> None:
             processed = 0
         if processed:
             continue
-        _WAKE_EVENT.wait(poll_seconds)
+        # Backs off automatically while the database is unreachable, so a
+        # 0.5s claim poll does not become a connection storm during an outage.
+        _WAKE_EVENT.wait(db_backoff.poll_delay(poll_seconds))
         _WAKE_EVENT.clear()
     logger.info("Durable strategy job worker stopped.")
 
