@@ -11,6 +11,7 @@ Any verified Google account may log in. ADMIN_EMAILS only sets the is_admin flag
 from __future__ import annotations
 
 import secrets
+import logging
 from urllib.parse import urlencode
 
 import httpx
@@ -59,6 +60,20 @@ def _require_oauth_configured() -> None:
         raise HTTPException(status_code=503, detail="DATABASE_URL is not configured; cannot persist users.")
 
 
+logger = logging.getLogger("nova_signal_router.auth.google")
+
+
+def _auth_error_redirect(reason: str) -> RedirectResponse:
+    """Send a failed login back into the app instead of rendering JSON at it.
+
+    This endpoint is reached by the browser's address bar, not by fetch(), so
+    an HTTPException here paints a raw {"detail": ...} page on an API domain
+    with no navigation back. The reason is a short, non-identifying code for
+    the UI to phrase; the real cause is logged, never put in the URL.
+    """
+    return RedirectResponse(f"{_frontend_url()}?auth_error={reason}", status_code=302)
+
+
 def _frontend_url() -> str:
     return (settings.FRONTEND_URL or settings.FRONTEND_ORIGIN or "/").rstrip("/") or "/"
 
@@ -102,15 +117,23 @@ def google_start(request: Request) -> RedirectResponse:
 def google_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
     _require_oauth_configured()
     if error:
-        raise HTTPException(status_code=400, detail=f"Google OAuth error: {error}")
+        logger.warning("Google returned an OAuth error: %s", error)
+        return _auth_error_redirect("provider")
     if not code or not state:
-        raise HTTPException(status_code=400, detail="Missing authorization code or state.")
+        return _auth_error_redirect("invalid_request")
 
     cookie_state = request.cookies.get(_OAUTH_STATE_COOKIE)
     if not cookie_state or not secrets.compare_digest(cookie_state, state):
-        raise HTTPException(status_code=400, detail="Invalid OAuth state (possible CSRF).")
+        # In practice this is nearly always a stale retry -- the state cookie
+        # lives 600s and a fresh /start replaces it, so going back and
+        # re-submitting an old callback lands here. Genuine CSRF looks
+        # identical from the outside, so it is logged either way, but the user
+        # is told to just try again rather than shown the word "CSRF".
+        logger.warning("OAuth state mismatch on callback (stale retry or CSRF).")
+        return _auth_error_redirect("expired")
     if read_oauth_state(state) is None:
-        raise HTTPException(status_code=400, detail="OAuth state expired or tampered.")
+        logger.warning("OAuth state signature expired or tampered.")
+        return _auth_error_redirect("expired")
 
     # Exchange the authorization code for tokens.
     try:
@@ -129,7 +152,8 @@ def google_callback(request: Request, code: str | None = None, state: str | None
             tokens = token_resp.json()
             access_token = tokens.get("access_token")
             if not access_token:
-                raise HTTPException(status_code=400, detail="Google did not return an access token.")
+                logger.warning("Google token response contained no access token.")
+                return _auth_error_redirect("provider")
             userinfo_resp = client.get(
                 GOOGLE_USERINFO_ENDPOINT,
                 headers={"Authorization": f"Bearer {access_token}"},
@@ -137,7 +161,10 @@ def google_callback(request: Request, code: str | None = None, state: str | None
             userinfo_resp.raise_for_status()
             profile = userinfo_resp.json()
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Google token exchange failed: {exc}") from exc
+        # Previously echoed the upstream token endpoint URL and httpx error
+        # text straight into the browser.
+        logger.warning("Google token exchange failed: %s", exc)
+        return _auth_error_redirect("provider")
 
     google_sub = profile.get("sub")
     email = (profile.get("email") or "").strip().lower()
@@ -145,28 +172,37 @@ def google_callback(request: Request, code: str | None = None, state: str | None
     if isinstance(email_verified, str):
         email_verified = email_verified.lower() == "true"
     if not google_sub or not email:
-        raise HTTPException(status_code=400, detail="Google profile missing sub/email.")
+        logger.warning("Google profile response was missing sub/email.")
+        return _auth_error_redirect("provider")
     if not email_verified:
-        raise HTTPException(status_code=403, detail="Google email is not verified.")
+        return _auth_error_redirect("email_unverified")
 
     is_admin = is_admin_user(email)  # derived AFTER login; does not gate login
-    with session_scope() as db:
-        user = crud.upsert_google_user(
-            db,
-            google_sub=google_sub,
-            email=email,
-            name=profile.get("name"),
-            picture_url=profile.get("picture"),
-            is_admin=is_admin,
-        )
-        sess = crud.create_session(
-            db,
-            user_id=user.id,
-            ttl_seconds=settings.SESSION_TOKEN_TTL_SECONDS,
-            metadata={"ip": request.client.host if request.client else None},
-        )
-        crud.add_audit_log(db, user_id=user.id, action="LOGIN_SUCCESS", metadata={"email": email})
-        session_id = sess.id
+    try:
+        with session_scope() as db:
+            user = crud.upsert_google_user(
+                db,
+                google_sub=google_sub,
+                email=email,
+                name=profile.get("name"),
+                picture_url=profile.get("picture"),
+                is_admin=is_admin,
+            )
+            sess = crud.create_session(
+                db,
+                user_id=user.id,
+                ttl_seconds=settings.SESSION_TOKEN_TTL_SECONDS,
+                metadata={"ip": request.client.host if request.client else None},
+            )
+            crud.add_audit_log(db, user_id=user.id, action="LOGIN_SUCCESS", metadata={"email": email})
+            session_id = sess.id
+    except Exception:
+        # This callback is browser-facing, so an unhandled failure here strands
+        # the user on a bare API error page with no way back into the app --
+        # which is exactly what a database outage produced. Send them to the
+        # frontend with a flag instead; the cause is logged, never shown.
+        logger.exception("Google login could not be completed for %s", email)
+        return RedirectResponse(f"{_frontend_url()}?auth_error=server", status_code=302)
 
     response = RedirectResponse(_frontend_url(), status_code=302)
     set_session_cookie(response, session_id)

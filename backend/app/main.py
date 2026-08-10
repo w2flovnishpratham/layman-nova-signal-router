@@ -8,6 +8,9 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.api.error_handlers import http_exception_handler, unhandled_exception_handler
 
 from app.api import session as chat_session
 from app.api import ws as chat_ws
@@ -366,6 +369,12 @@ app = FastAPI(
     lifespan=lifespan,
     **_api_documentation_urls(),
 )
+
+# 5xx responses are reduced to a generic message plus a traceable errorId;
+# 4xx details are user-facing and pass through untouched. See
+# app/api/error_handlers.py.
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(Exception, unhandled_exception_handler)
 
 cors_origins = [settings.FRONTEND_ORIGIN, settings.FRONTEND_URL]
 if not settings.is_production:
