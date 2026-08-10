@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import threading
 import time
@@ -22,8 +23,10 @@ from app.services.normalized_errors import classify_failure, order_journey
 from app.services.signal_parser import PayloadParseError, UnsupportedPayloadFormatError, parse_webhook_payload
 from app.services.signal_validator import validate_signal
 from app.services.state_store import add_seen_signal, get_app_state, get_engine_mode, has_seen_signal, update_app_state, utc_now
-from app.services import webhook_replay_store
+from app.services import signal_latency, webhook_replay_store
 
+
+logger = logging.getLogger("nova_signal_router.webhook")
 
 router = APIRouter()
 _PROCESSING_SIGNAL_IDS: set[str] = set()
@@ -244,6 +247,9 @@ def _route_payload_under_strategy_lock(
 
 @router.post("/tradingview")
 async def tradingview_webhook(request: Request) -> JSONResponse:
+    # Started before any parsing so the measurement covers everything the
+    # alert actually waits on, not just the broker call.
+    received_at = time.perf_counter()
     raw_body = (await request.body()).decode("utf-8", errors="replace")
     client_host = request.client.host if request.client else "unknown"
     engine_mode = get_engine_mode(legacy_fallback=False)
@@ -687,6 +693,15 @@ async def tradingview_webhook(request: Request) -> JSONResponse:
     else:
         message = f"{payload.action.title()} order placed in {engine_mode.upper()} mode"
         accepted = True
+        elapsed = time.perf_counter() - received_at
+        signal_latency.record_order_latency(elapsed)
+        logger.info(
+            "Signal %s routed to order in %.0fms (strategy=%s, mode=%s).",
+            payload.signal_id,
+            elapsed * 1000,
+            payload.strategy_code,
+            engine_mode,
+        )
 
     if event_claimed:
         try:
