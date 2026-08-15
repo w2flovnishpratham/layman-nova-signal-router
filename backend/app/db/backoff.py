@@ -76,7 +76,16 @@ def poll_delay(base_seconds: float) -> float:
     failures = consecutive_failures()
     if failures <= 0:
         return base_seconds
-    return min(base_seconds * (2 ** failures), MAX_BACKOFF_SECONDS)
+    # Production incident: a sustained outage pushed failures into the
+    # thousands, and 2**failures overflowed converting to a float *before*
+    # min() ever got to cap it -- raising OverflowError uncaught in every
+    # worker thread that calls this (strategy jobs, EOD square-off, ghost
+    # watcher, option monitor all died within the same minute). Capping the
+    # exponent first removes the overflow entirely: any base_seconds used in
+    # this codebase already saturates MAX_BACKOFF_SECONDS well before 20
+    # doublings, so this changes no observable behavior.
+    capped_failures = min(failures, 20)
+    return min(base_seconds * (2 ** capped_failures), MAX_BACKOFF_SECONDS)
 
 
 def reset() -> None:

@@ -45,6 +45,24 @@ def test_escalation_is_capped_so_recovery_is_still_detected():
     assert backoff.poll_delay(0.5) == backoff.MAX_BACKOFF_SECONDS
 
 
+def test_a_sustained_outage_does_not_crash_the_calling_worker_thread():
+    """Production incident: a Neon outage ran long enough that the failure
+    count climbed into the thousands. 2**failures overflowed converting to a
+    float -- before min() ever got a chance to cap it -- and raised
+    OverflowError uncaught inside four different worker threads (strategy
+    jobs, EOD square-off, ghost watcher, option monitor), all in the same
+    minute, none of which recovered until the process was later restarted.
+    2**50 alone (the previous test's ceiling) is nowhere near large enough to
+    reproduce this -- it takes thousands of failures, matching what was
+    actually observed.
+    """
+    exc = OperationalError("connect", None, Exception("quota exceeded"))
+    for _ in range(2000):
+        backoff.note_outcome(exc)
+
+    assert backoff.poll_delay(0.5) == backoff.MAX_BACKOFF_SECONDS
+
+
 def test_a_single_success_restores_full_cadence():
     exc = OperationalError("connect", None, Exception("quota exceeded"))
     for _ in range(5):
